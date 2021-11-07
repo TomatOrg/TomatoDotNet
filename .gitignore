@@ -1,0 +1,9 @@
+.idea
+cmake-build-debug
+Corelib/.idea
+Corelib/bin
+Corelib/obj
+Corelib/Corelib/obj
+Corelib/Corelib/bin
+Corelib/Test/obj
+Corelib/Test/bin
