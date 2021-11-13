@@ -7,7 +7,7 @@
 #define SAFE_FREE(ptr) \
     do { \
         if (ptr != NULL) { \
-            free(ptr); \
+            free((void*)(ptr)); \
             ptr = NULL; \
         } \
     } while (0)
@@ -20,14 +20,14 @@
     ({ \
         size_t _x = (size_t)(x); \
         size_t _align = (size_t)(align); \
-        (typeof(x))((x + (align - 1)) & ~(align - 1)); \
+        (typeof(x))((x + (align - 1ull)) & ~(align - 1ull)); \
     })
 
 #define ALIGN_DOWN(x, align) \
     ({ \
         size_t _x = (size_t)(x); \
         size_t _align = (size_t)(align); \
-        (typeof(x))(x - (x & (align - 1))); \
+        (typeof(x))(x - (x & (align - 1ull))); \
     })
 
 #define PACKED __attribute__((packed))

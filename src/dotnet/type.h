@@ -29,6 +29,14 @@ typedef enum type_mod {
     TYPE_ARRAY
 } type_mod_t;
 
+typedef enum stack_type {
+    STACK_TYPE_INT32,
+    STACK_TYPE_INT64,
+    STACK_TYPE_F,
+    STACK_TYPE_NATIVE_INT,
+    STACK_TYPE_T,
+} stack_type_t;
+
 typedef struct type {
     // the assembly this type is related to
     assembly_t* assembly;
@@ -43,6 +51,7 @@ typedef struct type {
     uint8_t resolved_size : 1;
 
     // the size of the element on the stack or inside another class
+    stack_type_t stack_type;
     size_t stack_size;
     size_t stack_alignment;
 
@@ -122,3 +131,8 @@ type_t* get_by_ref_type(type_t* type);
  * @param type      [IN] The type to print
  */
 void type_print(type_t* type);
+
+/**
+ * Output the type into a buffer
+ */
+int type_output(char* buffer, size_t buffer_size, type_t* type);

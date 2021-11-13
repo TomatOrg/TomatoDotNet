@@ -114,6 +114,11 @@ typedef struct metadata_method_impl {
     token_t method_declaration;
 } PACKED metadata_method_impl_t;
 
+#define METADATA_TYPE_SPEC 0x1b
+typedef struct metadata_type_spec {
+    const uint8_t* signature;
+} PACKED metadata_type_spec_t;
+
 #define METADATA_ASSEMBLY 0x20
 typedef struct metadata_assembly {
     uint32_t hash_alg_id;
@@ -147,3 +152,9 @@ typedef struct metadata_assembly_ref_os {
     uint32_t os_minor_version;
     token_t assembly_ref;
 } PACKED metadata_assembly_ref_os_t;
+
+#define METADATA_NESTED_CLASS 0x29
+typedef struct metadata_nested_class {
+    token_t* nested_class;
+    token_t* enclosing_class;
+} PACKED metadata_nested_class_t;

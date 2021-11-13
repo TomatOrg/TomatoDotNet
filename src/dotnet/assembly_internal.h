@@ -21,6 +21,11 @@ struct assembly {
     type_t* types;
     size_t types_count;
 
+    // list of all the fields for all the types
+    // this makes it easier to access using a token
+    field_t* fields;
+    size_t fields_count;
+
     // static data, all allocated on the heap
     char* strings;
     size_t strings_size;
@@ -30,4 +35,8 @@ struct assembly {
     size_t blob_size;
     guid_t* guids;
     size_t guids_count;
+
+    // the mir module data, needed for later
+    char* module_data;
+    size_t module_data_size;
 };

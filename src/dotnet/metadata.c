@@ -124,7 +124,7 @@ static const char* m_coded_index_tags[] = {
     [HAS_CUSTOM_ATTRIBUTE] = "\x06\x04\x01\x02\x08\x09\x0A\x00\x0E\x17\x14\x11\x1A\x1B\x20\x23\x26\x27\x28zzzzzzzzzzzzz",
     [HAS_FIELD_MARSHALL] = "\x04\x08",
     [HAS_DECL_SECURITY] = "\x02\x06\x20z",
-    [MEMBER_REF_PARENT] = "z\x01\x1A\x06\x1Bzzz",
+    [MEMBER_REF_PARENT] = "\x00\x01\x1A\x06\x1Bzzz",
     [HAS_SEMANTICS] = "\x14\x17",
     [METHOD_DEF_OR_REF] = "\x06\x0A",
     [MEMBER_FORWARDED] = "\x04\x06",
@@ -199,9 +199,11 @@ static table_parse_op_t* m_table_ops[] = {
     [METADATA_PROPERTY] = (table_parse_op_t[]){ GET_UINT16, GET_STRING, GET_BLOB, DONE },
     [METADATA_METHOD_SEMANTICS] = (table_parse_op_t[]){ GET_UINT16, GET_METHOD_DEF, GET_HAS_SEMANTICS, DONE },
     [METADATA_METHOD_IMPL] = (table_parse_op_t[]){ GET_TYPE_DEF, GET_METHOD_DEF_OR_REF, GET_METHOD_DEF_OR_REF, DONE },
+    [METADATA_TYPE_SPEC] = (table_parse_op_t[]){ GET_BLOB, DONE },
     [METADATA_ASSEMBLY] = (table_parse_op_t[]){ GET_UINT32, GET_UINT16, GET_UINT16, GET_UINT16, GET_UINT16, GET_UINT32, GET_BLOB, GET_STRING, GET_STRING, DONE },
     [METADATA_ASSEMBLY_REF] = (table_parse_op_t[]){ GET_UINT16, GET_UINT16, GET_UINT16, GET_UINT16, GET_UINT32, GET_BLOB, GET_STRING, GET_STRING, GET_BLOB, DONE },
     [METADATA_ASSEMBLY_REF_OS] = (table_parse_op_t[]){ GET_UINT32, GET_UINT32, GET_UINT32, GET_ASSEMBLY_REF, DONE },
+    [METADATA_NESTED_CLASS] = (table_parse_op_t[]){ GET_TYPE_DEF, GET_TYPE_DEF, DONE },
 };
 
 /**

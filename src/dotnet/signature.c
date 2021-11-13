@@ -33,36 +33,38 @@ static int sig_get_entry(sig_t* sig) {
 static uint8_t m_table_id[] = {
     METADATA_TYPE_DEF,
     METADATA_TYPE_REF,
-    0,
+    METADATA_TYPE_SPEC,
     0
 };
 
 static token_t sig_get_type_def_or_ref_or_spec(sig_t* sig) {
     uint32_t entry = sig_get_entry(sig);
-    return (token_t){ .table = entry & 0x3, .index = entry >> 2 };
+    return (token_t){ .table = m_table_id[entry & 0x3], .index = entry >> 2 };
 }
 
-type_t* sig_get_type(assembly_t* assembly, sig_t* sig) {
+static err_t sig_get_type(assembly_t* assembly, sig_t* sig, type_t** type) {
+    err_t err = NO_ERROR;
+
     int entry = sig_get_entry(sig);
     switch (entry) {
         // short forms
-        case ELEMENT_TYPE_VOID: return g_void;
-        case ELEMENT_TYPE_BOOLEAN: return g_boolean;
-        case ELEMENT_TYPE_CHAR: return g_char;
-        case ELEMENT_TYPE_I1: return g_sbyte;
-        case ELEMENT_TYPE_U1: return g_byte;
-        case ELEMENT_TYPE_I2: return g_int16;
-        case ELEMENT_TYPE_U2: return g_uint16;
-        case ELEMENT_TYPE_I4: return g_int32;
-        case ELEMENT_TYPE_U4: return g_uint32;
-        case ELEMENT_TYPE_I8: return g_int64;
-        case ELEMENT_TYPE_U8: return g_uint64;
-        case ELEMENT_TYPE_R4: return g_float;
-        case ELEMENT_TYPE_R8: return g_double;
-        case ELEMENT_TYPE_STRING: return g_string;
-        case ELEMENT_TYPE_I: return g_intptr;
-        case ELEMENT_TYPE_U: return g_uintptr;
-        case ELEMENT_TYPE_OBJECT: return g_object;
+        case ELEMENT_TYPE_VOID: *type = g_void; break;
+        case ELEMENT_TYPE_BOOLEAN: *type = g_boolean; break;
+        case ELEMENT_TYPE_CHAR: *type = g_char; break;
+        case ELEMENT_TYPE_I1: *type = g_sbyte; break;
+        case ELEMENT_TYPE_U1: *type = g_byte; break;
+        case ELEMENT_TYPE_I2: *type = g_int16; break;
+        case ELEMENT_TYPE_U2: *type = g_uint16; break;
+        case ELEMENT_TYPE_I4: *type = g_int32; break;
+        case ELEMENT_TYPE_U4: *type = g_uint32; break;
+        case ELEMENT_TYPE_I8: *type = g_int64; break;
+        case ELEMENT_TYPE_U8: *type = g_uint64; break;
+        case ELEMENT_TYPE_R4: *type = g_float; break;
+        case ELEMENT_TYPE_R8: *type = g_double; break;
+        case ELEMENT_TYPE_STRING: *type = g_string; break;
+        case ELEMENT_TYPE_I: *type = g_intptr; break;
+        case ELEMENT_TYPE_U: *type = g_uintptr; break;
+        case ELEMENT_TYPE_OBJECT: *type = g_object; break;
 
         // class reference
         case ELEMENT_TYPE_VALUETYPE:
@@ -70,31 +72,33 @@ type_t* sig_get_type(assembly_t* assembly, sig_t* sig) {
             token_t token = sig_get_type_def_or_ref_or_spec(sig);
             switch (token.table) {
                 // a type from our assembly
-                case METADATA_TYPE_DEF:
+                case METADATA_TYPE_DEF: {
                     if (1 <= token.index && token.index - 1 < assembly->types_count) {
-                        return &assembly->types[token.index - 1];
+                        *type = &assembly->types[token.index - 1];
+                        goto cleanup;
                     }
-                    return NULL;
+                } break;
 
                 // TODO: type spec / type ref
 
                 // unknown table
-                default:
-                    return NULL;
+                default: CHECK_FAIL("Unknown table %d", token.table);
             }
-        }
+        } break;
 
         // pointer type
         case ELEMENT_TYPE_PTR: {
-            type_t* element = sig_get_type(assembly, sig);
-            return get_ptr_type(element);
-        }
+            type_t* element = NULL;
+            CHECK_AND_RETHROW(sig_get_type(assembly, sig, &element));
+            *type = get_ptr_type(element);
+        } break;
 
         // unknown entry
-        default:
-            WARN("Invalid entry: %x", entry);
-            return NULL;
+        default: CHECK_FAIL("Invalid entry: %x", entry);
     }
+
+cleanup:
+    return err;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -127,8 +131,7 @@ static err_t sig_parse_ret_type(sig_t* sig, assembly_t* assembly, type_t** type)
         // Type
         default: {
             *sig = temp;
-            *type = sig_get_type(assembly, sig);
-            CHECK(*type != NULL);
+            CHECK_AND_RETHROW(sig_get_type(assembly, sig, type));
             if (by_ref) {
                 *type = get_by_ref_type(*type);
                 CHECK(*type != NULL);
@@ -159,8 +162,7 @@ static err_t sig_parse_param(sig_t* sig, assembly_t* assembly, type_t** type) {
         // Type
         default: {
             *sig = temp;
-            *type = sig_get_type(assembly, sig);
-            CHECK(*type != NULL);
+            CHECK_AND_RETHROW(sig_get_type(assembly, sig, type));
             if (by_ref) {
                 *type = get_by_ref_type(*type);
                 CHECK(*type != NULL);
@@ -181,8 +183,7 @@ err_t sig_parse_field(sig_t* sig, assembly_t* assembly, field_t* field) {
     CHECK(sig_get_entry(sig) == 0x06);
 
     // get the type
-    field->type = sig_get_type(assembly, sig);
-    CHECK(field->type != NULL);
+    CHECK_AND_RETHROW(sig_get_type(assembly, sig, &field->type));
 
 cleanup:
     return err;

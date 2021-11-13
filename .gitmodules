@@ -1,0 +1,3 @@
+[submodule "mir"]
+	path = mir
+	url = git@github.com:vnmakarov/mir.git

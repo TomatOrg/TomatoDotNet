@@ -212,6 +212,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_void = type;
         } else if (g_boolean == NULL && strcmp(type_def->type_name, "Boolean") == 0) {
             g_boolean = type;
+            g_boolean->stack_type = STACK_TYPE_INT32;
             g_boolean->stack_size = sizeof(unsigned char);
             g_boolean->stack_alignment = alignof(unsigned char);
             g_boolean->is_value_type = 1;
@@ -219,6 +220,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_boolean->resolved_value_type = 1;
         } else if (g_char == NULL && strcmp(type_def->type_name, "Char") == 0) {
             g_char = type;
+            g_char->stack_type = STACK_TYPE_INT32;
             g_char->stack_size = sizeof(unsigned short);
             g_char->stack_alignment = alignof(unsigned short);
             g_char->is_value_type = 1;
@@ -226,6 +228,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_char->resolved_value_type = 1;
         } else if (g_sbyte == NULL && strcmp(type_def->type_name, "SByte") == 0) {
             g_sbyte = type;
+            g_sbyte->stack_type = STACK_TYPE_INT32;
             g_sbyte->stack_size = sizeof(int8_t);
             g_sbyte->stack_alignment = alignof(int8_t);
             g_sbyte->is_value_type = 1;
@@ -233,6 +236,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_sbyte->resolved_value_type = 1;
         } else if (g_byte == NULL && strcmp(type_def->type_name, "Byte") == 0) {
             g_byte = type;
+            g_byte->stack_type = STACK_TYPE_INT32;
             g_byte->stack_size = sizeof(uint8_t);
             g_byte->stack_alignment = alignof(uint8_t);
             g_byte->is_value_type = 1;
@@ -240,6 +244,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_byte->resolved_value_type = 1;
         } else if (g_int16 == NULL && strcmp(type_def->type_name, "Int16") == 0) {
             g_int16 = type;
+            g_int16->stack_type = STACK_TYPE_INT32;
             g_int16->stack_size = sizeof(int16_t);
             g_int16->stack_alignment = alignof(int16_t);
             g_int16->is_value_type = 1;
@@ -247,6 +252,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_int16->resolved_value_type = 1;
         } else if (g_uint16 == NULL && strcmp(type_def->type_name, "UInt16") == 0) {
             g_uint16 = type;
+            g_uint16->stack_type = STACK_TYPE_INT32;
             g_uint16->stack_size = sizeof(uint16_t);
             g_uint16->stack_alignment = alignof(uint16_t);
             g_uint16->is_value_type = 1;
@@ -254,6 +260,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_uint16->resolved_value_type = 1;
         } else if (g_int32 == NULL && strcmp(type_def->type_name, "Int32") == 0) {
             g_int32 = type;
+            g_int32->stack_type = STACK_TYPE_INT32;
             g_int32->stack_size = sizeof(int32_t);
             g_int32->stack_alignment = alignof(int32_t);
             g_int32->is_value_type = 1;
@@ -261,6 +268,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_int32->resolved_value_type = 1;
         } else if (g_uint32 == NULL && strcmp(type_def->type_name, "UInt32") == 0) {
             g_uint32 = type;
+            g_uint32->stack_type = STACK_TYPE_INT32;
             g_uint32->stack_size = sizeof(uint32_t);
             g_uint32->stack_alignment = alignof(uint32_t);
             g_uint32->is_value_type = 1;
@@ -268,6 +276,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_uint32->resolved_value_type = 1;
         } else if (g_int64 == NULL && strcmp(type_def->type_name, "Int64") == 0) {
             g_int64 = type;
+            g_int64->stack_type = STACK_TYPE_INT64;
             g_int64->stack_size = sizeof(int64_t);
             g_int64->stack_alignment = alignof(int64_t);
             g_int64->is_value_type = 1;
@@ -275,6 +284,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_int64->resolved_value_type = 1;
         } else if (g_uint64 == NULL && strcmp(type_def->type_name, "UInt64") == 0) {
             g_uint64 = type;
+            g_uint64->stack_type = STACK_TYPE_INT64;
             g_uint64->stack_size = sizeof(uint64_t);
             g_uint64->stack_alignment = alignof(uint64_t);
             g_uint64->is_value_type = 1;
@@ -282,6 +292,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_uint64->resolved_value_type = 1;
         } else if (g_float == NULL && strcmp(type_def->type_name, "Float") == 0) {
             g_float = type;
+            g_float->stack_type = STACK_TYPE_F;
             g_float->stack_size = sizeof(float);
             g_float->stack_alignment = alignof(float);
             g_float->is_value_type = 1;
@@ -289,6 +300,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_float->resolved_value_type = 1;
         } else if (g_double == NULL && strcmp(type_def->type_name, "Double") == 0) {
             g_double = type;
+            g_double->stack_type = STACK_TYPE_F;
             g_double->stack_size = sizeof(double);
             g_double->stack_alignment = alignof(double);
             g_double->is_value_type = 1;
@@ -296,12 +308,14 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_double->resolved_value_type = 1;
         } else if (g_string == NULL && strcmp(type_def->type_name, "String") == 0) {
             g_string = type;
+            g_string->stack_type = STACK_TYPE_T;
             g_string->stack_size = sizeof(void*);
             g_string->stack_alignment = alignof(void*);
             g_string->is_value_type = 0;
             g_string->resolved_value_type = 1;
         } else if (g_intptr == NULL && strcmp(type_def->type_name, "IntPtr") == 0) {
             g_intptr = type;
+            g_intptr->stack_type = STACK_TYPE_NATIVE_INT;
             g_intptr->stack_size = sizeof(intptr_t);
             g_intptr->stack_alignment = sizeof(intptr_t);
             g_intptr->is_value_type = 1;
@@ -309,6 +323,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_intptr->resolved_value_type = 1;
         } else if (g_uintptr == NULL && strcmp(type_def->type_name, "UIntPtr") == 0) {
             g_uintptr = type;
+            g_uintptr->stack_type = STACK_TYPE_NATIVE_INT;
             g_uintptr->stack_size = sizeof(uintptr_t);
             g_uintptr->stack_alignment = alignof(uintptr_t);
             g_uintptr->is_value_type = 1;
@@ -316,6 +331,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_uintptr->resolved_value_type = 1;
         } else if (g_object == NULL && strcmp(type_def->type_name, "Object") == 0) {
             g_object = type;
+            g_object->stack_type = STACK_TYPE_T;
             g_object->stack_size = sizeof(void*);
             g_object->stack_alignment = alignof(void*);
             g_object->memory_size = sizeof(char);
@@ -329,6 +345,7 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_array->resolved_value_type = 1;
         } else if (g_value_type == NULL && strcmp(type_def->type_name, "ValueType") == 0) {
             g_value_type = type;
+            g_value_type->stack_type = STACK_TYPE_T;
             g_value_type->stack_size = 0;
             g_value_type->stack_alignment = 0;
             g_value_type->is_value_type = 1;
@@ -499,7 +516,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
         // setup all the md_fields in this type
         type->fields_count = end_index - start_index;
         if (type->fields_count > 0) {
-            type->fields = malloc(sizeof(field_t) * type->fields_count);
+            type->fields = &assembly->fields[start_index];
             for (int j = 0; j < type->fields_count; j++) {
                 metadata_field_t* md_field = &md_fields[start_index + j];
                 type->fields[j].name = md_field->name;
@@ -546,6 +563,7 @@ static size_t sum_field_sizes(type_t* type, size_t* alignment) {
 
         // align the size, set the offset, and increment it
         size = ALIGN_UP(size, field->type->stack_alignment);
+        TRACE("%ld", size);
         field->offset = size;
         size += field->type->stack_size;
 
@@ -564,6 +582,9 @@ static void resolve_size(type_t* type) {
     if (type->resolved_size) {
         return;
     }
+
+    // everything which is user defined is T
+    type->stack_type = STACK_TYPE_T;
 
     // first resolve the stack size because the element can't include itself
     // on the stack if it is a value type
@@ -658,7 +679,7 @@ err_t load_assembly_from_blob(uint8_t* blob, size_t blob_size, assembly_t** asse
     parsed_pe_t ctx = { 0 };
 
     // allocate the new assembly
-    assembly_t* new_assembly = malloc(sizeof(assembly_t));
+    assembly_t* new_assembly = calloc(1, sizeof(assembly_t));
     CHECK_ERROR(new_assembly != NULL, ERROR_OUT_OF_RESOURCES);
 
     // parse the PE binary
@@ -674,12 +695,16 @@ err_t load_assembly_from_blob(uint8_t* blob, size_t blob_size, assembly_t** asse
 
     // set the base arrays for methods and types
     new_assembly->types_count = ctx.metadata.tables[METADATA_TYPE_DEF].rows;
-    new_assembly->types = malloc(new_assembly->types_count * sizeof(type_t));
+    new_assembly->types = calloc(new_assembly->types_count, sizeof(type_t));
     CHECK(new_assembly->types != NULL);
 
     new_assembly->methods_count = ctx.metadata.tables[METADATA_METHOD_DEF].rows;
-    new_assembly->methods = malloc(new_assembly->methods_count * sizeof(method_t));
+    new_assembly->methods = calloc(new_assembly->methods_count, sizeof(method_t));
     CHECK(new_assembly->methods != NULL);
+
+    new_assembly->fields_count = ctx.metadata.tables[METADATA_FIELD].rows;
+    new_assembly->fields = calloc(new_assembly->fields_count, sizeof(field_t));
+    CHECK(new_assembly->fields != NULL);
 
     // if the kernel assembly is NULL at this point we are loading the kernel
     // assembly, so setup all the base types
