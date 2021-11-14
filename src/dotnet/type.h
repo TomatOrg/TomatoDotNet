@@ -83,6 +83,16 @@ typedef struct type {
     struct type* by_ref_type;
 } type_t;
 
+/**
+ * Returns true if this is a value type
+ *
+ * @remark
+ * This will return false for native types like floats, ints and alike
+ */
+static inline bool type_is_valuetype(type_t* type) {
+    return type->stack_type == STACK_TYPE_T && type->is_value_type;
+}
+
 // These are common built in types
 extern type_t* g_void;
 extern type_t* g_boolean;

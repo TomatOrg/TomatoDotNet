@@ -563,7 +563,6 @@ static size_t sum_field_sizes(type_t* type, size_t* alignment) {
 
         // align the size, set the offset, and increment it
         size = ALIGN_UP(size, field->type->stack_alignment);
-        TRACE("%ld", size);
         field->offset = size;
         size += field->type->stack_size;
 
@@ -588,9 +587,12 @@ static void resolve_size(type_t* type) {
 
     // first resolve the stack size because the element can't include itself
     // on the stack if it is a value type
-    if (type->resolved_size) {
+    if (!type->resolved_size) {
         if (type->is_value_type) {
+            // the stack size is the sum of all the fields aligned to the alignment
+            // of the largest field
             type->stack_size = sum_field_sizes(type, &type->stack_alignment);
+            type->stack_size = ALIGN_UP(type->stack_size, type->stack_alignment);
         } else {
             // for non-value-types the stack size is the size of an object on the stack
             // which should be just the size of a pointer

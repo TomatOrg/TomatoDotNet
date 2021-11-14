@@ -5,37 +5,38 @@
 #include "cil_opcodes.h"
 #include "metadata_spec.h"
 
-static MIR_var_t get_param_mir_type(type_t* type) {
+static MIR_type_t get_param_mir_type(type_t* type) {
     if (type == g_sbyte) {
-        return (MIR_var_t) { .type = MIR_T_I8 };
-    } else if (type == g_byte) {
-        return (MIR_var_t) { .type = MIR_T_U8 };
+        return MIR_T_I8;
+    } else if (type == g_byte || type == g_boolean) {
+        return MIR_T_U8;
     } else if (type == g_int16) {
-        return (MIR_var_t) { .type = MIR_T_I16 };
-    } else if (type == g_uint16) {
-        return (MIR_var_t) { .type = MIR_T_U16 };
+        return MIR_T_I16;
+    } else if (type == g_uint16 || type == g_char) {
+        return MIR_T_U16;
     } else if (type == g_int32) {
-        return (MIR_var_t) { .type = MIR_T_I32 };
+        return MIR_T_I32;
     } else if (type == g_uint32) {
-        return (MIR_var_t) { .type = MIR_T_U32 };
+        return MIR_T_U32;
     } else if (type == g_int64) {
-        return (MIR_var_t) { .type = MIR_T_I64 };
+        return MIR_T_I64;
     } else if (type == g_uint64) {
-        return (MIR_var_t) { .type = MIR_T_U64 };
+        return MIR_T_U64;
     } else if (type == g_float) {
-        return (MIR_var_t) { .type = MIR_T_F };
+        return MIR_T_F;
     } else if (type == g_double) {
-        return (MIR_var_t) { .type = MIR_T_D };
+        return MIR_T_D;
     } else if (type == g_uintptr) {
-        return (MIR_var_t) { .type = type->stack_size == 4 ? MIR_T_U32 : MIR_T_U64 };
+        return type->stack_size == 4 ? MIR_T_U32 : MIR_T_U64;
     } else if (type == g_intptr) {
-        return (MIR_var_t) { .type = type->stack_size == 4 ? MIR_T_I32 : MIR_T_I64 };
+        return type->stack_size == 4 ? MIR_T_I32 : MIR_T_I64;
     } else if (type->mod == TYPE_PTR || type->mod == TYPE_BY_REF) {
-        return (MIR_var_t) { .type = MIR_T_P };
+        return MIR_T_P;
     } else if (type->is_value_type) {
-        return (MIR_var_t) { .type = MIR_T_BLK, .size = type->stack_size };
+        // TODO: pass value types by value...
+        return MIR_T_UNDEF;
     } else {
-        return (MIR_var_t) { .type = MIR_T_P };
+        return MIR_T_P;
     }
 }
 
@@ -50,30 +51,6 @@ static MIR_type_t get_local_mir_type(type_t* type) {
     }
 }
 
-static bool requires_stack_allocation(type_t* type) {
-    if (type == g_sbyte ||
-        type == g_byte ||
-        type == g_int16 ||
-        type == g_uint16 ||
-        type == g_int32 ||
-        type == g_uint32 ||
-        type == g_int64 ||
-        type == g_uint64 ||
-        type == g_float ||
-        type == g_double ||
-        type == g_uintptr ||
-        type == g_intptr ||
-        type->mod == TYPE_BY_REF ||
-        type->mod == TYPE_PTR
-    ) {
-        return false;
-    } else if (type->is_value_type) {
-        return true;
-    } else {
-        return false;
-    }
-}
-
 #define CIL_FETCH(type) \
     ({ \
         CHECK(sizeof(type) <= cil_left); \
@@ -85,10 +62,13 @@ static bool requires_stack_allocation(type_t* type) {
 #define CIL_FETCH_UINT8() CIL_FETCH(uint8_t)
 #define CIL_FETCH_UINT16() CIL_FETCH(uint16_t)
 #define CIL_FETCH_UINT32() CIL_FETCH(uint32_t)
+#define CIL_FETCH_UINT64() CIL_FETCH(uint64_t)
+#define CIL_FETCH_FLOAT32() CIL_FETCH(float)
+#define CIL_FETCH_FLOAT64() CIL_FETCH(double)
 #define CIL_FETCH_TOKEN() CIL_FETCH(token_t)
 
 typedef struct arg_item {
-    MIR_reg_t reg;
+    MIR_op_t op;
     type_t* type;
 } arg_item_t;
 
@@ -198,6 +178,53 @@ static void emit_inline_memcpy(
     }
 }
 
+static void emit_inline_memset(
+    MIR_context_t ctx, MIR_item_t func,
+    MIR_reg_t to_base, size_t to_offset,
+    uint8_t value8, size_t size
+) {
+    uint16_t value16 = ((uint16_t)value8) | ((uint16_t)value8 << 8);
+    uint32_t value32 = ((uint32_t)value16) | ((uint32_t)value16 << 16);
+    uint64_t value64 = ((uint64_t)value32) | ((uint64_t)value32 << 32);
+    size_t size_left = size;
+    while (size_left >= 8) {
+        MIR_append_insn(ctx, func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_mem_op(ctx, MIR_T_I64,
+                                                    to_offset + size - size_left,
+                                                    to_base, 0, 1),
+                                     MIR_new_uint_op(ctx, value64)));
+        size_left -= 8;
+    }
+    if (size_left >= 4) {
+        MIR_append_insn(ctx, func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_mem_op(ctx, MIR_T_I32,
+                                                    to_offset + size - size_left,
+                                                    to_base, 0, 1),
+                                     MIR_new_uint_op(ctx, value32)));
+        size_left -= 4;
+    }
+    if (size_left >= 2) {
+        MIR_append_insn(ctx, func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_mem_op(ctx, MIR_T_I16,
+                                                    to_offset + size - size_left,
+                                                    to_base, 0, 1),
+                                     MIR_new_uint_op(ctx, value16)));
+        size_left -= 2;
+    }
+    if (size_left >= 1) {
+        MIR_append_insn(ctx, func,
+                        MIR_new_insn(ctx, MIR_MOV,
+                                     MIR_new_mem_op(ctx, MIR_T_I8,
+                                                    to_offset + size - size_left,
+                                                    to_base, 0, 1),
+                                     MIR_new_uint_op(ctx, value8)));
+        size_left -= 1;
+    }
+}
+
 static err_t emit_binary_op(
         MIR_context_t ctx, MIR_item_t func,
         MIR_insn_code_t insn_code,
@@ -289,14 +316,16 @@ cleanup:
     return err;
 }
 
+#define SPILL
+
 static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int method_index) {
     err_t err = NO_ERROR;
     MIR_context_t ctx = instance->context;
     size_t nargs = 0;
-    MIR_var_t* args_temp_before = NULL;
-    MIR_var_t* args_temp = NULL;
-    MIR_reg_t* locals = NULL;
+    const char** arg_names = NULL;
+    MIR_var_t* mir_args = NULL;
     stack_item_t* stack = NULL;
+    arg_item_t* locals = NULL;
     arg_item_t* args = NULL;
     size_t stack_pointer = 0;
     size_t stack_max = 0;
@@ -317,15 +346,16 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
 
     // setup all the arguments properly
     nargs = (method->is_static ? 0 : 1) + method->parameter_count;
-    args_temp = NULL;
+    mir_args = NULL;
     if (nargs > 0) {
-        args_temp = calloc(nargs, sizeof(MIR_var_t));
-        args_temp_before = calloc(nargs, sizeof(MIR_var_t));
-        args = calloc(nargs, sizeof(stack_item_t));
+        mir_args = calloc(nargs, sizeof(*mir_args));
+        arg_names = calloc(nargs, sizeof(*arg_names));
+        args = calloc(nargs, sizeof(*args));
 
         if (!method->is_static) {
-            args_temp[0].type = MIR_T_P;
-            args_temp[0].name = strdup("this");
+            mir_args[0].type = MIR_T_P;
+            mir_args[0].name = "this";
+            arg_names[0] = NULL;
 
             // set the real this type
             if (method->parent->is_value_type) {
@@ -340,39 +370,47 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
 
             char name_buffer[16] = { 0 };
             snprintf(name_buffer, sizeof(name_buffer), "arg%d", i);
-            args_temp[i] = get_param_mir_type(args[i].type);
-            args_temp[i].name = strdup(name_buffer);
+            mir_args[i].type = get_param_mir_type(args[i].type);
+            arg_names[i] = mir_args[i].name = strdup(name_buffer);
         }
     }
 
     // create the function, it is a bit annoying but the
-    memcpy(args_temp_before, args_temp, sizeof(MIR_var_t) * nargs);
-    MIR_item_t func = MIR_new_func_arr(ctx, func_name, nres, &res_type, nargs, args_temp);
+    MIR_item_t func = MIR_new_func_arr(ctx, func_name, nres, &res_type, nargs, mir_args);
     for (int i = 0; i < nargs; i++) {
-        args[i].reg = MIR_reg(ctx, args_temp[i].name, func->u.func);
-        SAFE_FREE(args_temp_before[i].name);
+        args[i].op = MIR_new_reg_op(ctx, MIR_reg(ctx, mir_args[i].name, func->u.func));
+        SAFE_FREE(arg_names[i]);
     }
-    SAFE_FREE(args_temp_before);
-    SAFE_FREE(args_temp);
+    SAFE_FREE(arg_names);
+    SAFE_FREE(mir_args);
 
     // setup all the locals as registers
     locals = NULL;
     if (method->locals_count > 0) {
-        locals = calloc(method->locals_count, sizeof(MIR_reg_t));
+        locals = calloc(method->locals_count, sizeof(*locals));
         for (int i = 0; i < method->locals_count; i++) {
             local_t* local = &method->locals[i];
 
             // setup the variable for this register
             char name_buffer[16] = { 0 };
             snprintf(name_buffer, sizeof(name_buffer), "local%d", i);
-            locals[i] = MIR_new_func_reg(ctx, func->u.func, get_local_mir_type(local->type), name_buffer);
+            locals[i].op = MIR_new_reg_op(ctx, MIR_new_func_reg(ctx, func->u.func, get_local_mir_type(local->type), name_buffer));
+            locals[i].type = local->type;
+
+            if (type_is_valuetype(local->type)) {
+                // need to allocate some space for this...
+                MIR_append_insn(ctx, func,
+                                MIR_new_insn(ctx, MIR_ALLOCA,
+                                             locals[i].op,
+                                             MIR_new_uint_op(ctx, local->type->stack_size)));
+            }
         }
     }
 
     // setup the stack itself
     stack_max = method->max_stack_depth;
     if (stack_max > 0) {
-        stack = calloc(stack_max, sizeof(stack_item_t));
+        stack = calloc(stack_max, sizeof(*stack));
     }
 
     // pass over the IL
@@ -381,68 +419,162 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
     while (cil_left) {
 
         int32_t value = 0;
+        arg_item_t* items = NULL;
+        size_t items_count = 0;
+        const char* str = NULL;
         uint8_t opcode = CIL_FETCH_UINT8();
 
         switch (opcode) {
             case CIL_NOP: break;
 
-            case CIL_LDARG_0: value = 0; goto do_ldarg;
-            case CIL_LDARG_1: value = 1; goto do_ldarg;
-            case CIL_LDARG_2: value = 2; goto do_ldarg;
-            case CIL_LDARG_3: value = 3; goto do_ldarg;
-            do_ldarg: {
+            case CIL_LDARG_0: value = 0; items = args; items_count = nargs; goto do_ld;
+            case CIL_LDARG_1: value = 1; items = args; items_count = nargs; goto do_ld;
+            case CIL_LDARG_2: value = 2; items = args; items_count = nargs; goto do_ld;
+            case CIL_LDARG_3: value = 3; items = args; items_count = nargs; goto do_ld;
+
+            case CIL_LDLOC_0: value = 0; items = locals; items_count = method->locals_count; goto do_ld;
+            case CIL_LDLOC_1: value = 1; items = locals; items_count = method->locals_count; goto do_ld;
+            case CIL_LDLOC_2: value = 2; items = locals; items_count = method->locals_count; goto do_ld;
+            case CIL_LDLOC_3: value = 3; items = locals; items_count = method->locals_count; goto do_ld;
+
+            do_ld: {
                 // make sure the argument exists
-                CHECK(value < nargs);
+                CHECK(value < items_count);
 
                 // push the value to the stack
-                type_t* type = args[value].type;
+                type_t* type = items[value].type;
                 MIR_reg_t reg = STACK_PUSH(type);
 
                 // append instruction
-                if (type->stack_type == STACK_TYPE_INT32) {
-                    // this is an int32 or intn, copy to stack slot
-                    MIR_append_insn(ctx, func,
-                                    MIR_new_insn(ctx, MIR_EXT32,
-                                                 MIR_new_reg_op(ctx, reg),
-                                                 MIR_new_reg_op(ctx, args[value].reg)));
-                } else if (type->stack_type == STACK_TYPE_INT64 || type->stack_type == STACK_TYPE_NATIVE_INT) {
-                    // this is an int64 or intn, copy to stack slot
-                    MIR_append_insn(ctx, func,
-                                    MIR_new_insn(ctx, MIR_MOV,
-                                                 MIR_new_reg_op(ctx, reg),
-                                                 MIR_new_reg_op(ctx, args[value].reg)));
-                } else if (type->stack_type == STACK_TYPE_F) {
+                if (type->stack_type == STACK_TYPE_F) {
                     if (type == g_float) {
                         // this is a float, convert to double and copy to stack slot
                         MIR_append_insn(ctx, func,
                                         MIR_new_insn(ctx, MIR_F2D,
                                                      MIR_new_reg_op(ctx, reg),
-                                                     MIR_new_reg_op(ctx, args[value].reg)));
+                                                     items[value].op));
                     } else {
                         // this is a double, just copy to stack slot
                         MIR_append_insn(ctx, func,
                                         MIR_new_insn(ctx, MIR_DMOV,
                                                      MIR_new_reg_op(ctx, reg),
-                                                     MIR_new_reg_op(ctx, args[value].reg)));
+                                                     items[value].op));
                     }
+                } else {
+                    MIR_append_insn(ctx, func,
+                                    MIR_new_insn(ctx, MIR_MOV,
+                                                 MIR_new_reg_op(ctx, reg),
+                                                 items[value].op));
                 }
             } break;
 
-            case CIL_LDARGA_S: {
-                value = CIL_FETCH_UINT8();
-                CHECK(value < nargs);
+            case CIL_STLOC_0: value = 0; items = locals; items_count = method->locals_count; goto do_st;
+            case CIL_STLOC_1: value = 1; items = locals; items_count = method->locals_count; goto do_st;
+            case CIL_STLOC_2: value = 2; items = locals; items_count = method->locals_count; goto do_st;
+            case CIL_STLOC_3: value = 3; items = locals; items_count = method->locals_count; goto do_st;
+
+            do_st: {
+                // make sure the argument exists
+                CHECK(value < items_count);
 
                 // push the value to the stack
-                MIR_reg_t reg = STACK_PUSH(get_by_ref_type(args[value].type));
+                type_t* type = items[value].type;
+                type_t* got_type;
+                MIR_reg_t reg = STACK_POP(&got_type);
 
-                if (args[value].type->stack_type == STACK_TYPE_T && args[value].type->is_value_type) {
+                // TODO: type validation
+
+                // append instruction
+                if (type->stack_type == STACK_TYPE_F) {
+                    if (type == g_float) {
+                        // this is a float, convert to double and copy to stack slot
+                        MIR_append_insn(ctx, func,
+                                        MIR_new_insn(ctx, MIR_F2D,
+                                                     items[value].op,
+                                                     MIR_new_reg_op(ctx, reg)));
+                    } else {
+                        // this is a double, just copy to stack slot
+                        MIR_append_insn(ctx, func,
+                                        MIR_new_insn(ctx, MIR_DMOV,
+                                                     items[value].op,
+                                                     MIR_new_reg_op(ctx, reg)));
+                    }
+                } else {
+                    MIR_append_insn(ctx, func,
+                                    MIR_new_insn(ctx, MIR_MOV,
+                                                 items[value].op,
+                                                 MIR_new_reg_op(ctx, reg)));
+                }
+            } break;
+
+            // TODO: these are very similar, abstract them somehow?
+
+            case CIL_LDARGA_S: {
+                value = CIL_FETCH_UINT8();
+                items_count = nargs;
+                items = args;
+                str = "arga%d";
+            } goto do_lda;
+
+            case CIL_LDLOCA_S: {
+                value = CIL_FETCH_UINT8();
+                items_count = method->locals_count;
+                items = locals;
+                str = "loca%d";
+            } goto do_lda;
+
+            do_lda: {
+                CHECK(value < items_count);
+
+                // push the value to the stack
+                MIR_reg_t reg = STACK_PUSH(get_by_ref_type(items[value].type));
+
+                if (type_is_valuetype(items[value].type)) {
                     // for value types this is simple, we always have them on the stack
                     MIR_append_insn(ctx, func,
                                     MIR_new_insn(ctx, MIR_MOV,
                                                  MIR_new_reg_op(ctx, reg),
-                                                 MIR_new_reg_op(ctx, args[value].reg)));
+                                                 items[value].op));
                 } else {
-                    CHECK_FAIL("TODO: addrof native value");
+                    char name_buffer[16];
+                    snprintf(name_buffer, sizeof(name_buffer), str, value);
+
+                    // check if the value needs to be spilled
+                    if (items[value].op.mode == MIR_OP_REG) {
+                        // allocate the new variable space
+                        MIR_reg_t new_base = MIR_new_func_reg(ctx, func->u.func, MIR_T_I64, name_buffer);
+                        MIR_append_insn(ctx, func,
+                                        MIR_new_insn(ctx, MIR_ALLOCA,
+                                                     MIR_new_reg_op(ctx, new_base),
+                                                     MIR_new_int_op(ctx, items[value].type->stack_size)));
+
+                        // setup the new operands
+                        MIR_op_t prev_op = items[value].op;
+                        items[value].op = MIR_new_mem_op(ctx, get_param_mir_type(items[value].type), 0, new_base, 0, 1);
+
+                        // actually move it
+                        MIR_insn_code_t insn_code;
+                        if (items[value].type == g_double) {
+                            // use the double move
+                            insn_code = MIR_DMOV;
+                        } else if (items[value].type == g_float) {
+                            // move it by converting from a double (stack value) to a float
+                            insn_code = MIR_D2F;
+                        } else {
+                            // just move it
+                            insn_code = MIR_MOV;
+                        }
+                        MIR_append_insn(ctx, func,
+                                        MIR_new_insn(ctx, insn_code,
+                                                     items[value].op,
+                                                     prev_op));
+                    }
+
+                    // now pass the base
+                    MIR_append_insn(ctx, func,
+                                    MIR_new_insn(ctx, MIR_MOV,
+                                                 MIR_new_reg_op(ctx, reg),
+                                                 MIR_new_reg_op(ctx, MIR_reg(ctx, name_buffer, func->u.func))));
                 }
             } break;
 
@@ -456,14 +588,42 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
             case CIL_LDC_I4_6: value = 6; goto do_ldc_i4;
             case CIL_LDC_I4_7: value = 7; goto do_ldc_i4;
             case CIL_LDC_I4_8: value = 8; goto do_ldc_i4;
+            case CIL_LDC_I4_S: value = CIL_FETCH_UINT8(); goto do_ldc_i4;
+            case CIL_LDC_I4: value = CIL_FETCH_UINT32(); goto do_ldc_i4;
             do_ldc_i4: {
-                // push the value to the stack
                 MIR_reg_t reg = STACK_PUSH(g_int32);
-
                 MIR_append_insn(ctx, func,
                                 MIR_new_insn(ctx, MIR_MOV,
                                              MIR_new_reg_op(ctx, reg),
                                              MIR_new_int_op(ctx, value)));
+            } break;
+
+            case CIL_LDC_I8: {
+                uint64_t value64 = CIL_FETCH_UINT64();
+                MIR_reg_t reg = STACK_PUSH(g_int64);
+                MIR_append_insn(ctx, func,
+                                MIR_new_insn(ctx, MIR_MOV,
+                                             MIR_new_reg_op(ctx, reg),
+                                             MIR_new_int_op(ctx, value)));
+            } break;
+
+
+            case CIL_LDC_R4: {
+                float fvalue = CIL_FETCH_FLOAT32();
+                MIR_reg_t reg = STACK_PUSH(g_float);
+                MIR_append_insn(ctx, func,
+                                MIR_new_insn(ctx, MIR_DMOV,
+                                             MIR_new_reg_op(ctx, reg),
+                                             MIR_new_double_op(ctx, fvalue)));
+            } break;
+
+            case CIL_LDC_R8: {
+                double dvalue = CIL_FETCH_FLOAT64();
+                MIR_reg_t reg = STACK_PUSH(g_double);
+                MIR_append_insn(ctx, func,
+                                MIR_new_insn(ctx, MIR_DMOV,
+                                             MIR_new_reg_op(ctx, reg),
+                                             MIR_new_double_op(ctx, dvalue)));
             } break;
 
             case CIL_CALL: {
@@ -496,6 +656,11 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
                                     MIR_new_ret_insn(ctx, 0));
                 }
             } break;
+
+            case CIL_ADD: CHECK_AND_RETHROW(emit_binary_op(ctx, func, MIR_ADD, stack, &stack_pointer, stack_max)); break;
+            case CIL_SUB: CHECK_AND_RETHROW(emit_binary_op(ctx, func, MIR_SUB, stack, &stack_pointer, stack_max)); break;
+            case CIL_MUL: CHECK_AND_RETHROW(emit_binary_op(ctx, func, MIR_MUL, stack, &stack_pointer, stack_max)); break;
+            case CIL_DIV: CHECK_AND_RETHROW(emit_binary_op(ctx, func, MIR_DIV, stack, &stack_pointer, stack_max)); break;
 
             // all of these convert to the same value...
             case CIL_CONV_I:
@@ -542,7 +707,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
                 // pop/push
                 type_t* obj_type;
                 MIR_reg_t obj_reg = STACK_POP(&obj_type);
-                MIR_reg_t val_reg = STACK_PUSH(obj_type);
+                MIR_reg_t val_reg = STACK_PUSH(field->type);
 
                 // TODO: verify object is valid for field
 
@@ -551,12 +716,6 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
                         // if this is a value type then we need to allocate it
                         // on the stack first
                         if (field->type->is_value_type) {
-                            // first allocate space for this type
-                            MIR_append_insn(ctx, func,
-                                            MIR_new_insn(ctx, MIR_ALLOCA,
-                                                         MIR_new_reg_op(ctx, val_reg),
-                                                         MIR_new_int_op(ctx, field->type->stack_size)));
-
                             // now we will memcpy it
                             emit_inline_memcpy(ctx, func, val_reg, 0, obj_reg, field->offset, field->type->stack_size);
                             break;
@@ -585,10 +744,10 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
                                     insn_code = MIR_F2D;
                                 } else if (field->type == g_int32) {
                                     type = MIR_T_I32;
-                                    insn_code = MIR_EXT32;
+                                    insn_code = MIR_MOV;
                                 } else {
                                     type = MIR_T_U32;
-                                    insn_code = MIR_UEXT32;
+                                    insn_code = MIR_MOV;
                                 }
                             } break;
 
@@ -709,6 +868,18 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
                         CHECK_AND_RETHROW(emit_binary_op(ctx, func, MIR_EQ, stack, &stack_pointer, stack_max));
                     } break;
 
+                    case CILX_INITOBJ: {
+                        token_t type_token = CIL_FETCH_TOKEN();
+
+                        // TODO: verify the type token is the same as the popped value...
+
+                        // just zero initialize everything, since default for every type
+                        // is basically zero
+                        type_t* type;
+                        MIR_reg_t reg = STACK_POP(&type);
+                        emit_inline_memset(ctx, func, reg, 0, 0, type->stack_size);
+                    } break;
+
                     default: WARN("Invalid extended opcode fe %x", opcode); goto cleanup;
                 }
             } break;
@@ -761,6 +932,18 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
     MIR_finish_module(instance->context);
 
     MIR_output(instance->context, stdout);
+
+    MIR_gen_init(instance->context, 0);
+    MIR_gen_set_optimize_level(instance->context, 0, 4);
+    MIR_gen_set_debug_file(instance->context, 0, stdout);
+    MIR_gen_set_debug_level(instance->context, 0, 10);
+    MIR_load_module(instance->context, mod);
+    MIR_link(instance->context, MIR_set_gen_interface, NULL);
+
+    MIR_item_t func = MIR_get_global_item(instance->context, "Corelib.Program::Main#0");
+    CHECK(func != NULL);
+
+    MIR_gen_finish(instance->context);
 
     // write it out
     FILE* out = open_memstream(&assembly->module_data, &assembly->module_data_size);

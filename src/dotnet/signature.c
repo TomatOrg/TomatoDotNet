@@ -122,7 +122,7 @@ static err_t sig_parse_ret_type(sig_t* sig, assembly_t* assembly, type_t** type)
             break;
 
         // BYREF
-        case TYPE_BY_REF:
+        case ELEMENT_TYPE_BYREF:
             temp = *sig;
             by_ref = true;
 
@@ -154,7 +154,7 @@ static err_t sig_parse_param(sig_t* sig, assembly_t* assembly, type_t** type) {
         // TODO: TYPEBYREF
 
         // BYREF
-        case TYPE_BY_REF:
+        case ELEMENT_TYPE_BYREF:
             temp = *sig;
             by_ref = true;
             // fallthrough to Type
