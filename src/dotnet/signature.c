@@ -199,7 +199,7 @@ err_t sig_parse_method_locals(sig_t* sig, method_t* method) {
 
     // Count
     method->locals_count = sig_get_entry(sig);
-    method->locals = malloc(sizeof(local_t) * method->locals_count);
+    method->locals = calloc(method->locals_count, sizeof(local_t));
 
     for (int i = 0; i < method->locals_count; i++) {
         CHECK_AND_RETHROW(sig_parse_param(sig, method->assembly, &method->locals[i].type));
@@ -235,7 +235,7 @@ err_t sig_parse_method(sig_t* sig, method_t* method) {
 
     // ParamCount
     method->parameter_count = sig_get_entry(sig);
-    method->parameters = malloc(sizeof(param_t) * method->parameter_count);
+    method->parameters = calloc(method->parameter_count, sizeof(param_t));
 
     // RetType
     CHECK_AND_RETHROW(sig_parse_ret_type(sig, method->assembly, &method->return_type));

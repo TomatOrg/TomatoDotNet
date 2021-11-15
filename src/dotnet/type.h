@@ -143,6 +143,10 @@ type_t* get_by_ref_type(type_t* type);
 void type_print(type_t* type);
 
 /**
- * Output the type into a buffer
+ * Write the type name into a buffer
+ *
+ * @param type          [IN] The type to write
+ * @param buffer        [IN] The buffer to write to
+ * @param buffer_size   [IN] The size of the buffer
  */
-int type_output(char* buffer, size_t buffer_size, type_t* type);
+size_t type_write_name(type_t* type, char* buffer, size_t buffer_size);

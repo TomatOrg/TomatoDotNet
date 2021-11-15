@@ -1,4 +1,5 @@
 #include <string.h>
+#include <util/stb_ds.h>
 #include "jit.h"
 
 #include "assembly_internal.h"
@@ -77,6 +78,11 @@ typedef struct stack_item {
     MIR_reg_t reg_int64;
     type_t* type;
 } stack_item_t;
+
+typedef struct method_proto {
+    const char* key;
+    MIR_proto_t value;
+} method_proto_t;
 
 //TRACE("\tpush: %zd> %s:%d", stack_pointer, __FILE__, __LINE__);
 
@@ -316,25 +322,17 @@ cleanup:
     return err;
 }
 
-#define SPILL
-
-static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int method_index) {
+static err_t emit_func_and_proto(MIR_context_t ctx, method_t* method, bool prototype_only, MIR_item_t* out_func) {
     err_t err = NO_ERROR;
-    MIR_context_t ctx = instance->context;
-    size_t nargs = 0;
-    const char** arg_names = NULL;
     MIR_var_t* mir_args = NULL;
-    stack_item_t* stack = NULL;
-    arg_item_t* locals = NULL;
-    arg_item_t* args = NULL;
-    size_t stack_pointer = 0;
-    size_t stack_max = 0;
+    const char** arg_names = NULL;
 
     // some unique name for the function...
-    char func_name[256] = {0 };
-    snprintf(func_name, sizeof(func_name), "%s.%s::%s#%d", method->parent->namespace, method->parent->name, method->name, method_index);
+    char func_name[256];
+    CHECK_AND_RETHROW(jit_mangle_name(method, func_name, sizeof(func_name)));
 
-    TRACE("%s", func_name);
+    char proto_func_name[sizeof(func_name) + 10];
+    snprintf(proto_func_name, sizeof(proto_func_name), "proto$%s", func_name);
 
     // setup the return value
     size_t nres = 0;
@@ -344,45 +342,94 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
         nres = 1;
     }
 
-    // setup all the arguments properly
-    nargs = (method->is_static ? 0 : 1) + method->parameter_count;
+    // setup the argument types correctly
+    size_t nargs = method->parameter_count;
     mir_args = NULL;
     if (nargs > 0) {
         mir_args = calloc(nargs, sizeof(*mir_args));
-        arg_names = calloc(nargs, sizeof(*arg_names));
-        args = calloc(nargs, sizeof(*args));
+        for (int i = 0; i < nargs; i++) {
+            mir_args[i].type = get_param_mir_type(method->parameters[i].type);
+            mir_args[i].name = "";
+        }
+    }
 
-        if (!method->is_static) {
-            mir_args[0].type = MIR_T_P;
-            mir_args[0].name = "this";
-            arg_names[0] = NULL;
+    // create the proto
+    MIR_item_t proto = MIR_get_global_item(ctx, proto_func_name);
+    if (proto == NULL) {
+        proto = MIR_new_proto_arr(ctx, proto_func_name, nres, &res_type, nargs, mir_args);
+    }
 
-            // set the real this type
-            if (method->parent->is_value_type) {
-                args[0].type = get_by_ref_type(method->parent);
-            } else {
-                args[0].type = method->parent;
+    if (prototype_only) {
+        // out the proto item
+        *out_func = proto;
+    } else {
+        // setup the names correctly, these are only needed for function declaration
+        if (nargs > 0) {
+            arg_names = calloc(nargs, sizeof(*arg_names));
+            for (int i = 0; i < nargs; i++) {
+                const char* name_ptr;
+                char name_buffer[64];
+                if (method->parameters[i].name != NULL) {
+                    name_ptr = method->parameters[i].name;
+                } else {
+                    snprintf(name_buffer, sizeof(name_buffer), "arg%d", i);
+                    name_ptr = arg_names[i] = strdup(name_buffer);
+                }
+                mir_args[i].name = name_ptr;
             }
         }
 
-        for (int i = (method->is_static ? 0 : 1); i < nargs; i++) {
-            args[i].type = method->parameters[i - (method->is_static ? 0 : 1)].type;
+        // out the new func
+        *out_func = MIR_new_func_arr(ctx, func_name, nres, &res_type, nargs, mir_args);
+    }
 
-            char name_buffer[16] = { 0 };
-            snprintf(name_buffer, sizeof(name_buffer), "arg%d", i);
-            mir_args[i].type = get_param_mir_type(args[i].type);
-            arg_names[i] = mir_args[i].name = strdup(name_buffer);
+cleanup:
+    if (arg_names != NULL) {
+        for (int i = 0; i < nargs; i++) {
+            SAFE_FREE(arg_names[i]);
+        }
+        SAFE_FREE(arg_names);
+    }
+    SAFE_FREE(mir_args);
+    return err;
+}
+
+static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
+    err_t err = NO_ERROR;
+    MIR_context_t ctx = instance->context;
+    stack_item_t* stack = NULL;
+    arg_item_t* locals = NULL;
+    arg_item_t* args = NULL;
+    size_t stack_pointer = 0;
+    size_t stack_max = 0;
+    MIR_op_t* call_args = NULL;
+
+//    TRACE("%s.%s::%s", method->parent->namespace, method->parent->name, method->name);
+
+    // setup all the arguments properly
+    if (method->parameter_count > 0) {
+        args = calloc(method->parameter_count, sizeof(*args));
+        for (int i = 0; i < method->parameter_count; i++) {
+            args[i].type = method->parameters[i].type;
+            CHECK(args[i].type != NULL);
         }
     }
 
+    MIR_item_t func;
+    CHECK_AND_RETHROW(emit_func_and_proto(ctx, method, false, &func));
+
     // create the function, it is a bit annoying but the
-    MIR_item_t func = MIR_new_func_arr(ctx, func_name, nres, &res_type, nargs, mir_args);
-    for (int i = 0; i < nargs; i++) {
-        args[i].op = MIR_new_reg_op(ctx, MIR_reg(ctx, mir_args[i].name, func->u.func));
-        SAFE_FREE(arg_names[i]);
+    for (int i = 0; i < method->parameter_count; i++) {
+        const char* name_ptr;
+        char name_buffer[64];
+        if (method->parameters[i].name != NULL) {
+            name_ptr = method->parameters[i].name;
+        } else {
+            snprintf(name_buffer, sizeof(name_buffer), "arg%d", i);
+            name_ptr = name_buffer;
+        }
+        args[i].op = MIR_new_reg_op(ctx, MIR_reg(ctx, name_ptr, func->u.func));
     }
-    SAFE_FREE(arg_names);
-    SAFE_FREE(mir_args);
 
     // setup all the locals as registers
     locals = NULL;
@@ -427,10 +474,10 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
         switch (opcode) {
             case CIL_NOP: break;
 
-            case CIL_LDARG_0: value = 0; items = args; items_count = nargs; goto do_ld;
-            case CIL_LDARG_1: value = 1; items = args; items_count = nargs; goto do_ld;
-            case CIL_LDARG_2: value = 2; items = args; items_count = nargs; goto do_ld;
-            case CIL_LDARG_3: value = 3; items = args; items_count = nargs; goto do_ld;
+            case CIL_LDARG_0: value = 0; items = args; items_count = method->parameter_count; goto do_ld;
+            case CIL_LDARG_1: value = 1; items = args; items_count = method->parameter_count; goto do_ld;
+            case CIL_LDARG_2: value = 2; items = args; items_count = method->parameter_count; goto do_ld;
+            case CIL_LDARG_3: value = 3; items = args; items_count = method->parameter_count; goto do_ld;
 
             case CIL_LDLOC_0: value = 0; items = locals; items_count = method->locals_count; goto do_ld;
             case CIL_LDLOC_1: value = 1; items = locals; items_count = method->locals_count; goto do_ld;
@@ -511,7 +558,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
 
             case CIL_LDARGA_S: {
                 value = CIL_FETCH_UINT8();
-                items_count = nargs;
+                items_count = method->parameter_count;
                 items = args;
                 str = "arga%d";
             } goto do_lda;
@@ -631,16 +678,44 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method, int 
                 method_t* target = assembly_get_method_by_token(method->assembly, target_token);
                 CHECK(target != NULL);
 
-                // Pop it from the stack
-                for (int i = 0; i < target->parameter_count + (target->is_static ? 0 : 1); i++) {
+                // the call arguments
+                char func_name[256];
+                CHECK_AND_RETHROW(jit_mangle_name(target, func_name, sizeof(func_name)));
+
+                char proto_func_name[sizeof(func_name) + 10];
+                snprintf(proto_func_name, sizeof(proto_func_name), "proto$%s", func_name);
+
+                // get the prototype, if it does not exist then emit it
+                CHECK(target_token.table == METADATA_METHOD_DEF);
+                MIR_item_t proto = MIR_get_global_item(ctx, proto_func_name);
+                if (proto == NULL) {
+                    CHECK_AND_RETHROW(emit_func_and_proto(ctx, target, true, &proto));
+                }
+                arrpush(call_args, MIR_new_ref_op(ctx, proto));
+
+                // forward declaration for function
+                MIR_item_t target_func = MIR_new_forward(ctx, func_name);
+                arrpush(call_args, MIR_new_ref_op(ctx, target_func));
+
+                // pop all the items that we need to pass
+                for (int i = 0; i < target->parameter_count; i++) {
                     MIR_reg_t stack_reg = STACK_POP(NULL);
+
+                    // TODO: type checking
+
+                    arrpush(call_args, MIR_new_reg_op(ctx, stack_reg));
                 }
 
                 // push the return value if any
                 if (target->return_type != g_void) {
                     MIR_reg_t ret_reg = STACK_PUSH(target->return_type);
-                    // TODO: properly figure the function and shit...
+                    arrins(call_args, 2, MIR_new_reg_op(ctx, ret_reg));
                 }
+
+                MIR_append_insn(ctx, func,
+                                MIR_new_insn_arr(ctx, MIR_CALL, arrlen(call_args), call_args));
+
+                arrfree(call_args);
             } break;
 
             case CIL_RET: {
@@ -901,6 +976,8 @@ cleanup:
     SAFE_FREE(stack);
     SAFE_FREE(args);
 
+    arrfree(call_args);
+
     return err;
 }
 
@@ -909,7 +986,7 @@ static err_t jit_prepare_type(jit_instance_t* instance, type_t* type) {
 
     for (int i = 0; i < type->methods_count; i++) {
         method_t* method = &type->methods[i];
-        CHECK_AND_RETHROW(jit_prepare_method(instance, method, i));
+        CHECK_AND_RETHROW(jit_prepare_method(instance, method));
     }
 
 cleanup:
@@ -935,13 +1012,12 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
 
     MIR_gen_init(instance->context, 0);
     MIR_gen_set_optimize_level(instance->context, 0, 4);
-    MIR_gen_set_debug_file(instance->context, 0, stdout);
-    MIR_gen_set_debug_level(instance->context, 0, 10);
     MIR_load_module(instance->context, mod);
     MIR_link(instance->context, MIR_set_gen_interface, NULL);
 
-    MIR_item_t func = MIR_get_global_item(instance->context, "Corelib.Program::Main#0");
+    MIR_item_t func = MIR_get_global_item(instance->context, "int[Corelib.dll]Corelib.Program::Main()");
     CHECK(func != NULL);
+    _MIR_dump_code("lol", 0, func->u.func->call_addr, 256);
 
     MIR_gen_finish(instance->context);
 
@@ -952,8 +1028,45 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
 
 cleanup:
     if (IS_ERROR(err)) {
+        MIR_finish_module(instance->context);
         MIR_finish(instance->context);
         instance->context = NULL;
     }
+    return err;
+}
+
+err_t jit_mangle_name(method_t* method, char* mangled_name, size_t buffer_size) {
+    err_t err = NO_ERROR;
+    int printed;
+
+    printed = type_write_name(method->return_type, mangled_name, buffer_size);
+    CHECK(printed < buffer_size);
+    buffer_size -= printed;
+    mangled_name += printed;
+
+    printed = snprintf(mangled_name, buffer_size, "[%s]%s.%s::%s(",
+             method->assembly->name, method->parent->namespace,
+             method->parent->name, method->name);
+    CHECK(printed < buffer_size);
+    buffer_size -= printed;
+    mangled_name += printed;
+
+    for (int i = 0; i < method->parameter_count; i++) {
+        printed = type_write_name(method->parameters[i].type, mangled_name, buffer_size);
+        CHECK(printed < buffer_size);
+        buffer_size -= printed;
+        mangled_name += printed;
+        if (i != method->parameter_count - 1) {
+            printed = snprintf(mangled_name, buffer_size, ",");
+            CHECK(printed < buffer_size);
+            buffer_size -= printed;
+            mangled_name += printed;
+        }
+    }
+
+    printed = snprintf(mangled_name, buffer_size, ")");
+    CHECK(printed < buffer_size);
+
+cleanup:
     return err;
 }

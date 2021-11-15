@@ -87,130 +87,80 @@ type_t* get_by_ref_type(type_t* type) {
 }
 
 void type_print(type_t* type) {
-    switch (type->mod) {
-        case TYPE_NORMAL: {
-            if (type == g_void) {
-                printf("void");
-            } else if (type == g_boolean) {
-                printf("bool");
-            } else if (type == g_char) {
-                printf("char");
-            } else if (type == g_sbyte) {
-                printf("sbyte");
-            } else if (type == g_byte) {
-                printf("byte");
-            } else if (type == g_int16) {
-                printf("short");
-            } else if (type == g_uint16) {
-                printf("ushort");
-            } else if (type == g_int32) {
-                printf("int");
-            } else if (type == g_uint32) {
-                printf("uint");
-            } else if (type == g_int64) {
-                printf("long");
-            } else if (type == g_uint64) {
-                printf("ulong");
-            } else if (type == g_boolean) {
-                printf("float");
-            } else if (type == g_double) {
-                printf("double");
-            } else if (type == g_string) {
-                printf("string");
-            } else {
-                if (type->assembly != g_corelib_assembly) {
-                    printf("[%s]", type->assembly->name);
-                }
-                printf("%s.%s", type->namespace, type->name);
-            }
-        } break;
-
-        case TYPE_ARRAY: {
-            type_print(type->element_type);
-            printf("[]");
-        } break;
-
-        case TYPE_BY_REF: {
-            printf("ref ");
-            type_print(type->element_type);
-        } break;
-
-        case TYPE_PTR: {
-            type_print(type->element_type);
-            printf("*");
-        } break;
-
-        default: printf("<invalid>");
-    }
+    char buffer[256];
+    type_write_name(type, buffer, sizeof(buffer));
+    printf("%s", buffer);
 }
 
-int type_output(char* buffer, size_t buffer_size, type_t* type) {
-    int added = 0;
-
+size_t type_write_name(type_t* type, char* buffer, size_t buffer_size) {
+    size_t printed_size = 0;
     switch (type->mod) {
         case TYPE_NORMAL: {
             if (type == g_void) {
-                added += snprintf(buffer, buffer_size, "void");
+                printed_size += snprintf(buffer, buffer_size, "void");
             } else if (type == g_boolean) {
-                added += snprintf(buffer, buffer_size, "bool");
+                printed_size += snprintf(buffer, buffer_size, "bool");
             } else if (type == g_char) {
-                added += snprintf(buffer, buffer_size, "char");
+                printed_size += snprintf(buffer, buffer_size, "char");
             } else if (type == g_sbyte) {
-                added += snprintf(buffer, buffer_size, "sbyte");
+                printed_size += snprintf(buffer, buffer_size, "sbyte");
             } else if (type == g_byte) {
-                added += snprintf(buffer, buffer_size, "byte");
+                printed_size += snprintf(buffer, buffer_size, "byte");
             } else if (type == g_int16) {
-                added += snprintf(buffer, buffer_size, "short");
+                printed_size += snprintf(buffer, buffer_size, "short");
             } else if (type == g_uint16) {
-                added += snprintf(buffer, buffer_size, "ushort");
+                printed_size += snprintf(buffer, buffer_size, "ushort");
             } else if (type == g_int32) {
-                added += snprintf(buffer, buffer_size, "int");
+                printed_size += snprintf(buffer, buffer_size, "int");
             } else if (type == g_uint32) {
-                added += snprintf(buffer, buffer_size, "uint");
+                printed_size += snprintf(buffer, buffer_size, "uint");
             } else if (type == g_int64) {
-                added += snprintf(buffer, buffer_size, "long");
+                printed_size += snprintf(buffer, buffer_size, "long");
             } else if (type == g_uint64) {
-                added += snprintf(buffer, buffer_size, "ulong");
+                printed_size += snprintf(buffer, buffer_size, "long");
+            } else if (type == g_intptr) {
+                printed_size += snprintf(buffer, buffer_size, "nint");
+            } else if (type == g_uintptr) {
+                printed_size += snprintf(buffer, buffer_size, "nuint");
             } else if (type == g_boolean) {
-                added += snprintf(buffer, buffer_size, "float");
+                printed_size += snprintf(buffer, buffer_size, "float");
             } else if (type == g_double) {
-                added += snprintf(buffer, buffer_size, "double");
+                printed_size += snprintf(buffer, buffer_size, "double");
             } else if (type == g_string) {
-                added += snprintf(buffer, buffer_size, "string");
+                printed_size += snprintf(buffer, buffer_size, "string");
             } else {
                 if (type->assembly != g_corelib_assembly) {
-                    added += snprintf(buffer, buffer_size, "[%s]", type->assembly->name);
+                    printed_size += snprintf(buffer, buffer_size, "[%s]", type->assembly->name);
+                    buffer += printed_size;
+                    buffer_size -= printed_size;
                 }
-                added += snprintf(buffer, buffer_size, "%s.%s", type->namespace, type->name);
+                printed_size += snprintf(buffer, buffer_size, "%s.%s", type->namespace, type->name);
             }
         } break;
 
         case TYPE_ARRAY: {
-            added = type_output(buffer, buffer_size, type->element_type);
-            buffer += added;
-            buffer_size -= added;
-            strncat(buffer, "[]", buffer_size);
-            added += 2;
+            printed_size += type_write_name(type->element_type, buffer, buffer_size);
+            buffer += printed_size;
+            buffer_size -= printed_size;
+            printed_size += snprintf(buffer, buffer_size, "[]");
         } break;
 
         case TYPE_BY_REF: {
-            strncat(buffer, "ref ", buffer_size);
-            buffer += 4;
-            buffer_size -= 4;
-            added += 4;
-            added += type_output(buffer, buffer_size, type->element_type);
+            printed_size += snprintf(buffer, buffer_size, "ref ");
+            buffer += printed_size;
+            buffer_size -= printed_size;
+            printed_size += type_write_name(type->element_type, buffer, buffer_size);
         } break;
 
         case TYPE_PTR: {
-            added = type_output(buffer, buffer_size, type->element_type);
-            buffer += added;
-            buffer_size -= added;
-            strncat(buffer, "*", buffer_size);
-            added += 1;
+            printed_size += type_write_name(type->element_type, buffer, buffer_size);
+            buffer += printed_size;
+            buffer_size -= printed_size;
+            printed_size += snprintf(buffer, buffer_size, "*");
         } break;
 
-        default: return snprintf(buffer, buffer_size, "<unknown>");
+        default: printed_size += snprintf(buffer, buffer_size, "<invalid>");
     }
 
-    return added;
+    return printed_size;
 }

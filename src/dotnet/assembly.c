@@ -451,6 +451,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
                 method->assembly = assembly;
                 method->name = method_def->name;
                 method->parent = type;
+                method->index = start_index + j;
 
                 // setup cil data
                 pe_directory_t directory = { .rva = method_def->rva };
@@ -616,43 +617,6 @@ static void resolve_size(type_t* type) {
     }
 }
 
-static void resolve_method_stack_offsets(method_t* method) {
-    // start with parameter offsets
-    size_t offset = 0;
-
-    // starting with the special case of this
-    if (!method->is_static) {
-        // this is always passed by reference, including ctors, value type
-        // methods and so on, so have enough place to put a reference to it
-        offset = g_object->stack_size;
-    }
-
-    for (int i = 0; i < method->parameter_count; i++) {
-        param_t* param = &method->parameters[i];
-
-        offset = ALIGN_UP(offset, param->type->stack_alignment);
-        param->offset = offset;
-        offset += param->type->stack_size;
-    }
-    method->parameters_size = offset;
-
-    // remove the g_object size if we don't need it, we can add it manually when need to
-    if (!method->is_static) {
-        method->parameters_size -= g_object->stack_size;
-    }
-
-    // now do the locals offsets
-    offset = 0;
-    for (int i = 0; i < method->locals_count; i++) {
-        local_t* local = &method->locals[i];
-
-        offset = ALIGN_UP(offset, local->type->stack_alignment);
-        local->offset = offset;
-        offset += local->type->stack_size;
-    }
-    method->locals_size = offset;
-}
-
 static void setup_sizes_and_offsets(assembly_t* assembly) {
     for (int i = 0; i < assembly->types_count; i++) {
         type_t* type = &assembly->types[i];
@@ -661,15 +625,31 @@ static void setup_sizes_and_offsets(assembly_t* assembly) {
         resolve_value_type(type);
         resolve_size(type);
     }
+}
 
-    // now that all the type information is set nicely we are going
-    // to set the offsets of all the parameters and locals
+static void add_this_parameter(assembly_t* assembly) {
+    // properly add the `this` as a parameter so we can have
+    // easier time with code generation
     for (int i = 0; i < assembly->types_count; i++) {
         type_t* type = &assembly->types[i];
 
         for (int j = 0; j < type->methods_count; j++) {
             method_t* method = &type->methods[j];
-            resolve_method_stack_offsets(method);
+
+            if (!method->is_static) {
+                // this is a non-static method, meaning it has a this, make space for it in the parameters
+                method->parameters = realloc(method->parameters, (method->parameter_count + 1) * sizeof(param_t));
+                memmove(method->parameters + 1, method->parameters, method->parameter_count * sizeof(param_t));
+                method->parameter_count++;
+
+                // figure its type, value types are always passed by ref to this
+                method->parameters[0].name = "this";
+                if (type->is_value_type) {
+                    method->parameters[0].type = get_by_ref_type(type);
+                } else {
+                    method->parameters[0].type = type;
+                }
+            }
         }
     }
 }
@@ -718,8 +698,9 @@ err_t load_assembly_from_blob(uint8_t* blob, size_t blob_size, assembly_t** asse
     // setup all of the type info from the metadata
     CHECK_AND_RETHROW(create_all_types(new_assembly, &ctx.metadata, &ctx));
 
-    // Setup all the sizes and offsets for all the types
+    // Setup any extra info that is needed once all the types are loaded
     setup_sizes_and_offsets(new_assembly);
+    add_this_parameter(new_assembly);
 
     // setup the name
     metadata_module_t* module = ctx.metadata.tables[METADATA_MODULE].table;

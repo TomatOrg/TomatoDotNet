@@ -11,22 +11,17 @@ typedef struct param {
     // the name and type of the parameter
     const char* name;
     struct type* type;
-
-    // offset in the parameters block
-    size_t offset;
 } param_t;
 
 typedef struct local {
     // the type of the local
     struct type* type;
-
-    // the offset on the locals stack
-    size_t offset;
 } local_t;
 
 typedef struct method {
     // the assembly this method is in
     assembly_t* assembly;
+    int index;
 
     // The type this method belongs to
     struct type* parent;
@@ -38,13 +33,9 @@ typedef struct method {
     size_t parameter_count;
     param_t* parameters;
 
-    // the size without `this`
-    size_t parameters_size;
-
     // the locals of this method
     size_t locals_count;
     local_t* locals;
-    size_t locals_size;
 
     // the name of the method
     const char* name;
