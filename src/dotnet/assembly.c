@@ -558,6 +558,14 @@ static void resolve_size(type_t* type);
 
 static size_t sum_field_sizes(type_t* type, size_t* alignment) {
     size_t size = 0;
+
+    if (type->extends != NULL) {
+        resolve_size(type->extends);
+        size = type->extends->memory_size;
+    }
+
+    // TODO: vtables
+
     for (int i = 0; i < type->fields_count; i++) {
         field_t* field = &type->fields[i];
         resolve_size(field->type);
@@ -621,9 +629,14 @@ static void setup_sizes_and_offsets(assembly_t* assembly) {
     for (int i = 0; i < assembly->types_count; i++) {
         type_t* type = &assembly->types[i];
 
-        // resolve the value type and size of the type
-        resolve_value_type(type);
-        resolve_size(type);
+        if (type->is_interface) {
+            // this is more complicated...
+            ERROR("TODO: is interface");
+        } else {
+            // resolve the value type and size of the type
+            resolve_value_type(type);
+            resolve_size(type);
+        }
     }
 }
 

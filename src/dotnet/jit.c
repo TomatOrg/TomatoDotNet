@@ -5,6 +5,7 @@
 #include "assembly_internal.h"
 #include "cil_opcodes.h"
 #include "metadata_spec.h"
+#include "gc.h"
 
 static MIR_type_t get_param_mir_type(type_t* type) {
     if (type == g_sbyte) {
@@ -322,7 +323,7 @@ cleanup:
     return err;
 }
 
-static err_t emit_func_and_proto(MIR_context_t ctx, method_t* method, bool prototype_only, MIR_item_t* out_func) {
+static err_t emit_func_or_proto(MIR_context_t ctx, method_t* method, bool emit_proto, MIR_item_t* out_func) {
     err_t err = NO_ERROR;
     MIR_var_t* mir_args = NULL;
     const char** arg_names = NULL;
@@ -353,15 +354,10 @@ static err_t emit_func_and_proto(MIR_context_t ctx, method_t* method, bool proto
         }
     }
 
-    // create the proto
-    MIR_item_t proto = MIR_get_global_item(ctx, proto_func_name);
-    if (proto == NULL) {
-        proto = MIR_new_proto_arr(ctx, proto_func_name, nres, &res_type, nargs, mir_args);
-    }
-
-    if (prototype_only) {
+    if (emit_proto) {
         // out the proto item
-        *out_func = proto;
+        MIR_item_t target_func = MIR_new_forward(ctx, func_name);
+        *out_func = MIR_new_proto_arr(ctx, proto_func_name, nres, &res_type, nargs, mir_args);
     } else {
         // setup the names correctly, these are only needed for function declaration
         if (nargs > 0) {
@@ -396,7 +392,8 @@ cleanup:
 
 static err_t emit_call(
         MIR_context_t ctx, MIR_item_t func, method_t* method,
-        stack_item_t* stack, size_t* stack_pointer_ptr, size_t stack_max) {
+        stack_item_t* stack, size_t* stack_pointer_ptr, size_t stack_max,
+        bool callvirt) {
     err_t err = NO_ERROR;
     size_t stack_pointer = *stack_pointer_ptr;
     MIR_op_t* call_args = NULL;
@@ -408,15 +405,14 @@ static err_t emit_call(
     char proto_func_name[sizeof(func_name) + 10];
     snprintf(proto_func_name, sizeof(proto_func_name), "proto$%s", func_name);
 
-    // get the prototype, if it does not exist then emit it
+    // get the prototype
     MIR_item_t proto = MIR_get_global_item(ctx, proto_func_name);
-    if (proto == NULL) {
-        CHECK_AND_RETHROW(emit_func_and_proto(ctx, method, true, &proto));
-    }
+    CHECK(proto != NULL);
     arrpush(call_args, MIR_new_ref_op(ctx, proto));
 
     // forward declaration for function
-    MIR_item_t target_func = MIR_new_forward(ctx, func_name);
+    MIR_item_t target_func = MIR_get_global_item(ctx, func_name);
+    CHECK(target_func != NULL);
     arrpush(call_args, MIR_new_ref_op(ctx, target_func));
 
     // pop all the items that we need to pass
@@ -424,6 +420,18 @@ static err_t emit_call(
         MIR_reg_t stack_reg = STACK_POP(NULL);
 
         // TODO: type checking
+
+        // for callvirt we always verify the first is non-null
+        if (callvirt && i == 0) {
+            MIR_insn_t after_throw = MIR_new_label(ctx);
+            MIR_append_insn(ctx, func,
+                            MIR_new_insn(ctx, MIR_BNE,
+                                         MIR_new_label_op(ctx, after_throw),
+                                         MIR_new_reg_op(ctx, stack_reg),
+                                         MIR_new_int_op(ctx, 0)));
+            // TODO: throw exception
+            MIR_append_insn(ctx, func, after_throw);
+        }
 
         arrpush(call_args, MIR_new_reg_op(ctx, stack_reg));
     }
@@ -453,8 +461,6 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
     size_t stack_pointer = 0;
     size_t stack_max = 0;
 
-//    TRACE("%s.%s::%s", method->parent->namespace, method->parent->name, method->name);
-
     // setup all the arguments properly
     if (method->parameter_count > 0) {
         args = calloc(method->parameter_count, sizeof(*args));
@@ -465,7 +471,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
     }
 
     MIR_item_t func;
-    CHECK_AND_RETHROW(emit_func_and_proto(ctx, method, false, &func));
+    CHECK_AND_RETHROW(emit_func_or_proto(ctx, method, false, &func));
 
     // create the function, it is a bit annoying but the
     for (int i = 0; i < method->parameter_count; i++) {
@@ -723,12 +729,45 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
                                              MIR_new_double_op(ctx, dvalue)));
             } break;
 
+            case CIL_DUP: {
+                type_t* type;
+                MIR_reg_t from = STACK_POP(&type);
+                CHECK(STACK_PUSH(type) == from);
+                MIR_reg_t to = STACK_PUSH(type);
+
+                MIR_insn_code_t insn_code = MIR_MOV;
+                if (type->stack_type == STACK_TYPE_F) {
+                    insn_code = MIR_DMOV;
+                }
+
+                MIR_append_insn(ctx, func,
+                                MIR_new_insn(ctx, insn_code,
+                                             MIR_new_reg_op(ctx, to),
+                                             MIR_new_reg_op(ctx, from)));
+            } break;
+
+            case CIL_POP: {
+                STACK_POP(NULL);
+            } break;
+
             case CIL_CALL: {
                 token_t target_token = CIL_FETCH_TOKEN();
                 method_t* target = assembly_get_method_by_token(method->assembly, target_token);
                 CHECK(target != NULL);
 
-                CHECK_AND_RETHROW(emit_call(ctx, func, method, stack, &stack_pointer, stack_max));
+                CHECK_AND_RETHROW(emit_call(ctx, func, target, stack, &stack_pointer, stack_max, false));
+            } break;
+
+            case CIL_CALLVIRT: {
+                token_t target_token = CIL_FETCH_TOKEN();
+                method_t* target = assembly_get_method_by_token(method->assembly, target_token);
+                CHECK(target != NULL);
+
+                if (target->is_virtual) {
+                    CHECK_FAIL("TODO: virtual dispatch");
+                } else {
+                    CHECK_AND_RETHROW(emit_call(ctx, func, target, stack, &stack_pointer, stack_max, true));
+                }
             } break;
 
             case CIL_RET: {
@@ -911,12 +950,18 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
                     emit_inline_memset(ctx, func, newobj_ref, 0, 0, ctor->parent->stack_size);
 
                 } else {
-                    // TODO: allocate properly
-                    CHECK_FAIL();
+                    // this is a new reference object, use gc_alloc to allocate it
+                    newobj_ref = STACK_PUSH(ctor->parent);
+                    MIR_append_insn(ctx, func,
+                                    MIR_new_call_insn(ctx, 4,
+                                                      MIR_new_ref_op(ctx, instance->p_gc_alloc),
+                                                      MIR_new_ref_op(ctx, instance->gc_alloc),
+                                                      MIR_new_reg_op(ctx, newobj_ref),
+                                                      MIR_new_uint_op(ctx, (uintptr_t)ctor->parent)));
                 }
 
                 // call the ctor
-                CHECK_AND_RETHROW(emit_call(ctx, func, ctor, stack, &stack_pointer, stack_max));
+                CHECK_AND_RETHROW(emit_call(ctx, func, ctor, stack, &stack_pointer, stack_max, false));
 
                 // now push the value32 properly
                 MIR_reg_t newobj_val = STACK_PUSH(ctor->parent);
@@ -926,7 +971,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
                         MIR_append_insn(ctx, func,
                                         MIR_new_insn(ctx, MIR_MOV,
                                                      MIR_new_reg_op(ctx, newobj_val),
-                                                     MIR_new_int_op(ctx, newobj_ref)));
+                                                     MIR_new_reg_op(ctx, newobj_ref)));
                     } else {
                         // this is a native type, deref it
                         MIR_append_insn(ctx, func,
@@ -939,7 +984,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
                     MIR_append_insn(ctx, func,
                                     MIR_new_insn(ctx, MIR_MOV,
                                                  MIR_new_reg_op(ctx, newobj_val),
-                                                 MIR_new_int_op(ctx, newobj_ref)));
+                                                 MIR_new_reg_op(ctx, newobj_ref)));
                 }
             } break;
 
@@ -1163,43 +1208,76 @@ cleanup:
 
 err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
     err_t err = NO_ERROR;
+    bool in_module = false;
+
+    // don't jit twice
+    if (assembly->module_data != NULL) {
+        goto cleanup;
+    }
 
     instance->context = MIR_init();
     CHECK(instance->context != NULL);
 
     MIR_module_t mod = MIR_new_module(instance->context, assembly->name);
+    in_module = true;
 
+    // prepare imports for the runtime
+    {
+        MIR_type_t restype = MIR_T_P;
+        instance->p_gc_alloc = MIR_new_proto(instance->context, "p_gc_alloc", 1, &restype, 1, MIR_T_P, "type");
+        instance->gc_alloc = MIR_new_import(instance->context, "gc_alloc");
+    }
+
+    // prepare all the prototypes
+    for (int i = 0; i < assembly->types_count; i++) {
+        type_t* type = &assembly->types[i];
+        for (int j = 0; j < type->methods_count; j++) {
+            method_t* method = &type->methods[j];
+            MIR_item_t item;
+            CHECK_AND_RETHROW(emit_func_or_proto(instance->context, method, true, &item));
+        }
+    }
+
+    // prepare all the types
     for (int i = 0; i < assembly->types_count; i++) {
         type_t* type = &assembly->types[i];
         CHECK_AND_RETHROW(jit_prepare_type(instance, type));
     }
 
+    in_module = false;
     MIR_finish_module(instance->context);
+
+//    MIR_output(instance->context, stdout);
+//
+//    MIR_gen_init(instance->context, 0);
+//    MIR_gen_set_optimize_level(instance->context, 0, 4);
+//
+//    MIR_load_module(instance->context, mod);
+//
+//    MIR_load_external(instance->context, "gc_alloc", gc_alloc);
+//    MIR_link(instance->context, MIR_set_gen_interface, NULL);
+//
+//    MIR_item_t func = MIR_get_global_item(instance->context, "int[Corelib.dll]Corelib.Program::Main()");
+//    CHECK(func != NULL);
+//    _MIR_dump_code("lol", 0, func->u.func->call_addr, 256);
+//
+//    MIR_gen_finish(instance->context);
 
     MIR_output(instance->context, stdout);
 
-    MIR_gen_init(instance->context, 0);
-    MIR_gen_set_optimize_level(instance->context, 0, 4);
-    MIR_load_module(instance->context, mod);
-    MIR_link(instance->context, MIR_set_gen_interface, NULL);
-
-    MIR_item_t func = MIR_get_global_item(instance->context, "nuint[Corelib.dll]System.UIntPtr::op_Explicit(uint)");
-    CHECK(func != NULL);
-    _MIR_dump_code("lol", 0, func->u.func->call_addr, 256);
-
-    MIR_gen_finish(instance->context);
-
     // write it out
     FILE* out = open_memstream(&assembly->module_data, &assembly->module_data_size);
-    MIR_write_module(instance->context, out, mod);
+    MIR_write(instance->context, out);
     fclose(out);
 
 cleanup:
-    if (IS_ERROR(err)) {
+    if (in_module) {
         MIR_finish_module(instance->context);
-        MIR_finish(instance->context);
-        instance->context = NULL;
     }
+
+    MIR_finish(instance->context);
+    instance->context = NULL;
+
     return err;
 }
 

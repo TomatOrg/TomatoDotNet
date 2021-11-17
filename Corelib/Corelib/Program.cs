@@ -3,7 +3,7 @@ namespace Corelib
     public class Program
     {
 
-struct Test
+class Test
 {
     public int a;
     public int b;

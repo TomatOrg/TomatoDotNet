@@ -93,6 +93,10 @@ static inline bool type_is_valuetype(type_t* type) {
     return type->stack_type == STACK_TYPE_T && type->is_value_type;
 }
 
+static inline bool type_is_reference_type(type_t* type) {
+    return type->stack_type == STACK_TYPE_T && !type->is_value_type;
+}
+
 // These are common built in types
 extern type_t* g_void;
 extern type_t* g_boolean;
