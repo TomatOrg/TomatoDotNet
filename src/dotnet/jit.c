@@ -702,7 +702,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
             } break;
 
             case CIL_LDC_I8: {
-                uint64_t value64 = CIL_FETCH_UINT64();
+                value64 = CIL_FETCH_UINT64();
                 MIR_reg_t reg = STACK_PUSH(g_int64);
                 MIR_append_insn(ctx, func,
                                 MIR_new_insn(ctx, MIR_MOV,
@@ -925,8 +925,8 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
             } break;
 
             case CIL_NEWOBJ: {
-                token_t target_ctor = CIL_FETCH_TOKEN();
-                method_t* ctor = assembly_get_method_by_token(method->assembly, target_ctor);
+                token_t ctor_token = CIL_FETCH_TOKEN();
+                method_t* ctor = assembly_get_method_by_token(method->assembly, ctor_token);
                 CHECK(ctor != NULL);
 
                 // ctor should not have any return type
@@ -950,14 +950,18 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
                     emit_inline_memset(ctx, func, newobj_ref, 0, 0, ctor->parent->stack_size);
 
                 } else {
-                    // this is a new reference object, use gc_alloc to allocate it
+                    // make sure the type has a valid index
+                    CHECK(ctor->parent->token.packed != 0);
+
+                    // this is a new reference object, use gc_alloc_from_token to allocate it
                     newobj_ref = STACK_PUSH(ctor->parent);
                     MIR_append_insn(ctx, func,
                                     MIR_new_call_insn(ctx, 4,
-                                                      MIR_new_ref_op(ctx, instance->p_gc_alloc),
-                                                      MIR_new_ref_op(ctx, instance->gc_alloc),
+                                                      MIR_new_ref_op(ctx, instance->p_gc_alloc_from_token),
+                                                      MIR_new_ref_op(ctx, instance->gc_alloc_from_token),
                                                       MIR_new_reg_op(ctx, newobj_ref),
-                                                      MIR_new_uint_op(ctx, (uintptr_t)ctor->parent)));
+                                                      MIR_new_ref_op(ctx, instance->current_assembly),
+                                                      MIR_new_int_op(ctx, ctor->parent->token.packed)));
                 }
 
                 // call the ctor
@@ -1224,8 +1228,13 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
     // prepare imports for the runtime
     {
         MIR_type_t restype = MIR_T_P;
-        instance->p_gc_alloc = MIR_new_proto(instance->context, "p_gc_alloc", 1, &restype, 1, MIR_T_P, "type");
-        instance->gc_alloc = MIR_new_import(instance->context, "gc_alloc");
+        instance->p_gc_alloc_from_token = MIR_new_proto(instance->context, "p_gc_alloc_from_token", 1, &restype, 1, MIR_T_P, "assembly", MIR_T_I32, "token");
+        instance->gc_alloc_from_token = MIR_new_import(instance->context, "gc_alloc_from_token");
+    }
+    {
+        char current_assembly_name[256];
+        snprintf(current_assembly_name, sizeof(current_assembly_name), "assembly$[%s]", assembly->name);
+        instance->current_assembly = MIR_new_import(instance->context, current_assembly_name);
     }
 
     // prepare all the prototypes
@@ -1249,19 +1258,23 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
 
 //    MIR_output(instance->context, stdout);
 //
-//    MIR_gen_init(instance->context, 0);
-//    MIR_gen_set_optimize_level(instance->context, 0, 4);
-//
-//    MIR_load_module(instance->context, mod);
-//
-//    MIR_load_external(instance->context, "gc_alloc", gc_alloc);
-//    MIR_link(instance->context, MIR_set_gen_interface, NULL);
-//
-//    MIR_item_t func = MIR_get_global_item(instance->context, "int[Corelib.dll]Corelib.Program::Main()");
-//    CHECK(func != NULL);
-//    _MIR_dump_code("lol", 0, func->u.func->call_addr, 256);
+    MIR_gen_init(instance->context, 0);
+    MIR_gen_set_optimize_level(instance->context, 0, 4);
+
+    MIR_load_module(instance->context, mod);
+
+    MIR_load_external(instance->context, "gc_alloc_from_token", gc_alloc_from_token);
+    MIR_load_external(instance->context, "assembly$[Corelib.dll]", assembly);
+    MIR_link(instance->context, MIR_set_gen_interface, NULL);
+
+    MIR_item_t func = MIR_get_global_item(instance->context, "int[Corelib.dll]Corelib.Program::Main()");
+    CHECK(func != NULL);
+    MIR_gen(instance->context, 0, func);
+    _MIR_dump_code("lol", 0, func->u.func->call_addr, 256);
 //
 //    MIR_gen_finish(instance->context);
+
+    exit(0);
 
     MIR_output(instance->context, stdout);
 

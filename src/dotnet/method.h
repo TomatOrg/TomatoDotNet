@@ -21,7 +21,7 @@ typedef struct local {
 typedef struct method {
     // the assembly this method is in
     assembly_t* assembly;
-    int index;
+    token_t token;
 
     // The type this method belongs to
     struct type* parent;

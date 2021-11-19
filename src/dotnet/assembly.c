@@ -405,6 +405,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
 
         // setup the type info
         type->assembly = assembly;
+        type->token = (token_t) { .table = METADATA_TYPE_DEF, .index = i };
         type->name = type_def->type_name;
         type->namespace = type_def->type_namespace;
 
@@ -451,7 +452,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
                 method->assembly = assembly;
                 method->name = method_def->name;
                 method->parent = type;
-                method->index = start_index + j;
+                method->token = (token_t) { .table = METADATA_TYPE_DEF, .index = start_index + j };
 
                 // setup cil data
                 pe_directory_t directory = { .rva = method_def->rva };
@@ -773,6 +774,21 @@ method_t* assembly_get_method_by_token(assembly_t* assembly, token_t token) {
         }
 
         // TODO: method ref
+
+        default: return NULL;
+    }
+}
+
+struct type* assembly_get_type_by_token(assembly_t* assembly, token_t token) {
+    switch (token.table) {
+        case METADATA_TYPE_DEF: {
+            if (token.index < 1 || token.index > assembly->types_count) {
+                return NULL;
+            }
+            return &assembly->types[token.index - 1];
+        }
+
+        // TODO: type ref
 
         default: return NULL;
     }

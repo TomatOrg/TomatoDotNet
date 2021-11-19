@@ -40,6 +40,7 @@ typedef enum stack_type {
 typedef struct type {
     // the assembly this type is related to
     assembly_t* assembly;
+    token_t token;
 
     // The base type of this type
     struct type* extends;

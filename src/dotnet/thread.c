@@ -18,7 +18,7 @@ app_domain_t* new_app_domain() {
     MIR_gen_set_optimize_level(domain->ctx, 0, 4);
 
     // setup runtime functions
-    MIR_load_external(domain->ctx, "gc_alloc", gc_alloc);
+    MIR_load_external(domain->ctx, "gc_alloc_from_token", gc_alloc_from_token);
 
     return domain;
 }
@@ -31,6 +31,11 @@ err_t app_domain_load_assembly(app_domain_t* domain, assembly_t* assembly) {
 
     // TODO: check it does not exists already
 
+    // set the global module pointer
+    char current_assembly_name[256];
+    snprintf(current_assembly_name, sizeof(current_assembly_name), "assembly$[%s]", assembly->name);
+    MIR_load_external(domain->ctx, current_assembly_name, assembly);
+
     // prepare for jitting
     jit_instance_t instance = { 0 };
     CHECK_AND_RETHROW(jit_prepare_assembly(&instance, assembly));
@@ -38,6 +43,8 @@ err_t app_domain_load_assembly(app_domain_t* domain, assembly_t* assembly) {
     // read the module
     f = fmemopen(assembly->module_data, assembly->module_data_size, "r");
     MIR_read(domain->ctx, f);
+
+//    MIR_output(domain->ctx, stdout);
 
 cleanup:
     if (f != NULL) {
@@ -72,6 +79,7 @@ err_t new_thread(app_domain_t* app_domain, method_t* method, thread_t** out_thre
     CHECK(func->item_type == MIR_func_item);
 
     // generate the start address
+    MIR_output(app_domain->ctx, stdout);
     thread->start_address = MIR_gen(app_domain->ctx, 0, func);
 
     *out_thread = thread;

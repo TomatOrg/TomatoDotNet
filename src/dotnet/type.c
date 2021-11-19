@@ -36,6 +36,7 @@ type_t* get_array_type(type_t* type) {
     type_t* new_type = malloc(sizeof(type_t));
     memcpy(new_type, g_array, sizeof(type_t));
 
+    new_type->token = (token_t) { .packed = 0 };
     new_type->mod = TYPE_ARRAY;
     new_type->element_type = type;
 
@@ -56,6 +57,7 @@ type_t* get_ptr_type(type_t* type) {
     type_t* new_type = malloc(sizeof(type_t));
     memcpy(new_type, g_uintptr, sizeof(type_t));
 
+    new_type->token = (token_t) { .packed = 0 };
     new_type->mod = TYPE_PTR;
     new_type->element_type = type;
 
@@ -76,6 +78,7 @@ type_t* get_by_ref_type(type_t* type) {
     type_t* new_type = malloc(sizeof(type_t));
     memcpy(new_type, g_intptr, sizeof(type_t));
 
+    new_type->token = (token_t) { .packed = 0 };
     new_type->mod = TYPE_BY_REF;
     new_type->element_type = type;
 

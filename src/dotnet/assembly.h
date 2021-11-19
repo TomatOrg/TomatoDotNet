@@ -39,6 +39,16 @@ err_t load_assembly(const char* file, assembly_t** assembly);
  */
 struct method* assembly_get_method_by_token(assembly_t* assembly, token_t token);
 
+/**
+ * Get the method by its token, returns NULL if the method was not found.
+ *
+ * This also handles method refs and alike
+ *
+ * @param assembly      [IN] The assembly we are calling from
+ * @param token         [IN] The token of the method to find
+ */
+struct type* assembly_get_type_by_token(assembly_t* assembly, token_t token);
+
 struct type* assembly_get_type_by_name(assembly_t* assembly, const char* namespace, const char* name);
 
 /**
