@@ -45,6 +45,9 @@ typedef struct type {
     // The base type of this type
     struct type* extends;
 
+    // The type we are enclosing in
+    struct type* enclosing;
+
     uint8_t is_interface : 1;
     uint8_t is_value_type : 1;
 

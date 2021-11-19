@@ -6,6 +6,7 @@
 #include "cil_opcodes.h"
 #include "metadata_spec.h"
 #include "gc.h"
+#include "mir_utils.h"
 
 static MIR_type_t get_param_mir_type(type_t* type) {
     if (type == g_sbyte) {
@@ -406,12 +407,12 @@ static err_t emit_call(
     snprintf(proto_func_name, sizeof(proto_func_name), "proto$%s", func_name);
 
     // get the prototype
-    MIR_item_t proto = MIR_get_global_item(ctx, proto_func_name);
+    MIR_item_t proto = mir_get_proto(ctx, proto_func_name);
     CHECK(proto != NULL);
     arrpush(call_args, MIR_new_ref_op(ctx, proto));
 
     // forward declaration for function
-    MIR_item_t target_func = MIR_get_global_item(ctx, func_name);
+    MIR_item_t target_func = mir_get_forward(ctx, func_name);
     CHECK(target_func != NULL);
     arrpush(call_args, MIR_new_ref_op(ctx, target_func));
 
@@ -956,7 +957,7 @@ static err_t jit_prepare_method(jit_instance_t* instance, method_t* method) {
                     // this is a new reference object, use gc_alloc_from_token to allocate it
                     newobj_ref = STACK_PUSH(ctor->parent);
                     MIR_append_insn(ctx, func,
-                                    MIR_new_call_insn(ctx, 4,
+                                    MIR_new_call_insn(ctx, 5,
                                                       MIR_new_ref_op(ctx, instance->p_gc_alloc_from_token),
                                                       MIR_new_ref_op(ctx, instance->gc_alloc_from_token),
                                                       MIR_new_reg_op(ctx, newobj_ref),
@@ -1228,7 +1229,7 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
     // prepare imports for the runtime
     {
         MIR_type_t restype = MIR_T_P;
-        instance->p_gc_alloc_from_token = MIR_new_proto(instance->context, "p_gc_alloc_from_token", 1, &restype, 1, MIR_T_P, "assembly", MIR_T_I32, "token");
+        instance->p_gc_alloc_from_token = MIR_new_proto(instance->context, "p_gc_alloc_from_token", 1, &restype, 2, MIR_T_P, "assembly", MIR_T_I32, "token");
         instance->gc_alloc_from_token = MIR_new_import(instance->context, "gc_alloc_from_token");
     }
     {
@@ -1256,28 +1257,6 @@ err_t jit_prepare_assembly(jit_instance_t* instance, assembly_t* assembly) {
     in_module = false;
     MIR_finish_module(instance->context);
 
-//    MIR_output(instance->context, stdout);
-//
-    MIR_gen_init(instance->context, 0);
-    MIR_gen_set_optimize_level(instance->context, 0, 4);
-
-    MIR_load_module(instance->context, mod);
-
-    MIR_load_external(instance->context, "gc_alloc_from_token", gc_alloc_from_token);
-    MIR_load_external(instance->context, "assembly$[Corelib.dll]", assembly);
-    MIR_link(instance->context, MIR_set_gen_interface, NULL);
-
-    MIR_item_t func = MIR_get_global_item(instance->context, "int[Corelib.dll]Corelib.Program::Main()");
-    CHECK(func != NULL);
-    MIR_gen(instance->context, 0, func);
-    _MIR_dump_code("lol", 0, func->u.func->call_addr, 256);
-//
-//    MIR_gen_finish(instance->context);
-
-    exit(0);
-
-    MIR_output(instance->context, stdout);
-
     // write it out
     FILE* out = open_memstream(&assembly->module_data, &assembly->module_data_size);
     MIR_write(instance->context, out);
@@ -1294,21 +1273,39 @@ cleanup:
     return err;
 }
 
+#define APPEND_FORMAT(buffer, buffer_size, fmt, ...) \
+    do { \
+        int __printed = snprintf(buffer, buffer_size, fmt, ## __VA_ARGS__); \
+        CHECK(__printed < buffer_size); \
+        buffer_size -= __printed; \
+        buffer += __printed; \
+    } while(0)
+
 err_t jit_mangle_name(method_t* method, char* mangled_name, size_t buffer_size) {
     err_t err = NO_ERROR;
-    int printed;
 
-    printed = type_write_name(method->return_type, mangled_name, buffer_size);
+    int printed = type_write_name(method->return_type, mangled_name, buffer_size);
     CHECK(printed < buffer_size);
     buffer_size -= printed;
     mangled_name += printed;
 
-    printed = snprintf(mangled_name, buffer_size, "[%s]%s.%s::%s(",
-             method->assembly->name, method->parent->namespace,
-             method->parent->name, method->name);
-    CHECK(printed < buffer_size);
-    buffer_size -= printed;
-    mangled_name += printed;
+    APPEND_FORMAT(mangled_name, buffer_size, "[%s]", method->assembly->name);
+
+    type_t* type = method->parent;
+    type_t* enclosing = type->enclosing;
+    while (enclosing != NULL) {
+        if (strlen(enclosing->namespace) > 0) {
+            APPEND_FORMAT(mangled_name, buffer_size, "%s.", enclosing->namespace);
+        }
+        APPEND_FORMAT(mangled_name, buffer_size, "%s.", enclosing->name);
+        enclosing = enclosing->enclosing;
+    }
+
+    if (strlen(type->namespace) > 0) {
+        APPEND_FORMAT(mangled_name, buffer_size, "%s.", type->namespace);
+    }
+
+    APPEND_FORMAT(mangled_name, buffer_size, "%s::%s(", type->name, method->name);
 
     for (int i = 0; i < method->parameter_count; i++) {
         printed = type_write_name(method->parameters[i].type, mangled_name, buffer_size);
@@ -1316,15 +1313,11 @@ err_t jit_mangle_name(method_t* method, char* mangled_name, size_t buffer_size) 
         buffer_size -= printed;
         mangled_name += printed;
         if (i != method->parameter_count - 1) {
-            printed = snprintf(mangled_name, buffer_size, ",");
-            CHECK(printed < buffer_size);
-            buffer_size -= printed;
-            mangled_name += printed;
+            APPEND_FORMAT(mangled_name, buffer_size, ",");
         }
     }
 
-    printed = snprintf(mangled_name, buffer_size, ")");
-    CHECK(printed < buffer_size);
+    APPEND_FORMAT(mangled_name, buffer_size, ")");
 
 cleanup:
     return err;

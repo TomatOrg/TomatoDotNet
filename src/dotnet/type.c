@@ -137,7 +137,25 @@ size_t type_write_name(type_t* type, char* buffer, size_t buffer_size) {
                     buffer += printed_size;
                     buffer_size -= printed_size;
                 }
-                printed_size += snprintf(buffer, buffer_size, "%s.%s", type->namespace, type->name);
+                type_t* enclosing = type->enclosing;
+                while (enclosing != NULL) {
+                    if (strlen(enclosing->namespace) == 0) {
+                        printed_size += snprintf(buffer, buffer_size, "%s.", enclosing->name);
+                        buffer += printed_size;
+                        buffer_size -= printed_size;
+                    } else {
+                        printed_size += snprintf(buffer, buffer_size, "%s.%s.", enclosing->namespace, enclosing->name);
+                        buffer += printed_size;
+                        buffer_size -= printed_size;
+                    }
+                    enclosing = enclosing->enclosing;
+                }
+
+                if (strlen(type->namespace) == 0) {
+                    printed_size += snprintf(buffer, buffer_size, "%s", type->name);
+                } else {
+                    printed_size += snprintf(buffer, buffer_size, "%s.%s", type->namespace, type->name);
+                }
             }
         } break;
 

@@ -155,6 +155,6 @@ typedef struct metadata_assembly_ref_os {
 
 #define METADATA_NESTED_CLASS 0x29
 typedef struct metadata_nested_class {
-    token_t* nested_class;
-    token_t* enclosing_class;
+    token_t nested_class;
+    token_t enclosing_class;
 } PACKED metadata_nested_class_t;

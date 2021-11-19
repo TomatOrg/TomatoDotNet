@@ -3,6 +3,7 @@
 #include "assembly_internal.h"
 #include "gc.h"
 #include "jit.h"
+#include "mir_utils.h"
 
 #include <mir-gen.h>
 
@@ -37,14 +38,14 @@ err_t app_domain_load_assembly(app_domain_t* domain, assembly_t* assembly) {
     MIR_load_external(domain->ctx, current_assembly_name, assembly);
 
     // prepare for jitting
-    jit_instance_t instance = { 0 };
+    jit_instance_t instance = {
+        .context = domain->ctx
+    };
     CHECK_AND_RETHROW(jit_prepare_assembly(&instance, assembly));
 
     // read the module
     f = fmemopen(assembly->module_data, assembly->module_data_size, "r");
     MIR_read(domain->ctx, f);
-
-//    MIR_output(domain->ctx, stdout);
 
 cleanup:
     if (f != NULL) {
@@ -63,7 +64,14 @@ err_t new_thread(app_domain_t* app_domain, method_t* method, thread_t** out_thre
 
     // make sure everything is linked properly
     if (!app_domain->linked) {
+        // load all the modules
+        DLIST(MIR_module_t)* modules = MIR_get_module_list(app_domain->ctx);
+        for (MIR_module_t module = DLIST_HEAD (MIR_module_t, *modules); module != NULL; module = DLIST_NEXT (MIR_module_t, module)) {
+            MIR_load_module(app_domain->ctx, module);
+        }
+
         MIR_link(app_domain->ctx, MIR_set_gen_interface, NULL);
+        app_domain->linked = true;
     }
 
     thread = calloc(1, sizeof(thread_t));
@@ -74,12 +82,11 @@ err_t new_thread(app_domain_t* app_domain, method_t* method, thread_t** out_thre
     // get the function start
     char func_name[256];
     CHECK_AND_RETHROW(jit_mangle_name(method, func_name, sizeof(func_name)));
-    MIR_item_t func = MIR_get_global_item(app_domain->ctx, func_name);
+    MIR_item_t func = mir_get_func(app_domain->ctx, func_name);
     CHECK(func != NULL);
     CHECK(func->item_type == MIR_func_item);
 
     // generate the start address
-    MIR_output(app_domain->ctx, stdout);
     thread->start_address = MIR_gen(app_domain->ctx, 0, func);
 
     *out_thread = thread;

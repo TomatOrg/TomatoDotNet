@@ -334,8 +334,8 @@ static err_t init_types(assembly_t* assembly, metadata_t* metadata) {
             g_object->stack_type = STACK_TYPE_T;
             g_object->stack_size = sizeof(void*);
             g_object->stack_alignment = alignof(void*);
-            g_object->memory_size = sizeof(char);
-            g_object->memory_alignment = alignof(char);
+            g_object->memory_size = 0;
+            g_object->memory_alignment = 0;
             g_object->is_value_type = 0;
             g_object->resolved_value_type = 1;
             g_object->resolved_size = 1;
@@ -405,7 +405,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
 
         // setup the type info
         type->assembly = assembly;
-        type->token = (token_t) { .table = METADATA_TYPE_DEF, .index = i };
+        type->token = (token_t) { .table = METADATA_TYPE_DEF, .index = i + 1 };
         type->name = type_def->type_name;
         type->namespace = type_def->type_namespace;
 
@@ -452,7 +452,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
                 method->assembly = assembly;
                 method->name = method_def->name;
                 method->parent = type;
-                method->token = (token_t) { .table = METADATA_TYPE_DEF, .index = start_index + j };
+                method->token = (token_t) { .table = METADATA_TYPE_DEF, .index = start_index + j + 1 };
 
                 // setup cil data
                 pe_directory_t directory = { .rva = method_def->rva };
@@ -619,10 +619,12 @@ static void resolve_size(type_t* type) {
 
     if (type->is_value_type) {
         type->memory_size = type->stack_size;
+        type->memory_alignment = type->stack_alignment;
     } else {
         // we are going to set the memory size in here because classes can have
         // cyclic values (because they are stored as pointers)
         type->memory_size = sum_field_sizes(type, &type->memory_alignment);
+        type->memory_size = ALIGN_UP(type->memory_size, type->memory_alignment);
     }
 }
 
@@ -668,6 +670,22 @@ static void add_this_parameter(assembly_t* assembly) {
     }
 }
 
+static err_t setup_nested_types(assembly_t* assembly, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_nested_class_t* nested_class = metadata->tables[METADATA_NESTED_CLASS].table;
+    for (int i = 0; i < metadata->tables[METADATA_NESTED_CLASS].rows; i++) {
+        type_t* nested = assembly_get_type_by_token(assembly, nested_class->nested_class);
+        type_t* enclosing = assembly_get_type_by_token(assembly, nested_class->enclosing_class);
+        CHECK(nested != NULL);
+        CHECK(enclosing != NULL);
+        nested->enclosing = enclosing;
+    }
+
+cleanup:
+    return err;
+}
+
 assembly_t* g_corelib_assembly = NULL;
 
 err_t load_assembly_from_blob(uint8_t* blob, size_t blob_size, assembly_t** assembly) {
@@ -711,6 +729,7 @@ err_t load_assembly_from_blob(uint8_t* blob, size_t blob_size, assembly_t** asse
 
     // setup all of the type info from the metadata
     CHECK_AND_RETHROW(create_all_types(new_assembly, &ctx.metadata, &ctx));
+    CHECK_AND_RETHROW(setup_nested_types(new_assembly, &ctx.metadata));
 
     // Setup any extra info that is needed once all the types are loaded
     setup_sizes_and_offsets(new_assembly);
