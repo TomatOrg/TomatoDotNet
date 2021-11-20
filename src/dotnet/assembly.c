@@ -522,6 +522,7 @@ static err_t create_all_types(assembly_t* assembly, metadata_t* metadata, parsed
             for (int j = 0; j < type->fields_count; j++) {
                 metadata_field_t* md_field = &md_fields[start_index + j];
                 type->fields[j].name = md_field->name;
+                type->fields[j].parent = type;
                 type->fields[j].is_static = md_field->flags & 0x10 ? 1 : 0;
                 type->fields[j].is_init_only = md_field->flags & 0x20 ? 1 : 0;
                 type->fields[j].is_literal = md_field->flags & 0x40 ? 1 : 0;
@@ -569,6 +570,7 @@ static size_t sum_field_sizes(type_t* type, size_t* alignment) {
 
     for (int i = 0; i < type->fields_count; i++) {
         field_t* field = &type->fields[i];
+        if (field->is_static) continue;
         resolve_size(field->type);
 
         // align the size, set the offset, and increment it

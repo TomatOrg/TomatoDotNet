@@ -19,7 +19,7 @@ app_domain_t* new_app_domain() {
     MIR_gen_set_optimize_level(domain->ctx, 0, 4);
 
     // setup runtime functions
-    MIR_load_external(domain->ctx, "gc_alloc_from_token", gc_alloc_from_token);
+    MIR_load_external(domain->ctx, "gc_alloc", gc_alloc);
 
     return domain;
 }
@@ -46,6 +46,15 @@ err_t app_domain_load_assembly(app_domain_t* domain, assembly_t* assembly) {
     // read the module
     f = fmemopen(assembly->module_data, assembly->module_data_size, "r");
     MIR_read(domain->ctx, f);
+
+    // set all the type references
+    for (int i = 0; i < assembly->types_count; i++) {
+        type_t* type = &assembly->types[i];
+
+        char type_name[256];
+        type_write_name(type, type_name, sizeof(type_name));
+        MIR_load_external(domain->ctx, type_name, type);
+    }
 
 cleanup:
     if (f != NULL) {
@@ -81,7 +90,7 @@ err_t new_thread(app_domain_t* app_domain, method_t* method, thread_t** out_thre
 
     // get the function start
     char func_name[256];
-    CHECK_AND_RETHROW(jit_mangle_name(method, func_name, sizeof(func_name)));
+    CHECK_AND_RETHROW(method_write_signature(method, func_name, sizeof(func_name)));
     MIR_item_t func = mir_get_func(app_domain->ctx, func_name);
     CHECK(func != NULL);
     CHECK(func->item_type == MIR_func_item);

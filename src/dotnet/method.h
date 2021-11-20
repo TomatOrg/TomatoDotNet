@@ -52,3 +52,12 @@ typedef struct method {
     // the max eval stack size
     size_t max_stack_depth;
 } method_t;
+
+/**
+ * Write a method's textual signature
+ *
+ * @param method            [IN] The method
+ * @param mangled_name      [IN] The buffer to write to
+ * @param buffer_size       [IN] The buffer's size
+ */
+err_t method_write_signature(method_t* method, char* buffer, size_t buffer_size);

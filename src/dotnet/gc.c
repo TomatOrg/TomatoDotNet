@@ -50,7 +50,3 @@ static void mark_object(void* ptr) {
 void* gc_alloc(type_t* type) {
     return malloc(type->memory_size);
 }
-
-void* gc_alloc_from_token(assembly_t* assembly, token_t token) {
-    return gc_alloc(assembly_get_type_by_token(assembly, token));
-}

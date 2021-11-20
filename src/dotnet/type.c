@@ -185,3 +185,19 @@ size_t type_write_name(type_t* type, char* buffer, size_t buffer_size) {
 
     return printed_size;
 }
+
+err_t field_write_name(field_t* field, char* buffer, size_t buffer_size) {
+    err_t err = NO_ERROR;
+
+    char type_name[256];
+    int printed = type_write_name(field->type, buffer, buffer_size);
+    CHECK(printed < buffer_size);
+    buffer_size -= printed;
+    buffer += printed;
+
+    printed = snprintf(buffer, buffer_size, "::%s", field->name);
+    CHECK(printed < buffer_size);
+
+cleanup:
+    return err;
+}

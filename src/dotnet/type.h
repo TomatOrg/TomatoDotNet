@@ -20,6 +20,8 @@ typedef struct field {
 
     // the offset in memory/on the stack
     size_t offset;
+
+    struct type* parent;
 } field_t;
 
 typedef enum type_mod {
@@ -158,3 +160,5 @@ void type_print(type_t* type);
  * @param buffer_size   [IN] The size of the buffer
  */
 size_t type_write_name(type_t* type, char* buffer, size_t buffer_size);
+
+err_t field_write_name(field_t* field, char* buffer, size_t buffer_size);
