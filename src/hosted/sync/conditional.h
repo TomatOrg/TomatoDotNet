@@ -2,9 +2,11 @@
 
 #include "mutex.h"
 
-typedef struct conditional {
-    // TODO: this
-} conditional_t;
+#include <pthread.h>
+
+typedef pthread_cond_t conditional_t;
+
+#define INIT_CONDITIONAL() PTHREAD_COND_INITIALIZER
 
 void conditional_wait(conditional_t* conditional, mutex_t* mutex);
 

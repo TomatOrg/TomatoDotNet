@@ -2,11 +2,16 @@
 
 #include "spinlock.h"
 
-#include <thread/thread.h>
+#include <semaphore.h>
 
-typedef struct semaphore {
-    // TODO: this
-} semaphore_t;
+typedef sem_t semaphore_t;
+// this is quite ugly, thanks posix!
+#define INIT_SEMAPHORE() \
+  ({ \
+    sem_t sem; \
+    sem_init(&sem); \
+    sem; \
+  })
 
 void semaphore_acquire(semaphore_t* semaphore, bool lifo);
 

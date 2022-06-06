@@ -61,4 +61,32 @@ set(MIR_SOURCES
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DMIR_NO_SCAN")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DMIR_PARALLEL_GEN")
 
-add_executable(tinydotnet ${HOSTED_SOURCES} ${DOTNET_SOURCES} ${UNICODE_SOURCES} ${MIR_SOURCES})
+########################################################################################################################
+# mimalloc
+########################################################################################################################
+
+set(MIMALLOC_SOURCES
+	lib/mimalloc/src/stats.c
+	lib/mimalloc/src/random.c
+	lib/mimalloc/src/os.c
+	lib/mimalloc/src/bitmap.c
+	lib/mimalloc/src/arena.c
+	lib/mimalloc/src/segment.c
+	lib/mimalloc/src/page.c
+	lib/mimalloc/src/alloc.c
+	lib/mimalloc/src/alloc-aligned.c
+	lib/mimalloc/src/alloc-posix.c
+	lib/mimalloc/src/heap.c
+	lib/mimalloc/src/options.c
+	lib/mimalloc/src/init.c
+	src/hosted/heap/mimalloc_region.c
+)
+include_directories(lib/mimalloc/include)
+
+include_directories(lib)
+
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DMIR_NO_SCAN")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DMIR_PARALLEL_GEN")
+
+
+add_executable(tinydotnet ${HOSTED_SOURCES} ${DOTNET_SOURCES} ${UNICODE_SOURCES} ${MIR_SOURCES} ${MIMALLOC_SOURCES})

@@ -1,5 +1,6 @@
 
 #include <dotnet/jit/jit.h>
+#include <dotnet/gc/gc.h>
 #include <dotnet/loader.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -20,6 +21,7 @@ void load_file(const char* name, void** file, uint64_t* size) {
 int main() {
     load_file("Pentagon/Corelib/bin/Release/net6.0/Corelib.dll", &corelib_file, &corelib_file_size);
     load_file("Pentagon/Pentagon/bin/Release/net6.0/Pentagon.dll", &kernel_file, &kernel_file_size);
+    init_gc();
     init_jit();
 
     // load the corelib
@@ -36,5 +38,6 @@ int main() {
     method_result_t result = entry_point();
     //CHECK(result.exception == NULL, "Got exception: \"%U\"", result.exception->Message);
     printf("Kernel output: %d\n", result.value);
+    gc_wait();
 }
 
