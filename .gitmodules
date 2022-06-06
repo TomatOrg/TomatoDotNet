@@ -1,3 +1,6 @@
-[submodule "mir"]
-	path = mir
+[submodule "lib/mir"]
+	path = lib/mir
 	url = git@github.com:vnmakarov/mir.git
+[submodule "lib/utf8-utf16-converter"]
+	path = lib/utf8-utf16-converter
+	url = git@github.com:Davipb/utf8-utf16-converter.git
