@@ -4,9 +4,11 @@
 
 #include <stdint.h>
 
-typedef struct mutex {
-    // TODO: this
-} mutex_t;
+#include <pthread.h>
+
+typedef pthread_mutex_t mutex_t;
+
+#define INIT_MUTEX() PTHREAD_MUTEX_INITIALIZER
 
 void mutex_lock(mutex_t* mutex);
 

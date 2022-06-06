@@ -2,11 +2,11 @@
 
 #include <stdbool.h>
 
-typedef struct spinlock {
-    // TODO: this
-} spinlock_t;
+#include <pthread.h>
 
-#define INIT_SPINLOCK() ((spinlock_t){  })
+typedef pthread_mutex_t spinlock_t;
+
+#define INIT_SPINLOCK() PTHREAD_MUTEX_INITIALIZER
 
 void spinlock_lock(spinlock_t* spinlock);
 
