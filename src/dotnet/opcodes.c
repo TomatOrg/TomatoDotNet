@@ -119,7 +119,8 @@ void opcode_disasm_method(System_Reflection_MethodInfo method) {
             case OPCODE_OPERAND_InlineField: {
                 token_t value = *(token_t*)&body->Il->Data[i];
                 i += sizeof(token_t);
-                System_Reflection_FieldInfo field = assembly_get_field_by_token(assembly, value);
+                System_Reflection_FieldInfo field;
+                ASSERT(!IS_ERROR(assembly_get_field_by_token(assembly, value, method->DeclaringType->GenericArguments, method->GenericArguments, &field)));
                 snprintf(param, param_size, "%U.%U::%U",
                          field->DeclaringType->Namespace, field->DeclaringType->Name, field->Name);
             } break;
@@ -136,7 +137,8 @@ void opcode_disasm_method(System_Reflection_MethodInfo method) {
             case OPCODE_OPERAND_InlineMethod: {
                 token_t value = *(token_t*)&body->Il->Data[i];
                 i += sizeof(token_t);
-                System_Reflection_MethodInfo methodOpr = assembly_get_method_by_token(assembly, value);
+                System_Reflection_MethodInfo methodOpr;
+                ASSERT(!IS_ERROR(assembly_get_method_by_token(assembly, value, method->DeclaringType->GenericArguments, method->GenericArguments, &methodOpr)));
                 snprintf(param, param_size, "%U.%U::%U",
                          methodOpr->DeclaringType->Namespace, methodOpr->DeclaringType->Name, methodOpr->Name);
             } break;

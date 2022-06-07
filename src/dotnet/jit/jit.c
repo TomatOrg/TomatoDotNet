@@ -64,7 +64,7 @@ static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, Sys
  * memcpy a struct to an heap object, taking care of any memory barrier that should happen
  * while we are copying it
  */
-static void managed_memcpy(System_Object this, System_Type struct_type, int offset, void* from) {
+void managed_memcpy(System_Object this, System_Type struct_type, int offset, void* from) {
     uint8_t* this_base = (uint8_t*)this;
 
     int last_offset = 0;
@@ -1791,7 +1791,8 @@ static err_t jit_method(jit_context_t* ctx, System_Reflection_MethodInfo method)
             case OPCODE_OPERAND_InlineField: {
                 token_t value = *(token_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(token_t);
-                operand_field = assembly_get_field_by_token(assembly, value);
+                CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, value, method->DeclaringType->GenericArguments,
+                                                              method->GenericArguments, &operand_field));
                 CHECK(operand_field != NULL);
                 CHECK(check_field_accessibility(method->DeclaringType, operand_field));
             } break;
@@ -1806,7 +1807,8 @@ static err_t jit_method(jit_context_t* ctx, System_Reflection_MethodInfo method)
             case OPCODE_OPERAND_InlineMethod: {
                 token_t value = *(token_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(token_t);
-                operand_method = assembly_get_method_by_token(assembly, value);
+                CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, value, method->DeclaringType->GenericArguments,
+                                                               method->GenericArguments, &operand_method));
                 CHECK(operand_method != NULL);
                 CHECK(check_method_accessibility(method->DeclaringType, operand_method));
             } break;
@@ -4425,27 +4427,6 @@ err_t jit_assembly(System_Reflection_Assembly assembly) {
     // internal
     for (int i = 0; i < assembly->DefinedMethods->Length; i++) {
         CHECK_AND_RETHROW(prepare_method_signature(&ctx, assembly->DefinedMethods->Data[i], false));
-    }
-
-    // external
-    for (int i = 0; i < assembly->ImportedMembers->Length; i++) {
-        System_Reflection_MemberInfo memberInfo = assembly->ImportedMembers->Data[i];
-        if (isinstance((System_Object)memberInfo, tSystem_Reflection_MethodInfo)) {
-            // method
-            CHECK_AND_RETHROW(prepare_method_signature(&ctx, (System_Reflection_MethodInfo)memberInfo, true));
-        } else {
-            // field
-            System_Reflection_FieldInfo fieldInfo = (System_Reflection_FieldInfo) memberInfo;
-            if (field_is_static(fieldInfo)) {
-                // import the static field
-                strbuilder_t name = strbuilder_new();
-                type_print_full_name(fieldInfo->DeclaringType, &name);
-                strbuilder_cstr(&name, "::");
-                strbuilder_utf16(&name, fieldInfo->Name->Chars, fieldInfo->Name->Length);
-                hmput(ctx.static_fields, fieldInfo, MIR_new_import(ctx.context, strbuilder_get(&name)));
-                strbuilder_free(&name);
-            }
-        }
     }
 
     //

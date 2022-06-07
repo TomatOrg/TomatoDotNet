@@ -55,6 +55,7 @@ System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
 
 System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
+System_Type tTinyDotNet_Reflection_MemberReference = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
@@ -132,7 +133,7 @@ err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t to
             } break;
 
             default:
-                CHECK_FAIL("Invalid table for type");
+                CHECK_FAIL("Invalid table for type %04x");
                 break;
         }
     }
@@ -143,72 +144,125 @@ cleanup:
     return err;
 }
 
-System_Reflection_MethodInfo assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token) {
+err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method) {
+    err_t err = NO_ERROR;
+
     if (token.index == 0) {
         // null token is valid for our case
-        return NULL;
+        *out_method = NULL;
+        goto cleanup;
     }
 
     switch (token.table) {
         case METADATA_METHOD_DEF: {
-            if (token.index - 1 >= assembly->DefinedMethods->Length) {
-                ASSERT(!"assembly_get_method_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->DefinedMethods->Data[token.index - 1];
+            CHECK(token.index - 1 < assembly->DefinedMethods->Length);
+            *out_method = assembly->DefinedMethods->Data[token.index - 1];
         } break;
 
         case METADATA_MEMBER_REF: {
-            if (token.index - 1 >= assembly->ImportedMembers->Length) {
-                ASSERT(!"assembly_get_method_by_token: token outside of range");
-                return NULL;
+            CHECK(token.index - 1 < assembly->DefinedMemberRefs->Length);
+            TinyDotNet_Reflection_MemberReference ref = assembly->DefinedMemberRefs->Data[token.index - 1];
+
+            // get the enclosing type
+            System_Type type;
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
+
+            // get the expected field
+            System_Reflection_MethodInfo wantedInfo = GC_NEW(tSystem_Reflection_MethodInfo);
+            blob_entry_t blob = {
+                .data = ref->Signature->Data,
+                .size = ref->Signature->Length
+            };
+            GC_UPDATE(wantedInfo, DeclaringType, type);
+            GC_UPDATE(wantedInfo, Module, assembly->Module);
+            CHECK_AND_RETHROW(parse_stand_alone_method_sig(blob, wantedInfo, true));
+
+            // find a method with that type
+            int index = 0;
+            System_Reflection_MethodInfo methodInfo = NULL;
+            while ((methodInfo = type_iterate_methods(type, ref->Name, &index)) != NULL) {
+                // check the return type and parameters count is the same
+                if (methodInfo->ReturnType != wantedInfo->ReturnType) continue;
+                if (methodInfo->Parameters->Length != wantedInfo->Parameters->Length) continue;
+
+                // check that the parameters are the same
+                bool found = true;
+                for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
+                    if (methodInfo->Parameters->Data[pi]->ParameterType != wantedInfo->Parameters->Data[pi]->ParameterType) {
+                        found = false;
+                        break;
+                    }
+                }
+
+                if (found) {
+                    break;
+                }
             }
-            System_Reflection_MemberInfo memberInfo = assembly->ImportedMembers->Data[token.index - 1];
-            if (memberInfo->vtable->type != tSystem_Reflection_MethodInfo) {
-                ASSERT(!"assembly_get_method_by_token: wanted member is not a method");
-                return NULL;
-            }
-            return (System_Reflection_MethodInfo)memberInfo;
+
+            // found it
+            CHECK(methodInfo != NULL);
+            *out_method = methodInfo;
         } break;
 
         default:
-            ASSERT(!"assembly_get_method_by_token: invalid table for type");
-            return NULL;
+            CHECK_FAIL();
+            break;
     }
+
+cleanup:
+    return err;
 }
 
-System_Reflection_FieldInfo assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token) {
+err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_FieldInfo* out_field) {
+    err_t err = NO_ERROR;
+
     if (token.index == 0) {
         // null token is valid for our case
-        return NULL;
+        *out_field = NULL;
+        goto cleanup;
     }
 
     switch (token.table) {
         case METADATA_FIELD: {
-            if (token.index - 1 >= assembly->DefinedFields->Length) {
-                ASSERT(!"assembly_get_field_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->DefinedFields->Data[token.index - 1];
+            CHECK(token.index - 1 < assembly->DefinedFields->Length);
+            *out_field = assembly->DefinedFields->Data[token.index - 1];
         } break;
 
         case METADATA_MEMBER_REF: {
-            if (token.index - 1 >= assembly->ImportedMembers->Length) {
-                ASSERT(!"assembly_get_field_by_token: token outside of range");
-                return NULL;
-            }
-            System_Reflection_MemberInfo memberInfo = assembly->ImportedMembers->Data[token.index - 1];
-            if (memberInfo->vtable->type != tSystem_Reflection_FieldInfo) {
-                ASSERT(!"assembly_get_field_by_token: wanted member is not a field");
-                return NULL;
-            }
-            return (System_Reflection_FieldInfo)memberInfo;
+            CHECK(token.index - 1 < assembly->DefinedMemberRefs->Length);
+            TinyDotNet_Reflection_MemberReference ref = assembly->DefinedMemberRefs->Data[token.index - 1];
+
+            // get the enclosing type
+            System_Type type;
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
+
+            // get the expected field
+            System_Reflection_FieldInfo wantedInfo = GC_NEW(tSystem_Reflection_FieldInfo);
+            blob_entry_t blob = {
+                .data = ref->Signature->Data,
+                .size = ref->Signature->Length
+            };
+            GC_UPDATE(wantedInfo, DeclaringType, type);
+            GC_UPDATE(wantedInfo, Module, assembly->Module);
+            CHECK_AND_RETHROW(parse_field_sig(blob, wantedInfo));
+
+            // get the actual field to verify compatibility
+            System_Reflection_FieldInfo fieldInfo = type_get_field(type, ref->Name);
+
+            // check we got what we wanted
+            CHECK(fieldInfo->FieldType == wantedInfo->FieldType);
+
+            // out it
+            *out_field = fieldInfo;
         } break;
 
         default:
-            ASSERT(!"assembly_get_field_by_token: invalid table for type");
-            return NULL;
+            CHECK_FAIL("Invalid table %02x", token.table);
+            break;
     }
+
+cleanup:
+    return err;
 }
 
 System_Type assembly_get_type_by_name(System_Reflection_Assembly assembly, const char* name, const char* namespace) {
@@ -609,18 +663,18 @@ void method_print_full_name(System_Reflection_MethodInfo method, strbuilder_t* b
     method_print_name(method, builder);
 }
 
-System_Reflection_FieldInfo type_get_field_cstr(System_Type type, const char* name) {
+System_Reflection_FieldInfo type_get_field(System_Type type, System_String name) {
     for (int i = 0; i < type->Fields->Length; i++) {
-        if (string_equals_cstr(type->Fields->Data[i]->Name, name)) {
+        if (string_equals(type->Fields->Data[i]->Name, name)) {
             return type->Fields->Data[i];
         }
     }
     return NULL;
 }
 
-System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const char* name, int* index) {
+System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index) {
     for (int i = *index; i < type->Methods->Length; i++) {
-        if (string_equals_cstr(type->Methods->Data[i]->Name, name)) {
+        if (string_equals(type->Methods->Data[i]->Name, name)) {
             *index = i + 1;
             return type->Methods->Data[i];
         }

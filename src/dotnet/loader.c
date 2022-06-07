@@ -429,102 +429,6 @@ static bool match_type_generic(System_Type original, System_Type target, System_
     return original == target;
 }
 
-static err_t loader_load_member_refs(System_Reflection_Assembly assembly, metadata_t* metadata) {
-    err_t err = NO_ERROR;
-
-    //
-    // Resolve members
-    //
-
-    metadata_member_ref_t* member_refs = metadata->tables[METADATA_MEMBER_REF].table;
-    size_t member_refs_count = metadata->tables[METADATA_MEMBER_REF].rows;
-
-    // the array of imported fields and methods
-    GC_UPDATE(assembly, ImportedMembers, GC_NEW_ARRAY(tSystem_Reflection_MemberInfo, member_refs_count));
-
-    // dummy field so we can parse into it
-    System_Reflection_FieldInfo dummyField = GC_NEW(tSystem_Reflection_FieldInfo);
-    GC_UPDATE(dummyField, Module, assembly->Module);
-
-    // dummy method so we can parse into it
-    System_Reflection_MethodInfo dummyMethod = GC_NEW(tSystem_Reflection_MethodInfo);
-    GC_UPDATE(dummyMethod, Module, assembly->Module);
-
-    for (int i = 0; i < member_refs_count; i++) {
-        metadata_member_ref_t* member_ref = &member_refs[i];
-        System_Type declaring_type;
-        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, member_ref->class, NULL, NULL, &declaring_type));
-
-        CHECK(member_ref->signature.size > 0);
-        uint8_t sig = member_ref->signature.data[0] & 0xf;
-        switch (member_ref->signature.data[0] & 0xf) {
-            // method
-            case DEFAULT:
-            case VARARG:
-            case GENERIC: {
-                // parse the signature
-                GC_UPDATE(dummyMethod, DeclaringType, declaring_type);
-                CHECK_AND_RETHROW(parse_stand_alone_method_sig(member_ref->signature, dummyMethod, true));
-
-                // find a method with that type
-                int index = 0;
-                System_Reflection_MethodInfo methodInfo = NULL;
-                while ((methodInfo = type_iterate_methods_cstr(declaring_type, member_ref->name, &index)) != NULL) {
-                    // check the return type and parameters count is the same
-                    if (!match_type_generic(methodInfo->ReturnType, dummyMethod->ReturnType, declaring_type->GenericArguments)) continue;
-                    if (methodInfo->Parameters->Length != dummyMethod->Parameters->Length) continue;
-
-                    // check that the parameters are the same
-                    bool found = true;
-                    System_Reflection_ParameterInfo_Array parameterInfo = methodInfo->Parameters;
-                    for (int pi = 0; pi < parameterInfo->Length; pi++) {
-                        if (!match_type_generic(
-                        parameterInfo->Data[pi]->ParameterType,
-                        dummyMethod->Parameters->Data[pi]->ParameterType,
-                        declaring_type->GenericArguments)
-                        ) {
-                            found = false;
-                            break;
-                        }
-                    }
-
-                    if (found) {
-                        break;
-                    }
-                }
-
-                // set it
-                CHECK(methodInfo != NULL, "Could not find %s", member_ref->name);
-                GC_UPDATE_ARRAY(assembly->ImportedMembers, i, methodInfo);
-            } break;
-
-                // field
-            case FIELD: {
-                // parse the field
-                GC_UPDATE(dummyField, DeclaringType, declaring_type);
-                CHECK_AND_RETHROW(parse_field_sig(member_ref->signature, dummyField));
-
-                // get it
-                System_Reflection_FieldInfo fieldInfo = type_get_field_cstr(declaring_type, member_ref->name);
-                CHECK(fieldInfo != NULL);
-
-                // make sure the type matches
-                CHECK(match_type_generic(fieldInfo->FieldType, dummyField->FieldType, declaring_type->GenericArguments));
-
-                // update
-                GC_UPDATE_ARRAY(assembly->ImportedMembers, i, fieldInfo);
-            } break;
-
-            default: {
-                CHECK_FAIL("Invalid member ref signature: %02x", member_ref->signature.data[0]);
-            } break;
-        }
-    }
-
-cleanup:
-    return err;
-}
-
 static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Reflection_Assembly assembly) {
     err_t err = NO_ERROR;
 
@@ -578,6 +482,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     // save up all the type spec blobs for later use
     //
 
+    // type specs
     int type_specs_count = metadata->tables[METADATA_TYPE_SPEC].rows;
     metadata_type_spec_t* type_specs = metadata->tables[METADATA_TYPE_SPEC].table;
     GC_UPDATE(assembly, DefinedTypeSpecs, GC_NEW_ARRAY(get_array_type(tSystem_Byte), type_specs_count));
@@ -586,6 +491,21 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->signature.size);
         memcpy(blob->Data, spec->signature.data, spec->signature.size);
         GC_UPDATE_ARRAY(assembly->DefinedTypeSpecs, i, blob);
+    }
+
+    // member refs
+    int member_refs_count = metadata->tables[METADATA_MEMBER_REF].rows;
+    metadata_member_ref_t* member_refs = metadata->tables[METADATA_MEMBER_REF].table;
+    GC_UPDATE(assembly, DefinedMemberRefs, GC_NEW_ARRAY(get_array_type(tSystem_Byte), member_refs_count));
+    for (int i = 0; i < member_refs_count; i++) {
+        metadata_member_ref_t* ref = &member_refs[i];
+        TinyDotNet_Reflection_MemberReference member = GC_NEW(tTinyDotNet_Reflection_MemberReference);
+        GC_UPDATE(member, Name, new_string_from_utf8(ref->name, strlen(ref->name)));
+        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, ref->signature.size);
+        memcpy(blob->Data, ref->signature.data, ref->signature.size);
+        GC_UPDATE(member, Signature, blob);
+        member->Class = ref->class;
+        GC_UPDATE_ARRAY(assembly->DefinedMemberRefs, i, member);
     }
 
     //
@@ -606,7 +526,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         if (generic_param->owner.table == METADATA_TYPE_DEF) {
             CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, generic_param->owner, NULL, NULL, (void*)&owner));
         } else {
-            owner = assembly_get_method_by_token(assembly, generic_param->owner);
+            CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, generic_param->owner, NULL, NULL, (void*)&owner));
         }
 
         System_Type typeParam = GC_NEW(tSystem_Type);
@@ -719,11 +639,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             CHECK_AND_RETHROW(parse_stand_alone_method_sig(method_def->signature, methodInfo, false));
         }
     }
-
-    //
-    // now that we have all the types loaded, we can load all the member refs
-    //
-    CHECK_AND_RETHROW(loader_load_member_refs(assembly, metadata));
 
     //
     // count how many interfaces are implemented in each type
@@ -1506,6 +1421,7 @@ static type_init_t m_type_init[] = {
     EXCEPTION_INIT("System", "OutOfMemoryException", System_OutOfMemoryException),
     EXCEPTION_INIT("System", "OverflowException", System_OverflowException),
     TYPE_INIT("TinyDotNet.Reflection", "InterfaceImpl", TinyDotNet_Reflection_InterfaceImpl, 3),
+    TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference, 3),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
@@ -1664,10 +1580,6 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
         assembly->DefinedTypes->Data[i]->vtable = tSystem_Type->VTable;
     }
 
-    // no imports for corelib
-    GC_UPDATE(assembly, ImportedTypes, GC_NEW_ARRAY(tSystem_Type, 0));
-    GC_UPDATE(assembly, ImportedMembers, GC_NEW_ARRAY(tSystem_Reflection_MemberInfo, 0));
-
     // all the last setup
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
@@ -1760,7 +1672,9 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     CHECK_AND_RETHROW(loader_run_cctors(assembly));
 
     // get the entry point
-    GC_UPDATE(assembly, EntryPoint, assembly_get_method_by_token(assembly, file.cli_header->entry_point_token));
+    System_Reflection_MethodInfo entryPoint = NULL;
+    CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
+    GC_UPDATE(assembly, EntryPoint, entryPoint);
 
     // give out the assembly
     *out_assembly = assembly;

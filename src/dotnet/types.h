@@ -150,6 +150,14 @@ DEFINE_ARRAY(System_Byte_Array);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct TinyDotNet_Reflection_MemberReference {
+    struct System_Object;
+    System_String Name;
+    token_t Class;
+    System_Byte_Array Signature;
+} *TinyDotNet_Reflection_MemberReference;
+DEFINE_ARRAY(TinyDotNet_Reflection_MemberReference);
+
 struct System_Reflection_Assembly {
     struct System_Object;
 
@@ -169,11 +177,10 @@ struct System_Reflection_Assembly {
     System_Reflection_MethodInfo_Array DefinedMethods;
     System_Reflection_FieldInfo_Array DefinedFields;
     System_Byte_Array_Array DefinedTypeSpecs;
+    TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
 
     // types imported from other assemblies, for easy lookup whenever needed
     System_Type_Array ImportedTypes;
-    System_Reflection_MemberInfo_Array ImportedMembers;
-    System_Byte_Array_Array GenericMemberSpecs;
 
     // we have two entries, one for GC tracking (the array)
     // and one for internally looking up the string entries
@@ -196,12 +203,12 @@ err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t to
 /**
  * Get a method by a token
  */
-System_Reflection_MethodInfo assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token);
+err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method);
 
 /**
  * Get a field by a token
  */
-System_Reflection_FieldInfo assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token);
+err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_FieldInfo* out_field);
 
 /**
  * Get a type by its name and namespace
@@ -549,23 +556,19 @@ void type_print_full_name(System_Type Type, strbuilder_t* builder);
 /**
  * Get a field by its name
  *
- * TODO: take into account member types
- *
  * @param type      [IN] The declaring type
  * @param name      [IN] The name
  */
-System_Reflection_FieldInfo type_get_field_cstr(System_Type type, const char* name);
+System_Reflection_FieldInfo type_get_field(System_Type type, System_String name);
 
 /**
  * Iterate all the methods of the type with the same name
- *
- * TODO: take into account member types
  *
  * @param type      [IN] The declaring type
  * @param name      [IN] The name of the type
  * @param index     [IN] The index from which to continue
  */
-System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const char* name, int* index);
+System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index);
 
 /**
  * Get the implementation of the given interface method
@@ -622,6 +625,7 @@ extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
+extern System_Type tTinyDotNet_Reflection_MemberReference;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || !type->IsValueType; }
