@@ -3,6 +3,9 @@
 #include "monitor.h"
 
 #include "gc/gc.h"
+#include "dotnet/metadata/sig.h"
+#include "encoding.h"
+#include "loader.h"
 
 #include <util/strbuilder.h>
 #include <util/stb_ds.h>
@@ -51,7 +54,7 @@ System_Type tSystem_InvalidCastException = NULL;
 System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
 
-System_Type tPentagon_Reflection_InterfaceImpl = NULL;
+System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
@@ -100,37 +103,44 @@ System_String string_append_cstr(System_String old, const char* str) {
     return new;
 }
 
-System_Type assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token) {
-    if (token.index == 0) {
-        // null token is valid for our case
-        return NULL;
+err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Type* out_type) {
+    err_t err = NO_ERROR;
+    System_Type type = NULL;
+
+    if (token.index != 0) {
+        switch (token.table) {
+            case METADATA_TYPE_DEF: {
+                CHECK(token.index - 1 < assembly->DefinedTypes->Length);
+                type = assembly->DefinedTypes->Data[token.index - 1];
+            } break;
+
+            case METADATA_TYPE_REF: {
+                CHECK(token.index - 1 < assembly->ImportedTypes->Length);
+                type = assembly->ImportedTypes->Data[token.index - 1];
+            } break;
+
+            case METADATA_TYPE_SPEC: {
+                CHECK(token.index - 1 < assembly->DefinedTypeSpecs->Length);
+
+                // not found, so parse it
+                System_Byte_Array blob = assembly->DefinedTypeSpecs->Data[token.index - 1];
+                blob_entry_t entry = {
+                    .data = blob->Data,
+                    .size = blob->Length
+                };
+                CHECK_AND_RETHROW(parse_type_spec(entry, assembly, &type, typeArgs, methodArgs));
+            } break;
+
+            default:
+                CHECK_FAIL("Invalid table for type");
+                break;
+        }
     }
 
-    switch (token.table) {
-        case METADATA_TYPE_DEF: {
-            if (token.index - 1 >= assembly->DefinedTypes->Length) {
-                ASSERT(!"assembly_get_type_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->DefinedTypes->Data[token.index - 1];
-        } break;
+    *out_type = type;
 
-        case METADATA_TYPE_REF: {
-            if (token.index - 1 >= assembly->ImportedTypes->Length) {
-                ASSERT(!"assembly_get_type_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->ImportedTypes->Data[token.index - 1];
-        } break;
-
-        case METADATA_TYPE_SPEC: {
-            ASSERT(!"assembly_get_type_by_token: TODO: TypeSpec");
-        } break;
-
-        default:
-            ASSERT(!"assembly_get_type_by_token: invalid table for type");
-            return NULL;
-    }
+cleanup:
+    return err;
 }
 
 System_Reflection_MethodInfo assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token) {
@@ -567,13 +577,17 @@ void type_print_name(System_Type type, strbuilder_t* builder) {
 
 
 void type_print_full_name(System_Type type, strbuilder_t* builder) {
-    strbuilder_char(builder, '[');
-    strbuilder_utf16(builder, type->Assembly->Name->Chars, type->Assembly->Name->Length);
-    strbuilder_char(builder, '-');
-    strbuilder_char(builder, 'v');
-    strbuilder_uint(builder, type->Assembly->MajorVersion);
-    strbuilder_char(builder, ']');
-    type_print_name(type, builder);
+    if (type->GenericParameterPosition >= 0) {
+        strbuilder_utf16(builder, type->Name->Chars, type->Name->Length);
+    } else {
+        strbuilder_char(builder, '[');
+        strbuilder_utf16(builder, type->Assembly->Name->Chars, type->Assembly->Name->Length);
+        strbuilder_char(builder, '-');
+        strbuilder_char(builder, 'v');
+        strbuilder_uint(builder, type->Assembly->MajorVersion);
+        strbuilder_char(builder, ']');
+        type_print_name(type, builder);
+    }
 }
 
 void method_print_name(System_Reflection_MethodInfo method, strbuilder_t* builder) {
@@ -615,14 +629,14 @@ System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const c
 }
 
 System_Reflection_MethodInfo type_get_interface_method_impl(System_Type targetType, System_Reflection_MethodInfo targetMethod) {
-    Pentagon_Reflection_InterfaceImpl interface = type_get_interface_impl(targetType, targetMethod->DeclaringType);
+    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(targetType, targetMethod->DeclaringType);
     if (interface == NULL) {
         return NULL;
     }
     return targetType->VirtualMethods->Data[interface->VTableOffset + targetMethod->VTableOffset];
 }
 
-Pentagon_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType) {
+TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType) {
     if (targetType->InterfaceImpls == NULL) {
         return NULL;
     }
@@ -665,14 +679,9 @@ void assembly_dump(System_Reflection_Assembly assembly) {
             strbuilder_cstr(&field, field_access_str(field_access(type->Fields->Data[j])));
             strbuilder_char(&field, ' ');
             strbuilder_cstr(&field, field_is_static(type->Fields->Data[j]) ? "static " : "");
-            
-            strbuilder_utf16(&field, type->Fields->Data[j]->FieldType->Namespace->Chars, type->Fields->Data[j]->FieldType->Namespace->Length);
-            strbuilder_char(&field, '.');
-            strbuilder_utf16(&field, type->Fields->Data[j]->FieldType->Name->Chars, type->Fields->Data[j]->FieldType->Name->Length);
+            type_print_full_name(type->Fields->Data[j]->FieldType, &field);
             strbuilder_char(&field, ' ');
-            
             strbuilder_utf16(&field, type->Fields->Data[j]->Name->Chars, type->Fields->Data[j]->Name->Length);
-            
             TRACE("\t\t%s; // offset 0x%02x", strbuilder_get(&field), type->Fields->Data[j]->MemoryOffset);
             strbuilder_free(&field);
         }
@@ -834,4 +843,137 @@ bool check_type_visibility(System_Type from, System_Type to) {
     }
 
     return true;
+}
+
+static System_Type expand_type(System_Type type, System_Type_Array arguments);
+
+static System_Reflection_FieldInfo expand_field(System_Type type, System_Reflection_FieldInfo field, System_Type_Array arguments) {
+    System_Reflection_FieldInfo instance = GC_NEW(tSystem_Reflection_FieldInfo);
+    instance->FieldType = expand_type(field->FieldType, arguments);
+    instance->Attributes = field->Attributes;
+    GC_UPDATE(instance, Module, field->Module);
+    GC_UPDATE(instance, DeclaringType, type);
+    GC_UPDATE(instance, Name, field->Name);
+    return instance;
+}
+
+static System_Reflection_MethodInfo expand_method(System_Type type, System_Reflection_MethodInfo field, System_Type_Array arguments) {
+    System_Reflection_MethodInfo instance = GC_NEW(tSystem_Reflection_MethodInfo);
+    GC_UPDATE(instance, MethodBody, field->MethodBody);
+    GC_UPDATE(instance, Module, field->Module);
+    GC_UPDATE(instance, DeclaringType, type);
+    GC_UPDATE(instance, Name, field->Name);
+    GC_UPDATE(instance, ReturnType, expand_type(field->ReturnType, arguments));
+    instance->Attributes = field->Attributes;
+    instance->ImplAttributes = field->ImplAttributes;
+
+    GC_UPDATE(instance, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, field->Parameters->Length));
+    for (int i = 0; i < instance->Parameters->Length; i++) {
+        System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
+        System_Reflection_ParameterInfo fieldParameter = field->Parameters->Data[i];
+        parameter->Attributes = fieldParameter->Attributes;
+        GC_UPDATE(parameter, Name, fieldParameter->Name);
+        GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments));
+        GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
+    }
+
+    return instance;
+}
+
+static System_Type expand_type(System_Type type, System_Type_Array arguments) {
+    bool real_instance = true;
+    for (int i = 0; i < arguments->Length; i++) {
+        if (arguments->Data[i]->GenericParameterPosition >= 0) {
+            real_instance = false;
+            break;
+        }
+    }
+
+    if (type == NULL) {
+        return NULL;
+    } else if (type->GenericParameterPosition >= 0) {
+        return arguments->Data[type->GenericParameterPosition];
+    } else if (!type_is_generic_definition(type)) {
+        return type;
+    }
+
+    monitor_enter(type);
+
+    // check for an existing instance
+    System_Type inst = type->NextGenericInstance;
+    bool found = false;
+    while (inst != NULL) {
+        found = true;
+        for (int i = 0; i < arguments->Length; i++) {
+            if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
+                found = false;
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+
+        inst = inst->NextGenericInstance;
+    }
+
+    if (found) {
+        monitor_exit(type);
+        return inst;
+    }
+
+    // instance not found, create one
+    System_Type instance = GC_NEW(tSystem_Type);
+    GC_UPDATE(instance, DeclaringType, type->DeclaringType);
+    GC_UPDATE(instance, Module, type->Module);
+    GC_UPDATE(instance, Assembly, type->Assembly);
+    GC_UPDATE(instance, GenericArguments, arguments);
+    GC_UPDATE(instance, GenericTypeDefinition, type);
+    GC_UPDATE(instance, Namespace, type->Namespace);
+    instance->Attributes = type->Attributes;
+
+    // create the unique name
+    strbuilder_t builder = strbuilder_new();
+    strbuilder_utf16(&builder, type->Name->Chars, type->Name->Length);
+    strbuilder_char(&builder, '<');
+    for (int i = 0; i < arguments->Length; i++) {
+        type_print_full_name(arguments->Data[i], &builder);
+        if (i + 1 != arguments->Length) {
+            strbuilder_char(&builder, ',');
+        }
+    }
+    strbuilder_char(&builder, '>');
+    GC_UPDATE(instance, Name, new_string_from_cstr(strbuilder_get(&builder)));
+    strbuilder_free(&builder);
+
+    // base type
+    GC_UPDATE(instance, BaseType, expand_type(instance->BaseType, arguments));
+
+    // fields
+    GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
+    for (int i = 0; i < instance->Fields->Length; i++) {
+        GC_UPDATE_ARRAY(instance->Fields, i, expand_field(type, type->Fields->Data[i], arguments));
+    }
+
+    GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
+    for (int i = 0; i < instance->Methods->Length; i++) {
+        GC_UPDATE_ARRAY(instance->Methods, i, expand_method(type, type->Methods->Data[i], arguments));
+    }
+
+    // add it only if there are no non-specific generic types
+    if (real_instance) {
+        GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
+        GC_UPDATE(type, NextGenericInstance, instance);
+    }
+
+    monitor_exit(type);
+
+    return instance;
+}
+
+System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
+    ASSERT(type_is_generic_definition(type));
+    ASSERT(type->GenericArguments->Length == arguments->Length);
+    return expand_type(type, arguments);
 }

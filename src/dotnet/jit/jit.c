@@ -46,7 +46,7 @@ static void memcpy_wrapper(void* dest, void* src, size_t count) {
 
 static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, System_Type targetInterface) {
     // should only be called after the type checking
-    Pentagon_Reflection_InterfaceImpl interface = type_get_interface_impl(source->vtable->type, targetInterface);
+    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(source->vtable->type, targetInterface);
     if (interface == NULL) {
         dest[0] = 0;
         dest[1] = 0;
@@ -1472,7 +1472,7 @@ static err_t jit_cast_obj_to_interface(jit_context_t* ctx,
 ) {
     err_t err = NO_ERROR;
 
-    Pentagon_Reflection_InterfaceImpl interface = type_get_interface_impl(from_type, to_type);
+    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(from_type, to_type);
     CHECK(interface != NULL);
 
     // &object->vtable[offsetof(vtable, virtual_functions) + vtable_offset]
@@ -1831,7 +1831,8 @@ static err_t jit_method(jit_context_t* ctx, System_Reflection_MethodInfo method)
             case OPCODE_OPERAND_InlineType: {
                 token_t value = *(token_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(token_t);
-                operand_type = assembly_get_type_by_token(assembly, value);
+                CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, value, method->DeclaringType->GenericArguments
+                                                             , method->GenericArguments, &operand_type));
                 CHECK(operand_type != NULL);
                 CHECK(check_type_visibility(method->DeclaringType, operand_type));
             } break;
@@ -4269,6 +4270,50 @@ static const char* m_allowed_internal_call_assemblies[] = {
     "Pentagon.dll"
 };
 
+static err_t jit_type(jit_context_t* ctx, System_Type type) {
+    err_t err = NO_ERROR;
+
+    for (int mi = 0; mi < type->Methods->Length; mi++) {
+        System_Reflection_MethodInfo method = type->Methods->Data[mi];
+
+        // nothing to generate in abstract methods
+        if (method_is_abstract(method)) {
+            continue;
+        }
+
+        CHECK(!method_is_unmanaged(method));
+
+        if (method_get_code_type(method) == METHOD_RUNTIME) {
+            CHECK_FAIL("TODO: runtime methods");
+        } else if (method_get_code_type(method) == METHOD_IL) {
+            if (method_is_internal_call(method)) {
+                // internal methods have no body
+                CHECK(method->MethodBody == NULL);
+
+                // only the corelib is allowed to have internal methods
+                bool found = false;
+                for (int i = 0; i < ARRAY_LEN(m_allowed_internal_call_assemblies); i++) {
+                    if (string_equals_cstr(method->Module->Name, m_allowed_internal_call_assemblies[i])) {
+                        found = true;
+                        break;
+                    }
+                }
+                CHECK(found, "Assembly `%U` is not allowed to have internal calls", method->Module->Name);
+
+                // TODO: if we need any special ones do it here
+            } else {
+                CHECK_AND_RETHROW(jit_method(ctx, method));
+            }
+        } else {
+            CHECK_FAIL();
+        }
+    }
+
+
+cleanup:
+    return err;
+}
+
 err_t jit_assembly(System_Reflection_Assembly assembly) {
     err_t err = NO_ERROR;
     jit_context_t ctx = {};
@@ -4410,40 +4455,10 @@ err_t jit_assembly(System_Reflection_Assembly assembly) {
     for (int ti = 0; ti < assembly->DefinedTypes->Length; ti++) {
         System_Type type = assembly->DefinedTypes->Data[ti];
 
-        for (int mi = 0; mi < type->Methods->Length; mi++) {
-            System_Reflection_MethodInfo method = type->Methods->Data[mi];
-
-            // nothing to generate in abstract methods
-            if (method_is_abstract(method)) {
-                continue;
-            }
-
-            CHECK(!method_is_unmanaged(method));
-
-            if (method_get_code_type(method) == METHOD_RUNTIME) {
-                CHECK_FAIL("TODO: runtime methods");
-            } else if (method_get_code_type(method) == METHOD_IL) {
-                if (method_is_internal_call(method)) {
-                    // internal methods have no body
-                    CHECK(method->MethodBody == NULL);
-
-                    // only the corelib is allowed to have internal methods
-                    bool found = false;
-                    for (int i = 0; i < ARRAY_LEN(m_allowed_internal_call_assemblies); i++) {
-                        if (string_equals_cstr(method->Module->Name, m_allowed_internal_call_assemblies[i])) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    CHECK(found, "Assembly `%U` is not allowed to have internal calls", method->Module->Name);
-
-                    // TODO: if we need any special ones do it here
-                } else {
-                    CHECK_AND_RETHROW(jit_method(&ctx, method));
-                }
-            } else {
-                CHECK_FAIL();
-            }
+        if (type_is_generic_definition(type)) {
+            CHECK_FAIL("JIT INSTANCES");
+        } else {
+            CHECK_AND_RETHROW(jit_type(&ctx, type));
         }
     }
 

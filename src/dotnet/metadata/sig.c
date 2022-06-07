@@ -81,7 +81,11 @@ cleanup:
     return err;
 }
 
-static err_t parse_type(System_Reflection_Assembly assembly, blob_entry_t* sig, System_Type* out_type, bool allow_void) {
+static err_t parse_type(
+    System_Reflection_Assembly assembly,
+    blob_entry_t* sig, System_Type* out_type, bool allow_void,
+    System_Type_Array typeArgs, System_Type_Array methodArgs
+) {
     err_t err = NO_ERROR;
 
     // switchhh
@@ -108,13 +112,12 @@ static err_t parse_type(System_Reflection_Assembly assembly, blob_entry_t* sig, 
         case ELEMENT_TYPE_CLASS: {
             token_t token;
             CHECK_AND_RETHROW(parse_type_def_or_ref_or_spec_encoded(sig, &token));
-            *out_type = assembly_get_type_by_token(assembly, token);
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, token, typeArgs, methodArgs, out_type));
             CHECK(*out_type != NULL);
         } break;
 
         // TODO: fnptr
         // TODO: genericinst
-        // TODO: mvar
         case ELEMENT_TYPE_OBJECT: *out_type = tSystem_Object; break;
 
         case ELEMENT_TYPE_PTR: {
@@ -122,18 +125,26 @@ static err_t parse_type(System_Reflection_Assembly assembly, blob_entry_t* sig, 
 
             // TODO: pointer types that store their actual type?
             System_Type elementType;
-            CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, true));
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, true, NULL, NULL));
         } break;
 
         case ELEMENT_TYPE_STRING: *out_type = tSystem_String; break;
 
         case ELEMENT_TYPE_SZARRAY: {
             System_Type elementType = NULL;
-            CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, false));
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, false, NULL, NULL));
             *out_type = get_array_type(elementType);
         } break;
 
-        // TODO: var
+        case ELEMENT_TYPE_MVAR:
+        case ELEMENT_TYPE_VAR: {
+            System_Type_Array arr = element_type == ELEMENT_TYPE_VAR ? typeArgs : methodArgs;
+            CHECK(arr != NULL);
+            uint32_t number;
+            CHECK_AND_RETHROW(parse_compressed_integer(sig, &number));
+            CHECK(number < arr->Length);
+            *out_type = arr->Data[number];
+        } break;
 
         default: CHECK_FAIL("Got invalid element type: 0x%02x", element_type);
     }
@@ -170,7 +181,7 @@ static err_t parse_ret_type(System_Reflection_Assembly assembly, blob_entry_t* s
         case ELEMENT_TYPE_VOID:
         default: {
             System_Type type;
-            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, true));
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, true, NULL, NULL));
 
             if (is_by_ref) {
                 type = get_by_ref_type(type);
@@ -184,7 +195,7 @@ cleanup:
     return err;
 }
 
-static err_t parse_param(System_Reflection_Assembly assembly, blob_entry_t* sig, System_Reflection_ParameterInfo parameter) {
+static err_t parse_param(System_Reflection_Assembly assembly, blob_entry_t* sig, System_Reflection_MethodInfo method, System_Reflection_ParameterInfo parameter) {
     err_t err = NO_ERROR;
 
     // get custom mods
@@ -209,7 +220,7 @@ static err_t parse_param(System_Reflection_Assembly assembly, blob_entry_t* sig,
 
         default: {
             System_Type type;
-            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, false));
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, false, method->DeclaringType->GenericArguments, method->GenericArguments));
 
             if (is_by_ref) {
                 type = get_by_ref_type(type);
@@ -238,13 +249,13 @@ err_t parse_field_sig(blob_entry_t _sig, System_Reflection_FieldInfo field) {
     } while (found);
 
     // parse the actual field
-    CHECK_AND_RETHROW(parse_type(field->Module->Assembly, sig, &field->FieldType, false));
+    CHECK_AND_RETHROW(parse_type(field->Module->Assembly, sig, &field->FieldType, false, field->DeclaringType->GenericArguments, NULL));
 
 cleanup:
     return err;
 }
 
-err_t parse_stand_alone_method_sig(blob_entry_t _sig, System_Reflection_MethodInfo method) {
+err_t parse_stand_alone_method_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, bool ref) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
@@ -262,7 +273,13 @@ err_t parse_stand_alone_method_sig(blob_entry_t _sig, System_Reflection_MethodIn
     uint32_t param_count = 0;
 
     if (header & HASTHIS) {
-        CHECK(!method_is_static(method), "Methods with this must not be static");
+        if (!ref) {
+            CHECK(!method_is_static(method), "Methods with this must not be static");
+        }
+    } else {
+        if (!ref) {
+            method->Attributes |= 0x0010;
+        }
     }
 
     CHECK_AND_RETHROW(parse_compressed_integer(sig, &param_count));
@@ -274,7 +291,7 @@ err_t parse_stand_alone_method_sig(blob_entry_t _sig, System_Reflection_MethodIn
     GC_UPDATE(method, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));
     for (int i = 0; i < param_count; i++) {
         System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
-        CHECK_AND_RETHROW(parse_param(method->Module->Assembly, sig, parameter));
+        CHECK_AND_RETHROW(parse_param(method->Module->Assembly, sig, method, parameter));
         GC_UPDATE_ARRAY(method->Parameters, i, parameter);
     }
 
@@ -329,7 +346,7 @@ err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_Metho
 
             default: {
                 System_Type type;
-                CHECK_AND_RETHROW(parse_type(method->Module->Assembly, sig, &type, false));
+                CHECK_AND_RETHROW(parse_type(method->Module->Assembly, sig, &type, false, NULL, NULL));
 
                 if (is_by_ref) {
                     type = get_by_ref_type(type);
@@ -340,6 +357,70 @@ err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_Metho
         }
     }
 
+
+cleanup:
+    return err;
+}
+
+err_t parse_type_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, System_Type* out_type, System_Type_Array typeArgs, System_Type_Array methodArgs) {
+    err_t err = NO_ERROR;
+    blob_entry_t* sig = &_sig;
+
+    switch (CONSUME_BYTE()) {
+        case ELEMENT_TYPE_PTR: {
+            CHECK_FAIL("TODO: PTR");
+        } break;
+
+        case ELEMENT_TYPE_FNPTR: {
+            CHECK_FAIL("TODO FNPTR");
+        } break;
+
+        case ELEMENT_TYPE_ARRAY: {
+            CHECK_FAIL("TODO: ARRAY");
+        } break;
+
+        case ELEMENT_TYPE_SZARRAY: {
+            // get custom mods
+            // TODO: wtf is a custom mod
+            bool found = false;
+            do {
+                CHECK_AND_RETHROW(parse_custom_mod(sig, &found));
+            } while (found);
+
+            // get the type
+            System_Type type = NULL;
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, false, typeArgs, methodArgs));
+
+            // get the array type
+            *out_type = get_array_type(type);
+        } break;
+
+        case ELEMENT_TYPE_GENERICINST: {
+            uint8_t kind = CONSUME_BYTE();
+            CHECK(kind == ELEMENT_TYPE_CLASS || kind == ELEMENT_TYPE_VALUETYPE);
+
+            // get the base type
+            token_t token;
+            CHECK_AND_RETHROW(parse_type_def_or_ref_or_spec_encoded(sig, &token));
+            System_Type type;
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, token, typeArgs, methodArgs, &type));
+            CHECK(type_is_generic_definition(type));
+
+            uint32_t gen_arg_count = 0;
+            CHECK_AND_RETHROW(parse_compressed_integer(sig, &gen_arg_count));
+            CHECK(gen_arg_count == type->GenericArguments->Length);
+
+            System_Type_Array newTypeArgs = GC_NEW_ARRAY(tSystem_Type, gen_arg_count);
+            for (int i = 0; i < gen_arg_count; i++) {
+                System_Type type_arg = NULL;
+                CHECK_AND_RETHROW(parse_type(assembly, sig, &type_arg, false, typeArgs, methodArgs));
+                GC_UPDATE_ARRAY(newTypeArgs, i, type_arg);
+            }
+
+            // we done
+            *out_type = type_make_generic(type, newTypeArgs);
+        } break;
+    }
 
 cleanup:
     return err;

@@ -152,7 +152,8 @@ void opcode_disasm_method(System_Reflection_MethodInfo method) {
             case OPCODE_OPERAND_InlineType: {
                 token_t value = *(token_t*)&body->Il->Data[i];
                 i += sizeof(token_t);
-                System_Type typeOpr = assembly_get_type_by_token(assembly, value);
+                System_Type typeOpr;
+                ASSERT(!IS_ERROR(assembly_get_type_by_token(assembly, value, method->DeclaringType->GenericArguments, method->GenericArguments, &typeOpr)));
                 snprintf(param, param_size, "%U.%U", typeOpr->Namespace, typeOpr->Name);
             } break;
             case OPCODE_OPERAND_InlineVar: {
