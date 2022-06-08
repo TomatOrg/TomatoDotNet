@@ -168,19 +168,19 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
             CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
 
             // get the expected field
-            System_Reflection_MethodInfo wantedInfo = GC_NEW(tSystem_Reflection_MethodInfo);
+            System_Reflection_MethodInfo wantedInfo;
             blob_entry_t blob = {
                 .data = ref->Signature->Data,
                 .size = ref->Signature->Length
             };
-            GC_UPDATE(wantedInfo, DeclaringType, type);
-            GC_UPDATE(wantedInfo, Module, assembly->Module);
-            CHECK_AND_RETHROW(parse_stand_alone_method_sig(blob, wantedInfo, true));
-
+            CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments, NULL));
             // find a method with that type
             int index = 0;
             System_Reflection_MethodInfo methodInfo = NULL;
             while ((methodInfo = type_iterate_methods(type, ref->Name, &index)) != NULL) {
+                // make sure both either have or don't have this
+                if (method_is_static(methodInfo) != method_is_static(wantedInfo)) continue;
+
                 // check the return type and parameters count is the same
                 if (methodInfo->ReturnType != wantedInfo->ReturnType) continue;
                 if (methodInfo->Parameters->Length != wantedInfo->Parameters->Length) continue;
@@ -1008,14 +1008,18 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     GC_UPDATE(instance, BaseType, expand_type(instance->BaseType, arguments));
 
     // fields
-    GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
-    for (int i = 0; i < instance->Fields->Length; i++) {
-        GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
+    if (type->Fields != NULL) {
+        GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
+        for (int i = 0; i < instance->Fields->Length; i++) {
+            GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
+        }
     }
 
-    GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
-    for (int i = 0; i < instance->Methods->Length; i++) {
-        GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments));
+    if (type->Methods != NULL) {
+        GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
+        for (int i = 0; i < instance->Methods->Length; i++) {
+            GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments));
+        }
     }
 
     // add it only if there are no non-specific generic types

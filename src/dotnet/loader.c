@@ -544,11 +544,8 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         }
     }
 
-    //
-    // all the base info is done, now we can do the rest
-    //
+    // now that we account for all the generics we can set them all up
     for (int i = 0; i < types_count; i++) {
-        metadata_type_def_t* type_def = &type_defs[i];
         System_Type type = assembly->DefinedTypes->Data[i];
 
         // start by filling the generic arguments of this class
@@ -562,6 +559,14 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
                 type->GenericArguments->Data[gtype->GenericParameterPosition] = gtype;
             }
         }
+    }
+
+    //
+    // all the base info is done, now we can do the rest
+    //
+    for (int i = 0; i < types_count; i++) {
+        metadata_type_def_t* type_def = &type_defs[i];
+        System_Type type = assembly->DefinedTypes->Data[i];
 
         // get the base type
         System_Type base_type;
@@ -636,7 +641,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
                 }));
             }
 
-            CHECK_AND_RETHROW(parse_stand_alone_method_sig(method_def->signature, methodInfo, false));
+            CHECK_AND_RETHROW(parse_stand_alone_method_sig(method_def->signature, methodInfo));
         }
     }
 
@@ -653,7 +658,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         System_Type class;
         System_Type interface;
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->class, NULL, NULL, &class));
-        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->interface, NULL, NULL, &interface));
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->interface, class->GenericArguments, NULL, &interface));
 
         CHECK(class != NULL);
         CHECK(interface != NULL);
