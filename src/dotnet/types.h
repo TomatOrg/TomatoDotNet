@@ -247,8 +247,13 @@ struct System_Reflection_MemberInfo {
 struct System_Reflection_FieldInfo {
     struct System_Reflection_MemberInfo;
     System_Type FieldType;
-    uintptr_t MemoryOffset; // can be either absolute offset to a literal/rva, or an offset from
-                            // the start, depending on the attributes of the field
+    union {
+        // for instance fields
+        uintptr_t MemoryOffset;
+
+        // for static fields
+        MIR_item_t MirField;
+    };
     uint16_t Attributes;
 };
 
@@ -345,6 +350,7 @@ struct System_Reflection_MethodInfo {
     int VTableOffset;
 
     MIR_item_t MirFunc;
+    MIR_item_t MirProto;
 };
 
 typedef enum method_access {
@@ -493,6 +499,7 @@ struct System_Type {
     System_Reflection_MethodInfo StaticCtor;
 
     TinyDotNet_Reflection_InterfaceImpl_Array InterfaceImpls;
+    MIR_item_t MirType;
 
     // getting instances from this type
     System_Type ArrayType;

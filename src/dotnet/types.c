@@ -311,6 +311,7 @@ System_Type get_array_type(System_Type type) {
     // this is an array
     ArrayType->IsArray = true;
     ArrayType->IsFilled = true;
+    ArrayType->GenericParameterPosition = -1;
     ArrayType->StackType = STACK_TYPE_O;
 
     // set the sizes properly
@@ -359,6 +360,7 @@ System_Type get_by_ref_type(System_Type type) {
     ByRefType->IsByRef = 1;
     ByRefType->IsFilled = 1;
     ByRefType->StackType = STACK_TYPE_REF;
+    ByRefType->GenericParameterPosition = -1;
 
     // set the type information to look as ref type
     GC_UPDATE(ByRefType, Module, type->Module);
@@ -980,6 +982,7 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     // instance not found, create one
     System_Type instance = GC_NEW(tSystem_Type);
     GC_UPDATE(instance, DeclaringType, type->DeclaringType);
+    GC_UPDATE(instance, BaseType, expand_type(type->BaseType, arguments));
     GC_UPDATE(instance, Module, type->Module);
     GC_UPDATE(instance, Assembly, type->Assembly);
     GC_UPDATE(instance, GenericArguments, arguments);
@@ -1007,12 +1010,12 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     // fields
     GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
     for (int i = 0; i < instance->Fields->Length; i++) {
-        GC_UPDATE_ARRAY(instance->Fields, i, expand_field(type, type->Fields->Data[i], arguments));
+        GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
     }
 
     GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
     for (int i = 0; i < instance->Methods->Length; i++) {
-        GC_UPDATE_ARRAY(instance->Methods, i, expand_method(type, type->Methods->Data[i], arguments));
+        GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments));
     }
 
     // add it only if there are no non-specific generic types

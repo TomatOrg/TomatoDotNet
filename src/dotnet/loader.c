@@ -1469,21 +1469,6 @@ cleanup:
 // invoke all the cctors
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static err_t loader_run_cctors(System_Reflection_Assembly assembly) {
-    err_t err = NO_ERROR;
-
-    for (int i = 0; i < assembly->DefinedTypes->Length; i++) {
-        System_Type type = assembly->DefinedTypes->Data[i];
-        if (type->StaticCtor != NULL) {
-            void (*cctor)() = type->StaticCtor->MirFunc->addr;
-            cctor();
-        }
-    }
-
-cleanup:
-    return err;
-}
-
 static err_t loader_setup_module(System_Reflection_Assembly assembly, metadata_t* metadata) {
     err_t err = NO_ERROR;
 
@@ -1561,9 +1546,11 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
-    // initialize all the types we have
-    for (int i = 0; i < types_count; i++) {
-        CHECK_AND_RETHROW(loader_fill_type(assembly->DefinedTypes->Data[i]));
+    // initialize all the runtime required types
+    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
+        type_init_t* bt = &m_type_init[i];
+        System_Type type = *bt->global;
+        CHECK_AND_RETHROW(loader_fill_type(type));
     }
 
     //
@@ -1586,14 +1573,9 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
 //    assembly_dump(assembly);
 
-    // now jit it (or well, prepare the ir of it)
-    CHECK_AND_RETHROW(jit_assembly(assembly));
-
     // save this
     g_corelib = assembly;
     gc_add_root(&g_corelib);
-
-    CHECK_AND_RETHROW(loader_run_cctors(assembly));
 
 cleanup:
     free_metadata(&metadata);
@@ -1653,11 +1635,6 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
-    // initialize all the types we have
-    for (int i = 0; i < types_count; i++) {
-        CHECK_AND_RETHROW(loader_fill_type(assembly->DefinedTypes->Data[i]));
-    }
-
     // all the last setup
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
@@ -1666,15 +1643,13 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     assembly_dump(assembly);
 //#endif
 
-    // now jit it (or well, prepare the ir of it)
-    CHECK_AND_RETHROW(jit_assembly(assembly));
-
-    CHECK_AND_RETHROW(loader_run_cctors(assembly));
-
     // get the entry point
     System_Reflection_MethodInfo entryPoint = NULL;
     CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
     GC_UPDATE(assembly, EntryPoint, entryPoint);
+
+    // jit the type of the entrypoint
+    CHECK_AND_RETHROW(jit_type(entryPoint->DeclaringType));
 
     // give out the assembly
     *out_assembly = assembly;
