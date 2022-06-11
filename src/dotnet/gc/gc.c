@@ -302,6 +302,7 @@ static void gc_mark_global_roots() {
     spinlock_lock(&m_global_roots_lock);
     for (int i = 0; i < arrlen(m_global_roots); i++) {
         System_Object object = *m_global_roots[i];
+        if (!object) continue;
         if (object->color == m_clear_color || object->color == m_allocation_color) {
             gc_mark_gray(object);
         }

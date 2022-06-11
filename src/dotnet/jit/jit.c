@@ -8,6 +8,8 @@
 #include <dotnet/loader.h>
 #include <dotnet/gc/heap.h>
 
+#include <mem/malloc.h>
+
 #include <util/except.h>
 #include <util/stb_ds.h>
 #include <time/timer.h>
@@ -1539,118 +1541,133 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
 
     MIR_reg_t value2_reg;
     MIR_reg_t value1_reg;
+    MIR_reg_t result_reg;
     System_Type value2_type;
     System_Type value1_type;
     CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg));
     CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg));
 
-    if (code == MIR_DIV || code == MIR_UDIV || code == MIR_MOD || code == MIR_UMOD) {
-        MIR_insn_t label = MIR_new_label(mir_ctx);
+    stack_type_t value1_stacktype = type_get_stack_type(value1_type);
+    stack_type_t value2_stacktype = type_get_stack_type(value2_type);
 
-        // these need to check that value2 is not zero
-        // if we have a non-zero value then skip the throw
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_BT,
-                                     MIR_new_label_op(mir_ctx, label),
-                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+    if (code == MIR_LSH || code == MIR_RSH || code == MIR_URSH) {
+        CHECK(value1_stacktype == STACK_TYPE_INT32 || value1_stacktype == STACK_TYPE_INT64 || value1_stacktype == STACK_TYPE_INTPTR);
+        CHECK(value2_stacktype == STACK_TYPE_INT32 || value1_stacktype == STACK_TYPE_INTPTR);
+        bool is32 = value2_stacktype == STACK_TYPE_INT32;
+        if (is32) {
+            if (code == MIR_LSH) code = MIR_LSHS;
+            else if (code == MIR_RSH) code = MIR_RSHS;
+            else if (code == MIR_URSH) code = MIR_URSHS;
+        }
+        CHECK_AND_RETHROW(stack_push(ctx, value1_type, &result_reg));
+    } else {
+        if (code == MIR_DIV || code == MIR_UDIV || code == MIR_MOD || code == MIR_UMOD) {
+            MIR_insn_t label = MIR_new_label(mir_ctx);
 
-        // throw the error, it has an unknown type
-        CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_DivideByZeroException));
+            // these need to check that value2 is not zero
+            // if we have a non-zero value then skip the throw
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_BT,
+                                         MIR_new_label_op(mir_ctx, label),
+                                         MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
 
-        // insert the skip label
-        MIR_append_insn(mir_ctx, mir_func, label);
-    }
+            // throw the error, it has an unknown type
+            CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_DivideByZeroException));
 
-    MIR_reg_t result_reg;
-    switch (type_get_stack_type(value1_type)) {
-        case STACK_TYPE_INT32: {
-            if (type_get_stack_type(value2_type) == STACK_TYPE_INT32) {
-                // int32 x int32
-                CHECK_AND_RETHROW(stack_push(ctx, tSystem_Int32, &result_reg));
-                code += 1;
-            } else {
-                // int32 x intptr
-                CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INTPTR);
+            // insert the skip label
+            MIR_append_insn(mir_ctx, mir_func, label);
+        }
+
+        switch (type_get_stack_type(value1_type)) {
+            case STACK_TYPE_INT32: {
+                if (type_get_stack_type(value2_type) == STACK_TYPE_INT32) {
+                    // int32 x int32
+                    CHECK_AND_RETHROW(stack_push(ctx, tSystem_Int32, &result_reg));
+                    code += 1;
+                } else {
+                    // int32 x intptr
+                    CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INTPTR);
+                    CHECK_AND_RETHROW(stack_push(ctx, tSystem_IntPtr, &result_reg));
+
+                    // sign extend the int32 to intptr
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_UEXT32,
+                                                 MIR_new_reg_op(mir_ctx, value1_reg),
+                                                 MIR_new_reg_op(mir_ctx, value1_reg)));
+                }
+            } break;
+
+            case STACK_TYPE_INT64: {
+                // int64 x int64
+                CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INT64);
+                CHECK_AND_RETHROW(stack_push(ctx, tSystem_Int64, &result_reg));
+            } break;
+
+            case STACK_TYPE_INTPTR: {
                 CHECK_AND_RETHROW(stack_push(ctx, tSystem_IntPtr, &result_reg));
 
-                // sign extend the int32 to intptr
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_UEXT32,
-                                             MIR_new_reg_op(mir_ctx, value1_reg),
-                                             MIR_new_reg_op(mir_ctx, value1_reg)));
-            }
-        } break;
-
-        case STACK_TYPE_INT64: {
-            // int64 x int64
-            CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INT64);
-            CHECK_AND_RETHROW(stack_push(ctx, tSystem_Int64, &result_reg));
-        } break;
-
-        case STACK_TYPE_INTPTR: {
-            CHECK_AND_RETHROW(stack_push(ctx, tSystem_IntPtr, &result_reg));
-
-            if (type_get_stack_type(value2_type) == STACK_TYPE_INT32) {
-                // intptr x int32
-                // sign extend
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_UEXT32,
-                                             MIR_new_reg_op(mir_ctx, value2_reg),
-                                             MIR_new_reg_op(mir_ctx, value2_reg)));
-            } else {
-                // intptr x intptr
-                CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INTPTR);
-            }
-        } break;
-
-        case STACK_TYPE_FLOAT: {
-            // make sure this is not an integer only operation
-            CHECK(!integer_only);
-
-            if (value1_type == tSystem_Single) {
-                if (value2_type == tSystem_Single) {
-                    // float x float -> float
-                    CHECK_AND_RETHROW(stack_push(ctx, tSystem_Single, &result_reg));
-                    code += 2;
-                } else {
-                    CHECK(value2_type == tSystem_Double);
-
-                    // float x double
-                    // convert the float to a double
-                    CHECK_AND_RETHROW(stack_push(ctx, tSystem_Double, &result_reg));
+                if (type_get_stack_type(value2_type) == STACK_TYPE_INT32) {
+                    // intptr x int32
+                    // sign extend
                     MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_F2D,
-                                                 MIR_new_reg_op(mir_ctx, result_reg),
-                                                 MIR_new_reg_op(mir_ctx, value1_reg)));
-                    value1_reg = result_reg;
-                    code += 3;
-                }
-            } else {
-                CHECK(value1_type == tSystem_Double);
-
-                // this always results in a double math
-                CHECK_AND_RETHROW(stack_push(ctx, tSystem_Double, &result_reg));
-                code += 3;
-
-                if (value2_type == tSystem_Single) {
-                    // double x float
-                    // convert the float to a double
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_F2D,
-                                                 MIR_new_reg_op(mir_ctx, result_reg),
+                                    MIR_new_insn(mir_ctx, MIR_UEXT32,
+                                                 MIR_new_reg_op(mir_ctx, value2_reg),
                                                  MIR_new_reg_op(mir_ctx, value2_reg)));
-                    value2_reg = result_reg;
                 } else {
-                    CHECK(value2_type == tSystem_Double);
+                    // intptr x intptr
+                    CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INTPTR);
                 }
-            }
-        } break;
+            } break;
 
-            // not allowed to do math on these
-        case STACK_TYPE_VALUE_TYPE:
-        case STACK_TYPE_O:
-        case STACK_TYPE_REF:
-            CHECK_FAIL();
+            case STACK_TYPE_FLOAT: {
+                // make sure this is not an integer only operation
+                CHECK(!integer_only);
+
+                if (value1_type == tSystem_Single) {
+                    if (value2_type == tSystem_Single) {
+                        // float x float -> float
+                        CHECK_AND_RETHROW(stack_push(ctx, tSystem_Single, &result_reg));
+                        code += 2;
+                    } else {
+                        CHECK(value2_type == tSystem_Double);
+
+                        // float x double
+                        // convert the float to a double
+                        CHECK_AND_RETHROW(stack_push(ctx, tSystem_Double, &result_reg));
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_F2D,
+                                                     MIR_new_reg_op(mir_ctx, result_reg),
+                                                     MIR_new_reg_op(mir_ctx, value1_reg)));
+                        value1_reg = result_reg;
+                        code += 3;
+                    }
+                } else {
+                    CHECK(value1_type == tSystem_Double);
+
+                    // this always results in a double math
+                    CHECK_AND_RETHROW(stack_push(ctx, tSystem_Double, &result_reg));
+                    code += 3;
+
+                    if (value2_type == tSystem_Single) {
+                        // double x float
+                        // convert the float to a double
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_F2D,
+                                                     MIR_new_reg_op(mir_ctx, result_reg),
+                                                     MIR_new_reg_op(mir_ctx, value2_reg)));
+                        value2_reg = result_reg;
+                    } else {
+                        CHECK(value2_type == tSystem_Double);
+                    }
+                }
+            } break;
+
+                // not allowed to do math on these
+            case STACK_TYPE_VALUE_TYPE:
+            case STACK_TYPE_O:
+            case STACK_TYPE_REF:
+                CHECK_FAIL();
+        }
     }
 
     MIR_append_insn(mir_ctx, mir_func,
@@ -2040,18 +2057,21 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
             // binary operations
-            case CEE_ADD: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_ADD, false)); break;
-            case CEE_DIV: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_DIV, false)); break;
-            case CEE_DIV_UN: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_UDIV, true)); break;
-            case CEE_MUL: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_MUL, false)); break;
-            case CEE_REM: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_MOD, false)); break;
-            case CEE_REM_UN: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_UMOD, true)); break;
-            case CEE_SUB: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_SUB, false)); break;
-
+            case CEE_ADD:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_ADD, false)); break;
+            case CEE_DIV:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_DIV, false)); break;
+            case CEE_DIV_UN:    CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_UDIV, true)); break;
+            case CEE_MUL:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_MUL, false)); break;
+            case CEE_REM:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_MOD, false)); break;
+            case CEE_REM_UN:    CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_UMOD, true)); break;
+            case CEE_SUB:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_SUB, false)); break;
             // bitwise binary operations
-            case CEE_AND: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_AND, true)); break;
-            case CEE_OR: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_OR, true)); break;
-            case CEE_XOR: CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_XOR, true)); break;
+            case CEE_AND:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_AND, true)); break;
+            case CEE_OR:        CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_OR, true)); break;
+            case CEE_XOR:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_XOR, true)); break;
+            // bit shifts
+            case CEE_SHL:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_LSH, true)); break;
+            case CEE_SHR:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_RSH, true)); break;
+            case CEE_SHR_UN:    CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_URSH, true)); break;
 
             // unary operations
             case CEE_NEG: {
