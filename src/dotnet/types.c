@@ -569,7 +569,7 @@ bool type_is_compatible_with(System_Type T, System_Type U) {
         }
     }
 
-    if (!T->IsValueType) {
+    if (type_is_object_ref(T)) {
         System_Type Base = T->BaseType;
         while (Base != NULL) {
             if (Base == U) {
