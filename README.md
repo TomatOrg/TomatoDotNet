@@ -23,11 +23,11 @@ Right now the main work is on the runtime itself, the main features of the runti
 - Full support for managed references
   - Supports locals, fields and array elements
 - Full support for boxing/unboxing 
+- Full support for Generics (Type and Methods)
 - Most common CIL instructions implemented
 - Visibility and Accessibility checking
 
 ### Main missing features
 - Bit-shifting
-- Generics
 - Delegates
 - Overflow math
