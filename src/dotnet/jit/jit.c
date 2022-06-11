@@ -1,5 +1,6 @@
 #include "jit.h"
 #include "dotnet/monitor.h"
+#include "thread/scheduler.h"
 
 #include <dotnet/opcodes.h>
 #include <dotnet/types.h>
@@ -56,11 +57,6 @@ static MIR_item_t m_memset_func = NULL;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // runtime functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-static method_result_t System_Object_GetType(System_Object this) {
-    return (method_result_t){ .exception = NULL, .value = (uintptr_t) this->vtable->type};
-}
-
 
 // The flatten attribute causes mem{cpy,set} to be inlined, if possible
 // The wrappers are needed here because the two functions are just macros over __builtin_X
@@ -131,6 +127,87 @@ static void managed_ref_memcpy(void* base, System_Type struct_type, void* from) 
         memcpy(base, from, struct_type->StackSize);
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Internal Calls
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static method_result_t System_Object_GetType(System_Object this) {
+    return (method_result_t){ .exception = NULL, .value = (uintptr_t) this->vtable->type};
+}
+
+static System_Exception System_Array_ClearInternal(System_Array array, int index, int length) {
+    System_Type elementType = array->vtable->type->ElementType;
+    int elementSize = elementType->StackSize;
+
+    if (type_get_stack_type(elementType) == STACK_TYPE_O) {
+        // we need a memset with a barrier so we won't
+        // get preempted in the middle, the nice thing
+        // is that the GC does not actually care for not
+        // using a write barrier with a null value
+        scheduler_preempt_disable();
+        memset((void*)((uintptr_t) (array + 1) + index * elementSize), 0, length * elementSize);
+        scheduler_preempt_enable();
+    } else {
+        // we don't need a barrier
+        memset((void*)((uintptr_t) (array + 1) + index * elementSize), 0, length * elementSize);
+    }
+
+    return NULL;
+}
+
+static System_Exception System_Array_CopyInternal(System_Array sourceArray, int64_t sourceIndex, System_Array destinationArray, int64_t destinationIndex, int64_t length) {
+    System_Type elementType = sourceArray->vtable->type->ElementType;
+    int elementSize = elementType->StackSize;
+
+    // TODO: have this check be done in the IL code
+    ASSERT(elementType == destinationArray->vtable->type->ElementType);
+
+    if (type_get_stack_type(elementType) == STACK_TYPE_VALUE_TYPE) {
+        // copying an array, copy each item as a managed memcpy
+        // TODO: fast path for copying non-managed struct arrays
+        for (int i = 0; i < length; i++) {
+            void* src = *(void**)((sourceArray + 1) + (sourceIndex + i) * elementSize);
+            size_t destOffset = sizeof(struct System_Array) + (destinationIndex + i) * elementSize;
+            managed_memcpy((System_Object)destinationArray, elementType, destOffset, src);
+        }
+    } else if (type_get_stack_type(elementType) == STACK_TYPE_O) {
+        // we are copying objects, need to use a membarrier for each
+        // TODO: maybe do group copies/barriers instead of one by one
+        for (int i = 0; i < length; i++) {
+            void* src = *(void**)((sourceArray + 1) + (sourceIndex + i) * elementSize);
+            size_t destOffset = sizeof(struct System_Array) + (destinationIndex + i) * elementSize;
+            gc_update(destinationArray, destOffset, src);
+        }
+    } else {
+        // normal memcpy, no need to do anything special
+        void* src = (sourceArray + 1) + (sourceIndex) * elementSize;
+        void* dest = (destinationArray + 1) + (destinationIndex) * elementSize;
+        memcpy(dest, src, length * elementSize);
+    }
+
+    return NULL;
+}
+
+typedef struct internal_call {
+    const char* target;
+    void* impl;
+} internal_call_t;
+
+static internal_call_t m_internal_calls[] = {
+    {
+        "[Corelib-v1]System.Object::GetType()",
+        System_Object_GetType,
+    },
+    {
+        "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,[Corelib-v1]System.Int32,[Corelib-v1]System.Int32)",
+        System_Array_ClearInternal,
+    },
+    {
+        "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,[Corelib-v1]System.Int64,[Corelib-v1]System.Array,[Corelib-v1]System.Int64,[Corelib-v1]System.Int64)",
+        System_Array_CopyInternal,
+    }
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // init the jit
@@ -206,7 +283,9 @@ err_t init_jit() {
     MIR_load_external(m_mir_context, "managed_ref_memcpy", managed_ref_memcpy);
 
     // load internal functions
-    MIR_load_external(m_mir_context, "[Corelib-v1]System.Object::GetType()", System_Object_GetType);
+    for (int i = 0; i < ARRAY_LEN(m_internal_calls); i++) {
+        MIR_load_external(m_mir_context, m_internal_calls[i].target, m_internal_calls[i].impl);
+    }
 
     // init the code gen
     // TODO: for real parallel gen we want to have more generators
@@ -630,18 +709,21 @@ static const char* m_allowed_internal_call_assemblies[] = {
 static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
     MIR_var_t* vars = NULL;
+    strbuilder_t proto_name = { 0 };
+    strbuilder_t func_name = { 0 };
+
 
     if (method->MirProto != NULL) {
         goto cleanup;
     }
 
     // generate the method name
-    strbuilder_t proto_name = strbuilder_new();
+    proto_name = strbuilder_new();
     method_print_full_name(method, &proto_name);
     strbuilder_cstr(&proto_name, "$proto");
 
     // generate the function name
-    strbuilder_t func_name = strbuilder_new();
+    func_name = strbuilder_new();
     method_print_full_name(method, &func_name);
 
     size_t nres = 1;
@@ -788,6 +870,10 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
     if (type->Methods != NULL) {
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo method = type->Methods->Data[i];
+
+            // if this is a generic method then we don't prepare it in here
+            // since it needs to be prepared per-instance
+            if (method->GenericArguments != NULL) continue;
 
             // prepare the return type
             if (method->ReturnType != NULL) {
@@ -1858,8 +1944,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // check we can access it
                 CHECK(check_method_accessibility(method->DeclaringType, operand_method));
 
-                // make sure we initialized its type
+                // prepare the owning type
                 CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_method->DeclaringType));
+
+                // if the method is a generic instance then we need to handle it separately
+                if (operand_method->GenericArguments != NULL) {
+                    CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, operand_method));
+                }
             } break;
 
             case OPCODE_OPERAND_InlineR: {
@@ -2349,6 +2440,180 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     case STACK_TYPE_REF:
                         CHECK_FAIL();
+                }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Indirect reference access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDIND_I1: operand_type = tSystem_SByte; goto cee_ldind;
+            case CEE_LDIND_U1: operand_type = tSystem_Byte; goto cee_ldind;
+            case CEE_LDIND_I2: operand_type = tSystem_Int16; goto cee_ldind;
+            case CEE_LDIND_U2: operand_type = tSystem_UInt16; goto cee_ldind;
+            case CEE_LDIND_I4: operand_type = tSystem_Int32; goto cee_ldind;
+            case CEE_LDIND_U4: operand_type = tSystem_UInt32; goto cee_ldind;
+            case CEE_LDIND_I8: operand_type = tSystem_Int64; goto cee_ldind;
+            case CEE_LDIND_I: operand_type = tSystem_IntPtr; goto cee_ldind;
+            case CEE_LDIND_R4: operand_type = tSystem_Single; goto cee_ldind;
+            case CEE_LDIND_R8: operand_type = tSystem_Double; goto cee_ldind;
+            case CEE_LDIND_REF: operand_type = NULL; goto cee_ldind;
+            cee_ldind: {
+                // pop all the values from the stack
+                MIR_reg_t addr_reg;
+                System_Type addr_type;
+                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg));
+
+                // this must be an array
+                CHECK(addr_type->IsByRef);
+
+                MIR_reg_t value_reg;
+
+                // for anything which is not ldelem.ref we know the operand_type
+                // from the array
+                if (operand_type != NULL) {
+                    CHECK(type_is_verifier_assignable_to(addr_type->BaseType, operand_type));
+                    CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_type), &value_reg));
+                } else {
+                    // the type is gotten from the array
+                    operand_type = addr_type->BaseType;
+                    CHECK_AND_RETHROW(stack_push(ctx, type_get_verification_type(operand_type), &value_reg));
+                }
+
+                switch (type_get_stack_type(operand_type)) {
+                    case STACK_TYPE_O: {
+                        if (type_is_interface(operand_type)) {
+                            goto ldind_value_type;
+                        } else {
+                            goto ldind_primitive_type;
+                        }
+                    } break;
+
+                    ldind_primitive_type:
+                    case STACK_TYPE_INT32:
+                    case STACK_TYPE_INT64:
+                    case STACK_TYPE_INTPTR:
+                    case STACK_TYPE_FLOAT: {
+                        // we need to extend this properly if the field is smaller
+                        // than an int32 (because we are going to load into an int32
+                        // essentially)
+                        MIR_insn_code_t code = MIR_MOV;
+                        if (operand_type == tSystem_SByte || operand_type == tSystem_Boolean) {
+                            code = MIR_EXT8;
+                        } else if (operand_type == tSystem_Byte) {
+                            code = MIR_UEXT8;
+                        } else if (operand_type == tSystem_Int16) {
+                            code = MIR_EXT16;
+                        } else if (operand_type == tSystem_UInt16 || operand_type == tSystem_Char) {
+                            code = MIR_UEXT16;
+                        } else if (operand_type == tSystem_Single) {
+                            code = MIR_FMOV;
+                        } else if (operand_type == tSystem_Single) {
+                            code = MIR_DMOV;
+                        }
+
+                        // we can copy this in a single mov
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, code,
+                                                     MIR_new_reg_op(mir_ctx, value_reg),
+                                                     MIR_new_mem_op(mir_ctx, get_mir_type(operand_type),
+                                                                    0, addr_reg, 0, 1)));
+                    } break;
+
+                    ldind_value_type:
+                    case STACK_TYPE_VALUE_TYPE: {
+                        jit_emit_memcpy(ctx, value_reg, addr_reg, operand_type->StackSize);
+                    } break;
+
+                    case STACK_TYPE_REF:
+                        CHECK_FAIL();
+                }
+            } break;
+
+            case CEE_STIND_REF: operand_type = NULL; goto cee_stind;
+            case CEE_STIND_I1: operand_type = tSystem_SByte; goto cee_stind;
+            case CEE_STIND_I2: operand_type = tSystem_Int16; goto cee_stind;
+            case CEE_STIND_I4: operand_type = tSystem_Int32; goto cee_stind;
+            case CEE_STIND_I8: operand_type = tSystem_Int64; goto cee_stind;
+            case CEE_STIND_R4: operand_type = tSystem_Single; goto cee_stind;
+            case CEE_STIND_R8: operand_type = tSystem_Double; goto cee_stind;
+            cee_stind: {
+                // pop all the values from the stack
+                MIR_reg_t value_reg;
+                MIR_reg_t addr_reg;
+                System_Type value_type;
+                System_Type addr_type;
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg));
+
+                // this must be an array
+                CHECK(addr_type->IsByRef);
+
+                // for stind.ref the operand type is the same as the
+                // byref itself
+                if (operand_type == NULL) {
+                    operand_type = addr_type->BaseType;
+                }
+
+                // validate all the type stuff
+                CHECK(type_is_verifier_assignable_to(value_type, operand_type));
+
+                switch (type_get_stack_type(value_type)) {
+                    case STACK_TYPE_O: {
+                        if (type_is_interface(operand_type)) {
+                            if (type_is_interface(value_type)) {
+                                // interface -> interface
+                                goto stind_value_type;
+                            } else {
+                                // object -> interface
+
+                                // from an object, cast required, need a write barrier
+                                CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
+                                                                            addr_reg, value_reg,
+                                                                            value_type, operand_type,
+                                                                            0));
+                            }
+                        } else {
+                            // check if we need to cast to an object from an interface
+                            if (type_is_interface(value_type)) {
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                                             MIR_new_reg_op(mir_ctx, value_reg),
+                                                             MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                                            sizeof(void*), value_reg,
+                                                                            0, 1)));
+                            }
+
+                            // storing to an object from an object
+                            MIR_append_insn(mir_ctx, mir_func,
+                                            MIR_new_call_insn(mir_ctx, 5,
+                                                              MIR_new_ref_op(mir_ctx, m_gc_update_proto),
+                                                              MIR_new_ref_op(mir_ctx, m_gc_update_func),
+                                                              MIR_new_reg_op(mir_ctx, addr_reg),
+                                                              MIR_new_int_op(mir_ctx, 0),
+                                                              MIR_new_reg_op(mir_ctx, value_reg)));
+                        }
+                    } break;
+
+                    case STACK_TYPE_INT32:
+                    case STACK_TYPE_INT64:
+                    case STACK_TYPE_INTPTR:
+                    case STACK_TYPE_FLOAT: {
+                        MIR_insn_code_t code = jit_number_cast_inscode(value_type, operand_type);
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, code,
+                                                     MIR_new_mem_op(mir_ctx, get_mir_type(operand_type),
+                                                                    0, addr_reg, 0, 1),
+                                                     MIR_new_reg_op(mir_ctx, value_reg)));
+                    } break;
+
+                    stind_value_type:
+                    case STACK_TYPE_VALUE_TYPE: {
+                        CHECK_FAIL("TODO: struct value store in array");
+                    } break;
+
+                    case STACK_TYPE_REF:
+                        CHECK_FAIL("wtf");
                 }
             } break;
 
@@ -4049,7 +4314,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                               MIR_new_ref_op(mir_ctx, m_gc_update_proto),
                                                               MIR_new_ref_op(mir_ctx, m_gc_update_func),
                                                               MIR_new_reg_op(mir_ctx, array_reg),
-                                                              MIR_new_int_op(mir_ctx, index_reg),
+                                                              MIR_new_reg_op(mir_ctx, index_reg),
                                                               MIR_new_reg_op(mir_ctx, value_reg)));
                         }
                     } break;
@@ -4402,6 +4667,11 @@ err_t jit_type(System_Type type) {
     }
 
 cleanup:
+    if (IS_ERROR(err)) {
+        // we need to finish the module just so we can finish the context
+        MIR_finish_module(ctx.ctx);
+    }
+
     // we no longer need the old module
     MIR_finish(ctx.ctx);
 

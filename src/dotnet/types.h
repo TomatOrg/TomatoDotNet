@@ -158,6 +158,13 @@ typedef struct TinyDotNet_Reflection_MemberReference {
 } *TinyDotNet_Reflection_MemberReference;
 DEFINE_ARRAY(TinyDotNet_Reflection_MemberReference);
 
+typedef struct TinyDotNet_Reflection_MethodSpec {
+    struct System_Object;
+    System_Reflection_MethodInfo Method;
+    System_Byte_Array Instantiation;
+} *TinyDotNet_Reflection_MethodSpec;
+DEFINE_ARRAY(TinyDotNet_Reflection_MethodSpec);
+
 struct System_Reflection_Assembly {
     struct System_Object;
 
@@ -178,6 +185,7 @@ struct System_Reflection_Assembly {
     System_Reflection_FieldInfo_Array DefinedFields;
     System_Byte_Array_Array DefinedTypeSpecs;
     TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
+    TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;
 
     // types imported from other assemblies, for easy lookup whenever needed
     System_Type_Array ImportedTypes;
@@ -351,6 +359,8 @@ struct System_Reflection_MethodInfo {
 
     MIR_item_t MirFunc;
     MIR_item_t MirProto;
+
+    System_Reflection_MethodInfo NextGenericInstance;
 };
 
 typedef enum method_access {
@@ -511,6 +521,8 @@ static inline stack_type_t type_get_stack_type(System_Type type) { return type =
 static inline bool type_is_generic_definition(System_Type type) { return type->IsGeneric && type->GenericTypeDefinition == NULL; }
 static inline bool type_is_generic_type(System_Type type) { return type->IsGeneric; }
 
+bool type_is_generic_parameter(System_Type type);
+
 typedef enum type_visibility {
     TYPE_NOT_PUBLIC,
     TYPE_PUBLIC,
@@ -633,6 +645,7 @@ extern System_Type tSystem_OverflowException;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
 extern System_Type tTinyDotNet_Reflection_MemberReference;
+extern System_Type tTinyDotNet_Reflection_MethodSpec;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || !type->IsValueType; }
@@ -656,3 +669,8 @@ bool check_type_visibility(System_Type from, System_Type to);
  * Create a new generic type with the given generic arguments
  */
 System_Type type_make_generic(System_Type type, System_Type_Array arguments);
+
+/**
+ * Make a new generic method with the given generic arguments
+ */
+System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments);

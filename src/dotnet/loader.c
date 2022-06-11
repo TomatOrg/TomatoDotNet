@@ -456,9 +456,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         metadata_type_def_t* type_def = &type_defs[i];
         System_Type type = assembly->DefinedTypes->Data[i];
 
-        // make sure the type index is valid
-        CHECK(type_def->extends.index - 1 < types_count);
-
         // set the owners and flags
         GC_UPDATE(type, Assembly, assembly);
         GC_UPDATE(type, Module, assembly->Module);
@@ -474,8 +471,39 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         // setup the name and base types
         GC_UPDATE(type, Name, new_string_from_utf8(type_def->type_name, strlen(type_def->type_name)));
         GC_UPDATE(type, Namespace, new_string_from_utf8(type_def->type_namespace, strlen(type_def->type_namespace)));
-
         CHECK(type->Name->Length > 0);
+    }
+
+    //
+    // Setup all the methods for each of the types so
+    // we can properly initialize generic methods
+    //
+
+    for (int i = 0; i < types_count; i++) {
+        metadata_type_def_t* type_def = &type_defs[i];
+        System_Type type = assembly->DefinedTypes->Data[i];
+
+        // init methods partially since these are needed for generic methods
+        // setup methods
+        int last_idx = (i + 1 == types_count) ?
+                       methods_count :
+                       type_def[1].method_list.index - 1;
+        CHECK(last_idx <= methods_count);
+
+        type->Methods = GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, last_idx - type_def->method_list.index + 1);
+        for (int mi = 0; mi < type->Methods->Length; mi++) {
+            size_t index = type_def->method_list.index + mi - 1;
+            metadata_method_def_t* method_def = metadata_get_method_def(metadata, index);
+            System_Reflection_MethodInfo methodInfo = GC_NEW(tSystem_Reflection_MethodInfo);
+            GC_UPDATE_ARRAY(type->Methods, mi, methodInfo);
+            GC_UPDATE_ARRAY(assembly->DefinedMethods, index, methodInfo);
+
+            GC_UPDATE(methodInfo, DeclaringType, type);
+            GC_UPDATE(methodInfo, Module, type->Module);
+            GC_UPDATE(methodInfo, Name, new_string_from_utf8(method_def->name, strlen(method_def->name)));
+            methodInfo->Attributes = method_def->flags;
+            methodInfo->ImplAttributes = method_def->impl_flags;
+        }
     }
 
     //
@@ -506,6 +534,22 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE(member, Signature, blob);
         member->Class = ref->class;
         GC_UPDATE_ARRAY(assembly->DefinedMemberRefs, i, member);
+    }
+
+    // method specs
+    int member_spec_count = metadata->tables[METADATA_METHOD_SPEC].rows;
+    metadata_method_spec_t* method_spec = metadata->tables[METADATA_METHOD_SPEC].table;
+    GC_UPDATE(assembly, DefinedMethodSpecs, GC_NEW_ARRAY(get_array_type(tTinyDotNet_Reflection_MethodSpec), member_spec_count));
+    for (int i = 0; i < member_spec_count; i++) {
+        System_Reflection_MethodInfo method = NULL;
+        metadata_method_spec_t* spec = &method_spec[i];
+        TinyDotNet_Reflection_MethodSpec methodSpec = GC_NEW(tTinyDotNet_Reflection_MethodSpec);
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->method, NULL, NULL, &method));
+        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->instantiation.size);
+        memcpy(blob->Data, spec->instantiation.data, spec->instantiation.size);
+        GC_UPDATE(methodSpec, Instantiation, blob);
+        GC_UPDATE(methodSpec, Method, method);
+        GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
     }
 
     //
@@ -595,31 +639,16 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             CHECK_AND_RETHROW(parse_field_sig(field->signature, fieldInfo));
         }
 
-        // setup fields
-        last_idx = (i + 1 == types_count) ?
-                       methods_count :
-                       type_def[1].method_list.index - 1;
-        CHECK(last_idx <= methods_count);
-
-        type->Methods = GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, last_idx - type_def->method_list.index + 1);
         for (int mi = 0; mi < type->Methods->Length; mi++) {
             size_t index = type_def->method_list.index + mi - 1;
             metadata_method_def_t* method_def = metadata_get_method_def(metadata, index);
-            System_Reflection_MethodInfo methodInfo = GC_NEW(tSystem_Reflection_MethodInfo);
-            GC_UPDATE_ARRAY(type->Methods, mi, methodInfo);
-            GC_UPDATE_ARRAY(assembly->DefinedMethods, index, methodInfo);
-
-            GC_UPDATE(methodInfo, DeclaringType, type);
-            GC_UPDATE(methodInfo, Module, type->Module);
-            GC_UPDATE(methodInfo, Name, new_string_from_utf8(method_def->name, strlen(method_def->name)));
-            methodInfo->Attributes = method_def->flags;
-            methodInfo->ImplAttributes = method_def->impl_flags;
+            System_Reflection_MethodInfo methodInfo = type->Methods->Data[mi];
 
             // now fill the method generic params
-            int mgi = hmgeti(owner_generic_params, type);
+            int mgi = hmgeti(owner_generic_params, methodInfo);
             if (mgi != -1) {
                 GC_UPDATE(methodInfo, GenericArguments, GC_NEW_ARRAY(tSystem_Type, arrlen(owner_generic_params[mgi].value)));
-                for (int j = 0; j < type->GenericArguments->Length; j++) {
+                for (int j = 0; j < methodInfo->GenericArguments->Length; j++) {
                     System_Type gtype = owner_generic_params[mgi].value[j];
                     CHECK(methodInfo->GenericArguments->Data[gtype->GenericParameterPosition] == NULL);
                     methodInfo->GenericArguments->Data[gtype->GenericParameterPosition] = gtype;
@@ -641,7 +670,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
                 }));
             }
 
-            CHECK_AND_RETHROW(parse_stand_alone_method_sig(method_def->signature, methodInfo));
+            CHECK_AND_RETHROW(parse_method_def_sig(method_def->signature, methodInfo, type->GenericArguments, methodInfo->GenericArguments));
         }
     }
 
@@ -1049,7 +1078,7 @@ err_t loader_fill_type(System_Type type) {
         if (type->ManagedSize != 0) {
             // only builtin-types should have this, and it means
             // they should be sequential layout
-            CHECK(type_layout(type) == TYPE_SEQUENTIAL_LAYOUT, "%U", type->Name);
+            CHECK(type_layout(type) == TYPE_SEQUENTIAL_LAYOUT);
 
             // This has a C type equivalent, verify the sizes match
             CHECK(type->ManagedSize == managedSize && type->ManagedAlignment == managedAlignment,
@@ -1156,6 +1185,7 @@ err_t loader_fill_type(System_Type type) {
         // Now fill all the method defs
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
+            if (methodInfo->GenericArguments != NULL) continue; // no need to fill generic methods
             CHECK_AND_RETHROW(loader_fill_method(type, methodInfo));
         }
 
@@ -1427,6 +1457,7 @@ static type_init_t m_type_init[] = {
     EXCEPTION_INIT("System", "OverflowException", System_OverflowException),
     TYPE_INIT("TinyDotNet.Reflection", "InterfaceImpl", TinyDotNet_Reflection_InterfaceImpl, 3),
     TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference, 3),
+    TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec, 3),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {

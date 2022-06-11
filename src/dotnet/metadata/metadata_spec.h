@@ -236,6 +236,12 @@ typedef struct metadata_generic_param {
     const char* name;
 } PACKED metadata_generic_param_t;
 
+#define METADATA_METHOD_SPEC 0x2b
+typedef struct metadata_method_spec {
+    token_t method;
+    blob_entry_t instantiation;
+} PACKED metadata_method_spec_t;
+
 #define METADATA_GENERIC_PARAM_CONSTRAINT 0x2c
 typedef struct metadata_generic_param_constraint {
     token_t owner;
