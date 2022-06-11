@@ -8,6 +8,8 @@
 #include <dotnet/loader.h>
 #include <dotnet/gc/heap.h>
 
+#include <mem/malloc.h>
+
 #include <util/except.h>
 #include <util/stb_ds.h>
 #include <time/timer.h>

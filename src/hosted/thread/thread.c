@@ -27,25 +27,25 @@ void unlock_all_threads() {
 // is gonna return from the pause()
 static void sigusr1_handler(int signum, siginfo_t* info, void* arg) {
     ucontext_t* context = arg;
-    gregset_t* gregs = &context->uc_mcontext.gregs;
+    greg_t* gregs = context->uc_mcontext.gregs;
     thread_t* thread = info->si_value.sival_ptr;
     thread_save_state_t* regs = &thread->save_state;
-    regs->rsp = (uint64_t)gregs[REG_RSP];
-    regs->r15 = (uint64_t)gregs[REG_R15];
-    regs->r14 = (uint64_t)gregs[REG_R14];
-    regs->r13 = (uint64_t)gregs[REG_R13];
-    regs->r12 = (uint64_t)gregs[REG_R12];
-    regs->r11 = (uint64_t)gregs[REG_R11];
-    regs->r10 = (uint64_t)gregs[REG_R10];
-    regs->r9 = (uint64_t)gregs[REG_R9];
-    regs->r8 = (uint64_t)gregs[REG_R8];
-    regs->rbp = (uint64_t)gregs[REG_RBP];
-    regs->rdi = (uint64_t)gregs[REG_RDI];
-    regs->rsi = (uint64_t)gregs[REG_RSI];
-    regs->rdx = (uint64_t)gregs[REG_RDX];
-    regs->rcx = (uint64_t)gregs[REG_RCX];
-    regs->rbx = (uint64_t)gregs[REG_RBX];
-    regs->rax = (uint64_t)gregs[REG_RAX];
+    regs->rsp = gregs[REG_RSP];
+    regs->r15 = gregs[REG_R15];
+    regs->r14 = gregs[REG_R14];
+    regs->r13 = gregs[REG_R13];
+    regs->r12 = gregs[REG_R12];
+    regs->r11 = gregs[REG_R11];
+    regs->r10 = gregs[REG_R10];
+    regs->r9 = gregs[REG_R9];
+    regs->r8 = gregs[REG_R8];
+    regs->rbp = gregs[REG_RBP];
+    regs->rdi = gregs[REG_RDI];
+    regs->rsi = gregs[REG_RSI];
+    regs->rdx = gregs[REG_RDX];
+    regs->rcx = gregs[REG_RCX];
+    regs->rbx = gregs[REG_RBX];
+    regs->rax = gregs[REG_RAX];
     wait_group_done(&thread->wg);
     // the actual pause, this waits for a SIGUSR2, which just resumes execution
     pause();
