@@ -14,6 +14,8 @@ err_t init_jit();
  */
 err_t jit_type(System_Type method);
 
+void jit_dump_method(System_Reflection_MethodInfo method);
+
 typedef struct method_result {
     System_Exception exception;
     uintptr_t value;

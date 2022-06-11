@@ -29,5 +29,6 @@ Right now the main work is on the runtime itself, the main features of the runti
 
 ### Main missing features
 - Bit-shifting
+- Controlled-mutability managed pointers
 - Delegates
 - Overflow math

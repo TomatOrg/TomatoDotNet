@@ -1024,17 +1024,17 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
 
 
     // method parameters
-    GC_UPDATE(instance, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, method->Parameters->Length));
-    for (int i = 0; i < instance->Parameters->Length; i++) {
-        System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
-        System_Reflection_ParameterInfo fieldParameter = method->Parameters->Data[i];
-        parameter->Attributes = fieldParameter->Attributes;
-        GC_UPDATE(parameter, Name, fieldParameter->Name);
-        GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments));
-        GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
+    if (method->Parameters != NULL) {
+        GC_UPDATE(instance, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, method->Parameters->Length));
+        for (int i = 0; i < instance->Parameters->Length; i++) {
+            System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
+            System_Reflection_ParameterInfo fieldParameter = method->Parameters->Data[i];
+            parameter->Attributes = fieldParameter->Attributes;
+            GC_UPDATE(parameter, Name, fieldParameter->Name);
+            GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments));
+            GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
+        }
     }
-
-    //
 
     return instance;
 }
