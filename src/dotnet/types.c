@@ -3,6 +3,9 @@
 #include "monitor.h"
 
 #include "gc/gc.h"
+#include "dotnet/metadata/sig.h"
+#include "encoding.h"
+#include "loader.h"
 
 #include <util/strbuilder.h>
 #include <util/stb_ds.h>
@@ -51,7 +54,9 @@ System_Type tSystem_InvalidCastException = NULL;
 System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
 
-System_Type tPentagon_Reflection_InterfaceImpl = NULL;
+System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
+System_Type tTinyDotNet_Reflection_MemberReference = NULL;
+System_Type tTinyDotNet_Reflection_MethodSpec = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
@@ -100,105 +105,184 @@ System_String string_append_cstr(System_String old, const char* str) {
     return new;
 }
 
-System_Type assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token) {
-    if (token.index == 0) {
-        // null token is valid for our case
-        return NULL;
+err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Type* out_type) {
+    err_t err = NO_ERROR;
+    System_Type type = NULL;
+
+    if (token.index != 0) {
+        switch (token.table) {
+            case METADATA_TYPE_DEF: {
+                CHECK(token.index - 1 < assembly->DefinedTypes->Length);
+                type = assembly->DefinedTypes->Data[token.index - 1];
+            } break;
+
+            case METADATA_TYPE_REF: {
+                CHECK(token.index - 1 < assembly->ImportedTypes->Length);
+                type = assembly->ImportedTypes->Data[token.index - 1];
+            } break;
+
+            case METADATA_TYPE_SPEC: {
+                CHECK(token.index - 1 < assembly->DefinedTypeSpecs->Length);
+
+                // not found, so parse it
+                System_Byte_Array blob = assembly->DefinedTypeSpecs->Data[token.index - 1];
+                blob_entry_t entry = {
+                    .data = blob->Data,
+                    .size = blob->Length
+                };
+                CHECK_AND_RETHROW(parse_type_spec(entry, assembly, &type, typeArgs, methodArgs));
+            } break;
+
+            default:
+                CHECK_FAIL("Invalid table for type %04x");
+                break;
+        }
     }
 
-    switch (token.table) {
-        case METADATA_TYPE_DEF: {
-            if (token.index - 1 >= assembly->DefinedTypes->Length) {
-                ASSERT(!"assembly_get_type_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->DefinedTypes->Data[token.index - 1];
-        } break;
+    *out_type = type;
 
-        case METADATA_TYPE_REF: {
-            if (token.index - 1 >= assembly->ImportedTypes->Length) {
-                ASSERT(!"assembly_get_type_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->ImportedTypes->Data[token.index - 1];
-        } break;
-
-        case METADATA_TYPE_SPEC: {
-            ASSERT(!"assembly_get_type_by_token: TODO: TypeSpec");
-        } break;
-
-        default:
-            ASSERT(!"assembly_get_type_by_token: invalid table for type");
-            return NULL;
-    }
+cleanup:
+    return err;
 }
 
-System_Reflection_MethodInfo assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token) {
+err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method) {
+    err_t err = NO_ERROR;
+
     if (token.index == 0) {
         // null token is valid for our case
-        return NULL;
+        *out_method = NULL;
+        goto cleanup;
     }
 
     switch (token.table) {
         case METADATA_METHOD_DEF: {
-            if (token.index - 1 >= assembly->DefinedMethods->Length) {
-                ASSERT(!"assembly_get_method_by_token: token outside of range");
-                return NULL;
+            CHECK(token.index - 1 < assembly->DefinedMethods->Length);
+            System_Reflection_MethodInfo method = assembly->DefinedMethods->Data[token.index - 1];
+            if (method->GenericArguments != NULL) {
+                CHECK_FAIL("TODO: instantiate generic method");
             }
-            return assembly->DefinedMethods->Data[token.index - 1];
+            *out_method = method;
+        } break;
+
+        case METADATA_METHOD_SPEC: {
+            CHECK(token.index - 1 < assembly->DefinedMethodSpecs->Length);
+
+            // not found, so parse it
+            TinyDotNet_Reflection_MethodSpec spec = assembly->DefinedMethodSpecs->Data[token.index - 1];
+
+            // create it
+            *out_method = spec->Method;
+            blob_entry_t entry = {
+                .data = spec->Instantiation->Data,
+                .size = spec->Instantiation->Length
+            };
+            CHECK_AND_RETHROW(parse_method_spec(entry, assembly, out_method, typeArgs, methodArgs));
         } break;
 
         case METADATA_MEMBER_REF: {
-            if (token.index - 1 >= assembly->ImportedMembers->Length) {
-                ASSERT(!"assembly_get_method_by_token: token outside of range");
-                return NULL;
+            CHECK(token.index - 1 < assembly->DefinedMemberRefs->Length);
+            TinyDotNet_Reflection_MemberReference ref = assembly->DefinedMemberRefs->Data[token.index - 1];
+
+            // get the enclosing type
+            System_Type type;
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
+
+            // get the expected field
+            System_Reflection_MethodInfo wantedInfo;
+            blob_entry_t blob = {
+                .data = ref->Signature->Data,
+                .size = ref->Signature->Length
+            };
+            CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments, NULL));
+            // find a method with that type
+            int index = 0;
+            System_Reflection_MethodInfo methodInfo = NULL;
+            while ((methodInfo = type_iterate_methods(type, ref->Name, &index)) != NULL) {
+                // make sure both either have or don't have this
+                if (method_is_static(methodInfo) != method_is_static(wantedInfo)) continue;
+
+                // check the return type and parameters count is the same
+                if (methodInfo->ReturnType != wantedInfo->ReturnType) continue;
+                if (methodInfo->Parameters->Length != wantedInfo->Parameters->Length) continue;
+
+                // check that the parameters are the same
+                bool found = true;
+                for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
+                    if (methodInfo->Parameters->Data[pi]->ParameterType != wantedInfo->Parameters->Data[pi]->ParameterType) {
+                        found = false;
+                        break;
+                    }
+                }
+
+                if (found) {
+                    break;
+                }
             }
-            System_Reflection_MemberInfo memberInfo = assembly->ImportedMembers->Data[token.index - 1];
-            if (memberInfo->vtable->type != tSystem_Reflection_MethodInfo) {
-                ASSERT(!"assembly_get_method_by_token: wanted member is not a method");
-                return NULL;
-            }
-            return (System_Reflection_MethodInfo)memberInfo;
+
+            // found it
+            CHECK(methodInfo != NULL);
+            *out_method = methodInfo;
         } break;
 
         default:
-            ASSERT(!"assembly_get_method_by_token: invalid table for type");
-            return NULL;
+            CHECK_FAIL("Invalid token %02x.%d", token.table, token.index);
+            break;
     }
+
+cleanup:
+    return err;
 }
 
-System_Reflection_FieldInfo assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token) {
+err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_FieldInfo* out_field) {
+    err_t err = NO_ERROR;
+
     if (token.index == 0) {
         // null token is valid for our case
-        return NULL;
+        *out_field = NULL;
+        goto cleanup;
     }
 
     switch (token.table) {
         case METADATA_FIELD: {
-            if (token.index - 1 >= assembly->DefinedFields->Length) {
-                ASSERT(!"assembly_get_field_by_token: token outside of range");
-                return NULL;
-            }
-            return assembly->DefinedFields->Data[token.index - 1];
+            CHECK(token.index - 1 < assembly->DefinedFields->Length);
+            *out_field = assembly->DefinedFields->Data[token.index - 1];
         } break;
 
         case METADATA_MEMBER_REF: {
-            if (token.index - 1 >= assembly->ImportedMembers->Length) {
-                ASSERT(!"assembly_get_field_by_token: token outside of range");
-                return NULL;
-            }
-            System_Reflection_MemberInfo memberInfo = assembly->ImportedMembers->Data[token.index - 1];
-            if (memberInfo->vtable->type != tSystem_Reflection_FieldInfo) {
-                ASSERT(!"assembly_get_field_by_token: wanted member is not a field");
-                return NULL;
-            }
-            return (System_Reflection_FieldInfo)memberInfo;
+            CHECK(token.index - 1 < assembly->DefinedMemberRefs->Length);
+            TinyDotNet_Reflection_MemberReference ref = assembly->DefinedMemberRefs->Data[token.index - 1];
+
+            // get the enclosing type
+            System_Type type;
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
+
+            // get the expected field
+            System_Reflection_FieldInfo wantedInfo = GC_NEW(tSystem_Reflection_FieldInfo);
+            blob_entry_t blob = {
+                .data = ref->Signature->Data,
+                .size = ref->Signature->Length
+            };
+            GC_UPDATE(wantedInfo, DeclaringType, type);
+            GC_UPDATE(wantedInfo, Module, assembly->Module);
+            CHECK_AND_RETHROW(parse_field_sig(blob, wantedInfo));
+
+            // get the actual field to verify compatibility
+            System_Reflection_FieldInfo fieldInfo = type_get_field(type, ref->Name);
+
+            // check we got what we wanted
+            CHECK(fieldInfo->FieldType == wantedInfo->FieldType);
+
+            // out it
+            *out_field = fieldInfo;
         } break;
 
         default:
-            ASSERT(!"assembly_get_field_by_token: invalid table for type");
-            return NULL;
+            CHECK_FAIL("Invalid table %02x", token.table);
+            break;
     }
+
+cleanup:
+    return err;
 }
 
 System_Type assembly_get_type_by_name(System_Reflection_Assembly assembly, const char* name, const char* namespace) {
@@ -247,6 +331,7 @@ System_Type get_array_type(System_Type type) {
     // this is an array
     ArrayType->IsArray = true;
     ArrayType->IsFilled = true;
+    ArrayType->GenericParameterPosition = -1;
     ArrayType->StackType = STACK_TYPE_O;
 
     // set the sizes properly
@@ -295,6 +380,7 @@ System_Type get_by_ref_type(System_Type type) {
     ByRefType->IsByRef = 1;
     ByRefType->IsFilled = 1;
     ByRefType->StackType = STACK_TYPE_REF;
+    ByRefType->GenericParameterPosition = -1;
 
     // set the type information to look as ref type
     GC_UPDATE(ByRefType, Module, type->Module);
@@ -567,13 +653,17 @@ void type_print_name(System_Type type, strbuilder_t* builder) {
 
 
 void type_print_full_name(System_Type type, strbuilder_t* builder) {
-    strbuilder_char(builder, '[');
-    strbuilder_utf16(builder, type->Assembly->Name->Chars, type->Assembly->Name->Length);
-    strbuilder_char(builder, '-');
-    strbuilder_char(builder, 'v');
-    strbuilder_uint(builder, type->Assembly->MajorVersion);
-    strbuilder_char(builder, ']');
-    type_print_name(type, builder);
+    if (type->GenericParameterPosition >= 0) {
+        strbuilder_utf16(builder, type->Name->Chars, type->Name->Length);
+    } else {
+        strbuilder_char(builder, '[');
+        strbuilder_utf16(builder, type->Assembly->Name->Chars, type->Assembly->Name->Length);
+        strbuilder_char(builder, '-');
+        strbuilder_char(builder, 'v');
+        strbuilder_uint(builder, type->Assembly->MajorVersion);
+        strbuilder_char(builder, ']');
+        type_print_name(type, builder);
+    }
 }
 
 void method_print_name(System_Reflection_MethodInfo method, strbuilder_t* builder) {
@@ -595,18 +685,18 @@ void method_print_full_name(System_Reflection_MethodInfo method, strbuilder_t* b
     method_print_name(method, builder);
 }
 
-System_Reflection_FieldInfo type_get_field_cstr(System_Type type, const char* name) {
+System_Reflection_FieldInfo type_get_field(System_Type type, System_String name) {
     for (int i = 0; i < type->Fields->Length; i++) {
-        if (string_equals_cstr(type->Fields->Data[i]->Name, name)) {
+        if (string_equals(type->Fields->Data[i]->Name, name)) {
             return type->Fields->Data[i];
         }
     }
     return NULL;
 }
 
-System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const char* name, int* index) {
+System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index) {
     for (int i = *index; i < type->Methods->Length; i++) {
-        if (string_equals_cstr(type->Methods->Data[i]->Name, name)) {
+        if (string_equals(type->Methods->Data[i]->Name, name)) {
             *index = i + 1;
             return type->Methods->Data[i];
         }
@@ -615,14 +705,14 @@ System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const c
 }
 
 System_Reflection_MethodInfo type_get_interface_method_impl(System_Type targetType, System_Reflection_MethodInfo targetMethod) {
-    Pentagon_Reflection_InterfaceImpl interface = type_get_interface_impl(targetType, targetMethod->DeclaringType);
+    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(targetType, targetMethod->DeclaringType);
     if (interface == NULL) {
         return NULL;
     }
     return targetType->VirtualMethods->Data[interface->VTableOffset + targetMethod->VTableOffset];
 }
 
-Pentagon_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType) {
+TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType) {
     if (targetType->InterfaceImpls == NULL) {
         return NULL;
     }
@@ -665,14 +755,9 @@ void assembly_dump(System_Reflection_Assembly assembly) {
             strbuilder_cstr(&field, field_access_str(field_access(type->Fields->Data[j])));
             strbuilder_char(&field, ' ');
             strbuilder_cstr(&field, field_is_static(type->Fields->Data[j]) ? "static " : "");
-            
-            strbuilder_utf16(&field, type->Fields->Data[j]->FieldType->Namespace->Chars, type->Fields->Data[j]->FieldType->Namespace->Length);
-            strbuilder_char(&field, '.');
-            strbuilder_utf16(&field, type->Fields->Data[j]->FieldType->Name->Chars, type->Fields->Data[j]->FieldType->Name->Length);
+            type_print_full_name(type->Fields->Data[j]->FieldType, &field);
             strbuilder_char(&field, ' ');
-            
             strbuilder_utf16(&field, type->Fields->Data[j]->Name->Chars, type->Fields->Data[j]->Name->Length);
-            
             TRACE("\t\t%s; // offset 0x%02x", strbuilder_get(&field), type->Fields->Data[j]->MemoryOffset);
             strbuilder_free(&field);
         }
@@ -835,3 +920,287 @@ bool check_type_visibility(System_Type from, System_Type to) {
 
     return true;
 }
+
+static System_Type expand_type(System_Type type, System_Type_Array arguments);
+
+static System_Reflection_FieldInfo expand_field(System_Type type, System_Reflection_FieldInfo field, System_Type_Array arguments) {
+    System_Reflection_FieldInfo instance = GC_NEW(tSystem_Reflection_FieldInfo);
+    instance->FieldType = expand_type(field->FieldType, arguments);
+    instance->Attributes = field->Attributes;
+    GC_UPDATE(instance, Module, field->Module);
+    GC_UPDATE(instance, DeclaringType, type);
+    GC_UPDATE(instance, Name, field->Name);
+    return instance;
+}
+
+static System_Reflection_MethodInfo expand_method(System_Type type, System_Reflection_MethodInfo method, System_Type_Array arguments) {
+    System_Reflection_MethodInfo instance = GC_NEW(tSystem_Reflection_MethodInfo);
+    GC_UPDATE(instance, Module, method->Module);
+    GC_UPDATE(instance, DeclaringType, type);
+    GC_UPDATE(instance, Name, method->Name);
+    GC_UPDATE(instance, ReturnType, expand_type(method->ReturnType, arguments));
+    instance->Attributes = method->Attributes;
+    instance->ImplAttributes = method->ImplAttributes;
+
+    // expand body
+    if (method->MethodBody != NULL) {
+        System_Reflection_MethodBody methodBody = method->MethodBody;
+
+        // check exception clauses
+        bool expand_exceptions = false;
+        for (int i = 0; i < methodBody->ExceptionHandlingClauses->Length; i++) {
+            System_Reflection_ExceptionHandlingClause clause = methodBody->ExceptionHandlingClauses->Data[i];
+            if (clause->CatchType != NULL && type_is_generic_parameter(clause->CatchType)) {
+                expand_exceptions = true;
+                break;
+            }
+        }
+
+        // check local variables
+        bool expand_locals = false;
+        for (int i = 0; i < methodBody->LocalVariables->Length; i++) {
+            System_Reflection_LocalVariableInfo variable = methodBody->LocalVariables->Data[i];
+            if (type_is_generic_parameter(variable->LocalType)) {
+                expand_locals = true;
+                break;
+            }
+        }
+
+        if (expand_locals || expand_exceptions) {
+            // create new and expand as needed
+            System_Reflection_MethodBody new_body = GC_NEW(tSystem_Reflection_MethodBody);
+            GC_UPDATE(new_body, Il, methodBody->Il);
+            new_body->InitLocals = methodBody->InitLocals;
+            new_body->MaxStackSize = methodBody->MaxStackSize;
+
+            if (expand_locals) {
+                GC_UPDATE(new_body, LocalVariables, GC_NEW_ARRAY(tSystem_Reflection_LocalVariableInfo, methodBody->LocalVariables->Length));
+                for (int i = 0; i < new_body->LocalVariables->Length; i++) {
+                    if (type_is_generic_parameter(methodBody->LocalVariables->Data[i]->LocalType)) {
+                        // expand
+                        System_Reflection_LocalVariableInfo variable = GC_NEW(tSystem_Reflection_LocalVariableInfo);
+                        GC_UPDATE(variable, LocalType, expand_type(methodBody->LocalVariables->Data[i]->LocalType, arguments));
+                        variable->LocalIndex = methodBody->LocalVariables->Data[i]->LocalIndex;
+                        GC_UPDATE_ARRAY(new_body->LocalVariables, i, variable);
+                    } else {
+                        // no need to expand this one
+                        GC_UPDATE_ARRAY(new_body->LocalVariables, i, methodBody->LocalVariables->Data[i]);
+                    }
+                }
+            } else {
+                GC_UPDATE(new_body, LocalVariables, methodBody->LocalVariables);
+            }
+
+            if (expand_exceptions) {
+                GC_UPDATE(new_body, ExceptionHandlingClauses, GC_NEW_ARRAY(tSystem_Reflection_ExceptionHandlingClause, methodBody->ExceptionHandlingClauses->Length));
+                for (int i = 0; i < new_body->ExceptionHandlingClauses->Length; i++) {
+                    System_Reflection_ExceptionHandlingClause clause = methodBody->ExceptionHandlingClauses->Data[i];
+                    if (clause->CatchType != NULL && type_is_generic_parameter(clause->CatchType)) {
+                        // expand
+                        System_Reflection_ExceptionHandlingClause new_clause = GC_NEW(tSystem_Reflection_ExceptionHandlingClause);
+                        GC_UPDATE(new_clause, CatchType, expand_type(clause->CatchType, arguments));
+                        new_clause->Flags = clause->Flags;
+                        new_clause->FilterOffset = clause->FilterOffset;
+                        new_clause->HandlerLength = clause->HandlerLength;
+                        new_clause->HandlerOffset = clause->HandlerOffset;
+                        new_clause->TryLength = clause->TryLength;
+                        new_clause->TryOffset = clause->TryOffset;
+                        GC_UPDATE_ARRAY(new_body->ExceptionHandlingClauses, i, new_clause);
+                    } else {
+                        // no need to expand this one
+                        GC_UPDATE_ARRAY(new_body->ExceptionHandlingClauses, i, clause);
+                    }
+                }
+            } else {
+                GC_UPDATE(new_body, ExceptionHandlingClauses, methodBody->ExceptionHandlingClauses);
+            }
+
+            GC_UPDATE(instance, MethodBody, new_body);
+        } else {
+            // no need to expand anything, keep the original stuff
+            GC_UPDATE(instance, MethodBody, method->MethodBody);
+        }
+    }
+
+
+    // method parameters
+    GC_UPDATE(instance, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, method->Parameters->Length));
+    for (int i = 0; i < instance->Parameters->Length; i++) {
+        System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
+        System_Reflection_ParameterInfo fieldParameter = method->Parameters->Data[i];
+        parameter->Attributes = fieldParameter->Attributes;
+        GC_UPDATE(parameter, Name, fieldParameter->Name);
+        GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments));
+        GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
+    }
+
+    //
+
+    return instance;
+}
+
+static System_Type expand_type(System_Type type, System_Type_Array arguments) {
+    if (type == NULL) {
+        // type is null, is this actually a valid case?
+        return NULL;
+    } else if (type->GenericParameterPosition >= 0) {
+        // type is a generic argument, resolve it
+        return arguments->Data[type->GenericParameterPosition];
+    } else if (type->IsArray) {
+        // type is an array, resolve the element type
+        System_Type real_array_type = expand_type(type->ElementType, arguments);
+        return get_array_type(real_array_type);
+    } else if (type->IsByRef) {
+        // type is a byref, resolve the base type
+        System_Type real_byref_base = expand_type(type->BaseType, arguments);
+        return get_by_ref_type(real_byref_base);
+    } else if (!type_is_generic_definition(type)) {
+        // type has no generic arguments, nothing to do with it
+        return type;
+    }
+
+    // figure if all the values in here are real types or just generic ones
+    bool real_instance = true;
+    for (int i = 0; i < arguments->Length; i++) {
+        if (type_is_generic_parameter(arguments->Data[i])) {
+            real_instance = false;
+            break;
+        }
+    }
+
+    monitor_enter(type);
+
+    // check for an existing instance
+    System_Type inst = type->NextGenericInstance;
+    bool found = false;
+    while (inst != NULL) {
+        found = true;
+        for (int i = 0; i < arguments->Length; i++) {
+            if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
+                found = false;
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+
+        inst = inst->NextGenericInstance;
+    }
+
+    if (found) {
+        monitor_exit(type);
+        return inst;
+    }
+
+    // instance not found, create one
+    System_Type instance = GC_NEW(tSystem_Type);
+    GC_UPDATE(instance, DeclaringType, type->DeclaringType);
+    GC_UPDATE(instance, BaseType, expand_type(type->BaseType, arguments));
+    GC_UPDATE(instance, Module, type->Module);
+    GC_UPDATE(instance, Assembly, type->Assembly);
+    GC_UPDATE(instance, GenericArguments, arguments);
+    GC_UPDATE(instance, GenericTypeDefinition, type);
+    GC_UPDATE(instance, Namespace, type->Namespace);
+    instance->Attributes = type->Attributes;
+
+    // create the unique name
+    strbuilder_t builder = strbuilder_new();
+    strbuilder_utf16(&builder, type->Name->Chars, type->Name->Length);
+    strbuilder_char(&builder, '<');
+    for (int i = 0; i < arguments->Length; i++) {
+        type_print_full_name(arguments->Data[i], &builder);
+        if (i + 1 != arguments->Length) {
+            strbuilder_char(&builder, ',');
+        }
+    }
+    strbuilder_char(&builder, '>');
+    GC_UPDATE(instance, Name, new_string_from_cstr(strbuilder_get(&builder)));
+    strbuilder_free(&builder);
+
+    // base type
+    GC_UPDATE(instance, BaseType, expand_type(instance->BaseType, arguments));
+
+    // fields
+    if (type->Fields != NULL) {
+        GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
+        for (int i = 0; i < instance->Fields->Length; i++) {
+            GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
+        }
+    }
+
+    if (type->Methods != NULL) {
+        GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
+        for (int i = 0; i < instance->Methods->Length; i++) {
+            GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments));
+        }
+    }
+
+    // add it only if there are no non-specific generic types
+    if (real_instance) {
+        GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
+        GC_UPDATE(type, NextGenericInstance, instance);
+    }
+
+    monitor_exit(type);
+
+    return instance;
+}
+
+System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
+    return expand_type(type, arguments);
+}
+
+System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments) {
+    monitor_enter(method);
+
+    // check for an existing instance
+    System_Reflection_MethodInfo inst = method->NextGenericInstance;
+    bool found = false;
+    while (inst != NULL) {
+        found = true;
+        for (int i = 0; i < arguments->Length; i++) {
+            if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
+                found = false;
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+
+        inst = inst->NextGenericInstance;
+    }
+
+    if (found) {
+        monitor_exit(method);
+        return inst;
+    }
+
+    System_Reflection_MethodInfo instance = expand_method(method->DeclaringType, method, arguments);
+
+    GC_UPDATE(instance, GenericArguments, arguments);
+    GC_UPDATE(instance, NextGenericInstance, method->NextGenericInstance);
+    GC_UPDATE(method, NextGenericInstance, instance);
+
+    monitor_exit(method);
+
+    return instance;
+}
+
+bool type_is_generic_parameter(System_Type type) {
+    if (type == NULL) {
+        return false;
+    } else if (type->GenericParameterPosition >= 0) {
+        return true;
+    } else if (type->IsArray) {
+        return type_is_generic_parameter(type->ElementType);
+    } else if (type->IsByRef) {
+        return type_is_generic_parameter(type->BaseType);
+    } else {
+        return false;
+    }
+}
+

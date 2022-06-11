@@ -10,14 +10,9 @@
 err_t init_jit();
 
 /**
- * Jit an assembly to the global context
+ * Fully jit a type, and all the types that reference this type
  */
-err_t jit_assembly(System_Reflection_Assembly assembly);
-
-/**
- * Dump the MIR of the given method
- */
-void jit_dump_mir(System_Reflection_MethodInfo methodInfo);
+err_t jit_type(System_Type method);
 
 typedef struct method_result {
     System_Exception exception;

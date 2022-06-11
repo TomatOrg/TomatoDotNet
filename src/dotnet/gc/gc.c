@@ -1,9 +1,10 @@
 #include "gc.h"
-#include "types.h"
-#include "time/timer.h"
 
-#include <dotnet/gc/gc_thread_data.h>
-#include <dotnet/gc/heap.h>
+#include "gc_thread_data.h"
+#include "heap.h"
+
+#include "../monitor.h"
+#include "../types.h"
 
 #include <sync/conditional.h>
 #include <sync/wait_group.h>
@@ -12,7 +13,7 @@
 #include <thread/thread.h>
 
 #include <util/stb_ds.h>
-#include <dotnet/monitor.h>
+#include <time/timer.h>
 
 
 #include <stdnoreturn.h>

@@ -11,6 +11,7 @@
 #include "loader.h"
 #include "encoding.h"
 #include "opcodes.h"
+#include "monitor.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -213,7 +214,10 @@ static err_t parse_method_cil(metadata_t* metadata, System_Reflection_MethodInfo
                             sig.size -= sizeof(method_section_fat_t);
                             sig.data += sizeof(method_section_fat_t);
                             if (ec->flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-                                clause->CatchType = assembly_get_type_by_token(method->Module->Assembly, ec->class_token);
+                                System_Type type;
+                                CHECK_AND_RETHROW(assembly_get_type_by_token(method->Module->Assembly, ec->class_token,
+                                                                             method->DeclaringType->GenericArguments, method->GenericArguments, &type));
+                                GC_UPDATE(clause, CatchType, type);
                             } else if (ec->flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                                 clause->FilterOffset = ec->filter_offset;
                             }
@@ -228,7 +232,10 @@ static err_t parse_method_cil(metadata_t* metadata, System_Reflection_MethodInfo
                             sig.size -= sizeof(method_exception_clause_t);
                             sig.data += sizeof(method_exception_clause_t);
                             if (ec->flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-                                clause->CatchType = assembly_get_type_by_token(method->Module->Assembly, ec->class_token);
+                                System_Type type;
+                                CHECK_AND_RETHROW(assembly_get_type_by_token(method->Module->Assembly, ec->class_token,
+                                                                             method->DeclaringType->GenericArguments, method->GenericArguments, &type));
+                                GC_UPDATE(clause, CatchType, type);
                             } else if (ec->flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                                 clause->FilterOffset = ec->filter_offset;
                             }
@@ -313,7 +320,8 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
     metadata_class_layout_t* class_layouts = metadata->tables[METADATA_CLASS_LAYOUT].table;
     for (int i = 0; i < metadata->tables[METADATA_CLASS_LAYOUT].rows; i++) {
         metadata_class_layout_t* class_layout = &class_layouts[i];
-        System_Type type = assembly_get_type_by_token(assembly, class_layout->parent);
+        System_Type type;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, class_layout->parent, NULL, NULL, &type));
         CHECK(type != NULL);
 
         // layout must be seq or explicit to have a row in this class
@@ -346,8 +354,79 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
         }
     }
 
-    cleanup:
+cleanup:
     return err;
+}
+
+static err_t loader_load_type_refs(System_Reflection_Assembly assembly, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+
+    metadata_assembly_ref_t* assembly_refs = metadata->tables[METADATA_ASSEMBLY_REF].table;
+    size_t assembly_refs_count = metadata->tables[METADATA_ASSEMBLY_REF].rows;
+
+    //
+    // resolve all external types which are assembly ref, this makes it easier
+    // for resolving other stuff later on
+    //
+
+    metadata_type_ref_t* type_refs = metadata->tables[METADATA_TYPE_REF].table;
+    size_t type_refs_count = metadata->tables[METADATA_TYPE_REF].rows;
+
+    GC_UPDATE(assembly, ImportedTypes, GC_NEW_ARRAY(tSystem_Type, type_refs_count));
+
+    for (int i = 0; i < type_refs_count; i++) {
+        metadata_type_ref_t* type_ref = &type_refs[i];
+        if (type_ref->resolution_scope.table != METADATA_ASSEMBLY_REF) continue;
+
+        // get the ref
+        CHECK(0 < type_ref->resolution_scope.index && type_ref->resolution_scope.index <= assembly_refs_count);
+        metadata_assembly_ref_t* assembly_ref = &assembly_refs[type_ref->resolution_scope.index - 1];
+
+        // resolve the assembly
+        System_Reflection_Assembly refed = NULL;
+        if (string_equals_cstr(g_corelib->Name, assembly_ref->name)) {
+            refed = g_corelib;
+        } else {
+            // TODO: properly load anything which is not loaded
+            CHECK_FAIL();
+        }
+        CHECK(refed != NULL);
+
+        // Validate the version we have loaded
+        //  - majors:   must match, indicate a breaking change in the API
+        //  - minor:    must be higher, indicates a compatible change in the API
+        //  - build:    must be higher, indicates a bugfix/improvement
+        //  - revision: ignored, mostly used as a unique id for the build so the
+        //              exact release source can be found
+        CHECK(refed->MajorVersion == assembly_ref->major_version);
+        CHECK(refed->MinorVersion >= assembly_ref->minor_version);
+        CHECK(refed->BuildNumber >= assembly_ref->build_number);
+
+        // get the type
+        System_Type refed_type = assembly_get_type_by_name(refed, type_ref->type_name, type_ref->type_namespace);
+        CHECK(refed_type != NULL, "Missing type `%s.%s` in assembly `%s`", type_ref->type_namespace, type_ref->type_name, assembly_ref->name);
+
+        // store it
+        GC_UPDATE_ARRAY(assembly->ImportedTypes, i, refed_type);
+    }
+
+    // TODO: resolve externals which are nested types
+
+    // validate we got all the types before we continue to members
+    for (int i = 0; i < assembly->ImportedTypes->Length; i++) {
+        CHECK(assembly->ImportedTypes->Data[i] != NULL);
+    }
+
+cleanup:
+    return err;
+}
+
+static bool match_type_generic(System_Type original, System_Type target, System_Type_Array arguments) {
+    if (original != NULL && original->GenericParameterPosition >= 0) {
+        original = arguments->Data[original->GenericParameterPosition];
+    }
+    return original == target;
 }
 
 static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Reflection_Assembly assembly) {
@@ -357,6 +436,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         System_Type key;
         System_Type* value;
     }* interfaces = NULL;
+
+    struct {
+        void* key;
+        System_Type* value;
+    }* owner_generic_params = NULL;
 
     //
     // Do the base type init
@@ -372,13 +456,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         metadata_type_def_t* type_def = &type_defs[i];
         System_Type type = assembly->DefinedTypes->Data[i];
 
-        // make sure the type index is valid
-        CHECK(type_def->extends.index - 1 < types_count);
-
         // set the owners and flags
         GC_UPDATE(type, Assembly, assembly);
         GC_UPDATE(type, Module, assembly->Module);
         type->Attributes = type_def->flags;
+        type->GenericParameterPosition = -1;
 
         CHECK(
             type_layout(type) == TYPE_SEQUENTIAL_LAYOUT ||
@@ -389,9 +471,138 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         // setup the name and base types
         GC_UPDATE(type, Name, new_string_from_utf8(type_def->type_name, strlen(type_def->type_name)));
         GC_UPDATE(type, Namespace, new_string_from_utf8(type_def->type_namespace, strlen(type_def->type_namespace)));
-        GC_UPDATE(type, BaseType, assembly_get_type_by_token(assembly, type_def->extends));
-
         CHECK(type->Name->Length > 0);
+    }
+
+    //
+    // Setup all the methods for each of the types so
+    // we can properly initialize generic methods
+    //
+
+    for (int i = 0; i < types_count; i++) {
+        metadata_type_def_t* type_def = &type_defs[i];
+        System_Type type = assembly->DefinedTypes->Data[i];
+
+        // init methods partially since these are needed for generic methods
+        // setup methods
+        int last_idx = (i + 1 == types_count) ?
+                       methods_count :
+                       type_def[1].method_list.index - 1;
+        CHECK(last_idx <= methods_count);
+
+        type->Methods = GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, last_idx - type_def->method_list.index + 1);
+        for (int mi = 0; mi < type->Methods->Length; mi++) {
+            size_t index = type_def->method_list.index + mi - 1;
+            metadata_method_def_t* method_def = metadata_get_method_def(metadata, index);
+            System_Reflection_MethodInfo methodInfo = GC_NEW(tSystem_Reflection_MethodInfo);
+            GC_UPDATE_ARRAY(type->Methods, mi, methodInfo);
+            GC_UPDATE_ARRAY(assembly->DefinedMethods, index, methodInfo);
+
+            GC_UPDATE(methodInfo, DeclaringType, type);
+            GC_UPDATE(methodInfo, Module, type->Module);
+            GC_UPDATE(methodInfo, Name, new_string_from_utf8(method_def->name, strlen(method_def->name)));
+            methodInfo->Attributes = method_def->flags;
+            methodInfo->ImplAttributes = method_def->impl_flags;
+        }
+    }
+
+    //
+    // save up all the type spec blobs for later use
+    //
+
+    // type specs
+    int type_specs_count = metadata->tables[METADATA_TYPE_SPEC].rows;
+    metadata_type_spec_t* type_specs = metadata->tables[METADATA_TYPE_SPEC].table;
+    GC_UPDATE(assembly, DefinedTypeSpecs, GC_NEW_ARRAY(get_array_type(tSystem_Byte), type_specs_count));
+    for (int i = 0; i < type_specs_count; i++) {
+        metadata_type_spec_t* spec = &type_specs[i];
+        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->signature.size);
+        memcpy(blob->Data, spec->signature.data, spec->signature.size);
+        GC_UPDATE_ARRAY(assembly->DefinedTypeSpecs, i, blob);
+    }
+
+    // member refs
+    int member_refs_count = metadata->tables[METADATA_MEMBER_REF].rows;
+    metadata_member_ref_t* member_refs = metadata->tables[METADATA_MEMBER_REF].table;
+    GC_UPDATE(assembly, DefinedMemberRefs, GC_NEW_ARRAY(get_array_type(tSystem_Byte), member_refs_count));
+    for (int i = 0; i < member_refs_count; i++) {
+        metadata_member_ref_t* ref = &member_refs[i];
+        TinyDotNet_Reflection_MemberReference member = GC_NEW(tTinyDotNet_Reflection_MemberReference);
+        GC_UPDATE(member, Name, new_string_from_utf8(ref->name, strlen(ref->name)));
+        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, ref->signature.size);
+        memcpy(blob->Data, ref->signature.data, ref->signature.size);
+        GC_UPDATE(member, Signature, blob);
+        member->Class = ref->class;
+        GC_UPDATE_ARRAY(assembly->DefinedMemberRefs, i, member);
+    }
+
+    // method specs
+    int member_spec_count = metadata->tables[METADATA_METHOD_SPEC].rows;
+    metadata_method_spec_t* method_spec = metadata->tables[METADATA_METHOD_SPEC].table;
+    GC_UPDATE(assembly, DefinedMethodSpecs, GC_NEW_ARRAY(get_array_type(tTinyDotNet_Reflection_MethodSpec), member_spec_count));
+    for (int i = 0; i < member_spec_count; i++) {
+        System_Reflection_MethodInfo method = NULL;
+        metadata_method_spec_t* spec = &method_spec[i];
+        TinyDotNet_Reflection_MethodSpec methodSpec = GC_NEW(tTinyDotNet_Reflection_MethodSpec);
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->method, NULL, NULL, &method));
+        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->instantiation.size);
+        memcpy(blob->Data, spec->instantiation.data, spec->instantiation.size);
+        GC_UPDATE(methodSpec, Instantiation, blob);
+        GC_UPDATE(methodSpec, Method, method);
+        GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
+    }
+
+    //
+    // load all the external type references
+    //
+    CHECK_AND_RETHROW(loader_load_type_refs(assembly, metadata));
+
+    //
+    // Create all dummy generic type arguments
+    //
+
+    int generic_params_count = metadata->tables[METADATA_GENERIC_PARAM].rows;
+    metadata_generic_param_t* generic_params = metadata->tables[METADATA_GENERIC_PARAM].table;
+    for (int i = 0; i < generic_params_count; i++) {
+        metadata_generic_param_t* generic_param = &generic_params[i];
+
+        void* owner = NULL;
+        if (generic_param->owner.table == METADATA_TYPE_DEF) {
+            CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, generic_param->owner, NULL, NULL, (void*)&owner));
+        } else {
+            CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, generic_param->owner, NULL, NULL, (void*)&owner));
+        }
+
+        System_Type typeParam = GC_NEW(tSystem_Type);
+        GC_UPDATE(typeParam, Name, new_string_from_utf8(generic_param->name, strlen(generic_param->name)));
+        typeParam->GenericParameterPosition = generic_param->number;
+        typeParam->GenericTypeAttributes = generic_param->flags;
+
+        int parami = hmgeti(owner_generic_params, owner);
+        if (parami == -1) {
+            System_Type* arr = NULL;
+            arrpush(arr, typeParam);
+            hmput(owner_generic_params, owner, arr);
+        } else {
+            arrpush(owner_generic_params[parami].value, typeParam);
+        }
+    }
+
+    // now that we account for all the generics we can set them all up
+    for (int i = 0; i < types_count; i++) {
+        System_Type type = assembly->DefinedTypes->Data[i];
+
+        // start by filling the generic arguments of this class
+        int gi = hmgeti(owner_generic_params, type);
+        if (gi != -1) {
+            type->IsGeneric = true;
+            GC_UPDATE(type, GenericArguments, GC_NEW_ARRAY(tSystem_Type, arrlen(owner_generic_params[gi].value)));
+            for (int j = 0; j < type->GenericArguments->Length; j++) {
+                System_Type gtype = owner_generic_params[gi].value[j];
+                CHECK(type->GenericArguments->Data[gtype->GenericParameterPosition] == NULL);
+                type->GenericArguments->Data[gtype->GenericParameterPosition] = gtype;
+            }
+        }
     }
 
     //
@@ -400,6 +611,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     for (int i = 0; i < types_count; i++) {
         metadata_type_def_t* type_def = &type_defs[i];
         System_Type type = assembly->DefinedTypes->Data[i];
+
+        // get the base type
+        System_Type base_type;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, type_def->extends, type->GenericArguments, NULL, &base_type));
+        GC_UPDATE(type, BaseType, base_type);
 
         // setup fields
         int last_idx = (i + 1 == types_count) ?
@@ -423,25 +639,21 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             CHECK_AND_RETHROW(parse_field_sig(field->signature, fieldInfo));
         }
 
-        // setup fields
-        last_idx = (i + 1 == types_count) ?
-                       methods_count :
-                       type_def[1].method_list.index - 1;
-        CHECK(last_idx <= methods_count);
-
-        type->Methods = GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, last_idx - type_def->method_list.index + 1);
         for (int mi = 0; mi < type->Methods->Length; mi++) {
             size_t index = type_def->method_list.index + mi - 1;
             metadata_method_def_t* method_def = metadata_get_method_def(metadata, index);
-            System_Reflection_MethodInfo methodInfo = GC_NEW(tSystem_Reflection_MethodInfo);
-            GC_UPDATE_ARRAY(type->Methods, mi, methodInfo);
-            GC_UPDATE_ARRAY(assembly->DefinedMethods, index, methodInfo);
+            System_Reflection_MethodInfo methodInfo = type->Methods->Data[mi];
 
-            GC_UPDATE(methodInfo, DeclaringType, type);
-            GC_UPDATE(methodInfo, Module, type->Module);
-            GC_UPDATE(methodInfo, Name, new_string_from_utf8(method_def->name, strlen(method_def->name)));
-            methodInfo->Attributes = method_def->flags;
-            methodInfo->ImplAttributes = method_def->impl_flags;
+            // now fill the method generic params
+            int mgi = hmgeti(owner_generic_params, methodInfo);
+            if (mgi != -1) {
+                GC_UPDATE(methodInfo, GenericArguments, GC_NEW_ARRAY(tSystem_Type, arrlen(owner_generic_params[mgi].value)));
+                for (int j = 0; j < methodInfo->GenericArguments->Length; j++) {
+                    System_Type gtype = owner_generic_params[mgi].value[j];
+                    CHECK(methodInfo->GenericArguments->Data[gtype->GenericParameterPosition] == NULL);
+                    methodInfo->GenericArguments->Data[gtype->GenericParameterPosition] = gtype;
+                }
+            }
 
             if (method_def->rva) {
                 // get the rva
@@ -458,7 +670,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
                 }));
             }
 
-            CHECK_AND_RETHROW(parse_stand_alone_method_sig(method_def->signature, methodInfo));
+            CHECK_AND_RETHROW(parse_method_def_sig(method_def->signature, methodInfo, type->GenericArguments, methodInfo->GenericArguments));
         }
     }
 
@@ -472,8 +684,10 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     // count interfaces for each type, use stack size as a temp while we do the counting
     for (int ii = 0; ii < interface_impls_count; ii++) {
         metadata_interface_impl_t* interface_impl = &interface_impls[ii];
-        System_Type class = assembly_get_type_by_token(assembly, interface_impl->class);
-        System_Type interface = assembly_get_type_by_token(assembly, interface_impl->interface);
+        System_Type class;
+        System_Type interface;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->class, NULL, NULL, &class));
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->interface, class->GenericArguments, NULL, &interface));
 
         CHECK(class != NULL);
         CHECK(interface != NULL);
@@ -491,9 +705,9 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     // Allocate all the arrays nicely
     for (int i = 0; i < hmlen(interfaces); i++) {
         System_Type type = interfaces[i].key;
-        GC_UPDATE(type, InterfaceImpls, GC_NEW_ARRAY(tPentagon_Reflection_InterfaceImpl, arrlen(interfaces[i].value)));
+        GC_UPDATE(type, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, arrlen(interfaces[i].value)));
         for (int j = 0; j < arrlen(interfaces[i].value); j++) {
-            Pentagon_Reflection_InterfaceImpl interfaceImpl = GC_NEW(tPentagon_Reflection_InterfaceImpl);
+            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
             GC_UPDATE(interfaceImpl, InterfaceType, interfaces[i].value[j]);
             GC_UPDATE_ARRAY(type->InterfaceImpls, j, interfaceImpl);
         }
@@ -510,10 +724,17 @@ cleanup:
         hmfree(interfaces);
     }
 
+    if (owner_generic_params != NULL) {
+        for (int i = 0; i < hmlen(owner_generic_params); i++) {
+            arrfree(owner_generic_params[i].value);
+        }
+        hmfree(owner_generic_params);
+    }
+
     return err;
 }
 
-err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method, System_Type_Array genericTypeArguments, System_Type_Array genericMethodArguments) {
+err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
 
     // don't initialize twice
@@ -524,13 +745,13 @@ err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method, 
 
     // init return type
     if (method->ReturnType != NULL) {
-        CHECK_AND_RETHROW(loader_fill_type(method->ReturnType, genericTypeArguments, genericMethodArguments));
+        CHECK_AND_RETHROW(loader_fill_type(method->ReturnType));
     }
 
     // init all the other parameters
     for (int i = 1; i < method->Parameters->Length; i++) {
         System_Reflection_ParameterInfo parameterInfo = method->Parameters->Data[i];
-        CHECK_AND_RETHROW(loader_fill_type(parameterInfo->ParameterType, genericTypeArguments, genericMethodArguments));
+        CHECK_AND_RETHROW(loader_fill_type(parameterInfo->ParameterType));
     }
 
 cleanup:
@@ -605,13 +826,24 @@ static bool unprimed_is_value_type(System_Type type) {
     return false;
 }
 
-err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments, System_Type_Array genericMethodArguments) {
+err_t loader_fill_type(System_Type type) {
     err_t err = NO_ERROR;
     static int depth = 0;
     TRACE_FILL_TYPE("%*s%U.%U", depth * 4, "", type->Namespace, type->Name);
     depth++;
 
-    // the type is already filled, ignore it
+    bool locked = 0;
+
+    // the type is already filled, ignore it (fast path)
+    if (type->IsFilled) {
+        goto cleanup;
+    }
+
+    // slow path, fill it
+    monitor_enter(type);
+    locked = true;
+
+    // check again just in case
     if (type->IsFilled) {
         goto cleanup;
     }
@@ -643,7 +875,7 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
         }
 
         // fill the type information of the parent
-        CHECK_AND_RETHROW(loader_fill_type(type->BaseType, genericTypeArguments, genericMethodArguments));
+        CHECK_AND_RETHROW(loader_fill_type(type->BaseType));
 
         // check we have a size
         if (!type->BaseType->IsValueType) {
@@ -794,7 +1026,7 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
 
             // Fill it
             if (unprimed_is_value_type(fieldInfo->FieldType)) {
-                CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType, genericTypeArguments, genericMethodArguments));
+                CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
                 CHECK(fieldInfo->FieldType->StackSize != 0);
             } else {
                 if (type_is_interface(fieldInfo->FieldType)) {
@@ -846,7 +1078,7 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
         if (type->ManagedSize != 0) {
             // only builtin-types should have this, and it means
             // they should be sequential layout
-            CHECK(type_layout(type) == TYPE_SEQUENTIAL_LAYOUT, "%U", type->Name);
+            CHECK(type_layout(type) == TYPE_SEQUENTIAL_LAYOUT);
 
             // This has a C type equivalent, verify the sizes match
             CHECK(type->ManagedSize == managedSize && type->ManagedAlignment == managedAlignment,
@@ -884,7 +1116,7 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
             if (field_is_static(fieldInfo)) continue;
 
             // Fill it
-            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType, genericTypeArguments, genericMethodArguments));
+            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -898,7 +1130,7 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
             if (!field_is_static(fieldInfo)) continue;
 
             // Fill it
-            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType, genericTypeArguments, genericMethodArguments));
+            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -953,7 +1185,8 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
         // Now fill all the method defs
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
-            CHECK_AND_RETHROW(loader_fill_method(type, methodInfo, genericTypeArguments, genericMethodArguments));
+            if (methodInfo->GenericArguments != NULL) continue; // no need to fill generic methods
+            CHECK_AND_RETHROW(loader_fill_method(type, methodInfo));
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -962,7 +1195,7 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
 
         if (!type_is_abstract(type) && !type_is_interface(type) && type->InterfaceImpls != NULL) {
             for (int i = 0; i < type->InterfaceImpls->Length; i++) {
-                Pentagon_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
+                TinyDotNet_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
                 System_Type interface = interfaceImpl->InterfaceType;
 
                 int lastOffset = -1;
@@ -1023,9 +1256,13 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
                 }
             }
         }
-
     } else {
-        CHECK_FAIL("TODO: Handle generic definitions");
+        // fill all the instances instead
+        System_Type instance = type->NextGenericInstance;
+        while (instance != NULL) {
+            CHECK_AND_RETHROW(loader_fill_type(instance));
+            instance = instance->NextGenericInstance;
+        }
     }
 
     // set the namespace if this is a nested type
@@ -1038,6 +1275,11 @@ err_t loader_fill_type(System_Type type, System_Type_Array genericTypeArguments,
     }
 
 cleanup:
+
+    if (locked) {
+        monitor_exit(type);
+    }
+
     depth--;
     TRACE_FILL_TYPE("%*s%U.%U - %d, %d", depth * 4, "", type->Namespace, type->Name, type->ManagedSize, type->StackSize);
     return err;
@@ -1107,8 +1349,10 @@ static err_t connect_nested_types(System_Reflection_Assembly assembly, metadata_
     metadata_nested_class_t* nested_classes = metadata->tables[METADATA_NESTED_CLASS].table;
     for (int i = 0; i < metadata->tables[METADATA_NESTED_CLASS].rows; i++) {
         metadata_nested_class_t* nested_class = &nested_classes[i];
-        System_Type enclosing = assembly_get_type_by_token(assembly, nested_class->enclosing_class);
-        System_Type nested = assembly_get_type_by_token(assembly, nested_class->nested_class);
+        System_Type enclosing;
+        System_Type nested;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, nested_class->enclosing_class, NULL, NULL, &enclosing));
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, nested_class->nested_class, NULL, NULL, &nested));
         CHECK(enclosing != NULL && nested != NULL);
         nested->DeclaringType = enclosing;
     }
@@ -1211,7 +1455,9 @@ static type_init_t m_type_init[] = {
     EXCEPTION_INIT("System", "InvalidCastException", System_InvalidCastException),
     EXCEPTION_INIT("System", "OutOfMemoryException", System_OutOfMemoryException),
     EXCEPTION_INIT("System", "OverflowException", System_OverflowException),
-    TYPE_INIT("Pentagon.Reflection", "InterfaceImpl", Pentagon_Reflection_InterfaceImpl, 3),
+    TYPE_INIT("TinyDotNet.Reflection", "InterfaceImpl", TinyDotNet_Reflection_InterfaceImpl, 3),
+    TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference, 3),
+    TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec, 3),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
@@ -1258,21 +1504,6 @@ cleanup:
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // invoke all the cctors
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-static err_t loader_run_cctors(System_Reflection_Assembly assembly) {
-    err_t err = NO_ERROR;
-
-    for (int i = 0; i < assembly->DefinedTypes->Length; i++) {
-        System_Type type = assembly->DefinedTypes->Data[i];
-        if (type->StaticCtor != NULL) {
-            void (*cctor)() = type->StaticCtor->MirFunc->addr;
-            cctor();
-        }
-    }
-
-cleanup:
-    return err;
-}
 
 static err_t loader_setup_module(System_Reflection_Assembly assembly, metadata_t* metadata) {
     err_t err = NO_ERROR;
@@ -1351,9 +1582,11 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
-    // initialize all the types we have
-    for (int i = 0; i < types_count; i++) {
-        CHECK_AND_RETHROW(loader_fill_type(assembly->DefinedTypes->Data[i], NULL, NULL));
+    // initialize all the runtime required types
+    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
+        type_init_t* bt = &m_type_init[i];
+        System_Type type = *bt->global;
+        CHECK_AND_RETHROW(loader_fill_type(type));
     }
 
     //
@@ -1370,24 +1603,15 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
         assembly->DefinedTypes->Data[i]->vtable = tSystem_Type->VTable;
     }
 
-    // no imports for corelib
-    GC_UPDATE(assembly, ImportedTypes, GC_NEW_ARRAY(tSystem_Type, 0));
-    GC_UPDATE(assembly, ImportedMembers, GC_NEW_ARRAY(tSystem_Reflection_MemberInfo, 0));
-
     // all the last setup
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
 
 //    assembly_dump(assembly);
 
-    // now jit it (or well, prepare the ir of it)
-    CHECK_AND_RETHROW(jit_assembly(assembly));
-
     // save this
     g_corelib = assembly;
     gc_add_root(&g_corelib);
-
-    CHECK_AND_RETHROW(loader_run_cctors(assembly));
 
 cleanup:
     free_metadata(&metadata);
@@ -1406,149 +1630,6 @@ cleanup:
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // this is the normal parsing and initialization
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-static err_t loader_load_refs(System_Reflection_Assembly assembly, metadata_t* metadata) {
-    err_t err = NO_ERROR;
-
-    metadata_assembly_ref_t* assembly_refs = metadata->tables[METADATA_ASSEMBLY_REF].table;
-    size_t assembly_refs_count = metadata->tables[METADATA_ASSEMBLY_REF].rows;
-
-    //
-    // resolve all external types which are assembly ref, this makes it easier
-    // for resolving other stuff later on
-    //
-
-    metadata_type_ref_t* type_refs = metadata->tables[METADATA_TYPE_REF].table;
-    size_t type_refs_count = metadata->tables[METADATA_TYPE_REF].rows;
-
-    GC_UPDATE(assembly, ImportedTypes, GC_NEW_ARRAY(tSystem_Type, type_refs_count));
-
-    for (int i = 0; i < type_refs_count; i++) {
-        metadata_type_ref_t* type_ref = &type_refs[i];
-        if (type_ref->resolution_scope.table != METADATA_ASSEMBLY_REF) continue;
-
-        // get the ref
-        CHECK(0 < type_ref->resolution_scope.index && type_ref->resolution_scope.index <= assembly_refs_count);
-        metadata_assembly_ref_t* assembly_ref = &assembly_refs[type_ref->resolution_scope.index - 1];
-
-        // resolve the assembly
-        System_Reflection_Assembly refed = NULL;
-        if (string_equals_cstr(g_corelib->Name, assembly_ref->name)) {
-            refed = g_corelib;
-        } else {
-            // TODO: properly load anything which is not loaded
-            CHECK_FAIL();
-        }
-        CHECK(refed != NULL);
-
-        // Validate the version we have loaded
-        //  - majors:   must match, indicate a breaking change in the API
-        //  - minor:    must be higher, indicates a compatible change in the API
-        //  - build:    must be higher, indicates a bugfix/improvement
-        //  - revision: ignored, mostly used as a unique id for the build so the
-        //              exact release source can be found
-        CHECK(refed->MajorVersion == assembly_ref->major_version);
-        CHECK(refed->MinorVersion >= assembly_ref->minor_version);
-        CHECK(refed->BuildNumber >= assembly_ref->build_number);
-
-        // get the type
-        System_Type refed_type = assembly_get_type_by_name(refed, type_ref->type_name, type_ref->type_namespace);
-        CHECK(refed_type != NULL, "Missing type `%s.%s` in assembly `%s`", type_ref->type_namespace, type_ref->type_name, assembly_ref->name);
-
-        // store it
-        GC_UPDATE_ARRAY(assembly->ImportedTypes, i, refed_type);
-    }
-
-    // TODO: resolve externals which are nested types
-
-    // validate we got all the types before we continue to members
-    for (int i = 0; i < assembly->ImportedTypes->Length; i++) {
-        CHECK(assembly->ImportedTypes->Data[i] != NULL);
-    }
-
-    //
-    // Resolve members
-    //
-
-    metadata_member_ref_t* member_refs = metadata->tables[METADATA_MEMBER_REF].table;
-    size_t member_refs_count = metadata->tables[METADATA_MEMBER_REF].rows;
-
-    // the array of imported fields and methods
-    GC_UPDATE(assembly, ImportedMembers, GC_NEW_ARRAY(tSystem_Reflection_MemberInfo, member_refs_count));
-
-    // dummy field so we can parse into it
-    System_Reflection_FieldInfo dummyField = GC_NEW(tSystem_Reflection_FieldInfo);
-    GC_UPDATE(dummyField, Module, assembly->Module);
-
-    // dummy method so we can parse into it
-    System_Reflection_MethodInfo dummyMethod = GC_NEW(tSystem_Reflection_MethodInfo);
-    GC_UPDATE(dummyMethod, Module, assembly->Module);
-
-    for (int i = 0; i < member_refs_count; i++) {
-        metadata_member_ref_t* member_ref = &member_refs[i];
-        System_Type declaring_type = assembly_get_type_by_token(assembly, member_ref->class);
-
-        CHECK(member_ref->signature.size > 0);
-        switch (member_ref->signature.data[0] & 0xf) {
-            // method
-            case DEFAULT:
-            case VARARG:
-            case GENERIC: {
-                // parse the signature
-                CHECK_AND_RETHROW(parse_stand_alone_method_sig(member_ref->signature, dummyMethod));
-
-                // find a method with that type
-                int index = 0;
-                System_Reflection_MethodInfo methodInfo = NULL;
-                while ((methodInfo = type_iterate_methods_cstr(declaring_type, member_ref->name, &index)) != NULL) {
-                    // check the return type and parameters count is the same
-                    if (methodInfo->ReturnType != dummyMethod->ReturnType) continue;
-                    if (methodInfo->Parameters->Length != dummyMethod->Parameters->Length) continue;
-
-                    // check that the parameters are the same
-                    bool found = true;
-                    for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
-                        if (methodInfo->Parameters->Data[pi]->ParameterType != dummyMethod->Parameters->Data[pi]->ParameterType) {
-                            found = false;
-                            break;
-                        }
-                    }
-
-                    if (found) {
-                        break;
-                    }
-                }
-
-                // set it
-                CHECK(methodInfo != NULL);
-                GC_UPDATE_ARRAY(assembly->ImportedMembers, i, methodInfo);
-            } break;
-
-            // field
-            case FIELD: {
-                // parse the field
-                CHECK_AND_RETHROW(parse_field_sig(member_ref->signature, dummyField));
-
-                // get it
-                System_Reflection_FieldInfo fieldInfo = type_get_field_cstr(declaring_type, member_ref->name);
-                CHECK(fieldInfo != NULL);
-
-                // make sure the type matches
-                CHECK(fieldInfo->FieldType == dummyField->FieldType);
-
-                // update
-                GC_UPDATE_ARRAY(assembly->ImportedMembers, i, fieldInfo);
-            } break;
-
-            default: {
-                CHECK_FAIL("Invalid member ref signature: %02x", member_ref->signature.data[0]);
-            } break;
-        }
-    }
-
-cleanup:
-    return err;
-}
 
 err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_Assembly* out_assembly) {
     err_t err = NO_ERROR;
@@ -1583,20 +1664,12 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     CHECK_AND_RETHROW(loader_setup_module(assembly, &metadata));
 
-    // load all the external dependencies
-    CHECK_AND_RETHROW(loader_load_refs(assembly, &metadata));
-
     // create all the methods and fields
     GC_UPDATE(assembly, DefinedMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, method_count));
     GC_UPDATE(assembly, DefinedFields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, field_count));
 
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
-
-    // initialize all the types we have
-    for (int i = 0; i < types_count; i++) {
-        CHECK_AND_RETHROW(loader_fill_type(assembly->DefinedTypes->Data[i], NULL, NULL));
-    }
 
     // all the last setup
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
@@ -1606,13 +1679,13 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     assembly_dump(assembly);
 //#endif
 
-    // now jit it (or well, prepare the ir of it)
-    CHECK_AND_RETHROW(jit_assembly(assembly));
-
-    CHECK_AND_RETHROW(loader_run_cctors(assembly));
-
     // get the entry point
-    GC_UPDATE(assembly, EntryPoint, assembly_get_method_by_token(assembly, file.cli_header->entry_point_token));
+    System_Reflection_MethodInfo entryPoint = NULL;
+    CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
+    GC_UPDATE(assembly, EntryPoint, entryPoint);
+
+    // jit the type of the entrypoint
+    CHECK_AND_RETHROW(jit_type(entryPoint->DeclaringType));
 
     // give out the assembly
     *out_assembly = assembly;

@@ -219,6 +219,7 @@ static table_parse_op_t* m_table_ops[] = {
     [METADATA_EXPORTED_TYPE] = (table_parse_op_t[]){ GET_UINT32, GET_UINT32, GET_STRING, GET_STRING, GET_IMPLEMENTATION, DONE },
     [METADATA_NESTED_CLASS] = (table_parse_op_t[]){ GET_TYPE_DEF, GET_TYPE_DEF, DONE },
     [METADATA_GENERIC_PARAM] = (table_parse_op_t[]){ GET_UINT16, GET_UINT16, GET_TYPE_OR_METHOD_DEF, GET_STRING, DONE },
+    [METADATA_METHOD_SPEC] = (table_parse_op_t[]){ GET_METHOD_DEF_OR_REF, GET_BLOB, DONE },
     [METADATA_GENERIC_PARAM_CONSTRAINT] = (table_parse_op_t[]){ GET_GENERIC_PARAM, GET_TYPE_DEF_OR_REF, DONE },
 };
 

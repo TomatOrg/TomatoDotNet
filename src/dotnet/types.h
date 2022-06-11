@@ -146,8 +146,24 @@ DEFINE_ARRAY(System_Reflection_Assembly);
 DEFINE_ARRAY(System_Reflection_FieldInfo);
 DEFINE_ARRAY(System_Reflection_MemberInfo);
 DEFINE_ARRAY(System_Int32);
+DEFINE_ARRAY(System_Byte_Array);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef struct TinyDotNet_Reflection_MemberReference {
+    struct System_Object;
+    System_String Name;
+    token_t Class;
+    System_Byte_Array Signature;
+} *TinyDotNet_Reflection_MemberReference;
+DEFINE_ARRAY(TinyDotNet_Reflection_MemberReference);
+
+typedef struct TinyDotNet_Reflection_MethodSpec {
+    struct System_Object;
+    System_Reflection_MethodInfo Method;
+    System_Byte_Array Instantiation;
+} *TinyDotNet_Reflection_MethodSpec;
+DEFINE_ARRAY(TinyDotNet_Reflection_MethodSpec);
 
 struct System_Reflection_Assembly {
     struct System_Object;
@@ -167,10 +183,12 @@ struct System_Reflection_Assembly {
     System_Type_Array DefinedTypes;
     System_Reflection_MethodInfo_Array DefinedMethods;
     System_Reflection_FieldInfo_Array DefinedFields;
+    System_Byte_Array_Array DefinedTypeSpecs;
+    TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
+    TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;
 
     // types imported from other assemblies, for easy lookup whenever needed
     System_Type_Array ImportedTypes;
-    System_Reflection_MemberInfo_Array ImportedMembers;
 
     // we have two entries, one for GC tracking (the array)
     // and one for internally looking up the string entries
@@ -182,14 +200,37 @@ struct System_Reflection_Assembly {
     }* UserStringsTable;
 };
 
-System_Type assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token);
-System_Reflection_MethodInfo assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token);
-System_Reflection_FieldInfo assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token);
+/**
+ * Get a type by its token
+ *
+ * @remark
+ * Could fail if type requires type/method parameters
+ */
+err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Type* out_type);
 
+/**
+ * Get a method by a token
+ */
+err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method);
+
+/**
+ * Get a field by a token
+ */
+err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_FieldInfo* out_field);
+
+/**
+ * Get a type by its name and namespace
+ */
 System_Type assembly_get_type_by_name(System_Reflection_Assembly assembly, const char* name, const char* namespace);
 
+/**
+ * Get a string by a token
+ */
 System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, token_t token);
 
+/**
+ * Dump the assembly to the kernel output
+ */
 void assembly_dump(System_Reflection_Assembly assembly);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -214,8 +255,13 @@ struct System_Reflection_MemberInfo {
 struct System_Reflection_FieldInfo {
     struct System_Reflection_MemberInfo;
     System_Type FieldType;
-    uintptr_t MemoryOffset; // can be either absolute offset to a literal/rva, or an offset from
-                            // the start, depending on the attributes of the field
+    union {
+        // for instance fields
+        uintptr_t MemoryOffset;
+
+        // for static fields
+        MIR_item_t MirField;
+    };
     uint16_t Attributes;
 };
 
@@ -298,6 +344,8 @@ typedef struct System_Reflection_MethodBase {
     uint16_t Attributes;
     System_Reflection_MethodBody MethodBody;
     System_Reflection_ParameterInfo_Array Parameters;
+    System_Type_Array GenericArguments;
+    System_Reflection_MethodInfo GenericMethodDefinition;
 } *System_Reflection_MethodBase;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -310,6 +358,9 @@ struct System_Reflection_MethodInfo {
     int VTableOffset;
 
     MIR_item_t MirFunc;
+    MIR_item_t MirProto;
+
+    System_Reflection_MethodInfo NextGenericInstance;
 };
 
 typedef enum method_access {
@@ -393,12 +444,12 @@ typedef System_Exception System_OverflowException;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-typedef struct Pentagon_Reflection_InterfaceImpl {
+typedef struct TinyDotNet_Reflection_InterfaceImpl {
     struct System_Object;
     System_Type InterfaceType;
     int VTableOffset;
-} *Pentagon_Reflection_InterfaceImpl;
-DEFINE_ARRAY(Pentagon_Reflection_InterfaceImpl);
+} *TinyDotNet_Reflection_InterfaceImpl;
+DEFINE_ARRAY(TinyDotNet_Reflection_InterfaceImpl);
 
 // TODO: should we maybe have this more customized for our needs
 //       so for example differentiate Object and interface, and have
@@ -414,6 +465,7 @@ typedef enum stack_type {
 } stack_type_t;
 
 struct System_Type {
+    // basic type information
     struct System_Reflection_MemberInfo;
     System_Reflection_Assembly Assembly;
     System_Type BaseType;
@@ -424,17 +476,28 @@ struct System_Type {
     uint32_t Attributes;
     bool IsArray;
     bool IsByRef;
-    System_Type_Array GenericTypeArguments;
-    System_Type_Array GenericTypeParameters;
+
+    // for type parameter (not instantiated)
     System_Type GenericTypeDefinition;
+    int GenericTypeAttributes;
+    int GenericParameterPosition;
+
+    // when instantiated this is the actual type arguments
+    // when not instantiated, its the generic arguments
+    System_Type_Array GenericArguments;
+
+
+    // used for both instantiated
 
     // from the class-layout stuff
     int32_t ClassSize;
     int16_t PackingSize;
 
+    // internal stuff related to offsets, vtables and so on
     int* ManagedPointersOffsets;
     bool IsFilled;
     bool IsValueType;
+    bool IsGeneric;
     System_Reflection_MethodInfo_Array VirtualMethods;
     System_Reflection_MethodInfo Finalize;
     int ManagedSize;
@@ -445,16 +508,20 @@ struct System_Type {
     stack_type_t StackType;
     System_Reflection_MethodInfo StaticCtor;
 
-    Pentagon_Reflection_InterfaceImpl_Array InterfaceImpls;
+    TinyDotNet_Reflection_InterfaceImpl_Array InterfaceImpls;
+    MIR_item_t MirType;
 
+    // getting instances from this type
     System_Type ArrayType;
     System_Type ByRefType;
+    System_Type NextGenericInstance;
 };
 
 static inline stack_type_t type_get_stack_type(System_Type type) { return type == NULL ? STACK_TYPE_O : type->StackType; }
+static inline bool type_is_generic_definition(System_Type type) { return type->IsGeneric && type->GenericTypeDefinition == NULL; }
+static inline bool type_is_generic_type(System_Type type) { return type->IsGeneric; }
 
-static inline bool type_is_generic_definition(System_Type type) { return type->GenericTypeParameters != NULL; }
-static inline bool type_is_generic_type(System_Type type) { return type_is_generic_definition(type) || type->GenericTypeArguments != NULL; }
+bool type_is_generic_parameter(System_Type type);
 
 typedef enum type_visibility {
     TYPE_NOT_PUBLIC,
@@ -508,23 +575,19 @@ void type_print_full_name(System_Type Type, strbuilder_t* builder);
 /**
  * Get a field by its name
  *
- * TODO: take into account member types
- *
  * @param type      [IN] The declaring type
  * @param name      [IN] The name
  */
-System_Reflection_FieldInfo type_get_field_cstr(System_Type type, const char* name);
+System_Reflection_FieldInfo type_get_field(System_Type type, System_String name);
 
 /**
  * Iterate all the methods of the type with the same name
- *
- * TODO: take into account member types
  *
  * @param type      [IN] The declaring type
  * @param name      [IN] The name of the type
  * @param index     [IN] The index from which to continue
  */
-System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const char* name, int* index);
+System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index);
 
 /**
  * Get the implementation of the given interface method
@@ -534,7 +597,7 @@ System_Reflection_MethodInfo type_get_interface_method_impl(System_Type targetTy
 /**
  * Get the interface implementation of the given type
  */
-Pentagon_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType);
+TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -580,7 +643,9 @@ extern System_Type tSystem_InvalidCastException;
 extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
 
-extern System_Type tPentagon_Reflection_InterfaceImpl;
+extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
+extern System_Type tTinyDotNet_Reflection_MemberReference;
+extern System_Type tTinyDotNet_Reflection_MethodSpec;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || !type->IsValueType; }
@@ -599,3 +664,13 @@ bool isinstance(System_Object object, System_Type type);
 bool check_field_accessibility(System_Type from, System_Reflection_FieldInfo to);
 bool check_method_accessibility(System_Type from, System_Reflection_MethodInfo to);
 bool check_type_visibility(System_Type from, System_Type to);
+
+/**
+ * Create a new generic type with the given generic arguments
+ */
+System_Type type_make_generic(System_Type type, System_Type_Array arguments);
+
+/**
+ * Make a new generic method with the given generic arguments
+ */
+System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments);
