@@ -194,6 +194,7 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
                 .size = ref->Signature->Length
             };
             CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments, NULL));
+
             // find a method with that type
             int index = 0;
             System_Reflection_MethodInfo methodInfo = NULL;
@@ -216,6 +217,14 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
 
                 if (found) {
                     break;
+                }
+            }
+
+            if (methodInfo == NULL) {
+                for (int i = 0; i < type->GenericTypeDefinition->Methods->Length; i++) {
+                    if (type->GenericTypeDefinition->Methods->Data[i]->ReturnType == NULL) {
+                        continue;
+                    }
                 }
             }
 
@@ -732,6 +741,69 @@ bool isinstance(System_Object object, System_Type type) {
     return type_is_verifier_assignable_to(object->vtable->type, type);
 }
 
+void type_dump(System_Type type) {
+    printf("[*] \t%s %s ", type_visibility_str(type_visibility(type)), type_is_interface(type) ? "interface" : "class");
+    strbuilder_t name = strbuilder_new();
+    type_print_full_name(type, &name);
+    if (type->BaseType != NULL) {
+        strbuilder_cstr(&name, " : ");
+        type_print_full_name(type->BaseType, &name);
+    }
+    printf("%s\r\n", strbuilder_get(&name));
+    strbuilder_free(&name);
+
+    for (int j = 0; j < type->Fields->Length; j++) {
+        strbuilder_t field = strbuilder_new();
+        strbuilder_cstr(&field, field_access_str(field_access(type->Fields->Data[j])));
+        strbuilder_char(&field, ' ');
+        strbuilder_cstr(&field, field_is_static(type->Fields->Data[j]) ? "static " : "");
+        type_print_full_name(type->Fields->Data[j]->FieldType, &field);
+        strbuilder_char(&field, ' ');
+        strbuilder_utf16(&field, type->Fields->Data[j]->Name->Chars, type->Fields->Data[j]->Name->Length);
+        TRACE("\t\t%s; // offset 0x%02x", strbuilder_get(&field), type->Fields->Data[j]->MemoryOffset);
+        strbuilder_free(&field);
+    }
+
+    for (int j = 0; j < type->Methods->Length; j++) {
+        System_Reflection_MethodInfo mi = type->Methods->Data[j];
+
+        printf("[*] \t\t");
+
+        strbuilder_t method = strbuilder_new();
+
+        strbuilder_cstr(&method, method_access_str(method_get_access(mi)));
+        strbuilder_char(&method, ' ');
+
+        if (method_is_static(mi)) {
+            strbuilder_cstr(&method, "static ");
+        }
+
+        if (method_is_abstract(mi)) {
+            strbuilder_cstr(&method, "abstract ");
+        }
+
+        if (method_is_final(mi)) {
+            strbuilder_cstr(&method, "final ");
+        }
+
+        if (method_is_virtual(mi)) {
+            strbuilder_cstr(&method, "virtual[");
+            strbuilder_uint(&method, mi->VTableOffset);
+            strbuilder_cstr(&method, "] ");
+        }
+
+        if (mi->ReturnType == NULL) {
+            strbuilder_cstr(&method, "void");
+        } else {
+            type_print_full_name(mi->ReturnType, &method);
+        }
+        strbuilder_char(&method, ' ');
+        method_print_full_name(mi, &method);
+        printf("%s\r\n", strbuilder_get(&method));
+        strbuilder_free(&method);
+    }
+}
+
 void assembly_dump(System_Reflection_Assembly assembly) {
     strbuilder_t name = strbuilder_new();
     strbuilder_utf16(&name, assembly->Module->Name->Chars, assembly->Module->Name->Length);
@@ -1041,8 +1113,9 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
 
 static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     if (type == NULL) {
-        // type is null, is this actually a valid case?
         return NULL;
+    } else if (!type_is_generic_parameter(type)) {
+        return type;
     } else if (type->GenericParameterPosition >= 0) {
         // type is a generic argument, resolve it
         return arguments->Data[type->GenericParameterPosition];
@@ -1054,56 +1127,71 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
         // type is a byref, resolve the base type
         System_Type real_byref_base = expand_type(type->BaseType, arguments);
         return get_by_ref_type(real_byref_base);
-    } else if (!type_is_generic_definition(type)) {
-        // type has no generic arguments, nothing to do with it
-        return type;
-    }
-
-    // figure if all the values in here are real types or just generic ones
-    bool real_instance = true;
-    for (int i = 0; i < arguments->Length; i++) {
-        if (type_is_generic_parameter(arguments->Data[i])) {
-            real_instance = false;
-            break;
+    } else if (type->GenericArguments != NULL) {
+        // type has generic arguments, expand them and create the
+        // new generic type
+        ASSERT(type->GenericTypeDefinition != NULL);
+        System_Type definition = type->GenericTypeDefinition;
+        System_Type_Array new_arguments = GC_NEW_ARRAY(tSystem_Type, type->GenericArguments->Length);
+        for (int i = 0; i < new_arguments->Length; i++) {
+            GC_UPDATE_ARRAY(new_arguments, i, expand_type(type->GenericArguments->Data[i], arguments));
         }
+        return type_make_generic(definition, new_arguments);
+    } else {
+        ASSERT(!"Invalid generic type");
     }
+}
+
+System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
+    ASSERT(type_is_generic_definition(type));
 
     monitor_enter(type);
 
-    // check for an existing instance
-    System_Type inst = type->NextGenericInstance;
-    bool found = false;
-    while (inst != NULL) {
-        found = true;
-        for (int i = 0; i < arguments->Length; i++) {
-            if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
-                found = false;
+    // add it
+    bool is_full_instantiation = true;
+    for (int i = 0; i < arguments->Length; i++) {
+        if (type_is_generic_parameter(arguments->Data[i])) {
+            is_full_instantiation = false;
+            break;
+        }
+    }
+
+    if (is_full_instantiation) {
+        // check for an existing instance
+        System_Type inst = type->NextGenericInstance;
+        bool found = false;
+        while (inst != NULL) {
+            found = true;
+            for (int i = 0; i < arguments->Length; i++) {
+                if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
+                    found = false;
+                    break;
+                }
+            }
+
+            if (found) {
                 break;
             }
+
+            inst = inst->NextGenericInstance;
         }
 
         if (found) {
-            break;
+            monitor_exit(type);
+            return inst;
         }
-
-        inst = inst->NextGenericInstance;
-    }
-
-    if (found) {
-        monitor_exit(type);
-        return inst;
     }
 
     // instance not found, create one
     System_Type instance = GC_NEW(tSystem_Type);
     GC_UPDATE(instance, DeclaringType, type->DeclaringType);
-    GC_UPDATE(instance, BaseType, expand_type(type->BaseType, arguments));
     GC_UPDATE(instance, Module, type->Module);
     GC_UPDATE(instance, Assembly, type->Assembly);
     GC_UPDATE(instance, GenericArguments, arguments);
     GC_UPDATE(instance, GenericTypeDefinition, type);
     GC_UPDATE(instance, Namespace, type->Namespace);
     instance->Attributes = type->Attributes;
+    instance->GenericParameterPosition = -1;
 
     // create the unique name
     strbuilder_t builder = strbuilder_new();
@@ -1119,8 +1207,22 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     GC_UPDATE(instance, Name, new_string_from_cstr(strbuilder_get(&builder)));
     strbuilder_free(&builder);
 
+    // if this is not a full generic instantiation (it takes generic arguments)
+    // then we are not going to actually expand it, if it is all real types then
+    // we are going to add it, and only after leaving the lock expand it, so we
+    // allow the other person to expand it properly
+    if (!is_full_instantiation) {
+        monitor_exit(type);
+        return instance;
+    } else {
+        GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
+        GC_UPDATE(type, NextGenericInstance, instance);
+
+        monitor_exit(type);
+    }
+
     // base type
-    GC_UPDATE(instance, BaseType, expand_type(instance->BaseType, arguments));
+    GC_UPDATE(instance, BaseType, expand_type(type->BaseType, arguments));
 
     // fields
     if (type->Fields != NULL) {
@@ -1137,19 +1239,7 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
         }
     }
 
-    // add it only if there are no non-specific generic types
-    if (real_instance) {
-        GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
-        GC_UPDATE(type, NextGenericInstance, instance);
-    }
-
-    monitor_exit(type);
-
     return instance;
-}
-
-System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
-    return expand_type(type, arguments);
 }
 
 System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments) {
@@ -1199,6 +1289,13 @@ bool type_is_generic_parameter(System_Type type) {
         return type_is_generic_parameter(type->ElementType);
     } else if (type->IsByRef) {
         return type_is_generic_parameter(type->BaseType);
+    } else if (type->GenericArguments != NULL) {
+        for (int i = 0; i < type->GenericArguments->Length; i++) {
+            if (type_is_generic_parameter(type->GenericArguments->Data[i])) {
+                return true;
+            }
+        }
+        return false;
     } else {
         return false;
     }

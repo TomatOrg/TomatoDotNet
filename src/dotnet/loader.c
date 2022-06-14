@@ -411,7 +411,42 @@ static err_t loader_load_type_refs(System_Reflection_Assembly assembly, metadata
         GC_UPDATE_ARRAY(assembly->ImportedTypes, i, refed_type);
     }
 
-    // TODO: resolve externals which are nested types
+    //
+    // now continue to other types
+    //
+
+    for (int i = 0; i < type_refs_count; i++) {
+        metadata_type_ref_t* type_ref = &type_refs[i];
+        System_Type resolved_type = NULL;
+
+        switch (type_ref->resolution_scope.table) {
+            // already handled
+            case METADATA_ASSEMBLY_REF: continue;
+
+            case METADATA_TYPE_REF: {
+                // get the parent type (hopefully already got resolved)
+                CHECK(type_ref->resolution_scope.index > 0 && type_ref->resolution_scope.index - 1 < assembly->ImportedTypes->Length);
+                System_Type type = assembly->ImportedTypes->Data[type_ref->resolution_scope.index - 1];
+                CHECK(type != NULL);
+
+                // go over all the nested types and search for the correct one
+                System_Type nested = type->NestedTypes;
+                while (nested != NULL) {
+                    if (string_equals_cstr(nested->Name, type_ref->type_name)) {
+                        resolved_type = nested;
+                        break;
+                    }
+                    nested = nested->NextNestedType;
+                }
+                CHECK(resolved_type != NULL);
+            } break;
+
+            default:
+                CHECK_FAIL("Invalid resolution scope %02x", type_ref->resolution_scope.table);
+        }
+
+        GC_UPDATE_ARRAY(assembly->ImportedTypes, i, resolved_type);
+    }
 
     // validate we got all the types before we continue to members
     for (int i = 0; i < assembly->ImportedTypes->Length; i++) {
@@ -510,6 +545,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     // save up all the type spec blobs for later use
     //
 
+    //
+    // load all the external type references
+    //
+    CHECK_AND_RETHROW(loader_load_type_refs(assembly, metadata));
+
     // type specs
     int type_specs_count = metadata->tables[METADATA_TYPE_SPEC].rows;
     metadata_type_spec_t* type_specs = metadata->tables[METADATA_TYPE_SPEC].table;
@@ -551,11 +591,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE(methodSpec, Method, method);
         GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
     }
-
-    //
-    // load all the external type references
-    //
-    CHECK_AND_RETHROW(loader_load_type_refs(assembly, metadata));
 
     //
     // Create all dummy generic type arguments
@@ -1355,6 +1390,9 @@ static err_t connect_nested_types(System_Reflection_Assembly assembly, metadata_
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, nested_class->nested_class, NULL, NULL, &nested));
         CHECK(enclosing != NULL && nested != NULL);
         nested->DeclaringType = enclosing;
+
+        nested->NextNestedType = enclosing->NestedTypes;
+        enclosing->NestedTypes = nested;
     }
 
 cleanup:
@@ -1606,8 +1644,6 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // all the last setup
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-
-//    assembly_dump(assembly);
 
     // save this
     g_corelib = assembly;

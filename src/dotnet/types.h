@@ -515,6 +515,13 @@ struct System_Type {
     System_Type ArrayType;
     System_Type ByRefType;
     System_Type NextGenericInstance;
+
+    // used to connected nested types
+    System_Type NextNestedType;
+
+    // used as the link to the first nested
+    // type of this type
+    System_Type NestedTypes;
 };
 
 static inline stack_type_t type_get_stack_type(System_Type type) { return type == NULL ? STACK_TYPE_O : type->StackType; }
@@ -522,6 +529,8 @@ static inline bool type_is_generic_definition(System_Type type) { return type->I
 static inline bool type_is_generic_type(System_Type type) { return type->IsGeneric; }
 
 bool type_is_generic_parameter(System_Type type);
+
+void type_dump(System_Type type);
 
 typedef enum type_visibility {
     TYPE_NOT_PUBLIC,

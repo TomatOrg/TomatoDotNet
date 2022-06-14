@@ -47,10 +47,10 @@ void* gc_new(System_Type type, size_t size);
 #define GC_NEW_STRING(count) \
     ({ \
         size_t __count = count; \
-        System_String str = gc_new(tSystem_String, tSystem_String->ManagedSize + 2 * __count); \
-        str->Length = __count; \
-        ASSERT(str != NULL); \
-        str; \
+        System_String __str = gc_new(tSystem_String, tSystem_String->ManagedSize + 2 * __count); \
+        ASSERT(__str != NULL); \
+        __str->Length = __count; \
+        __str; \
     })
 
 /**

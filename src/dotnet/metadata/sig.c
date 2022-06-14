@@ -229,7 +229,7 @@ static err_t parse_ret_type(
                 type = get_by_ref_type(type);
             }
 
-            gc_update_ref(out_type, type);
+            *out_type = type;
         } break;
     }
 
@@ -332,11 +332,13 @@ err_t parse_method_def_sig(blob_entry_t _sig, System_Reflection_MethodInfo metho
     CHECK_AND_RETHROW(parse_compressed_integer(sig, &param_count));
 
     // get the return type
+    System_Type retType;
     CHECK_AND_RETHROW(parse_ret_type(
             method->Module->Assembly, sig,
-            &method->ReturnType,
+            &retType,
             method->DeclaringType->GenericArguments,
             method->GenericArguments));
+    GC_UPDATE(method, ReturnType, retType);
 
     // allocate the parameters and update it
     GC_UPDATE(method, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));
@@ -379,10 +381,12 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
     CHECK_AND_RETHROW(parse_compressed_integer(sig, &param_count));
 
     // get the return type
+    System_Type retType;
     CHECK_AND_RETHROW(parse_ret_type(
             assembly, sig,
-            &mi->ReturnType,
+            &retType,
             typeArgs, methodArgs));
+    GC_UPDATE(mi, ReturnType, retType);
 
     // allocate the parameters and update it
     GC_UPDATE(mi, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));

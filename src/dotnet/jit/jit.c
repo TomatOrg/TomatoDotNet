@@ -93,7 +93,7 @@ static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, Sys
  * memcpy a struct to an heap object, taking care of any memory barrier that should happen
  * while we are copying it
  */
-static void managed_memcpy(System_Object this, System_Type struct_type, int offset, void* from) {
+static void managed_memcpy(System_Object this, System_Type struct_type, size_t offset, void* from) {
     uint8_t* this_base = (uint8_t*)this;
 
     int last_offset = 0;
@@ -165,27 +165,50 @@ static System_Exception System_Array_CopyInternal(System_Array sourceArray, int6
     // TODO: have this check be done in the IL code
     ASSERT(elementType == destinationArray->vtable->type->ElementType);
 
-    if (type_get_stack_type(elementType) == STACK_TYPE_VALUE_TYPE) {
-        // copying an array, copy each item as a managed memcpy
-        // TODO: fast path for copying non-managed struct arrays
-        for (int i = 0; i < length; i++) {
-            void* src = *(void**)((sourceArray + 1) + (sourceIndex + i) * elementSize);
-            size_t destOffset = sizeof(struct System_Array) + (destinationIndex + i) * elementSize;
-            managed_memcpy((System_Object)destinationArray, elementType, destOffset, src);
+    void* src_data = (void*)(sourceArray + 1) + sourceIndex * elementSize;
+    void* dst_data = (void*)(destinationArray + 1) + destinationIndex * elementSize;
+    size_t dst_offset = sizeof(struct System_Array) + (destinationIndex) * elementSize;
+    size_t copy_size = length * elementSize;
+
+    if (type_get_stack_type(elementType) == STACK_TYPE_VALUE_TYPE || type_is_interface(elementType)) {
+        if (arrlen(elementType->ManagedPointersOffsets) == 0) {
+            // fast path for copying non-managed struct arrays
+            memmove(dst_data, src_data, copy_size);
+        } else {
+            // copying an array, copy each item as a managed memcpy
+            if ((src_data < dst_data) && dst_data < src_data + copy_size) {
+                for (dst_offset += copy_size, src_data += copy_size; length--; ) {
+                    src_data -= elementSize;
+                    dst_offset -= elementSize;
+                    managed_memcpy((System_Object)destinationArray, elementType, dst_offset, src_data);
+                }
+            } else {
+                while (length--) {
+                    managed_memcpy((System_Object)destinationArray, elementType, dst_offset, src_data);
+                    src_data += elementSize;
+                    dst_offset += elementSize;
+                }
+            }
         }
     } else if (type_get_stack_type(elementType) == STACK_TYPE_O) {
         // we are copying objects, need to use a membarrier for each
         // TODO: maybe do group copies/barriers instead of one by one
-        for (int i = 0; i < length; i++) {
-            void* src = *(void**)((sourceArray + 1) + (sourceIndex + i) * elementSize);
-            size_t destOffset = sizeof(struct System_Array) + (destinationIndex + i) * elementSize;
-            gc_update(destinationArray, destOffset, src);
+        if ((src_data < dst_data) && dst_data < src_data + copy_size) {
+            for (dst_offset += copy_size, src_data += copy_size; length--; ) {
+                src_data -= elementSize;
+                dst_offset -= elementSize;
+                gc_update((System_Object)destinationArray, dst_offset, src_data);
+            }
+        } else {
+            while (length--) {
+                gc_update((System_Object)destinationArray, dst_offset, src_data);
+                src_data += elementSize;
+                dst_offset += elementSize;
+            }
         }
     } else {
         // normal memcpy, no need to do anything special
-        void* src = (sourceArray + 1) + (sourceIndex) * elementSize;
-        void* dest = (destinationArray + 1) + (destinationIndex) * elementSize;
-        memcpy(dest, src, length * elementSize);
+        memmove(dst_data, src_data, copy_size);
     }
 
     return NULL;
@@ -243,7 +266,7 @@ err_t init_jit() {
     m_gc_update_ref_proto = MIR_new_proto(m_mir_context, "gc_update_ref$proto", 0, NULL, 2, MIR_T_P, "o", MIR_T_P, "new");
     m_gc_update_ref_func = MIR_new_import(m_mir_context, "gc_update_ref");
 
-    m_managed_memcpy_proto = MIR_new_proto(m_mir_context, "managed_memcpy$proto", 0, NULL, 4, MIR_T_P, "this", MIR_T_P, "struct_type", MIR_T_I32, "offset", MIR_T_P, "from");
+    m_managed_memcpy_proto = MIR_new_proto(m_mir_context, "managed_memcpy$proto", 0, NULL, 4, MIR_T_P, "this", MIR_T_P, "struct_type", MIR_T_I64, "offset", MIR_T_P, "from");
     m_managed_memcpy_func = MIR_new_import(m_mir_context, "managed_memcpy");
 
     m_managed_ref_memcpy_proto = MIR_new_proto(m_mir_context, "managed_ref_memcpy$proto", 0, NULL, 3, MIR_T_P, "this", MIR_T_P, "struct_type", MIR_T_P, "from");
@@ -750,7 +773,6 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
     MIR_var_t* vars = NULL;
     strbuilder_t proto_name = { 0 };
     strbuilder_t func_name = { 0 };
-
 
     if (method->MirProto != NULL) {
         goto cleanup;
@@ -4030,7 +4052,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             CHECK(operand_method->VTableOffset < constrainedType->VirtualMethods->Length);
 
                             // figure the real method for this dispatch
-                            operand_method = constrainedType->VirtualMethods->Data[operand_method->VTableOffset];
+                            int vtable_offset = operand_method->VTableOffset;
+                            if (type_is_interface(operand_method->DeclaringType)) {
+                                // comes from interface, need to give a static offset
+                                TRACE("%U -- %U", constrainedType->Name, operand_method->DeclaringType->Name);
+                                vtable_offset += type_get_interface_impl(constrainedType, operand_method->DeclaringType)->VTableOffset;
+                            }
+                            operand_method = constrainedType->VirtualMethods->Data[vtable_offset];
 
                             // clear the type
                             constrainedType = NULL;
