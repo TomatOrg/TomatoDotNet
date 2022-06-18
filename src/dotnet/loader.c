@@ -12,6 +12,7 @@
 #include "encoding.h"
 #include "opcodes.h"
 #include "monitor.h"
+#include "thread/scheduler.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -457,20 +458,22 @@ cleanup:
     return err;
 }
 
-static bool match_type_generic(System_Type original, System_Type target, System_Type_Array arguments) {
-    if (original != NULL && original->GenericParameterPosition >= 0) {
-        original = arguments->Data[original->GenericParameterPosition];
-    }
-    return original == target;
-}
-
 static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Reflection_Assembly assembly) {
     err_t err = NO_ERROR;
+
+    // TODO: these are not going to be tracked by the GC properly, for now disable preemption
+    //       but we will need to find something better so it won't DOS the system lol
+    scheduler_preempt_disable();
 
     struct {
         System_Type key;
         System_Type* value;
     }* interfaces = NULL;
+
+    struct {
+        System_Type key;
+        TinyDotNet_Reflection_MethodImpl* value;
+    }* method_impls_table = NULL;
 
     struct {
         void* key;
@@ -724,9 +727,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->class, NULL, NULL, &class));
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, interface_impl->interface, class->GenericArguments, NULL, &interface));
 
-        CHECK(class != NULL);
-        CHECK(interface != NULL);
-
         int i = hmgeti(interfaces, class);
         if (i == -1) {
             System_Type* arr = NULL;
@@ -748,23 +748,83 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         }
     }
 
+    //
+    // Take care of all the method impls
+    //
+
+    metadata_method_impl_t* method_impls = metadata->tables[METADATA_METHOD_IMPL].table;
+    int method_impls_count = metadata->tables[METADATA_METHOD_IMPL].rows;
+
+    for (int i = 0; i < method_impls_count; i++) {
+        metadata_method_impl_t* method_impl = &method_impls[i];
+        System_Type class;
+        System_Reflection_MethodInfo body;
+        System_Reflection_MethodInfo declaration;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, method_impl->class, NULL, NULL, &class));
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, method_impl->method_body, class->GenericArguments, NULL, &body));
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, method_impl->method_declaration, class->GenericArguments, NULL, &declaration));
+
+        // validate the declaration
+        CHECK(body->DeclaringType == class);
+        CHECK(method_is_virtual(body));
+        CHECK(body->MethodBody != NULL);
+
+        // validate the body
+//        bool found = false;
+//        System_Type base = class;
+//        while (base != NULL) {
+//            if (base == declaration->DeclaringType) {
+//                found = true;
+//                break;
+//            }
+//            base = base->BaseType;
+//        }
+//        CHECK(found);
+        CHECK(!method_is_final(declaration));
+
+        TinyDotNet_Reflection_MethodImpl methodImpl = GC_NEW(tTinyDotNet_Reflection_MethodImpl);
+        GC_UPDATE(methodImpl, Body, body);
+        GC_UPDATE(methodImpl, Declaration, declaration);
+
+        int j = hmgeti(method_impls_table, class);
+        if (j == -1) {
+            TinyDotNet_Reflection_MethodImpl* arr = NULL;
+            arrpush(arr, methodImpl);
+            hmput(method_impls_table, class, arr);
+        } else {
+            arrpush(method_impls_table[j].value, methodImpl);
+        }
+    }
+
+    // Allocate all the arrays nicely
+    for (int i = 0; i < hmlen(method_impls_table); i++) {
+        System_Type type = method_impls_table[i].key;
+        GC_UPDATE(type, MethodImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_MethodImpl, arrlen(method_impls_table[i].value)));
+        for (int j = 0; j < arrlen(method_impls_table[i].value); j++) {
+            GC_UPDATE_ARRAY(type->MethodImpls, j, method_impls_table[i].value[j]);
+        }
+    }
+
     // init class layout
     CHECK_AND_RETHROW(set_class_layout(assembly, metadata));
 
 cleanup:
-    if (interfaces != NULL) {
-        for (int i = 0; i < hmlen(interfaces); i++) {
-            arrfree(interfaces[i].value);
-        }
-        hmfree(interfaces);
+    for (int i = 0; i < hmlen(interfaces); i++) {
+        arrfree(interfaces[i].value);
     }
+    hmfree(interfaces);
 
-    if (owner_generic_params != NULL) {
-        for (int i = 0; i < hmlen(owner_generic_params); i++) {
-            arrfree(owner_generic_params[i].value);
-        }
-        hmfree(owner_generic_params);
+    for (int i = 0; i < hmlen(owner_generic_params); i++) {
+        arrfree(owner_generic_params[i].value);
     }
+    hmfree(owner_generic_params);
+
+    for (int i = 0; i < hmlen(method_impls_table); i++) {
+        arrfree(method_impls_table[i].value);
+    }
+    hmfree(method_impls_table);
+
+    scheduler_preempt_enable();
 
     return err;
 }
@@ -799,9 +859,16 @@ cleanup:
     #define TRACE_FILL_TYPE(...)
 #endif
 
-static System_Reflection_MethodInfo find_method_by_signature(System_Type type, System_Reflection_MethodInfo method) {
+static System_Reflection_MethodInfo find_virtually_overridden_method(System_Type type, System_Reflection_MethodInfo method) {
     while (type != NULL) {
-        // TODO: search MethodImpl table
+        // search the method impl table
+        if (type->MethodImpls != NULL) {
+            for (int i = 0; i < type->MethodImpls->Length; i++) {
+                if (type->MethodImpls->Data[i]->Declaration == method) {
+                    return type->MethodImpls->Data[i]->Body;
+                }
+            }
+        }
 
         // this type does not have a method table, meaning
         // we can stop our search now
@@ -816,27 +883,23 @@ static System_Reflection_MethodInfo find_method_by_signature(System_Type type, S
             // match the name
             if (!string_equals(info->Name, method->Name)) continue;
 
-            // if this method is hidden by signature then check the
-            // full signature match
-            if (method_is_hide_by_sig(info)) {
-                // check the return type
-                if (info->ReturnType != method->ReturnType) continue;
+            // check the return type
+            if (info->ReturnType != method->ReturnType) continue;
 
-                // Check parameter count matches
-                if (info->Parameters->Length != method->Parameters->Length) continue;
+            // Check parameter count matches
+            if (info->Parameters->Length != method->Parameters->Length) continue;
 
-                // check the parameters
-                bool signatureMatch = true;
-                for (int j = 0; j < info->Parameters->Length; j++) {
-                    System_Reflection_ParameterInfo paramA = info->Parameters->Data[j];
-                    System_Reflection_ParameterInfo paramB = method->Parameters->Data[j];
-                    if (paramA->ParameterType != paramB->ParameterType) {
-                        signatureMatch = false;
-                        break;
-                    }
+            // check the parameters
+            bool signatureMatch = true;
+            for (int j = 0; j < info->Parameters->Length; j++) {
+                System_Reflection_ParameterInfo paramA = info->Parameters->Data[j];
+                System_Reflection_ParameterInfo paramB = method->Parameters->Data[j];
+                if (paramA->ParameterType != paramB->ParameterType) {
+                    signatureMatch = false;
+                    break;
                 }
-                if (!signatureMatch) continue;
             }
+            if (!signatureMatch) continue;
 
             // set the offset
             return info;
@@ -959,7 +1022,8 @@ err_t loader_fill_type(System_Type type) {
                     // this is a newslot, always allocate a new slot
                     methodInfo->VTableOffset = virtualOfs++;
                 } else {
-                    System_Reflection_MethodInfo overridden = find_method_by_signature(type->BaseType, methodInfo);
+                    System_Reflection_MethodInfo overridden = find_virtually_overridden_method(type->BaseType,
+                                                                                               methodInfo);
                     if (overridden == NULL) {
                         // The base method was not found, just allocate a new slot per the spec.
                         methodInfo->VTableOffset = virtualOfs++;
@@ -971,11 +1035,12 @@ err_t loader_fill_type(System_Type type) {
                         // should be a virtual method which can be overridden
                         CHECK(method_is_virtual(overridden));
                         CHECK(!method_is_final(overridden));
+                        methodInfo->VTableOffset = overridden->VTableOffset;
                     }
                 }
             } else {
                 // make sure there isn't another method with this signature
-                CHECK(find_method_by_signature(type, methodInfo) == NULL);
+                CHECK(find_virtually_overridden_method(type, methodInfo) == NULL);
             }
 
             // for interfaces all methods need to be abstract
@@ -1002,7 +1067,7 @@ err_t loader_fill_type(System_Type type) {
         if (need_new_vtable) {
             // we have our own vtable, if we have a parent with a vtable then copy
             // its vtable entries to our vtable
-            type->VirtualMethods = GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtualOfs);
+            GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtualOfs));
             if (type->BaseType != NULL && type->BaseType->VirtualMethods != NULL) {
                 for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
                     GC_UPDATE_ARRAY(type->VirtualMethods, i, type->BaseType->VirtualMethods->Data[i]);
@@ -1011,7 +1076,7 @@ err_t loader_fill_type(System_Type type) {
         } else {
             // just inherit the vtable
             if (type->BaseType != NULL) {
-                type->VirtualMethods = type->BaseType->VirtualMethods;
+                GC_UPDATE(type, VirtualMethods, type->BaseType->VirtualMethods);
             }
         }
 
@@ -1232,19 +1297,43 @@ err_t loader_fill_type(System_Type type) {
             for (int i = 0; i < type->InterfaceImpls->Length; i++) {
                 TinyDotNet_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
                 System_Type interface = interfaceImpl->InterfaceType;
+                CHECK_AND_RETHROW(loader_fill_type(interface));
 
                 int lastOffset = -1;
                 for (int vi = 0; vi < interface->VirtualMethods->Length; vi++) {
-                    System_Reflection_MethodInfo implementation = find_method_by_signature(type, interface->VirtualMethods->Data[vi]);
+                    System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, interface->VirtualMethods->Data[vi]);
                     CHECK(implementation != NULL);
-                    CHECK(method_is_virtual(implementation));
 
                     // resolve/verify the offset is sequential
                     if (lastOffset == -1) {
                         lastOffset = implementation->VTableOffset;
                         interfaceImpl->VTableOffset = lastOffset;
                     } else {
-                        CHECK(lastOffset == implementation->VTableOffset - 1);
+                        // try and reorder the vtable to make it fit
+                        if (lastOffset + 1 != implementation->VTableOffset) {
+                            int wanted_offset = lastOffset + 1;
+                            int got_offset = implementation->VTableOffset;
+                            System_Reflection_MethodInfo wanted_method = implementation;
+                            System_Reflection_MethodInfo got_method = type->VirtualMethods->Data[wanted_offset];
+
+                            // make sure we only reorder forward and not backwards, otherwise
+                            // we might break an existing vtable offset
+                            CHECK(wanted_offset < got_offset);
+
+                            // check that both can be replaced
+                            CHECK(method_is_new_slot(wanted_method));
+                            CHECK(method_is_new_slot(got_method));
+
+                            // replace the got method with the implementation for the vtable
+                            wanted_method->VTableOffset = wanted_offset;
+                            got_method->VTableOffset = got_offset;
+
+                            // update the vtable
+                            GC_UPDATE_ARRAY(type->VirtualMethods, got_method->VTableOffset, got_method);
+                            GC_UPDATE_ARRAY(type->VirtualMethods, wanted_method->VTableOffset, wanted_method);
+                        }
+
+                        CHECK(lastOffset + 1 == implementation->VTableOffset);
                     }
                     lastOffset = implementation->VTableOffset;
                 }
@@ -1495,6 +1584,7 @@ static type_init_t m_type_init[] = {
     EXCEPTION_INIT("System", "OverflowException", System_OverflowException),
     TYPE_INIT("TinyDotNet.Reflection", "InterfaceImpl", TinyDotNet_Reflection_InterfaceImpl, 3),
     TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference, 3),
+    TYPE_INIT("TinyDotNet.Reflection", "MethodImpl", TinyDotNet_Reflection_MethodImpl, 3),
     TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec, 3),
 };
 

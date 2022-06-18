@@ -56,6 +56,7 @@ System_Type tSystem_OverflowException = NULL;
 
 System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
 System_Type tTinyDotNet_Reflection_MemberReference = NULL;
+System_Type tTinyDotNet_Reflection_MethodImpl = NULL;
 System_Type tTinyDotNet_Reflection_MethodSpec = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
@@ -145,6 +146,30 @@ cleanup:
     return err;
 }
 
+static bool match_generic_type(System_Type a, System_Type b) {
+    if (a == b) {
+        return true;
+    } else if (a->IsArray && b->IsArray) {
+        return match_generic_type(a->ElementType, b->ElementType);
+    } else if (a->IsByRef && b->IsByRef) {
+        return match_generic_type(a->BaseType, b->BaseType);
+    } else if (a->GenericParameterPosition >= 0 && b->GenericParameterPosition >= 0) {
+        return a->GenericParameterPosition == b->GenericParameterPosition;
+    } else if (a->GenericArguments != NULL && b->GenericArguments != NULL) {
+        if (a->GenericArguments->Length != b->GenericArguments->Length) {
+            return false;
+        }
+        for (int i = 0; i < a->GenericArguments->Length; i++) {
+            if (!match_generic_type(a->GenericArguments->Data[i], b->GenericArguments->Data[i])) {
+                return false;
+            }
+        }
+        return true;
+    } else {
+        return false;
+    }
+}
+
 err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method) {
     err_t err = NO_ERROR;
 
@@ -195,6 +220,12 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
             };
             CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments, NULL));
 
+            // if this is null it means that this is a generic definition that is not complete, so we are
+            // going to look at the declaration instead
+            if (type->Methods == NULL) {
+                type = type->GenericTypeDefinition;
+            }
+
             // find a method with that type
             int index = 0;
             System_Reflection_MethodInfo methodInfo = NULL;
@@ -203,13 +234,13 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
                 if (method_is_static(methodInfo) != method_is_static(wantedInfo)) continue;
 
                 // check the return type and parameters count is the same
-                if (methodInfo->ReturnType != wantedInfo->ReturnType) continue;
+                if (!match_generic_type(methodInfo->ReturnType, wantedInfo->ReturnType)) continue;
                 if (methodInfo->Parameters->Length != wantedInfo->Parameters->Length) continue;
 
                 // check that the parameters are the same
                 bool found = true;
                 for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
-                    if (methodInfo->Parameters->Data[pi]->ParameterType != wantedInfo->Parameters->Data[pi]->ParameterType) {
+                    if (!match_generic_type(methodInfo->Parameters->Data[pi]->ParameterType, wantedInfo->Parameters->Data[pi]->ParameterType)) {
                         found = false;
                         break;
                     }
@@ -217,14 +248,6 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
 
                 if (found) {
                     break;
-                }
-            }
-
-            if (methodInfo == NULL) {
-                for (int i = 0; i < type->GenericTypeDefinition->Methods->Length; i++) {
-                    if (type->GenericTypeDefinition->Methods->Data[i]->ReturnType == NULL) {
-                        continue;
-                    }
                 }
             }
 
@@ -409,6 +432,45 @@ System_Type get_by_ref_type(System_Type type) {
     monitor_exit(type);
 
     return type->ByRefType;
+}
+
+System_Type get_boxed_type(System_Type type) {
+    if (type->BoxedType != NULL) {
+        return type->BoxedType;
+    }
+
+    monitor_enter(type);
+
+    if (type->BoxedType != NULL) {
+        monitor_exit(type);
+        return type->BoxedType;
+    }
+
+    // must not be a byref
+    ASSERT(!type->BoxedType);
+
+    // allocate the new ref type
+    System_Type BoxedType = GC_NEW(tSystem_Type);
+    GC_UPDATE(BoxedType, DeclaringType, type->DeclaringType);
+    GC_UPDATE(BoxedType, Module, type->Module);
+    GC_UPDATE(BoxedType, Name, type->Name);
+    GC_UPDATE(BoxedType, Assembly, type->Assembly);
+    GC_UPDATE(BoxedType, BaseType, type->BaseType);
+    GC_UPDATE(BoxedType, Namespace, type->Namespace);
+    GC_UPDATE(BoxedType, Fields, type->Fields);
+    GC_UPDATE(BoxedType, Methods, type->Methods);
+    BoxedType->ManagedSize = type->ManagedSize;
+    BoxedType->ManagedAlignment = type->ManagedAlignment;
+    BoxedType->StackSize = tSystem_Object->StackSize;
+    BoxedType->StackAlignment = tSystem_Object->StackAlignment;
+    BoxedType->StackType = STACK_TYPE_O;
+    GC_UPDATE(BoxedType, InterfaceImpls, type->InterfaceImpls);
+
+    // Set the array type
+    GC_UPDATE(type, BoxedType, BoxedType);
+    monitor_exit(type);
+
+    return type->BoxedType;
 }
 
 const char* method_access_str(method_access_t access) {
@@ -921,7 +983,28 @@ bool check_field_accessibility(System_Type from, System_Reflection_FieldInfo to)
 
     switch (field_access(to)) {
         case FIELD_COMPILER_CONTROLLED: ASSERT(!"TODO: METHOD_COMPILER_CONTROLLED"); return false;
-        case FIELD_PRIVATE: return from == to->DeclaringType;
+        case FIELD_PRIVATE: {
+            // get the raw to type
+            System_Type to_type = to->DeclaringType;
+            if (to_type->GenericTypeDefinition != NULL) {
+                to_type = to_type->GenericTypeDefinition;
+            }
+
+            // get the raw declaring type
+            System_Type declaring = from;
+            if (declaring->GenericTypeDefinition != NULL) {
+                declaring = declaring->GenericTypeDefinition;
+            }
+
+            // now go ahead a match it
+            while (declaring != NULL) {
+                if (declaring == to_type) {
+                    return true;
+                }
+                declaring = declaring->DeclaringType;
+            }
+            return false;
+        }
         case FIELD_FAMILY: return family;
         case FIELD_ASSEMBLY: return assembly;
         case FIELD_FAMILY_AND_ASSEMBLY: return family && assembly;
@@ -978,7 +1061,28 @@ bool check_type_visibility(System_Type from, System_Type to) {
     bool assembly = from->Assembly == to->DeclaringType->Assembly;
 
     switch (visibility) {
-        case TYPE_NESTED_PRIVATE: return from == to->DeclaringType;
+        case TYPE_NESTED_PRIVATE:{
+            // get the raw to type
+            System_Type to_type = to->DeclaringType;
+            if (to_type->GenericTypeDefinition != NULL) {
+                to_type = to_type->GenericTypeDefinition;
+            }
+
+            // get the raw declaring type
+            System_Type declaring = from;
+            if (declaring->GenericTypeDefinition != NULL) {
+                declaring = declaring->GenericTypeDefinition;
+            }
+
+            // now go ahead a match it
+            while (declaring != NULL) {
+                if (declaring == to_type) {
+                    return true;
+                }
+                declaring = declaring->DeclaringType;
+            }
+            return false;
+        }
         case TYPE_NESTED_FAMILY: return family;
         case TYPE_NESTED_ASSEMBLY: return assembly;
         case TYPE_NESTED_FAMILY_AND_ASSEMBLY: return family && assembly;
@@ -1130,8 +1234,10 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     } else if (type->GenericArguments != NULL) {
         // type has generic arguments, expand them and create the
         // new generic type
-        ASSERT(type->GenericTypeDefinition != NULL);
-        System_Type definition = type->GenericTypeDefinition;
+        System_Type definition = type;
+        if (type->GenericTypeDefinition != NULL) {
+            definition = type->GenericTypeDefinition;
+        }
         System_Type_Array new_arguments = GC_NEW_ARRAY(tSystem_Type, type->GenericArguments->Length);
         for (int i = 0; i < new_arguments->Length; i++) {
             GC_UPDATE_ARRAY(new_arguments, i, expand_type(type->GenericArguments->Data[i], arguments));
@@ -1140,6 +1246,39 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
     } else {
         ASSERT(!"Invalid generic type");
     }
+}
+
+static System_Reflection_MethodInfo find_expanded_method(System_Reflection_MethodInfo method, System_Type_Array arguments) {
+    System_Type type = expand_type(method->DeclaringType, arguments);
+    TRACE("find_expanded_method: %U", type->Name);
+
+    int index = 0;
+    System_Reflection_MethodInfo methodInfo = NULL;
+    while ((methodInfo = type_iterate_methods(type, method->Name, &index)) != NULL) {
+        // make sure both either have or don't have this
+        if (method_is_static(methodInfo) != method_is_static(method)) continue;
+
+        // check the return type and parameters count is the same
+        if (methodInfo->ReturnType != expand_type(method->ReturnType, arguments)) continue;
+        if (methodInfo->Parameters->Length != method->Parameters->Length) continue;
+
+        // check that the parameters are the same
+        bool found = true;
+        for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
+            if (methodInfo->Parameters->Data[pi]->ParameterType != expand_type(method->Parameters->Data[pi]->ParameterType, arguments)) {
+                found = false;
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+    }
+
+    ASSERT(methodInfo != NULL);
+
+    return methodInfo;
 }
 
 System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
@@ -1190,6 +1329,7 @@ System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
     GC_UPDATE(instance, GenericArguments, arguments);
     GC_UPDATE(instance, GenericTypeDefinition, type);
     GC_UPDATE(instance, Namespace, type->Namespace);
+    instance->StackType = type->StackType;
     instance->Attributes = type->Attributes;
     instance->GenericParameterPosition = -1;
 
@@ -1225,17 +1365,34 @@ System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
     GC_UPDATE(instance, BaseType, expand_type(type->BaseType, arguments));
 
     // fields
-    if (type->Fields != NULL) {
-        GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
-        for (int i = 0; i < instance->Fields->Length; i++) {
-            GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
+    GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
+    for (int i = 0; i < instance->Fields->Length; i++) {
+        GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
+    }
+
+    // methods
+    GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
+    for (int i = 0; i < instance->Methods->Length; i++) {
+        GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments));
+    }
+
+    // interfaces
+    if (type->InterfaceImpls != NULL) {
+        GC_UPDATE(instance, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, type->InterfaceImpls->Length));
+        for (int i = 0; i < instance->InterfaceImpls->Length; i++) {
+            TinyDotNet_Reflection_InterfaceImpl impl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+            impl->InterfaceType = expand_type(type->InterfaceImpls->Data[i]->InterfaceType, arguments);
+            GC_UPDATE_ARRAY(instance->InterfaceImpls, i, impl);
         }
     }
 
-    if (type->Methods != NULL) {
-        GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
-        for (int i = 0; i < instance->Methods->Length; i++) {
-            GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments));
+    if (type->MethodImpls != NULL) {
+        GC_UPDATE(instance, MethodImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_MethodImpl, type->MethodImpls->Length));
+        for (int i = 0; i < instance->MethodImpls->Length; i++) {
+            TinyDotNet_Reflection_MethodImpl impl = GC_NEW(tTinyDotNet_Reflection_MethodImpl);
+            GC_UPDATE(impl, Body, find_expanded_method(type->MethodImpls->Data[i]->Body, arguments));
+            GC_UPDATE(impl, Declaration, find_expanded_method(type->MethodImpls->Data[i]->Declaration, arguments));
+            GC_UPDATE_ARRAY(instance->MethodImpls, i, impl);
         }
     }
 

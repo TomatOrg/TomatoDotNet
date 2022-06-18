@@ -761,6 +761,9 @@ static const char* m_allowed_internal_call_assemblies[] = {
     "Pentagon.dll"
 };
 
+// forward declare
+static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
+
 /**
  * Prepare a method signature and MIR item.
  *
@@ -795,6 +798,8 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
 
     // handle the return value
     if (method->ReturnType != NULL) {
+        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->ReturnType));
+
         res_type[1] = get_mir_type(method->ReturnType);
         if (res_type[1] == MIR_T_BLK) {
             // value type return
@@ -825,6 +830,8 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
     }
 
     for (int i = 0; i < method->Parameters->Length; i++) {
+        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->Parameters->Data[i]->ParameterType));
+
         char name[64];
         snprintf(name, sizeof(name), "arg%d", i);
         MIR_var_t var = {
@@ -938,16 +945,6 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
             // if this is a generic method then we don't prepare it in here
             // since it needs to be prepared per-instance
             if (method->GenericArguments != NULL) continue;
-
-            // prepare the return type
-            if (method->ReturnType != NULL) {
-                CHECK_AND_RETHROW(jit_prepare_type(ctx, method->ReturnType));
-            }
-
-            // prepare the types of the parameters
-            for (int pi = 0; pi < method->Parameters->Length; pi++) {
-                CHECK_AND_RETHROW(jit_prepare_type(ctx, method->Parameters->Data[pi]->ParameterType));
-            }
 
             // now prepare the method itself
             CHECK_AND_RETHROW(jit_prepare_method(ctx, type->Methods->Data[i]));
@@ -1337,6 +1334,8 @@ cleanup:
  */
 static err_t jit_null_check(jit_method_context_t* ctx, MIR_reg_t reg, System_Type type) {
     err_t err = NO_ERROR;
+
+    goto cleanup;
 
     if (type == NULL) {
         // this is a null type, just throw it
@@ -1785,37 +1784,45 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         System_Reflection_LocalVariableInfo variable = body->LocalVariables->Data[i];
         CHECK(variable->LocalIndex == i);
 
-        if (body->InitLocals) {
-            // we are going to initialize all of the variables
-            MIR_reg_t reg = new_reg(ctx, variable->LocalType);
-                    arrpush(locals, MIR_new_reg_op(mir_ctx, reg));
-            if (
-                type_is_object_ref(variable->LocalType) ||
-                variable->LocalType == tSystem_Int32 ||
-                variable->LocalType == tSystem_Int64 ||
-                variable->LocalType == tSystem_IntPtr
-            ) {
+        // prepare the variable type
+        CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, variable->LocalType));
+
+        CHECK(body->InitLocals);
+
+        // we are going to initialize all of the variables
+        MIR_reg_t reg = new_reg(ctx, variable->LocalType);
+        arrpush(locals, MIR_new_reg_op(mir_ctx, reg));
+
+        switch (variable->LocalType->StackType) {
+            case STACK_TYPE_O:
+            case STACK_TYPE_INT32:
+            case STACK_TYPE_INT64:
+            case STACK_TYPE_REF:
+            case STACK_TYPE_INTPTR: {
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_MOV,
                                              MIR_new_reg_op(mir_ctx, reg),
                                              MIR_new_int_op(mir_ctx, 0)));
-            } else if (variable->LocalType == tSystem_Single) {
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_FMOV,
-                                             MIR_new_reg_op(mir_ctx, reg),
-                                             MIR_new_float_op(mir_ctx, 0.0f)));
-            } else if (variable->LocalType == tSystem_Double) {
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_DMOV,
-                                             MIR_new_reg_op(mir_ctx, reg),
-                                             MIR_new_double_op(mir_ctx, 0.0)));
-            } else {
+            } break;
+
+            case STACK_TYPE_FLOAT: {
+                if (variable->LocalType == tSystem_Single) {
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_FMOV,
+                                                 MIR_new_reg_op(mir_ctx, reg),
+                                                 MIR_new_float_op(mir_ctx, 0.0f)));
+                } else {
+                    ASSERT(variable->LocalType == tSystem_Double);
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_DMOV,
+                                                 MIR_new_reg_op(mir_ctx, reg),
+                                                 MIR_new_double_op(mir_ctx, 0.0)));
+                }
+            } break;
+
+            case STACK_TYPE_VALUE_TYPE: {
                 jit_emit_zerofill(ctx, reg, variable->LocalType->StackSize);
-            }
-        } else {
-            // we can not verify non-initlocals methods, so we are not
-            // going to support them at all for now
-            CHECK_FAIL();
+            } break;
         }
     }
 
@@ -2498,9 +2505,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // make sure that this is fine
                 CHECK(type_is_verifier_assignable_to(val_type, operand_type));
 
+                System_Type boxed_type = get_boxed_type(val_type);
+
                 // we track this as an object now
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_push(ctx, tSystem_Object, &obj_reg));
+                CHECK_AND_RETHROW(stack_push(ctx, boxed_type, &obj_reg));
 
                 // check if we need to allocate memory for this
                 if (operand_type->IsValueType) {
@@ -3658,7 +3667,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                                 // call the gc_update_ref write-barrier
                                 MIR_append_insn(mir_ctx, mir_func,
-                                                MIR_new_call_insn(mir_ctx, 5,
+                                                MIR_new_call_insn(mir_ctx, 4,
                                                                   MIR_new_ref_op(mir_ctx, m_gc_update_ref_proto),
                                                                   MIR_new_ref_op(mir_ctx, m_gc_update_ref_func),
                                                                   MIR_new_reg_op(mir_ctx, obj_reg),
@@ -4055,7 +4064,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             int vtable_offset = operand_method->VTableOffset;
                             if (type_is_interface(operand_method->DeclaringType)) {
                                 // comes from interface, need to give a static offset
-                                TRACE("%U -- %U", constrainedType->Name, operand_method->DeclaringType->Name);
                                 vtable_offset += type_get_interface_impl(constrainedType, operand_method->DeclaringType)->VTableOffset;
                             }
                             operand_method = constrainedType->VirtualMethods->Data[vtable_offset];
@@ -4202,7 +4210,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_AND_RETHROW(stack_pop(ctx, &dest_type, &dest_reg));
 
                 CHECK(dest_type->IsByRef);
-                CHECK(type_get_stack_type(dest_type->BaseType) == STACK_TYPE_VALUE_TYPE);
                 CHECK(type_is_verifier_assignable_to(operand_type, dest_type->BaseType));
 
                 jit_emit_zerofill(ctx, dest_reg, operand_type->StackSize);

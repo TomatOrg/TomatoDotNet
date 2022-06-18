@@ -353,13 +353,10 @@ typedef struct System_Reflection_MethodBase {
 struct System_Reflection_MethodInfo {
     struct System_Reflection_MethodBase;
     System_Type ReturnType;
-
     bool IsFilled;
     int VTableOffset;
-
     MIR_item_t MirFunc;
     MIR_item_t MirProto;
-
     System_Reflection_MethodInfo NextGenericInstance;
 };
 
@@ -451,6 +448,17 @@ typedef struct TinyDotNet_Reflection_InterfaceImpl {
 } *TinyDotNet_Reflection_InterfaceImpl;
 DEFINE_ARRAY(TinyDotNet_Reflection_InterfaceImpl);
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef struct TinyDotNet_Reflection_MethodImpl {
+    struct System_Object;
+    System_Reflection_MethodInfo Body;
+    System_Reflection_MethodInfo Declaration;
+} *TinyDotNet_Reflection_MethodImpl;
+DEFINE_ARRAY(TinyDotNet_Reflection_MethodImpl);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // TODO: should we maybe have this more customized for our needs
 //       so for example differentiate Object and interface, and have
 //       two float types (32 and 64)
@@ -509,11 +517,13 @@ struct System_Type {
     System_Reflection_MethodInfo StaticCtor;
 
     TinyDotNet_Reflection_InterfaceImpl_Array InterfaceImpls;
+    TinyDotNet_Reflection_MethodImpl_Array MethodImpls;
     MIR_item_t MirType;
 
     // getting instances from this type
     System_Type ArrayType;
     System_Type ByRefType;
+    System_Type BoxedType;
     System_Type NextGenericInstance;
 
     // used to connected nested types
@@ -570,6 +580,8 @@ System_Type get_array_type(System_Type type);
  * @param type  [IN] The type
  */
 System_Type get_by_ref_type(System_Type type);
+
+System_Type get_boxed_type(System_Type type);
 
 /**
  * Print the type name as <namespace>.<class>[+<nested>]
@@ -654,6 +666,7 @@ extern System_Type tSystem_OverflowException;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
 extern System_Type tTinyDotNet_Reflection_MemberReference;
+extern System_Type tTinyDotNet_Reflection_MethodImpl;
 extern System_Type tTinyDotNet_Reflection_MethodSpec;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && type->BaseType == tSystem_Enum; }
