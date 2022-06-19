@@ -218,7 +218,7 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
                 .data = ref->Signature->Data,
                 .size = ref->Signature->Length
             };
-            CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments, NULL));
+            CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments));
 
             // if this is null it means that this is a generic definition that is not complete, so we are
             // going to look at the declaration instead
@@ -230,6 +230,15 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
             int index = 0;
             System_Reflection_MethodInfo methodInfo = NULL;
             while ((methodInfo = type_iterate_methods(type, ref->Name, &index)) != NULL) {
+                // verify the generic args count matches
+                if (wantedInfo->GenericArguments != NULL || methodInfo->GenericArguments != NULL) {
+                    // both must have generic arguments
+                    if (wantedInfo->GenericArguments == NULL || methodInfo->GenericArguments == NULL) continue;
+
+                    // both must have the same number of arguments
+                    if (wantedInfo->GenericArguments->Length != methodInfo->GenericArguments->Length) continue;
+                }
+
                 // make sure both either have or don't have this
                 if (method_is_static(methodInfo) != method_is_static(wantedInfo)) continue;
 

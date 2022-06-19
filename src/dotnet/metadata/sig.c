@@ -374,7 +374,16 @@ cleanup:
     return err;
 }
 
-err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembly, System_Reflection_MethodInfo* out_method, System_Type_Array typeArgs, System_Type_Array methodArgs) {
+static System_String get_empty_string() {
+    static System_String str = NULL;
+    if (str == NULL) {
+        gc_add_root(&str);
+        str = GC_NEW_STRING(0);
+    }
+    return str;
+}
+
+err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembly, System_Reflection_MethodInfo* out_method, System_Type_Array typeArgs) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
@@ -384,18 +393,32 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
 
     // check the calling convention
     uint8_t cc = header & 0xf;
+    CHECK(cc == VARARG || cc == DEFAULT);
     if (header & EXPLICITTHIS) {
         CHECK(header & HASTHIS, "Can't have an explicit `this` parameter without a `this` parameter");
         CHECK_FAIL("The EXPLICITTHIS bit can be set only in signatures for function pointers: signatures whose MethodDefSig is preceded by FNPTR");
     }
 
-    // get the param count
-    uint32_t param_count = 0;
-
     if (!(header & HASTHIS)) {
         mi->Attributes |= 0x10;
     }
 
+    if (header & GENERIC) {
+        // handle generic method signature
+        uint32_t generic_param_count = 0;
+        CHECK_AND_RETHROW(parse_compressed_integer(sig, &generic_param_count));
+        System_Type_Array generic_params = GC_NEW_ARRAY(tSystem_Type, generic_param_count);
+        for (int i = 0; i < generic_param_count; i++) {
+            System_Type typeParam = GC_NEW(tSystem_Type);
+            GC_UPDATE(typeParam, Name, get_empty_string());
+            typeParam->GenericParameterPosition = i;
+            GC_UPDATE_ARRAY(generic_params, i, typeParam);
+        }
+        GC_UPDATE(mi, GenericArguments, generic_params);
+    }
+
+    // get the param count
+    uint32_t param_count = 0;
     CHECK_AND_RETHROW(parse_compressed_integer(sig, &param_count));
 
     // get the return type
@@ -403,7 +426,7 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
     CHECK_AND_RETHROW(parse_ret_type(
             assembly, sig,
             &retType,
-            typeArgs, methodArgs,
+            typeArgs, mi->GenericArguments,
             NULL, NULL));
     GC_UPDATE(mi, ReturnType, retType);
 
@@ -411,7 +434,9 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
     GC_UPDATE(mi, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));
     for (int i = 0; i < param_count; i++) {
         System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
-        CHECK_AND_RETHROW(parse_param(assembly, sig, mi, parameter, typeArgs, methodArgs, NULL, NULL));
+        CHECK_AND_RETHROW(parse_param(assembly, sig, mi, parameter,
+                                      typeArgs, mi->GenericArguments,
+                                      NULL, NULL));
         GC_UPDATE_ARRAY(mi->Parameters, i, parameter);
     }
 
