@@ -296,7 +296,7 @@ err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t t
             };
             GC_UPDATE(wantedInfo, DeclaringType, type);
             GC_UPDATE(wantedInfo, Module, assembly->Module);
-            CHECK_AND_RETHROW(parse_field_sig(blob, wantedInfo));
+            CHECK_AND_RETHROW(parse_field_sig(blob, wantedInfo, NULL, NULL));
 
             // get the actual field to verify compatibility
             System_Reflection_FieldInfo fieldInfo = type_get_field(type, ref->Name);
@@ -1200,16 +1200,14 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
 
 
     // method parameters
-    if (method->Parameters != NULL) {
-        GC_UPDATE(instance, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, method->Parameters->Length));
-        for (int i = 0; i < instance->Parameters->Length; i++) {
-            System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
-            System_Reflection_ParameterInfo fieldParameter = method->Parameters->Data[i];
-            parameter->Attributes = fieldParameter->Attributes;
-            GC_UPDATE(parameter, Name, fieldParameter->Name);
-            GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments));
-            GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
-        }
+    GC_UPDATE(instance, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, method->Parameters->Length));
+    for (int i = 0; i < instance->Parameters->Length; i++) {
+        System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
+        System_Reflection_ParameterInfo fieldParameter = method->Parameters->Data[i];
+        parameter->Attributes = fieldParameter->Attributes;
+        GC_UPDATE(parameter, Name, fieldParameter->Name);
+        GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments));
+        GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
     }
 
     return instance;

@@ -2,6 +2,7 @@
 
 #include "../gc/gc.h"
 #include "sig_spec.h"
+#include "dotnet/loader.h"
 
 
 static err_t parse_custom_mod(blob_entry_t* sig, bool* found) {
@@ -84,7 +85,8 @@ cleanup:
 static err_t parse_type(
     System_Reflection_Assembly assembly,
     blob_entry_t* sig, System_Type* out_type,
-    System_Type_Array typeArgs, System_Type_Array methodArgs
+    System_Type_Array typeArgs, System_Type_Array methodArgs,
+    pe_file_t* file, metadata_t* metadata
 ) {
     err_t err = NO_ERROR;
 
@@ -112,6 +114,11 @@ static err_t parse_type(
             CHECK_AND_RETHROW(parse_type_def_or_ref_or_spec_encoded(sig, &token));
             CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, token, typeArgs, methodArgs, out_type));
             CHECK(*out_type != NULL);
+
+            // make sure to setup the type if needed
+            if (file != NULL && metadata != NULL) {
+                CHECK_AND_RETHROW(loader_setup_type(file, metadata, *out_type));
+            }
         } break;
 
         case ELEMENT_TYPE_GENERICINST: {
@@ -125,6 +132,11 @@ static err_t parse_type(
             CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, token, typeArgs, methodArgs, &type));
             CHECK(type_is_generic_definition(type));
 
+            // make sure to init the type if needed
+            if (file != NULL && metadata != NULL) {
+                CHECK_AND_RETHROW(loader_setup_type(file, metadata, type));
+            }
+
             uint32_t gen_arg_count = 0;
             CHECK_AND_RETHROW(parse_compressed_integer(sig, &gen_arg_count));
             CHECK(gen_arg_count == type->GenericArguments->Length);
@@ -132,7 +144,7 @@ static err_t parse_type(
             System_Type_Array newTypeArgs = GC_NEW_ARRAY(tSystem_Type, gen_arg_count);
             for (int i = 0; i < gen_arg_count; i++) {
                 System_Type type_arg = NULL;
-                CHECK_AND_RETHROW(parse_type(assembly, sig, &type_arg, typeArgs, methodArgs));
+                CHECK_AND_RETHROW(parse_type(assembly, sig, &type_arg, typeArgs, methodArgs, file, metadata));
                 GC_UPDATE_ARRAY(newTypeArgs, i, type_arg);
             }
 
@@ -154,7 +166,7 @@ static err_t parse_type(
                 NEXT_BYTE;
                 elementType = NULL;
             } else {
-                CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs));
+                CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs, file, metadata));
             }
         } break;
 
@@ -165,7 +177,7 @@ static err_t parse_type(
             // TODO: CustomMod*
 
             System_Type elementType = NULL;
-            CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs));
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs, file, metadata));
             *out_type = get_array_type(elementType);
         } break;
 
@@ -187,10 +199,11 @@ cleanup:
 }
 
 static err_t parse_ret_type(
-        System_Reflection_Assembly assembly,
-        blob_entry_t* sig, System_Type* out_type,
-        System_Type_Array typeArgs,
-        System_Type_Array methodArgs
+    System_Reflection_Assembly assembly,
+    blob_entry_t* sig, System_Type* out_type,
+    System_Type_Array typeArgs,
+    System_Type_Array methodArgs,
+    pe_file_t* file, metadata_t* metadata
 )  {
     err_t err = NO_ERROR;
 
@@ -223,7 +236,7 @@ static err_t parse_ret_type(
 
         default: {
             System_Type type;
-            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, typeArgs, methodArgs));
+            CHECK_AND_RETHROW(parse_type(assembly, sig, &type, typeArgs, methodArgs, file, metadata));
 
             if (is_by_ref) {
                 type = get_by_ref_type(type);
@@ -242,7 +255,8 @@ static err_t parse_param(
     blob_entry_t* sig,
     System_Reflection_MethodInfo method,
     System_Reflection_ParameterInfo parameter,
-    System_Type_Array typeArgs, System_Type_Array methodArgs
+    System_Type_Array typeArgs, System_Type_Array methodArgs,
+    pe_file_t* file, metadata_t* metadata
 ) {
     err_t err = NO_ERROR;
 
@@ -270,7 +284,8 @@ static err_t parse_param(
             System_Type type;
             CHECK_AND_RETHROW(parse_type(
                     assembly, sig, &type,
-                    typeArgs, methodArgs));
+                    typeArgs, methodArgs,
+                    file, metadata));
 
             if (is_by_ref) {
                 type = get_by_ref_type(type);
@@ -284,7 +299,7 @@ cleanup:
     return err;
 }
 
-err_t parse_field_sig(blob_entry_t _sig, System_Reflection_FieldInfo field) {
+err_t parse_field_sig(blob_entry_t _sig, System_Reflection_FieldInfo field, pe_file_t* file, metadata_t* metadata) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
@@ -301,13 +316,14 @@ err_t parse_field_sig(blob_entry_t _sig, System_Reflection_FieldInfo field) {
     // parse the actual field
     CHECK_AND_RETHROW(parse_type(
             field->Module->Assembly, sig, &field->FieldType,
-            field->DeclaringType->GenericArguments, NULL));
+            field->DeclaringType->GenericArguments, NULL,
+            file, metadata));
 
 cleanup:
     return err;
 }
 
-err_t parse_method_def_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, System_Type_Array typeArgs, System_Type_Array methodArgs) {
+err_t parse_method_def_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
@@ -337,7 +353,8 @@ err_t parse_method_def_sig(blob_entry_t _sig, System_Reflection_MethodInfo metho
             method->Module->Assembly, sig,
             &retType,
             method->DeclaringType->GenericArguments,
-            method->GenericArguments));
+            method->GenericArguments,
+            file, metadata));
     GC_UPDATE(method, ReturnType, retType);
 
     // allocate the parameters and update it
@@ -348,7 +365,8 @@ err_t parse_method_def_sig(blob_entry_t _sig, System_Reflection_MethodInfo metho
                 method->Module->Assembly, sig,
                 method, parameter,
                 method->DeclaringType->GenericArguments,
-                method->GenericArguments));
+                method->GenericArguments,
+                file, metadata));
         GC_UPDATE_ARRAY(method->Parameters, i, parameter);
     }
 
@@ -385,14 +403,15 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
     CHECK_AND_RETHROW(parse_ret_type(
             assembly, sig,
             &retType,
-            typeArgs, methodArgs));
+            typeArgs, methodArgs,
+            NULL, NULL));
     GC_UPDATE(mi, ReturnType, retType);
 
     // allocate the parameters and update it
     GC_UPDATE(mi, Parameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));
     for (int i = 0; i < param_count; i++) {
         System_Reflection_ParameterInfo parameter = GC_NEW(tSystem_Reflection_ParameterInfo);
-        CHECK_AND_RETHROW(parse_param(assembly, sig, mi, parameter, typeArgs, methodArgs));
+        CHECK_AND_RETHROW(parse_param(assembly, sig, mi, parameter, typeArgs, methodArgs, NULL, NULL));
         GC_UPDATE_ARRAY(mi->Parameters, i, parameter);
     }
 
@@ -421,7 +440,7 @@ err_t parse_method_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, 
     System_Type_Array newTypeArgs = GC_NEW_ARRAY(tSystem_Type, gen_arg_count);
     for (int i = 0; i < gen_arg_count; i++) {
         System_Type type_arg = NULL;
-        CHECK_AND_RETHROW(parse_type(assembly, sig, &type_arg, typeArgs, methodArgs));
+        CHECK_AND_RETHROW(parse_type(assembly, sig, &type_arg, typeArgs, methodArgs, NULL, NULL));
         GC_UPDATE_ARRAY(newTypeArgs, i, type_arg);
     }
 
@@ -436,13 +455,13 @@ err_t parse_type_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, Sy
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
-    CHECK_AND_RETHROW(parse_type(assembly, sig, out_type, typeArgs, methodArgs));
+    CHECK_AND_RETHROW(parse_type(assembly, sig, out_type, typeArgs, methodArgs, NULL, NULL));
 
 cleanup:
     return err;
 }
 
-err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method) {
+err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
@@ -487,7 +506,8 @@ err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_Metho
                 CHECK_AND_RETHROW(parse_type(
                         method->Module->Assembly, sig, &type,
                         method->DeclaringType->GenericArguments,
-                        method->GenericArguments));
+                        method->GenericArguments,
+                        file, metadata));
 
                 if (is_by_ref) {
                     type = get_by_ref_type(type);

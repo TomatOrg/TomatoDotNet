@@ -243,6 +243,25 @@ static internal_call_t m_internal_calls[] = {
  */
 static MIR_context_t m_mir_context;
 
+static void jit_generate_System_String_GetCharInternal() {
+    const char* fname = "[Corelib-v1]System.String::GetCharInternal([Corelib-v1]System.Int32)";
+    MIR_type_t res[] = {
+        MIR_T_P,
+        MIR_T_U16
+    };
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 2, MIR_T_P, "this", MIR_T_I32, "index");
+    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
+    MIR_reg_t index = MIR_reg(m_mir_context, "index", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 2,
+                                     MIR_new_int_op(m_mir_context, 0),
+                                     MIR_new_mem_op(m_mir_context, MIR_T_I16,
+                                                    offsetof(struct System_String, Chars),
+                                                    this, index, 2)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
 err_t init_jit() {
     err_t err = NO_ERROR;
 
@@ -285,6 +304,10 @@ err_t init_jit() {
 
     m_is_instance_proto = MIR_new_proto(m_mir_context, "isinstance$proto", 1, &res_type, 2, MIR_T_P, "object", MIR_T_P, "type");
     m_is_instance_func = MIR_new_import(m_mir_context, "isinstance");
+
+    // generate some builtin methods that we can't properly create in CIL because we don't allow
+    // any unsafe code, and it is not worth having them as native functions
+    jit_generate_System_String_GetCharInternal();
 
     MIR_finish_module(m_mir_context);
 

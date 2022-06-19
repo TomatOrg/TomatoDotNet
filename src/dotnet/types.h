@@ -482,6 +482,7 @@ struct System_Type {
     System_Reflection_MethodInfo_Array Methods;
     System_Type ElementType;
     uint32_t Attributes;
+    token_t MetadataToken;
     bool IsArray;
     bool IsByRef;
 
@@ -494,15 +495,13 @@ struct System_Type {
     // when not instantiated, its the generic arguments
     System_Type_Array GenericArguments;
 
-
-    // used for both instantiated
-
     // from the class-layout stuff
     int32_t ClassSize;
     int16_t PackingSize;
 
     // internal stuff related to offsets, vtables and so on
     int* ManagedPointersOffsets;
+    bool IsSetup;
     bool IsFilled;
     bool IsValueType;
     bool IsGeneric;

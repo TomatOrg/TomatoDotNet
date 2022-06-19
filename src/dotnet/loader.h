@@ -28,3 +28,9 @@ err_t loader_fill_type(System_Type type);
  * Fill the method information of the given method
  */
 err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method);
+
+/**
+ * Setup a type, this is done before we fill the type information and
+ * only takes care of matching everything
+ */
+err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type);
