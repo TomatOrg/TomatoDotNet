@@ -34,6 +34,11 @@ void gc_add_root(void* object);
 void* gc_new(System_Type type, size_t size);
 
 /**
+ * Get the memory info of the GC
+ */
+void gc_get_memory_info(System_GCMemoryInfo* memoryInfo);
+
+/**
  * Helper to allocate a new gc object
  */
 #define GC_NEW(type) \
@@ -127,9 +132,9 @@ bool gc_need_to_run_finalizers();
 /**
  * Trigger the collection in an async manner
  */
-void gc_wake();
+void gc_wake(bool full);
 
 /**
  * Trigger the gc and wait for it to finish
  */
-void gc_wait();
+void gc_wait(bool full);

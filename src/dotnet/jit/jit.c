@@ -214,6 +214,30 @@ static System_Exception System_Array_CopyInternal(System_Array sourceArray, int6
     return NULL;
 }
 
+static System_Exception System_GC_Collect(int generations, int collectionMode, bool blocking) {
+    // turn Default to Forced
+    if (collectionMode == 0) {
+        collectionMode = 1;
+    }
+
+    // TODO: how do we wanna to treat the optimized one?
+
+    // a full one is determined by this
+    bool full = generations == 0 ? false : true;
+
+    if (blocking) {
+        gc_wait(full);
+    } else {
+        gc_wake(full);
+    }
+
+    return NULL;
+}
+
+static System_Exception System_GC_KeepAlive(void* obj) {
+    return NULL;
+}
+
 typedef struct internal_call {
     const char* target;
     void* impl;
@@ -231,6 +255,14 @@ static internal_call_t m_internal_calls[] = {
     {
         "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,[Corelib-v1]System.Int64,[Corelib-v1]System.Array,[Corelib-v1]System.Int64,[Corelib-v1]System.Int64)",
         System_Array_CopyInternal,
+    },
+    {
+        "[Corelib-v1]System.GC::Collect([Corelib-v1]System.Int32,[Corelib-v1]System.GCCollectionMode,[Corelib-v1]System.Boolean)",
+        System_GC_Collect,
+    },
+    {
+        "[Corelib-v1]System.GC::KeepAlive([Corelib-v1]System.Object)",
+        System_GC_KeepAlive,
     }
 };
 
@@ -4795,14 +4827,14 @@ err_t jit_type(System_Type type) {
                 if (!field_is_static(fieldInfo)) continue;
                 if (fieldInfo->MirField->item_type != MIR_bss_item) continue;
 
-                switch (type_get_stack_type(type)) {
+                switch (type_get_stack_type(fieldInfo->FieldType)) {
                     case STACK_TYPE_O: {
                         gc_add_root(fieldInfo->MirField->addr);
                     } break;
 
                     case STACK_TYPE_VALUE_TYPE: {
-                        for (int j = 0; j < arrlen(type->ManagedPointersOffsets); j++) {
-                            gc_add_root(fieldInfo->MirField->addr + type->ManagedPointersOffsets[j]);
+                        for (int j = 0; j < arrlen(fieldInfo->FieldType->ManagedPointersOffsets); j++) {
+                            gc_add_root(fieldInfo->MirField->addr + fieldInfo->FieldType->ManagedPointersOffsets[j]);
                         }
                     } break;
 

@@ -36,6 +36,23 @@ typedef struct System_Guid {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_GCMemoryInfo {
+    uint64_t FinalizationPendingCount;
+    uint64_t FragmentedBytes;
+    int Generation;
+    // TODO: generation info
+    uint64_t HeapSizeBytes;
+    uint64_t HighMemoryLoadThresholdBytes;
+    uint64_t Index;
+    uint64_t MemoryLoadBytes;
+    // TODO: Pause Duration
+    double PauseTimePercentage;
+    uint64_t TotalAvailableMemoryBytes;
+    uint64_t TotalCommittedBytes;
+} System_GCMemoryInfo;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef struct System_ValueType {
     // empty...
 } System_ValueType;

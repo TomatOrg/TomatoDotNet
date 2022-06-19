@@ -463,7 +463,7 @@ static void gc_finalize(System_Object object) {
 }
 
 void gc_run_finalizers() {
-    while (m_objects_to_finalize != 0) {
+    while (atomic_load(&m_objects_to_finalize) != 0) {
         heap_iterate_objects(gc_finalize);
     }
 }
@@ -539,16 +539,27 @@ static void gc_conductor_wait() {
     } while (m_gc_running);
 }
 
-void gc_wake() {
+/**
+ * To signal the collector to do a full cycle
+ */
+static atomic_bool m_full_collection = false;
+
+void gc_wake(bool full) {
+    m_full_collection = full;
     gc_conductor_wake();
 }
 
-void gc_wait() {
+void gc_wait(bool full) {
     mutex_lock(&m_gc_mutex);
+    m_full_collection = full;
     gc_conductor_wake();
     gc_conductor_wait();
     mutex_unlock(&m_gc_mutex);
 }
+
+static atomic_bool m_had_full_collection = false;
+
+static atomic_int m_gc_count = 0;
 
 noreturn static void gc_thread(void* ctx) {
     wait_group_done(&m_gc_start);
@@ -559,11 +570,23 @@ noreturn static void gc_thread(void* ctx) {
         mutex_lock(&m_gc_mutex);
         gc_conductor_next();
         mutex_unlock(&m_gc_mutex);
-        TRACE("gc: Starting collection");
 
+        m_gc_count++;
+        TRACE("gc: Starting collection #%d", m_gc_count);
+
+        // setup for the collection
+        bool was_full = m_full_collection;
+        if (was_full) m_had_full_collection = true;
+
+        // do a full cycle
         uint64_t start = microtime();
-        gc_collection_cycle(true);
+        gc_collection_cycle(was_full);
         TRACE("gc: Collection finished after %dms", (microtime() - start) / 1000);
+
+        // clean up
+        if (was_full) {
+            m_full_collection = false;
+        }
     }
 }
 
@@ -579,4 +602,20 @@ err_t init_gc() {
     wait_group_wait(&m_gc_start);
 cleanup:
     return err;
+}
+
+void gc_get_memory_info(System_GCMemoryInfo* memoryInfo) {
+    scheduler_preempt_disable();
+    memoryInfo->FinalizationPendingCount = atomic_load(&m_objects_to_finalize);
+    memoryInfo->FragmentedBytes = 0;                            // TODO: The amount of wasted space
+    memoryInfo->Generation = m_had_full_collection ? 1 : 0;
+    memoryInfo->HeapSizeBytes = 0;                              // TODO: The size of the heap in bytes, includes both allocated and free objects
+    memoryInfo->HighMemoryLoadThresholdBytes = 0;               // TODO: I am not sure what this is supposed to be
+    memoryInfo->Index = m_gc_count;
+    memoryInfo->MemoryLoadBytes = 0;                            // TODO: The amount of allocated bytes in the whole system (?)
+    memoryInfo->PauseTimePercentage = 0.0;
+    memoryInfo->TotalAvailableMemoryBytes = 0;                  // TODO: The amount of available memory in the whole system
+    memoryInfo->TotalCommittedBytes = 0;                        // TODO: The committed bytes of the heap (for now same as HeapSizeBytes)
+    m_had_full_collection = false;
+    scheduler_preempt_enable();
 }
