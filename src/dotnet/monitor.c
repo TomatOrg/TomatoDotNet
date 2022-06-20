@@ -1,4 +1,5 @@
 #include "monitor.h"
+#include "util/fastrand.h"
 
 #include <thread/scheduler.h>
 #include <sync/mutex.h>
@@ -45,20 +46,6 @@ static monitor_table_t m_monitor_table[MONITOR_TABLE_SIZE];
 
 static monitor_root_t* get_monitor_root(void* addr) {
     return &m_monitor_table[((uintptr_t)addr >> 3) % MONITOR_TABLE_SIZE].root;
-}
-
-static uint64_t m_fast_rand;
-
-static __uint128_t mul64(uint64_t a, uint64_t b) {
-    return (__uint128_t)a * b;
-}
-
-static uint32_t fastrandom() {
-    m_fast_rand += 0xa0761d6478bd642f;
-    __uint128_t i = mul64(m_fast_rand, m_fast_rand ^ 0xe7037ed1a0b428db);
-    uint64_t hi = (uint64_t)(i >> 64);
-    uint64_t lo = (uint64_t)i;
-    return (uint32_t)(hi ^ lo);
 }
 
 static void rotate_left(monitor_root_t* root, monitor_t* x) {
@@ -143,7 +130,7 @@ static monitor_t* get_monitor(monitor_root_t* root, void* addr) {
         spinlock_unlock(&root->lock);
         return NULL;
     }
-    monitor->ticket = fastrandom() | 1;
+    monitor->ticket = fastrand() | 1;
     monitor->object = addr;
     monitor->parent = last;
     *pm = monitor;
