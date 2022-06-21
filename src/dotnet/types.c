@@ -1257,7 +1257,6 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments) {
 
 static System_Reflection_MethodInfo find_expanded_method(System_Reflection_MethodInfo method, System_Type_Array arguments) {
     System_Type type = expand_type(method->DeclaringType, arguments);
-    TRACE("find_expanded_method: %U", type->Name);
 
     int index = 0;
     System_Reflection_MethodInfo methodInfo = NULL;

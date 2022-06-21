@@ -6,7 +6,7 @@
 
 #include <util/stb_ds.h>
 
-#include "time/timer.h"
+#include "time/tsc.h"
 #include "exception.h"
 #include "loader.h"
 #include "encoding.h"

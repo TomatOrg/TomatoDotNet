@@ -12,7 +12,7 @@
 
 #include <util/except.h>
 #include <util/stb_ds.h>
-#include <time/timer.h>
+#include <time/tsc.h>
 
 #include <mir/mir-gen.h>
 #include <mir/mir.h>
@@ -4750,7 +4750,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
 cleanup:
     // free all the memory used for jitting the method
-    FREE(switch_ops);
+    SAFE_FREE(switch_ops);
     strbuilder_free(&method_name);
     arrfree(locals);
     for (int i = 0; i < hmlen(ctx->pc_to_stack_snapshot); i++) {

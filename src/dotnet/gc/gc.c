@@ -13,7 +13,7 @@
 #include <thread/thread.h>
 
 #include <util/stb_ds.h>
-#include <time/timer.h>
+#include <time/tsc.h>
 
 
 #include <stdnoreturn.h>
