@@ -56,6 +56,9 @@ static MIR_item_t m_memcpy_func = NULL;
 static MIR_item_t m_memset_proto = NULL;
 static MIR_item_t m_memset_func = NULL;
 
+static MIR_item_t m_delegate_ctor_proto = NULL;
+static MIR_item_t m_delegate_ctor_func = NULL;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // runtime functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -245,26 +248,27 @@ typedef struct internal_call {
 
 static internal_call_t m_internal_calls[] = {
     {
-        "[Corelib-v1]System.Object::GetType()",
+        "object::GetType()",
         System_Object_GetType,
     },
     {
-        "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,[Corelib-v1]System.Int32,[Corelib-v1]System.Int32)",
+        "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)",
         System_Array_ClearInternal,
     },
     {
-        "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,[Corelib-v1]System.Int64,[Corelib-v1]System.Array,[Corelib-v1]System.Int64,[Corelib-v1]System.Int64)",
+        "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)",
         System_Array_CopyInternal,
     },
     {
-        "[Corelib-v1]System.GC::Collect([Corelib-v1]System.Int32,[Corelib-v1]System.GCCollectionMode,[Corelib-v1]System.Boolean)",
+        "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)",
         System_GC_Collect,
     },
     {
-        "[Corelib-v1]System.GC::KeepAlive([Corelib-v1]System.Object)",
+        "[Corelib-v1]System.GC::KeepAlive(object)",
         System_GC_KeepAlive,
     }
 };
+
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // init the jit
@@ -276,7 +280,7 @@ static internal_call_t m_internal_calls[] = {
 static MIR_context_t m_mir_context;
 
 static void jit_generate_System_String_GetCharInternal() {
-    const char* fname = "[Corelib-v1]System.String::GetCharInternal([Corelib-v1]System.Int32)";
+    const char* fname = "string::GetCharInternal(int32)";
     MIR_type_t res[] = {
         MIR_T_P,
         MIR_T_U16
@@ -292,6 +296,45 @@ static void jit_generate_System_String_GetCharInternal() {
                                                     this, index, 2)));
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
+}
+
+/**
+ * All delegates have the exact same ctor, so we are going to just use
+ * generate the ctor once and use it every time that we need to init
+ * a ctor of a delegate
+ *
+ * this works for both multicast and non-multicast delegates
+ */
+static void jit_generate_delegate_ctor() {
+    const char* fname = "delegate_ctor";
+    MIR_type_t res = MIR_T_P;
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 3, MIR_T_P, "this", MIR_T_P, "target", MIR_T_P, "method");
+    MIR_reg_t this_reg = MIR_reg(m_mir_context, "this", func->u.func);
+    MIR_reg_t target_reg = MIR_reg(m_mir_context, "target", func->u.func);
+    MIR_reg_t method_reg = MIR_reg(m_mir_context, "method", func->u.func);
+
+    MIR_op_t target_op = MIR_new_mem_op(m_mir_context, MIR_T_P, offsetof(struct System_Delegate, Target), this_reg, 0, 1);
+    MIR_op_t fnptr_op = MIR_new_mem_op(m_mir_context, MIR_T_P, offsetof(struct System_Delegate, Fnptr), this_reg, 0, 1);
+
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_insn(m_mir_context, MIR_MOV,
+                                 target_op,
+                                 MIR_new_reg_op(m_mir_context, target_reg)));
+
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_insn(m_mir_context, MIR_MOV,
+                                 fnptr_op,
+                                 MIR_new_reg_op(m_mir_context, method_reg)));
+
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 1,
+                                     MIR_new_int_op(m_mir_context, 0)));
+
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+    m_delegate_ctor_func = func;
+
+    MIR_output_item(m_mir_context, stdout, m_delegate_ctor_func);
 }
 
 err_t init_jit() {
@@ -337,9 +380,12 @@ err_t init_jit() {
     m_is_instance_proto = MIR_new_proto(m_mir_context, "isinstance$proto", 1, &res_type, 2, MIR_T_P, "object", MIR_T_P, "type");
     m_is_instance_func = MIR_new_import(m_mir_context, "isinstance");
 
+    m_delegate_ctor_proto = MIR_new_proto(m_mir_context, "delegate_ctor$proto", 0, NULL, 3, MIR_T_P, "this", MIR_T_P, "object", MIR_T_P, "method");
+
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
     jit_generate_System_String_GetCharInternal();
+    jit_generate_delegate_ctor();
 
     MIR_finish_module(m_mir_context);
 
@@ -805,6 +851,215 @@ void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit the delegate wrappers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Generated code is essentially
+ *
+ *   var return_value;
+ *   do {
+ *        if (this->Target != NULL) {
+ *            return_value = this->Fnptr(this->Target, ...);
+ *        } else {
+ *            return_value = this->Fnptr(...);
+ *        }
+ *        this = this->Next;
+ *   } (this != NULL);
+ *   return return_value;
+ *
+ */
+static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func, MIR_item_t proto_static) {
+    err_t err = NO_ERROR;
+
+    // to access the delegate's parameters
+    MIR_reg_t this_reg = MIR_reg(ctx->ctx, "this", func->u.func);
+    MIR_op_t fnptr_op = MIR_new_mem_op(ctx->ctx, MIR_T_P, offsetof(struct System_MulticastDelegate, Fnptr), this_reg, 0, 1);
+    MIR_op_t target_op = MIR_new_mem_op(ctx->ctx, MIR_T_P, offsetof(struct System_MulticastDelegate, Target), this_reg, 0, 1);
+    MIR_op_t next_op = MIR_new_mem_op(ctx->ctx, MIR_T_P, offsetof(struct System_MulticastDelegate, Next), this_reg, 0, 1);
+
+    System_Type ret_type = method->ReturnType;
+
+    // count the amount of arguments, +1 if we have a this
+    int arg_count = method->Parameters->Length;
+
+    // prepare array of all the operands
+    // 1st is the prototype
+    // 2nd is the reference
+    // 3rd is exception_reg return
+    // 4rd is return type (optionally)
+    // 5th is this type (optionally)
+    // Rest are the arguments
+    size_t other_args = 3;
+    if (ret_type != NULL) other_args++;
+    other_args++;
+    MIR_op_t arg_ops[other_args + arg_count];
+
+    // setup all the parameters
+    int i;
+    for (i = arg_count + other_args - 1; i >= other_args; i--) {
+        System_Type signature_type = method->Parameters->Data[i - other_args]->ParameterType;
+
+        // get the argument value
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "arg%d", i - other_args);
+        MIR_reg_t arg_reg = MIR_reg(ctx->ctx, buffer, func->u.func);
+
+        // check if we need to pass by value (a bit in-efficient but whatever)
+        bool mem_op = false;
+        if (type_is_interface(signature_type) || type_get_stack_type(signature_type) == STACK_TYPE_VALUE_TYPE) {
+            mem_op = true;
+        }
+
+        // set the op, for anything passed by value we need to use MIR_T_BLK with the disp
+        // being the size instead of the displacement
+        if (mem_op) {
+            arg_ops[i] = MIR_new_mem_op(ctx->ctx, MIR_T_BLK, signature_type->StackSize, arg_reg, 0, 1);
+        } else {
+            arg_ops[i] = MIR_new_reg_op(ctx->ctx, arg_reg);
+        }
+    }
+
+    // the this comes from the target field of this object
+    arg_ops[i] = target_op;
+
+    // get the MIR signature
+    arg_ops[0] = MIR_new_ref_op(ctx->ctx, method->MirProto);
+
+    // indirect call
+    arg_ops[1] = fnptr_op;
+
+    // get it to the exception_reg register
+    MIR_reg_t exception_reg = MIR_new_func_reg(ctx->ctx, func->u.func, MIR_T_I64, "exception_reg");
+    arg_ops[2] = MIR_new_reg_op(ctx->ctx, exception_reg);
+
+    // handle the return type
+    size_t nres = 1;
+    MIR_reg_t return_reg = 0;
+
+    // emit the IR
+    if (ret_type != NULL) {
+        if (type_is_interface(ret_type) || type_get_stack_type(ret_type) == STACK_TYPE_VALUE_TYPE) {
+            // returned as an implicit pointer
+            return_reg = MIR_reg(ctx->ctx, "return_block", func->u.func);
+        } else {
+            // returned as a value
+            nres++;
+            if (ret_type == tSystem_Single) {
+                return_reg = MIR_new_func_reg(ctx->ctx, func->u.func, MIR_T_F, "return");
+            } else if (ret_type == tSystem_Double) {
+                return_reg = MIR_new_func_reg(ctx->ctx, func->u.func, MIR_T_D, "return");
+            } else {
+                return_reg = MIR_new_func_reg(ctx->ctx, func->u.func, MIR_T_I64, "return");
+            }
+        }
+
+        // this should just work, because if the value is a struct it is going to be allocated properly
+        // in the stack push, and it is going to be passed by a pointer that we give, and everything will
+        // just work out because of how we have the order of everything :)
+        arg_ops[3] = MIR_new_reg_op(ctx->ctx, return_reg);
+    }
+
+    //
+    // Start the call loop
+    //
+
+    MIR_insn_t label_do_next_call = MIR_new_label(ctx->ctx);
+    MIR_append_insn(ctx->ctx, func, label_do_next_call);
+
+    MIR_insn_t label_static_call = MIR_new_label(ctx->ctx);
+    MIR_insn_t label_check_exception = MIR_new_label(ctx->ctx);
+
+    // check if we have a this parameter
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(ctx->ctx, MIR_BF,
+                                 MIR_new_label_op(ctx->ctx, label_static_call),
+                                 target_op));
+
+    /************************************/
+    /*** Call with a `this` parameter ***/
+    /************************************/
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn_arr(ctx->ctx, MIR_CALL,
+                                     other_args + arg_count,
+                                     arg_ops));
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(ctx->ctx, MIR_JMP,
+                                 MIR_new_label_op(ctx->ctx, label_check_exception)));
+
+    /***************************************/
+    /*** Call without a `this` parameter ***/
+    /***************************************/
+
+    MIR_append_insn(ctx->ctx, func, label_static_call);
+
+    // need to move the arguments one over so we won't pass the this register
+    other_args--;
+    memmove(&arg_ops[i], &arg_ops[i + 1], arg_count * sizeof(MIR_op_t));
+
+    // setup the static prototype signature
+    arg_ops[0] = MIR_new_ref_op(ctx->ctx, proto_static);
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn_arr(ctx->ctx, MIR_CALL,
+                                     other_args + arg_count,
+                                     arg_ops));
+
+    //
+    // Check for exception from the delegate's call
+    //
+
+    MIR_append_insn(ctx->ctx, func, label_check_exception);
+
+    MIR_insn_t label_no_exception = MIR_new_label(ctx->ctx);
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(ctx->ctx, MIR_BF,
+                                 MIR_new_label_op(ctx->ctx, label_no_exception),
+                                 MIR_new_reg_op(ctx->ctx, exception_reg)));
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_ret_insn(ctx->ctx, nres,
+                                     MIR_new_reg_op(ctx->ctx, exception_reg),
+                                     MIR_new_int_op(ctx->ctx, 0)));
+
+    MIR_append_insn(ctx->ctx, func, label_no_exception);
+
+    //
+    // call the next delegate, do that by overriding the this register with the next
+    // multicast delegate and then calling it
+    //
+
+    MIR_insn_t label_no_next = MIR_new_label(ctx->ctx);
+
+    // read the next to the this register
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(ctx->ctx, MIR_MOV,
+                                 MIR_new_reg_op(ctx->ctx, this_reg),
+                                 next_op));
+
+    // and loop if not null
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(ctx->ctx, MIR_BT,
+                                 MIR_new_label_op(ctx->ctx, label_do_next_call),
+                                 MIR_new_reg_op(ctx->ctx, this_reg)));
+
+    //
+    // return the last value
+    //
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_ret_insn(ctx->ctx, nres,
+                                     MIR_new_int_op(ctx->ctx, 0),
+                                     MIR_new_reg_op(ctx->ctx, return_reg)));
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Preparing code gen of a function
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -829,6 +1084,7 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
 static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
     MIR_var_t* vars = NULL;
+    strbuilder_t proto_static_name = { 0 };
     strbuilder_t proto_name = { 0 };
     strbuilder_t func_name = { 0 };
 
@@ -870,6 +1126,7 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
         }
     }
 
+    int this_index = -1;
     if (!method_is_static(method)) {
         System_Type declaringType = method->DeclaringType;
         if (declaringType->IsValueType) declaringType = get_by_ref_type(declaringType);
@@ -881,6 +1138,7 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
         if (var.type == MIR_T_BLK) {
             var.type = MIR_T_P;
         }
+        this_index = arrlen(vars);
         arrpush(vars, var);
     }
 
@@ -912,7 +1170,43 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
 
     // check how to generate the method itself
     if (method_get_code_type(method) == METHOD_RUNTIME) {
-        CHECK_FAIL("TODO: runtime methods");
+        // right now only delegate types are supported
+        CHECK(method->DeclaringType->BaseType == tSystem_MulticastDelegate);
+
+        // for the ctor
+        if (string_equals_cstr(method->Name, ".ctor")) {
+            CHECK(method->ReturnType == NULL);
+            CHECK(method->Parameters->Length == 2);
+            CHECK(method->Parameters->Data[0]->ParameterType == tSystem_Object);
+            CHECK(method->Parameters->Data[1]->ParameterType == tSystem_IntPtr);
+            CHECK(method_is_special_name(method));
+            CHECK(method_is_rt_special_name(method));
+            CHECK(!method_is_static(method));
+            method->MirFunc = m_delegate_ctor_func;
+
+        } else if (string_equals_cstr(method->Name, "Invoke")) {
+            CHECK(!method_is_static(method));
+            CHECK(method->DeclaringType->DelegateSignature == NULL);
+            method->DeclaringType->DelegateSignature = method;
+
+            // create the function
+            method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+
+            // remove the this so we can have a static prototype
+            arrdel(vars, this_index);
+
+            // prepare the signature for the non-
+            proto_static_name = strbuilder_new();
+            method_print_full_name(method, &proto_static_name);
+            strbuilder_cstr(&proto_static_name, "$proto_static");
+            MIR_item_t static_invoke_proto = MIR_new_proto_arr(ctx->ctx, strbuilder_get(&proto_static_name), nres, res_type, arrlen(vars), vars);
+
+            // generate the dispatcher
+            CHECK_AND_RETHROW(jit_multicast_delegate_invoke(ctx, method, method->MirFunc, static_invoke_proto));
+            MIR_finish_func(ctx->ctx);
+        } else {
+            CHECK_FAIL();
+        }
     } else if (method_get_code_type(method) == METHOD_IL) {
         if (method_is_internal_call(method)) {
             // internal methods have no body
@@ -1914,6 +2208,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     // The main loop for decoding and jitting opcodes
     //
     opcode_control_flow_t last_cf = OPCODE_CONTROL_FLOW_INVALID;
+    opcode_t last_opcode = CEE_INVALID;
+    System_Reflection_MethodInfo ftnMethod = NULL;
     System_Type constrainedType = NULL;
     int il_ptr = 0;
     while (il_ptr < body->Il->Length) {
@@ -2174,6 +2470,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // before callvirt opcode only
         if (constrainedType != NULL) {
             CHECK(opcode == CEE_CALLVIRT);
+        }
+
+        // after ldftn/ldvirtftn there must be a newobj
+        if (ftnMethod != NULL) {
+            CHECK(opcode == CEE_NEWOBJ);
         }
 
         switch (opcode) {
@@ -4031,6 +4332,28 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     // in the loader
                     CHECK(method_is_rt_special_name(operand_method));
                     CHECK(string_equals_cstr(operand_method->Name, ".ctor"));
+
+                    if (ftnMethod != NULL) {
+                        // we had an ldftn/ldvirtftb, meaning that we are going to
+                        // create a delegate now, make sure of that
+                        CHECK(operand_method->DeclaringType->BaseType == tSystem_MulticastDelegate);
+                        CHECK(operand_method->Parameters->Length == 2);
+                        CHECK(operand_method->Parameters->Data[0]->ParameterType == tSystem_Object);
+                        CHECK(operand_method->Parameters->Data[1]->ParameterType == tSystem_IntPtr);
+
+                        // verify that the method signature matches the delegate we
+                        // want to create
+                        System_Reflection_MethodInfo signature = operand_method->DeclaringType->DelegateSignature;
+                        CHECK(signature != NULL);
+                        CHECK(signature->ReturnType == ftnMethod->ReturnType);
+                        CHECK(signature->Parameters->Length == ftnMethod->Parameters->Length);
+                        for (int i = 0; i < signature->Parameters->Length; i++) {
+                            CHECK(signature->Parameters->Data[i]->ParameterType == ftnMethod->Parameters->Data[i]->ParameterType);
+                        }
+                    } else {
+                        // make sure that this is *NOT* a delegate
+                        CHECK(operand_method->DeclaringType->BaseType != tSystem_MulticastDelegate);
+                    }
                 } else if (opcode == CEE_CALLVIRT) {
                     // callvirt must call an instance methods
                     CHECK(!method_is_static(operand_method));
@@ -4065,7 +4388,23 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     bool mem_op = false;
                     switch (type_get_stack_type(arg_type)) {
                         case STACK_TYPE_O: {
-                            // TODO: handle object<->interface cast
+                            if (type_is_interface(signature_type)) {
+                                if (!type_is_interface(arg_type)) {
+                                    // object --> interface
+                                    CHECK_FAIL("TODO: cast to interface");
+                                }
+
+                                // pass by value
+                                mem_op = true;
+                            } else {
+                                if (type_is_interface(arg_type)) {
+                                    // interface --> object
+                                    MIR_append_insn(mir_ctx, mir_func,
+                                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                                     MIR_new_reg_op(mir_ctx, arg_reg),
+                                                                     MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), arg_reg, 0, 1)));
+                                }
+                            }
                         } break;
 
                         case STACK_TYPE_INT32: {
@@ -4141,6 +4480,27 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                         default:
                             CHECK_FAIL();
+                    }
+
+                    // we are creating a new delegate and this is the target parameter
+                    if (i - other_args == 0 && ftnMethod != NULL) {
+                        if (!method_is_static(ftnMethod)) {
+                            // this is an instance method, emit a null check on the target
+                            // to make sure that it is not null
+                            CHECK_AND_RETHROW(jit_null_check(ctx, arg_reg, arg_type));
+                        } else {
+                            // this is a static method, we need a null target, if already null
+                            // ignore it, otherwise just zero the reg
+                            if (arg_type != NULL) {
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                                             MIR_new_reg_op(mir_ctx, arg_reg),
+                                                             MIR_new_int_op(mir_ctx, 0)));
+                            }
+                        }
+
+                        // make sure to reset it now
+                        ftnMethod = NULL;
                     }
 
                     // set the op, for anything passed by value we need to use MIR_T_BLK with the disp
@@ -4246,6 +4606,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // byref uses static dispatch since we know the exact type always
                 if (
                     opcode == CEE_CALLVIRT &&
+                    !type_is_sealed(this_type) &&
                     method_is_virtual(operand_method) &&
                     !this_type->IsByRef
                 ) {
@@ -4827,6 +5188,37 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Delegate
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFTN: {
+                // push the reference to the function
+                MIR_reg_t ftn_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, tSystem_UIntPtr, &ftn_reg));
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, ftn_reg),
+                                             MIR_new_ref_op(mir_ctx, operand_method->MirFunc)));
+
+                // save the method that we are pushing
+                ftnMethod = operand_method;
+            } break;
+
+            case CEE_LDVIRTFTN: {
+                // according to the ECMA spec it should always be
+                //
+                //  DUP
+                //  LDVIRTFTN method
+                //  NEWOBJ delegate_ctor
+                //
+                // so we check for the first part here
+                //
+                CHECK(last_opcode == CEE_DUP);
+
+                CHECK_FAIL("TODO: this");
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Unknown opcode
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -4834,6 +5226,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_FAIL("TODO: opcode %s", opcode_info->name);
             } break;
         }
+
+        // store the last opcode
+        last_opcode = opcode;
     }
 
     // make sure that the last instruction is either

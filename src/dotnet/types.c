@@ -35,6 +35,8 @@ System_Type tSystem_Single = NULL;
 System_Type tSystem_Double = NULL;
 System_Type tSystem_IntPtr = NULL;
 System_Type tSystem_UIntPtr = NULL;
+System_Type tSystem_Delegate = NULL;
+System_Type tSystem_MulticastDelegate = NULL;
 System_Type tSystem_Reflection_Module = NULL;
 System_Type tSystem_Reflection_Assembly = NULL;
 System_Type tSystem_Reflection_FieldInfo = NULL;
@@ -723,7 +725,33 @@ bool type_is_verifier_assignable_to(System_Type Q, System_Type R) {
     return false;
 }
 
+static const char* handle_builtin(System_Type type) {
+    if (type == tSystem_SByte) return "int8";
+    else if (type == tSystem_Byte) return "uint8";
+    else if (type == tSystem_Int16) return "int16";
+    else if (type == tSystem_UInt16) return "uint16";
+    else if (type == tSystem_Int32) return "int32";
+    else if (type == tSystem_UInt32) return "uint32";
+    else if (type == tSystem_Int64) return "int64";
+    else if (type == tSystem_UInt64) return "uint64";
+    else if (type == tSystem_Object) return "object";
+    else if (type == tSystem_Char) return "char";
+    else if (type == tSystem_Boolean) return "bool";
+    else if (type == tSystem_IntPtr) return "native int";
+    else if (type == tSystem_UIntPtr) return "native uint";
+    else if (type == tSystem_String) return "string";
+    else if (type == tSystem_Single) return "float32";
+    else if (type == tSystem_Double) return "float64";
+    else return NULL;
+}
+
 void type_print_name(System_Type type, strbuilder_t* builder) {
+    const char* builtin = handle_builtin(type);
+    if (builtin != NULL) {
+        strbuilder_cstr(builder, builtin);
+        return;
+    }
+
     if (type->DeclaringType != NULL) {
         type_print_name(type->DeclaringType, builder);
         strbuilder_char(builder, '+');
@@ -738,6 +766,12 @@ void type_print_name(System_Type type, strbuilder_t* builder) {
 
 
 void type_print_full_name(System_Type type, strbuilder_t* builder) {
+    const char* builtin = handle_builtin(type);
+    if (builtin != NULL) {
+        strbuilder_cstr(builder, builtin);
+        return;
+    }
+
     if (type->GenericParameterPosition >= 0) {
         strbuilder_utf16(builder, type->Name->Chars, type->Name->Length);
     } else {

@@ -165,6 +165,7 @@ DEFINE_ARRAY(System_Reflection_MemberInfo);
 DEFINE_ARRAY(System_Int32);
 DEFINE_ARRAY(System_Byte_Array);
 
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct TinyDotNet_Reflection_MemberReference {
@@ -476,6 +477,21 @@ DEFINE_ARRAY(TinyDotNet_Reflection_MethodImpl);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_Delegate {
+    struct System_Object;
+    void* Fnptr;
+    System_Object Target;
+} *System_Delegate;
+
+typedef struct System_MulticastDelegate *System_MulticastDelegate;
+
+struct System_MulticastDelegate {
+    struct System_Delegate;
+    System_MulticastDelegate Next;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 // TODO: should we maybe have this more customized for our needs
 //       so for example differentiate Object and interface, and have
 //       two float types (32 and 64)
@@ -511,6 +527,9 @@ struct System_Type {
     // when instantiated this is the actual type arguments
     // when not instantiated, its the generic arguments
     System_Type_Array GenericArguments;
+
+    // for delegate types
+    System_Reflection_MethodInfo DelegateSignature;
 
     // from the class-layout stuff
     int32_t ClassSize;

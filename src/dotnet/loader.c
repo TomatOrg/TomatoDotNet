@@ -1623,6 +1623,8 @@ static type_init_t m_type_init[] = {
     VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT),
     VALUE_TYPE_INIT("System", "IntPtr", System_IntPtr, STACK_TYPE_INTPTR),
     VALUE_TYPE_INIT("System", "UIntPtr", System_UIntPtr, STACK_TYPE_INTPTR),
+    TYPE_INIT("System", "Delegate", System_Delegate, 3),
+    TYPE_INIT("System", "MulticastDelegate", System_MulticastDelegate, 3),
     TYPE_INIT("System.Reflection", "Module", System_Reflection_Module, 3),
     TYPE_INIT("System.Reflection", "Assembly", System_Reflection_Assembly, 3),
     TYPE_INIT("System.Reflection", "FieldInfo", System_Reflection_FieldInfo, 3),
