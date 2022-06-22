@@ -1390,8 +1390,6 @@ cleanup:
 static err_t jit_null_check(jit_method_context_t* ctx, MIR_reg_t reg, System_Type type) {
     err_t err = NO_ERROR;
 
-    goto cleanup;
-
     if (type == NULL) {
         // this is a null type, just throw it
         CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_NullReferenceException));
@@ -3341,7 +3339,75 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 }
             } break;
 
-            // TODO: LDARGA
+            case CEE_LDARGA:
+            case CEE_LDARGA_S: {
+                char arg_name_buf[64];
+                const char* arg_name = NULL;
+
+                // resolve the type
+                System_Type arg_type = NULL;
+                if (!method_is_static(method)) {
+                    if (operand_i32 == 0) {
+                        arg_name = "this";
+                        arg_type = method->DeclaringType;
+                        if (arg_type->IsValueType) {
+                            // value types turn into a by-ref when using this
+                            arg_type = get_by_ref_type(arg_type);
+                        }
+                    }
+                    operand_i32--;
+                }
+
+                // if this is not `this` then get the name
+                if (arg_name == NULL) {
+                    snprintf(arg_name_buf, sizeof(arg_name_buf), "arg%d", operand_i32);
+                    arg_name = arg_name_buf;
+                }
+
+                if (arg_type == NULL) {
+                    CHECK(operand_i32 < method->Parameters->Length);
+                    arg_type = method->Parameters->Data[operand_i32]->ParameterType;
+                }
+
+                // the register containing the value
+                MIR_reg_t arg_reg = MIR_reg(mir_ctx, arg_name, mir_func->u.func);
+
+                // Get the value type
+                System_Type value_type = get_by_ref_type(type_get_verification_type(arg_type));
+
+                // push it
+                MIR_reg_t value_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, value_type, &value_reg));
+
+                switch (type_get_stack_type(arg_type)) {
+                    case STACK_TYPE_O: {
+                        if (type_is_interface(arg_type)) {
+                            // interface type, copy it
+                            goto ldarga_value_type;
+                        } else {
+                            // primitive type, move it
+                            goto ldarga_primitive_type;
+                        }
+                    } break;
+
+                    ldarga_primitive_type:
+                    case STACK_TYPE_INT32:
+                    case STACK_TYPE_INT64:
+                    case STACK_TYPE_INTPTR:
+                    case STACK_TYPE_FLOAT:
+                    case STACK_TYPE_REF: {
+                        CHECK_FAIL("TODO: spill arguments from registers");
+                    } break;
+
+                    ldarga_value_type:
+                    case STACK_TYPE_VALUE_TYPE: {
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                     MIR_new_reg_op(mir_ctx, value_reg),
+                                                     MIR_new_reg_op(mir_ctx, arg_reg)));
+                    } break;
+                }
+            } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Basic stack manipulation
@@ -3996,62 +4062,94 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     CHECK_AND_RETHROW(stack_pop(ctx, &arg_type, &arg_reg));
 
                     // do implicit conversion as needed
-                    if (arg_type == tSystem_Int32) {
-                        if (
-                            signature_type == tSystem_SByte ||
-                            signature_type == tSystem_Byte ||
-                            signature_type == tSystem_Boolean ||
-                            signature_type == tSystem_Int16 ||
-                            signature_type == tSystem_UInt16
-                        ) {
-                            // truncate, going to be done implicitly by mir
-                            arg_type = signature_type;
-                        } else if (signature_type == tSystem_IntPtr) {
-                            // sign extend
-                            MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_insn(mir_ctx, MIR_EXT32,
-                                                         MIR_new_reg_op(mir_ctx, arg_reg),
-                                                         MIR_new_reg_op(mir_ctx, arg_reg)));
-                            arg_type = signature_type;
-                        } else if (signature_type == tSystem_UIntPtr) {
-                            // zero extend
-                            MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_insn(mir_ctx, MIR_UEXT32,
-                                                         MIR_new_reg_op(mir_ctx, arg_reg),
-                                                         MIR_new_reg_op(mir_ctx, arg_reg)));
-                            arg_type = signature_type;
-                        }
-                    } else if (arg_type == tSystem_IntPtr) {
-                        if (type_is_integer(signature_type)) {
-                            // truncate or nop, we don't really care
-                            arg_type = signature_type;
-                        }
-                    } else if (arg_type == tSystem_Single) {
-                        if (signature_type == tSystem_Double) {
-                            // float->double conversion
-                            MIR_reg_t real_arg_reg = new_reg(ctx, tSystem_Double);
-                            MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_insn(mir_ctx, MIR_F2D,
-                                                         MIR_new_reg_op(mir_ctx, real_arg_reg),
-                                                         MIR_new_reg_op(mir_ctx, arg_reg)));
-                            arg_reg = real_arg_reg;
-                            arg_type = signature_type;
-                        }
-                    } else if (arg_type == tSystem_Double) {
-                        if (signature_type == tSystem_Single) {
-                            // double->float conversion
-                            MIR_reg_t real_arg_reg = new_reg(ctx, tSystem_Single);
-                            MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_insn(mir_ctx, MIR_D2F,
-                                                         MIR_new_reg_op(mir_ctx, real_arg_reg),
-                                                         MIR_new_reg_op(mir_ctx, arg_reg)));
-                            arg_reg = real_arg_reg;
-                            arg_type = signature_type;
-                        }
+                    bool mem_op = false;
+                    switch (type_get_stack_type(arg_type)) {
+                        case STACK_TYPE_O: {
+                            // TODO: handle object<->interface cast
+                        } break;
+
+                        case STACK_TYPE_INT32: {
+                            if (
+                                signature_type == tSystem_SByte ||
+                                signature_type == tSystem_Byte ||
+                                signature_type == tSystem_Boolean ||
+                                signature_type == tSystem_Int16 ||
+                                signature_type == tSystem_UInt16 ||
+                                signature_type == tSystem_Char
+                            ) {
+                                // truncate, going to be done implicitly by mir
+                                arg_type = signature_type;
+                            } else if (signature_type == tSystem_IntPtr) {
+                                // sign extend
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_EXT32,
+                                                             MIR_new_reg_op(mir_ctx, arg_reg),
+                                                             MIR_new_reg_op(mir_ctx, arg_reg)));
+                                arg_type = signature_type;
+                            } else if (signature_type == tSystem_UIntPtr) {
+                                // zero extend
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_UEXT32,
+                                                             MIR_new_reg_op(mir_ctx, arg_reg),
+                                                             MIR_new_reg_op(mir_ctx, arg_reg)));
+                                arg_type = signature_type;
+                            }
+                        } break;
+
+                        case STACK_TYPE_INTPTR: {
+                            if (type_is_integer(signature_type)) {
+                                // truncate or nop, we don't really care
+                                arg_type = signature_type;
+                            }
+                        } break;
+
+                        case STACK_TYPE_FLOAT: {
+                            // handle implicit float casting
+                            if (arg_type == tSystem_Single) {
+                                if (signature_type == tSystem_Double) {
+                                    // float->double conversion
+                                    MIR_reg_t real_arg_reg = new_reg(ctx, tSystem_Double);
+                                    MIR_append_insn(mir_ctx, mir_func,
+                                                    MIR_new_insn(mir_ctx, MIR_F2D,
+                                                                 MIR_new_reg_op(mir_ctx, real_arg_reg),
+                                                                 MIR_new_reg_op(mir_ctx, arg_reg)));
+                                    arg_reg = real_arg_reg;
+                                    arg_type = signature_type;
+                                }
+                            } else if (arg_type == tSystem_Double) {
+                                if (signature_type == tSystem_Single) {
+                                    // double->float conversion
+                                    MIR_reg_t real_arg_reg = new_reg(ctx, tSystem_Single);
+                                    MIR_append_insn(mir_ctx, mir_func,
+                                                    MIR_new_insn(mir_ctx, MIR_D2F,
+                                                                 MIR_new_reg_op(mir_ctx, real_arg_reg),
+                                                                 MIR_new_reg_op(mir_ctx, arg_reg)));
+                                    arg_reg = real_arg_reg;
+                                    arg_type = signature_type;
+                                }
+                            }
+                        } break;
+
+                        // nothing to do
+                        case STACK_TYPE_REF: break;
+                        case STACK_TYPE_INT64: break;
+
+                        // in mir when calling
+                        case STACK_TYPE_VALUE_TYPE: {
+                            mem_op = true;
+                        } break;
+
+                        default:
+                            CHECK_FAIL();
                     }
 
-                    // set the op reg
-                    arg_ops[i] = MIR_new_reg_op(mir_ctx, arg_reg);
+                    // set the op, for anything passed by value we need to use MIR_T_BLK with the disp
+                    // being the size instead of the displacement
+                    if (mem_op) {
+                        arg_ops[i] = MIR_new_mem_op(mir_ctx, MIR_T_BLK, arg_type->StackSize, arg_reg, 0, 1);
+                    } else {
+                        arg_ops[i] = MIR_new_reg_op(mir_ctx, arg_reg);
+                    }
 
                     // verify a normal argument
                     CHECK(type_is_verifier_assignable_to(type_get_verification_type(arg_type), signature_type));
@@ -4129,7 +4227,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                         // verify a normal argument
                         CHECK(type_is_verifier_assignable_to(
-                                type_get_verification_type(this_type), thisType));
+                                type_get_verification_type(this_type), thisType),
+                              "%U verifier assignable to %U",
+                              type_get_verification_type(this_type)->Name, thisType->Name);
 
                         // make sure that the object is not null, only if not a byref
                         if (!this_type->IsByRef) {
@@ -4744,11 +4844,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         last_cf == OPCODE_CONTROL_FLOW_RETURN
     );
 
-#if 0
-    MIR_output_item(mir_ctx, stdout, mir_func);
-#endif
-
 cleanup:
+    if (IS_ERROR(err)) {
+        MIR_output_item(mir_ctx, stdout, mir_func);
+    }
+
     // free all the memory used for jitting the method
     SAFE_FREE(switch_ops);
     strbuilder_free(&method_name);

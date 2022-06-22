@@ -615,14 +615,19 @@ static bool type_is_interface_directly_implemented_by(System_Type I, System_Type
         return false;
     }
 
-    if (T->InterfaceImpls == NULL) {
-        return false;
-    }
-
-    for (int i = 0; i < T->InterfaceImpls->Length; i++) {
-        if (T->InterfaceImpls->Data[i]->InterfaceType == I) {
-            return true;
+    while (T != NULL) {
+        if (T->InterfaceImpls == NULL) {
+            T = T->BaseType;
+            continue;
         }
+
+        for (int i = 0; i < T->InterfaceImpls->Length; i++) {
+            if (T->InterfaceImpls->Data[i]->InterfaceType == I) {
+                return true;
+            }
+        }
+
+        T = T->BaseType;
     }
 
     return false;
@@ -793,15 +798,21 @@ System_Reflection_MethodInfo type_get_interface_method_impl(System_Type targetTy
 }
 
 TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetType, System_Type interfaceType) {
-    if (targetType->InterfaceImpls == NULL) {
-        return NULL;
+    while (targetType != NULL) {
+        if (targetType->InterfaceImpls == NULL) {
+            targetType = targetType->BaseType;
+            continue;
+        }
+
+        for (int i = 0; i < targetType->InterfaceImpls->Length; i++) {
+            if (targetType->InterfaceImpls->Data[i]->InterfaceType == interfaceType) {
+                return targetType->InterfaceImpls->Data[i];
+            }
+        }
+
+        targetType = targetType->BaseType;
     }
 
-    for (int i = 0; i < targetType->InterfaceImpls->Length; i++) {
-        if (targetType->InterfaceImpls->Data[i]->InterfaceType == interfaceType) {
-            return targetType->InterfaceImpls->Data[i];
-        }
-    }
     return NULL;
 }
 
