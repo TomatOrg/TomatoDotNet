@@ -5118,6 +5118,138 @@ cleanup:
     return err;
 }
 
+//
+// TODO: this can be much cheaper if we just have a
+//
+//  add rdi, sizeof(struct System_Object)
+//  jmp <original method>
+//
+// but idk if we have a good way to do it in MIR
+//
+static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodInfo method) {
+    err_t err = NO_ERROR;
+    MIR_var_t* vars = NULL;
+    MIR_op_t* ops = NULL;
+
+    // generate the function name
+    strbuilder_t func_name = strbuilder_new();
+    method_print_full_name(method, &func_name);
+    strbuilder_cstr(&func_name, "$unboxer");
+
+    size_t nres = 1;
+    MIR_type_t res_type[2] = {
+        MIR_T_P, // exception
+        MIR_T_UNDEF, // return value if any
+    };
+
+    // handle the return value
+    if (method->ReturnType != NULL) {
+        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->ReturnType));
+
+        res_type[1] = get_mir_type(method->ReturnType);
+        if (res_type[1] == MIR_T_BLK) {
+            // value type return
+            MIR_var_t var = {
+                .name = "return_block",
+                .type = MIR_T_P, // TODO: do we want to use rblk along size a normal return value
+                .size = method->ReturnType->StackSize
+            };
+            arrpush(vars, var);
+        } else {
+            // we can use normal return
+            nres = 2;
+        }
+    }
+
+    // the this is always going to be boxed
+    MIR_var_t var = {
+        .name = "this",
+        .type = MIR_T_P,
+    };
+    arrpush(vars, var);
+
+    for (int i = 0; i < method->Parameters->Length; i++) {
+        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->Parameters->Data[i]->ParameterType));
+
+        char name[64];
+        snprintf(name, sizeof(name), "arg%d", i);
+        MIR_var_t var = {
+            .name = _MIR_uniq_string(ctx->ctx, name),
+            .type = get_mir_type(method->Parameters->Data[i]->ParameterType),
+        };
+        if (var.type == MIR_T_BLK) {
+            var.size = method->Parameters->Data[i]->ParameterType->StackSize;
+        }
+        arrpush(vars, var);
+    }
+
+    method->MirUnboxerFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+
+    // push the prototype and the address
+    arrpush(ops, MIR_new_ref_op(ctx->ctx, method->MirProto));
+    arrpush(ops, MIR_new_ref_op(ctx->ctx, method->MirFunc));
+
+    // the exception return register
+    MIR_reg_t exception_reg = MIR_new_func_reg(ctx->ctx, method->MirUnboxerFunc->u.func, MIR_T_I64, "exception");
+    arrpush(ops, MIR_new_reg_op(ctx->ctx, exception_reg));
+
+    // the return value
+    MIR_reg_t return_reg = 0;
+    if (nres > 1) {
+        if (res_type[1] == MIR_T_BLK) {
+            // uses an implicit pointer, get it
+            MIR_reg_t return_block = MIR_reg(ctx->ctx, "return_block", method->MirUnboxerFunc->u.func);
+            arrpush(ops, MIR_new_reg_op(ctx->ctx, return_block));
+        } else {
+            // uses another thing, get it
+            return_reg = MIR_new_func_reg(ctx->ctx, method->MirUnboxerFunc->u.func, MIR_T_I64, "return");
+            arrpush(ops, MIR_new_reg_op(ctx->ctx, return_reg));
+        }
+    }
+
+    // the this argument, increment after the object header to unbox it
+    MIR_reg_t this_reg = MIR_reg(ctx->ctx, "this", method->MirUnboxerFunc->u.func);
+    MIR_append_insn(ctx->ctx, method->MirUnboxerFunc,
+                    MIR_new_insn(ctx->ctx, MIR_ADD,
+                                 MIR_new_reg_op(ctx->ctx, this_reg),
+                                 MIR_new_reg_op(ctx->ctx, this_reg),
+                                 MIR_new_int_op(ctx->ctx, sizeof(struct System_Object))));
+    arrpush(ops, MIR_new_reg_op(ctx->ctx, this_reg));
+
+    // parameters
+    for (int i = 0; i < method->Parameters->Length; i++) {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "arg%d", i);
+        MIR_reg_t arg_reg = MIR_reg(ctx->ctx, buffer, method->MirUnboxerFunc->u.func);
+        if (type_get_stack_type(method->Parameters->Data[i]->ParameterType) == STACK_TYPE_VALUE_TYPE) {
+            // pass struct by-value
+            arrpush(ops, MIR_new_mem_op(ctx->ctx, MIR_T_BLK, method->Parameters->Data[i]->ParameterType->StackSize, arg_reg, 0, 1));
+        } else {
+            // pass as a register
+            arrpush(ops, MIR_new_reg_op(ctx->ctx, arg_reg));
+        }
+    }
+
+    // actually call the real method now that we have unboxed the this parameter
+    MIR_append_insn(ctx->ctx, method->MirUnboxerFunc,
+                    MIR_new_insn_arr(ctx->ctx, MIR_CALL, arrlen(ops), ops));
+
+    // return the exception and value
+    MIR_append_insn(ctx->ctx, method->MirUnboxerFunc,
+                    MIR_new_ret_insn(ctx->ctx, nres,
+                                     MIR_new_reg_op(ctx->ctx, exception_reg),
+                                     MIR_new_reg_op(ctx->ctx, return_reg)));
+
+    MIR_finish_func(ctx->ctx);
+
+cleanup:
+    strbuilder_free(&func_name);
+    arrfree(vars);
+    arrfree(ops);
+
+    return err;
+}
+
 /**
  * Mutex guarding so there won't be multiple jitting at the same time
  */
@@ -5150,6 +5282,11 @@ err_t jit_type(System_Type type) {
     while (arrlen(ctx.methods_to_jit) != 0) {
         System_Reflection_MethodInfo method = arrpop(ctx.methods_to_jit);
         CHECK_AND_RETHROW(jit_method(&ctx, method));
+
+        // generate an unboxer
+        if (method_is_virtual(method) && method->DeclaringType->IsValueType) {
+            CHECK_AND_RETHROW(jit_generate_unboxer(&ctx, method));
+        }
     }
 
     // we are done with the module
@@ -5171,7 +5308,13 @@ err_t jit_type(System_Type type) {
         // prepare the vtable for the type
         if (created_type->VirtualMethods != NULL && !type_is_abstract(created_type) && !type_is_interface(created_type)) {
             for (int vi = 0; vi < created_type->VirtualMethods->Length; vi++) {
-                created_type->VTable->virtual_functions[vi] = created_type->VirtualMethods->Data[vi]->MirFunc->addr;
+                // if this has an unboxer use the unboxer instead of the actual method
+                System_Reflection_MethodInfo method = created_type->VirtualMethods->Data[vi];
+                if (method->MirUnboxerFunc != NULL) {
+                    created_type->VTable->virtual_functions[vi] = method->MirUnboxerFunc->addr;
+                } else {
+                    created_type->VTable->virtual_functions[vi] = method->MirFunc->addr;
+                }
             }
         }
 

@@ -374,6 +374,7 @@ struct System_Reflection_MethodInfo {
     bool IsFilled;
     int VTableOffset;
     MIR_item_t MirFunc;
+    MIR_item_t MirUnboxerFunc;
     MIR_item_t MirProto;
     System_Reflection_MethodInfo NextGenericInstance;
 };
