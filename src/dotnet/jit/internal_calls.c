@@ -4,6 +4,7 @@
 
 #include "../gc/gc.h"
 #include "../types.h"
+#include "time/tsc.h"
 
 #include <thread/scheduler.h>
 
@@ -40,6 +41,18 @@ void managed_memcpy(System_Object this, System_Type struct_type, size_t offset, 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Implementation of internal methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//----------------------------------------------------------------------------------------------------------------------
+// System.Diagnostic.Stopwatch
+//----------------------------------------------------------------------------------------------------------------------
+
+static method_result_t System_Diagnostic_Stopwatch_GetTscFrequency() {
+    return (method_result_t) { .exception = NULL, .value = get_tsc_freq() * 1000000 };
+}
+
+static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
+    return (method_result_t) { .exception = NULL, .value = get_tsc() };
+}
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Object
@@ -222,6 +235,14 @@ static System_Exception System_GC_KeepAlive(void* obj) {
 //----------------------------------------------------------------------------------------------------------------------
 
 internal_call_t g_internal_calls[] = {
+    {
+        "[Corelib-v1]System.Diagnostics.Stopwatch::GetTscFrequency()",
+        System_Diagnostic_Stopwatch_GetTscFrequency
+    },
+    {
+        "[Corelib-v1]System.Diagnostics.Stopwatch::GetTimestamp()",
+        System_Diagnostic_Stopwatch_GetTimestamp
+    },
     {
         "object::GetType()",
             object_GetType,

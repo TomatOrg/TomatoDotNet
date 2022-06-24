@@ -1809,7 +1809,7 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
             MIR_append_insn(mir_ctx, mir_func,
                             MIR_new_insn(mir_ctx, MIR_BT,
                                          MIR_new_label_op(mir_ctx, label),
-                                         MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+                                         MIR_new_reg_op(mir_ctx, value2_reg)));
 
             // throw the error, it has an unknown type
             CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_DivideByZeroException));
