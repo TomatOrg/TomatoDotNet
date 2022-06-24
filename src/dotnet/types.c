@@ -420,8 +420,8 @@ System_Type get_by_ref_type(System_Type type) {
     System_Type ByRefType = GC_NEW(tSystem_Type);
 
     // this is an array
-    ByRefType->IsByRef = 1;
-    ByRefType->IsFilled = 1;
+    ByRefType->IsByRef = true;
+    ByRefType->IsFilled = true;
     ByRefType->StackType = STACK_TYPE_REF;
     ByRefType->GenericParameterPosition = -1;
 
@@ -458,24 +458,31 @@ System_Type get_boxed_type(System_Type type) {
     }
 
     // must not be a byref
-    ASSERT(!type->BoxedType);
+    ASSERT(!type->IsByRef);
+
+    // TODO: error handling?
+    loader_fill_type(type);
 
     // allocate the new ref type
     System_Type BoxedType = GC_NEW(tSystem_Type);
     GC_UPDATE(BoxedType, DeclaringType, type->DeclaringType);
     GC_UPDATE(BoxedType, Module, type->Module);
-    GC_UPDATE(BoxedType, Name, type->Name);
+    GC_UPDATE(BoxedType, Name, string_append_cstr(type->Name, "{boxed}"));
     GC_UPDATE(BoxedType, Assembly, type->Assembly);
     GC_UPDATE(BoxedType, BaseType, type->BaseType);
     GC_UPDATE(BoxedType, Namespace, type->Namespace);
     GC_UPDATE(BoxedType, Fields, type->Fields);
     GC_UPDATE(BoxedType, Methods, type->Methods);
+    GC_UPDATE(BoxedType, UnboxedType, type);
     BoxedType->ManagedSize = type->ManagedSize;
     BoxedType->ManagedAlignment = type->ManagedAlignment;
     BoxedType->StackSize = tSystem_Object->StackSize;
     BoxedType->StackAlignment = tSystem_Object->StackAlignment;
     BoxedType->StackType = STACK_TYPE_O;
+    BoxedType->IsFilled = true;
+    BoxedType->IsBoxed = true;
     GC_UPDATE(BoxedType, InterfaceImpls, type->InterfaceImpls);
+    GC_UPDATE(BoxedType, VirtualMethods, type->VirtualMethods);
 
     // Set the array type
     GC_UPDATE(type, BoxedType, BoxedType);
@@ -533,6 +540,7 @@ static bool type_is_integer(System_Type type) {
 
 System_Type type_get_underlying_type(System_Type T) {
     if (type_is_enum(T)) {
+        ASSERT(T->ElementType != NULL);
         return T->ElementType;
     } else {
         return T;
@@ -557,15 +565,37 @@ static System_Type type_get_reduced_type(System_Type T) {
 }
 
 System_Type type_get_verification_type(System_Type T) {
-    T = type_get_reduced_type(T);
-    if (T == tSystem_Boolean) {
-        return tSystem_SByte;
-    } else if (T == tSystem_Char) {
-        return tSystem_Int16;
-    } else if (T != NULL && T->IsByRef) {
-        return get_by_ref_type(type_get_verification_type(T->BaseType));
+    // if T is a managed pointer type S&
+    if (T != NULL && T->IsByRef) {
+        System_Type TR = type_get_reduced_type(T->BaseType);
+        if (TR == tSystem_SByte || TR == tSystem_Boolean) {
+            return get_by_ref_type(tSystem_SByte);
+        } else if (TR == tSystem_Int16 || TR == tSystem_Char) {
+            return get_by_ref_type(tSystem_Int16);
+        } else if (TR == tSystem_Int32) {
+            return get_by_ref_type(tSystem_Int32);
+        } else if (TR == tSystem_Int64) {
+            return get_by_ref_type(tSystem_Int64);
+        } else if (TR == tSystem_IntPtr) {
+            return get_by_ref_type(tSystem_IntPtr);
+        } else {
+            return T;
+        }
     } else {
-        return T;
+        System_Type TR = type_get_reduced_type(T);
+        if (TR == tSystem_SByte || TR == tSystem_Boolean) {
+            return tSystem_SByte;
+        } else if (TR == tSystem_Int16 || TR == tSystem_Char) {
+            return tSystem_Int16;
+        } else if (TR == tSystem_Int32) {
+            return tSystem_Int32;
+        } else if (TR == tSystem_Int64) {
+            return tSystem_Int64;
+        } else if (TR == tSystem_IntPtr) {
+            return tSystem_IntPtr;
+        } else {
+            return T;
+        }
     }
 }
 
@@ -579,25 +609,51 @@ System_Type type_get_intermediate_type(System_Type T) {
 }
 
 bool type_is_array_element_compatible_with(System_Type T, System_Type U) {
+    // T has underlying type V
     System_Type V = type_get_underlying_type(T);
+
+    // U has underlying type W
     System_Type W = type_get_underlying_type(U);
 
+    // V is compatible-with W
     if (type_is_compatible_with(V, W)) {
         return true;
 
-    } else if (type_get_verification_type(V) == type_get_verification_type(W)) {
+    }
+
+    // V amd W jave the same reduced type
+//    if (type_get_reduced_type(V) == type_get_reduced_type(W)) {
+    if (type_get_verification_type(V) == type_get_verification_type(W)) {
         // spec says it should be reduced-type, but then bool and int8 are not the same
         // and there is valid code where this happens...
         return true;
-    } else {
-        return false;
     }
+
+    return false;
 }
 
 bool type_is_pointer_element_compatible_with(System_Type T, System_Type U) {
+    // A managed pointer type T is pointer-element-compatible-with a managed pointer type U if and
+    // only if T has verification type V and U has verification type W and V is identical to W.
     System_Type V = type_get_verification_type(T);
     System_Type W = type_get_verification_type(U);
-    return V == W;
+
+    // for value types we are going to make sure
+    // that the inheritance work (in reality it is only
+    // for System.Enum and System.ValueType to work)
+    if (V != NULL && V->BaseType->IsValueType) {
+        System_Type base = V;
+        while (base != NULL) {
+            if (base == W->BaseType) {
+                return true;
+            }
+            base = base->BaseType;
+        }
+
+        return false;
+    } else {
+        return V == W;
+    }
 }
 
 static System_Type type_get_direct_base_class(System_Type T) {
@@ -635,23 +691,37 @@ static bool type_is_interface_directly_implemented_by(System_Type I, System_Type
     return false;
 }
 
-bool type_is_compatible_with(System_Type T, System_Type U) {
-    // T is identical to U.
+static bool type_is_compatible_with_I_8_7_1(System_Type T, System_Type U) {
+    // T is identical to U
     if (T == U) {
         return true;
     }
 
-    // doesn't make sense to have a null type in here
     if (T == NULL || U == NULL) {
         return false;
     }
 
+    // T is a reference type
     if (type_is_object_ref(T)) {
+        // and U is the direct base class of T
         if (U == type_get_direct_base_class(T)) {
             return true;
         }
 
+        // and U is an interface directly implemented by T
         if (type_is_interface_directly_implemented_by(U, T)) {
+            return true;
+        }
+    }
+
+    // T s a zero-based rank-1 array V[] and
+    // U is a zero-based rank-1 array W[]
+    if (T->IsArray && U->IsArray) {
+        System_Type V = T->ElementType;
+        System_Type W = U->ElementType;
+
+        // and V is array-element-compatible-with W
+        if (type_is_array_element_compatible_with(V, W)) {
             return true;
         }
     }
@@ -666,14 +736,20 @@ bool type_is_compatible_with(System_Type T, System_Type U) {
         }
     }
 
-    if (T->IsArray && U->IsArray && type_is_array_element_compatible_with(T->ElementType, U->ElementType)) {
-        return true;
+    return false;
+}
+
+bool type_is_compatible_with(System_Type T, System_Type U) {
+    // T and U are not managed pointer types
+    if ((T == NULL || !T->IsByRef) && (U == NULL || !U->IsByRef)) {
+        // and T is compatible-with U according to definition in I.8.7.1
+        return type_is_compatible_with_I_8_7_1(T, U);
     }
 
-    if (T->IsByRef && U->IsByRef) {
-        if (type_is_pointer_element_compatible_with(T, U)) {
-            return true;
-        }
+    // T and U are both managed pointer types
+    if ((T != NULL && T->IsByRef) && (U != NULL && U->IsByRef)) {
+        // and T is pointer-element-compatible-with U.
+        return type_is_pointer_element_compatible_with(T, U);
     }
 
     return false;
@@ -691,19 +767,14 @@ static bool type_is_assignable_to(System_Type T, System_Type U) {
         return true;
     }
 
-    // TODO: This rule seems really wtf
-//    if (
-//        (V == tSystem_IntPtr && W == tSystem_Int32) ||
-//        (V == tSystem_Int32 && W == tSystem_IntPtr)
-//    ) {
-//        return true;
-//    }
-
-    if (type_is_compatible_with(T, U)) {
+    if (
+        (V == tSystem_IntPtr && W == tSystem_Int32) ||
+        (V == tSystem_Int32 && W == tSystem_IntPtr)
+    ) {
         return true;
     }
 
-    if (T == NULL && type_is_object_ref(U)) {
+    if (type_is_compatible_with(T, U)) {
         return true;
     }
 
@@ -711,14 +782,39 @@ static bool type_is_assignable_to(System_Type T, System_Type U) {
 }
 
 bool type_is_verifier_assignable_to(System_Type Q, System_Type R) {
+    // T is the verification type of Q
     System_Type T = type_get_verification_type(Q);
+
+    // U is the verification type of R,
     System_Type U = type_get_verification_type(R);
 
+    // T is identical to U
     if (T == U) {
         return true;
     }
 
+    // T is assignable-to U according to the rules in I.8.7.3
     if (type_is_assignable_to(T, U)) {
+        return true;
+    }
+
+    // T is boxed V
+    if (T != NULL && T->IsBoxed) {
+        System_Type V = T->UnboxedType;
+
+        // and U is the immediate base class of V
+        if (V->BaseType == U) {
+            return true;
+        }
+
+        // and U is an interface directly implemented by V
+        if (type_is_interface_directly_implemented_by(U, V)) {
+            return true;
+        }
+    }
+
+    // T is the null type, and U is a reference type
+    if (T == NULL && type_is_object_ref(U)) {
         return true;
     }
 
@@ -1027,13 +1123,14 @@ static bool is_same_family(System_Type from, System_Type to) {
     return true;
 }
 
-bool check_field_accessibility(System_Type from, System_Reflection_FieldInfo to) {
-    if (!check_type_visibility(from, to->DeclaringType)) {
+bool check_field_accessibility(System_Reflection_MethodInfo from_method, System_Reflection_FieldInfo to) {
+    if (!check_type_visibility(from_method, to->DeclaringType)) {
         return false;
     }
 
-    bool family = is_same_family(from, to->DeclaringType);
-    bool assembly = from->Assembly == to->DeclaringType->Assembly;
+    System_Type from_type = from_method->DeclaringType;
+    bool family = is_same_family(from_type, to->DeclaringType);
+    bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
 
     switch (field_access(to)) {
         case FIELD_COMPILER_CONTROLLED: ASSERT(!"TODO: METHOD_COMPILER_CONTROLLED"); return false;
@@ -1045,7 +1142,7 @@ bool check_field_accessibility(System_Type from, System_Reflection_FieldInfo to)
             }
 
             // get the raw declaring type
-            System_Type declaring = from;
+            System_Type declaring = from_type;
             if (declaring->GenericTypeDefinition != NULL) {
                 declaring = declaring->GenericTypeDefinition;
             }
@@ -1071,17 +1168,36 @@ bool check_field_accessibility(System_Type from, System_Reflection_FieldInfo to)
 
 }
 
-bool check_method_accessibility(System_Type from, System_Reflection_MethodInfo to) {
-    if (!check_type_visibility(from, to->DeclaringType)) {
+bool check_method_accessibility(System_Reflection_MethodInfo from_method, System_Reflection_MethodInfo to) {
+    if (!check_type_visibility(from_method, to->DeclaringType)) {
         return false;
     }
 
-    bool family = is_same_family(from, to->DeclaringType);
-    bool assembly = from->Assembly == to->DeclaringType->Assembly;
+    System_Type from_type = from_method->DeclaringType;
+    bool family = is_same_family(from_type, to->DeclaringType);
+    bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
+
+    // make sure all the arguments are known
+    if (to->GenericArguments != NULL) {
+        for (int i = 0; i < to->GenericArguments->Length; i++) {
+            if (!check_type_visibility(from_method, to->GenericArguments->Data[i])) {
+                return false;
+            }
+        }
+    }
+
+    System_Type to_type = to->DeclaringType;
+    if (to_type->GenericArguments != NULL) {
+        for (int i = 0; i < to_type->GenericArguments->Length; i++) {
+            if (!check_type_visibility(from_method, to_type->GenericArguments->Data[i])) {
+                return false;
+            }
+        }
+    }
 
     switch (method_get_access(to)) {
         case METHOD_COMPILER_CONTROLLED: ASSERT(!"TODO: METHOD_COMPILER_CONTROLLED"); return false;
-        case METHOD_PRIVATE: return from == to->DeclaringType;
+        case METHOD_PRIVATE: return from_type == to->DeclaringType;
         case METHOD_FAMILY: return family;
         case METHOD_ASSEMBLY: return assembly;
         case METHOD_FAMILY_AND_ASSEMBLY: return family && assembly;
@@ -1093,16 +1209,37 @@ bool check_method_accessibility(System_Type from, System_Reflection_MethodInfo t
     }
 }
 
-bool check_type_visibility(System_Type from, System_Type to) {
+bool check_type_visibility(System_Reflection_MethodInfo from_method, System_Type to) {
     type_visibility_t visibility = type_visibility(to);
 
     // start with easy cases
     if (visibility == TYPE_PUBLIC) {
         // anyone can access this
         return true;
-    } else if (visibility == TYPE_NOT_PUBLIC) {
+    }
+
+    // check if the type is part of the generic type arguments, if it is then
+    // it is visible
+    if (from_method->GenericArguments != NULL) {
+        for (int i = 0; i < from_method->GenericArguments->Length; i++) {
+            if (from_method->GenericArguments->Data[i] == to) {
+                return true;
+            }
+        }
+    }
+
+    System_Type from_type = from_method->DeclaringType;
+    if (from_type->GenericArguments != NULL) {
+        for (int i = 0; i < from_type->GenericArguments->Length; i++) {
+            if (from_type->GenericArguments->Data[i] == to) {
+                return true;
+            }
+        }
+    }
+
+    if (visibility == TYPE_NOT_PUBLIC) {
         // only the same assembly may access this
-        return from->Assembly == to->Assembly;
+        return from_type->Assembly == to->Assembly;
     }
 
     // the rest only works on nested types
@@ -1111,8 +1248,8 @@ bool check_type_visibility(System_Type from, System_Type to) {
         return false;
     }
 
-    bool family = is_same_family(from, to->DeclaringType);
-    bool assembly = from->Assembly == to->DeclaringType->Assembly;
+    bool family = is_same_family(from_type, to->DeclaringType);
+    bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
 
     switch (visibility) {
         case TYPE_NESTED_PRIVATE:{
@@ -1123,7 +1260,7 @@ bool check_type_visibility(System_Type from, System_Type to) {
             }
 
             // get the raw declaring type
-            System_Type declaring = from;
+            System_Type declaring = from_type;
             if (declaring->GenericTypeDefinition != NULL) {
                 declaring = declaring->GenericTypeDefinition;
             }

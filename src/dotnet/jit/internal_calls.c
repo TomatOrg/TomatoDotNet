@@ -5,6 +5,7 @@
 #include "../gc/gc.h"
 #include "../types.h"
 #include "time/tsc.h"
+#include "thread/waitable.h"
 
 #include <thread/scheduler.h>
 
@@ -53,6 +54,42 @@ static method_result_t System_Diagnostic_Stopwatch_GetTscFrequency() {
 static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
     return (method_result_t) { .exception = NULL, .value = get_tsc() };
 }
+
+//----------------------------------------------------------------------------------------------------------------------
+// System.Threading.WaitHandle
+//----------------------------------------------------------------------------------------------------------------------
+
+static method_result_t System_Threading_WaitHandle_WaitableSend(waitable_t* waitable, bool block) {
+    return (method_result_t) { .exception = NULL, .value = waitable_send(waitable, block) };
+}
+
+static method_result_t System_Threading_WaitHandle_WaitableWait(waitable_t* waitable, bool block) {
+    return (method_result_t) { .exception = NULL, .value = waitable_wait(waitable, block) };
+}
+
+static method_result_t System_Threading_WaitHandle_WaitableSelect2(waitable_t* w1, waitable_t* w2, bool block) {
+    waitable_t* waitables[] = { w1, w2 };
+    return (method_result_t) { .exception = NULL, .value = waitable_select(waitables, 0, 2, block).index };
+}
+
+static method_result_t System_Threading_WaitHandle_CreateWaitable(int count) {
+    return (method_result_t) { .exception = NULL, .value = (uintptr_t) create_waitable(count)};
+}
+
+static method_result_t System_Threading_WaitHandle_WaitableAfter(int64_t timeout) {
+    return (method_result_t) { .exception = NULL, .value = (uintptr_t) after(timeout)};
+}
+
+static method_result_t System_Threading_WaitHandle_ReleaseWaitable(waitable_t* w) {
+    release_waitable(w);
+    return (method_result_t) { .exception = NULL, .value = 0 };
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// System.Runtime.Intrinsics.X86
+//----------------------------------------------------------------------------------------------------------------------
+
+
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Object
@@ -263,6 +300,13 @@ internal_call_t g_internal_calls[] = {
         "[Corelib-v1]System.GC::KeepAlive(object)",
         System_GC_KeepAlive,
     },
+
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableSend(uint64,bool)", System_Threading_WaitHandle_WaitableSend },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableWait(uint64,bool)", System_Threading_WaitHandle_WaitableWait },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableSelect2(uint64,uint64,bool)", System_Threading_WaitHandle_WaitableSelect2 },
+    { "[Corelib-v1]System.Threading.WaitHandle::CreateWaitable(int32)", System_Threading_WaitHandle_CreateWaitable },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableAfter(int64)", System_Threading_WaitHandle_WaitableAfter },
+    { "[Corelib-v1]System.Threading.WaitHandle::ReleaseWaitable(uint64)", System_Threading_WaitHandle_ReleaseWaitable },
 
     { "[Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int32&,int32)", interlocked_add_i32 },
     { "[Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.UInt32&,uint32)", interlocked_add_u32 },

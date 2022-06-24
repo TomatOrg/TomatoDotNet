@@ -518,6 +518,7 @@ struct System_Type {
     token_t MetadataToken;
     bool IsArray;
     bool IsByRef;
+    bool IsBoxed;
 
     // for type parameter (not instantiated)
     System_Type GenericTypeDefinition;
@@ -540,7 +541,6 @@ struct System_Type {
     bool IsSetup;
     bool IsFilled;
     bool IsValueType;
-    bool IsGeneric;
     System_Reflection_MethodInfo_Array VirtualMethods;
     System_Reflection_MethodInfo Finalize;
     int ManagedSize;
@@ -559,6 +559,7 @@ struct System_Type {
     System_Type ArrayType;
     System_Type ByRefType;
     System_Type BoxedType;
+    System_Type UnboxedType;
     System_Type NextGenericInstance;
 
     // used to connected nested types
@@ -570,8 +571,8 @@ struct System_Type {
 };
 
 static inline stack_type_t type_get_stack_type(System_Type type) { return type == NULL ? STACK_TYPE_O : type->StackType; }
-static inline bool type_is_generic_definition(System_Type type) { return type->IsGeneric && type->GenericTypeDefinition == NULL; }
-static inline bool type_is_generic_type(System_Type type) { return type->IsGeneric; }
+static inline bool type_is_generic_type(System_Type type) { return type->GenericArguments != NULL; }
+static inline bool type_is_generic_definition(System_Type type) { return type_is_generic_type(type) && type->GenericTypeDefinition == NULL; }
 
 bool type_is_generic_parameter(System_Type type);
 
@@ -704,7 +705,7 @@ extern System_Type tTinyDotNet_Reflection_MemberReference;
 extern System_Type tTinyDotNet_Reflection_MethodImpl;
 extern System_Type tTinyDotNet_Reflection_MethodSpec;
 
-static inline bool type_is_enum(System_Type type) { return type != NULL && type->BaseType == tSystem_Enum; }
+static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || type_get_stack_type(type) == STACK_TYPE_O; }
 static inline bool type_is_value_type(System_Type type) { return type != NULL && type->IsValueType; }
 bool type_is_integer(System_Type type);
@@ -718,9 +719,11 @@ bool type_is_verifier_assignable_to(System_Type Q, System_Type R);
 
 bool isinstance(System_Object object, System_Type type);
 
-bool check_field_accessibility(System_Type from, System_Reflection_FieldInfo to);
-bool check_method_accessibility(System_Type from, System_Reflection_MethodInfo to);
-bool check_type_visibility(System_Type from, System_Type to);
+bool check_field_accessibility(System_Reflection_MethodInfo from, System_Reflection_FieldInfo to);
+bool check_method_accessibility(System_Reflection_MethodInfo from, System_Reflection_MethodInfo to);
+bool check_type_visibility(System_Reflection_MethodInfo from, System_Type to);
+
+System_Type get_this_type(System_Reflection_MethodInfo signature);
 
 /**
  * Create a new generic type with the given generic arguments

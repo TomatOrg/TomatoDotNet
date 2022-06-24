@@ -735,7 +735,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         // set the generics of the type
         int gi = hmgeti(owner_generic_params, type);
         if (gi != -1) {
-            type->IsGeneric = true;
             GC_UPDATE(type, GenericArguments, GC_NEW_ARRAY(tSystem_Type, arrlen(owner_generic_params[gi].value)));
             for (int j = 0; j < type->GenericArguments->Length; j++) {
                 System_Type gtype = owner_generic_params[gi].value[j];
@@ -1861,8 +1860,6 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // all the last setup
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-
-    assembly_dump(assembly);
 
     // get the entry point
     System_Reflection_MethodInfo entryPoint = NULL;

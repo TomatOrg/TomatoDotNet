@@ -474,6 +474,10 @@ cleanup:
 static err_t stack_push(jit_method_context_t* ctx, System_Type type, MIR_reg_t* out_reg) {
     err_t err = NO_ERROR;
 
+    if (type != NULL) {
+        ASSERT(type->IsFilled);
+    }
+
     stack_entry_t entry = {
         .type = type
     };
@@ -961,6 +965,7 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
     int this_index = -1;
     if (!method_is_static(method)) {
         System_Type declaringType = method->DeclaringType;
+        ASSERT(declaringType->IsFilled);
         if (declaringType->IsValueType) declaringType = get_by_ref_type(declaringType);
 
         MIR_var_t var = {
@@ -1084,6 +1089,7 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
     if (type->MirType != NULL) {
+        ASSERT(type->IsFilled);
         goto cleanup;
     }
 
@@ -1097,6 +1103,16 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
     type->MirType = MIR_new_import(ctx->ctx, strbuilder_get(&type_name));
     MIR_load_external(m_mir_context, strbuilder_get(&type_name), type);
     strbuilder_free(&type_name);
+
+    // setup the base type
+    if (type->BaseType != NULL) {
+        CHECK_AND_RETHROW(jit_prepare_type(ctx, type->BaseType));
+    }
+
+    // setup the element type
+    if (type->ElementType != NULL) {
+        CHECK_AND_RETHROW(jit_prepare_type(ctx, type->ElementType));
+    }
 
     // setup fields
     if (type->Fields != NULL) {
@@ -2153,16 +2169,16 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // Handle operands of the opcode
         //--------------------------------------------------------------------------------------------------------------
 
-        int32_t operand_i32;
-        int64_t operand_i64;
-        System_Reflection_FieldInfo operand_field;
-        System_Reflection_MethodInfo operand_method;
-        float operand_f32;
-        double operand_f64;
-        System_Type operand_type;
-        System_String operand_string;
-        uint32_t operand_switch_n;
-        int32_t *operand_switch_dests;
+        int32_t operand_i32 = 0;
+        int64_t operand_i64 = 0;
+        System_Reflection_FieldInfo operand_field = NULL;
+        System_Reflection_MethodInfo operand_method = NULL;
+        float operand_f32 = 0;
+        double operand_f64 = 0;
+        System_Type operand_type = NULL;
+        System_String operand_string = NULL;
+        uint32_t operand_switch_n = 0;
+        int32_t* operand_switch_dests = NULL;
 
         char param[128] = { 0 };
         switch (opcode_info->operand) {
@@ -2183,7 +2199,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK(operand_field != NULL);
 
                 // check we can access it
-                CHECK(check_field_accessibility(method->DeclaringType, operand_field));
+                CHECK(check_field_accessibility(method, operand_field));
 
                 // make sure we initialized its type
                 CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_field->DeclaringType));
@@ -2210,7 +2226,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK(operand_method != NULL);
 
                 // check we can access it
-                CHECK(check_method_accessibility(method->DeclaringType, operand_method));
+                CHECK(check_method_accessibility(method, operand_method));
 
                 // prepare the owning type
                 CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_method->DeclaringType));
@@ -2255,7 +2271,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK(operand_type != NULL);
 
                 // check it is visible
-                CHECK(check_type_visibility(method->DeclaringType, operand_type));
+                CHECK(check_type_visibility(method, operand_type));
 
                 // init it
                 CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_type));
@@ -2761,6 +2777,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_LDIND_R4: operand_type = tSystem_Single; goto cee_ldind;
             case CEE_LDIND_R8: operand_type = tSystem_Double; goto cee_ldind;
             case CEE_LDIND_REF: operand_type = NULL; goto cee_ldind;
+            case CEE_LDOBJ: goto cee_ldind;
             cee_ldind: {
                 // pop all the values from the stack
                 MIR_reg_t addr_reg;
@@ -2840,6 +2857,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_STIND_I8: operand_type = tSystem_Int64; goto cee_stind;
             case CEE_STIND_R4: operand_type = tSystem_Single; goto cee_stind;
             case CEE_STIND_R8: operand_type = tSystem_Double; goto cee_stind;
+            case CEE_STOBJ: goto cee_stind;
             cee_stind: {
                 // pop all the values from the stack
                 MIR_reg_t value_reg;
@@ -3843,16 +3861,15 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 }
 
                 // validate the field is part of the object
+                System_Type target = type_get_intermediate_type(operand_field->DeclaringType);
                 System_Type base = obj_type;
-                System_Type target = type_get_verification_type(operand_field->DeclaringType);
-                if (target->IsValueType) target = get_by_ref_type(target);
                 while (base != NULL && base != target) {
                     base = base->BaseType;
                 }
                 CHECK(base != NULL);
 
                 // make sure the field is compatible
-                CHECK(type_is_compatible_with(obj_type, target));
+                CHECK(type_is_verifier_assignable_to(value_type, operand_field->FieldType));
 
                 // TODO: does the runtime actually use ldfld for static fields?
                 //       in theory CIL allows that, but I think I won't for simplicity
@@ -4012,16 +4029,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 }
 
                 // validate the field is part of the object
+                System_Type target = type_get_intermediate_type(operand_field->DeclaringType);
                 System_Type base = obj_type;
-                System_Type target = type_get_verification_type(operand_field->DeclaringType);
-                if (target->IsValueType) target = get_by_ref_type(target);
                 while (base != NULL && base != target) {
                     base = base->BaseType;
                 }
                 CHECK(base != NULL);
-
-                // make sure the field is compatible
-                CHECK(type_is_compatible_with(obj_type, target));
 
                 // TODO: does the runtime actually use ldfld for static fields?
                 CHECK(!field_is_static(operand_field));
@@ -4105,9 +4118,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O || type_get_stack_type(obj_type) == STACK_TYPE_REF);
 
                 // validate the field is part of the object
+                System_Type target = type_get_intermediate_type(operand_field->DeclaringType);
                 System_Type base = obj_type;
-                System_Type target = type_get_verification_type(operand_field->DeclaringType);
-                if (target->IsValueType) target = get_by_ref_type(target);
                 while (base != NULL && base != target) {
                     base = base->BaseType;
                 }
@@ -4115,9 +4127,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // TODO: does the runtime actually use ldfld for static fields?
                 CHECK(!field_is_static(operand_field));
-
-                // make sure the field is compatible
-                CHECK(type_is_compatible_with(obj_type, target));
 
                 // Get the field type
                 System_Type field_stack_type = get_by_ref_type(type_get_verification_type(operand_field->FieldType));
@@ -4392,14 +4401,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         CHECK_AND_RETHROW(stack_pop(ctx, &this_type, &this_reg));
 
                         // Value types have their this as a by-ref
-                        System_Type thisType = operand_method->DeclaringType;
-                        if (thisType->IsValueType) {
-                            thisType = get_by_ref_type(thisType);
+                        System_Type signature_this_type = operand_method->DeclaringType;
+                        if (signature_this_type->IsValueType) {
+                            signature_this_type = get_by_ref_type(signature_this_type);
                         }
 
                         if (constrainedType != NULL) {
                             CHECK(this_type->IsByRef);
-                            thisType = get_by_ref_type(constrainedType);
+                            signature_this_type = get_by_ref_type(constrainedType);
 
                             // get the static dispatch, the call later will
                             // actually handle making sure this is correct
@@ -4418,10 +4427,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         }
 
                         // verify a normal argument
-                        CHECK(type_is_verifier_assignable_to(
-                                type_get_verification_type(this_type), thisType),
-                              "%U verifier assignable to %U",
-                              type_get_verification_type(this_type)->Name, thisType->Name);
+                        if (signature_this_type == tSystem_Object && this_type->BaseType == tSystem_ValueType) {
+                            // this is an edge case, we are going to politely ignore it
+                            // in short, for whatever reason the compiler generates a ctor in System.ValueType
+                            // that calls the ctor of System.Object ????
+                        } else {
+                            CHECK(type_is_verifier_assignable_to(this_type, signature_this_type));
+                        }
 
                         // make sure that the object is not null, only if not a byref
                         if (!this_type->IsByRef) {
@@ -4436,9 +4448,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 arg_ops[0] = MIR_new_ref_op(mir_ctx, operand_method->MirProto);
 
                 // byref uses static dispatch since we know the exact type always
+                // TODO: optimize dispatch on sealed classes
                 if (
                     opcode == CEE_CALLVIRT &&
-                    !type_is_sealed(this_type) &&
                     method_is_virtual(operand_method) &&
                     !this_type->IsByRef
                 ) {
@@ -5023,7 +5035,36 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             // Delegate
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_LDFTN: {
+            case CEE_LDFTN:
+            case CEE_LDVIRTFTN:
+            {
+
+                if (opcode == CEE_LDVIRTFTN) {
+                    // according to the ECMA spec it should always be
+                    //
+                    //  DUP
+                    //  LDVIRTFTN method
+                    //  NEWOBJ delegate_ctor
+                    //
+                    // the reason is that this makes sure that the method and the type we are
+                    // creating the delegate on are def the same type
+                    //
+                    CHECK(last_opcode == CEE_DUP);
+
+                    // pop the object
+                    MIR_reg_t object_reg;
+                    System_Type object_type;
+                    CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg));
+
+                    // check that the method matches the object
+                    CHECK(type_is_verifier_assignable_to(type_get_verification_type(object_type), operand_method->DeclaringType));
+
+                    // resolve it
+                    CHECK(method_is_virtual(operand_method));
+                    operand_method = object_type->VirtualMethods->Data[operand_method->VTableOffset];
+                    CHECK(method_is_final(operand_method));
+                }
+
                 // push the reference to the function
                 MIR_reg_t ftn_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, tSystem_UIntPtr, &ftn_reg));
@@ -5032,22 +5073,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                              MIR_new_reg_op(mir_ctx, ftn_reg),
                                              MIR_new_ref_op(mir_ctx, operand_method->MirFunc)));
 
+
                 // save the method that we are pushing
                 ftnMethod = operand_method;
-            } break;
-
-            case CEE_LDVIRTFTN: {
-                // according to the ECMA spec it should always be
-                //
-                //  DUP
-                //  LDVIRTFTN method
-                //  NEWOBJ delegate_ctor
-                //
-                // so we check for the first part here
-                //
-                CHECK(last_opcode == CEE_DUP);
-
-                CHECK_FAIL("TODO: this");
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
