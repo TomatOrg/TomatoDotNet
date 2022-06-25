@@ -1603,7 +1603,7 @@ typedef struct type_init {
         .vtable_size = 5                                        \
     }
 
-#define VALUE_TYPE_INIT(_namespace, _name, code, stype)         \
+#define VALUE_TYPE_INIT(_namespace, _name, code, stype, _vtable_size)         \
     {                                                           \
         .namespace = (_namespace),                              \
         .name = (_name),                                        \
@@ -1612,32 +1612,32 @@ typedef struct type_init {
         .stack_alignment = alignof(code),                       \
         .managed_size = sizeof(code),                           \
         .managed_alignment = alignof(code),                     \
-        .vtable_size = 0,                                       \
+        .vtable_size = (_vtable_size),                          \
         .stack_type = (stype)                                   \
     }
 
 static type_init_t m_type_init[] = {
     TYPE_INIT("System", "Exception", System_Exception, 5),
-    VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE),
-    VALUE_TYPE_INIT("System", "ValueType", System_ValueType, STACK_TYPE_VALUE_TYPE),
+    VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE, 0),
+    VALUE_TYPE_INIT("System", "ValueType", System_ValueType, STACK_TYPE_VALUE_TYPE, 0),
     TYPE_INIT("System", "Object", System_Object, 3),
     TYPE_INIT("System", "Type", System_Type, 3),
     TYPE_INIT("System", "Array", System_Array, 3),
-    TYPE_INIT("System", "String", System_String, 3),
-    VALUE_TYPE_INIT("System", "Boolean", System_Boolean, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "Char", System_Char, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "SByte", System_SByte, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "Byte", System_Byte, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "Int16", System_Int16, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "UInt16", System_UInt16, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "Int32", System_Int32, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "UInt32", System_UInt32, STACK_TYPE_INT32),
-    VALUE_TYPE_INIT("System", "Int64", System_Int64, STACK_TYPE_INT64),
-    VALUE_TYPE_INIT("System", "UInt64", System_UInt64, STACK_TYPE_INT64),
-    VALUE_TYPE_INIT("System", "Single", System_Single, STACK_TYPE_FLOAT),
-    VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT),
-    VALUE_TYPE_INIT("System", "IntPtr", System_IntPtr, STACK_TYPE_INTPTR),
-    VALUE_TYPE_INIT("System", "UIntPtr", System_UIntPtr, STACK_TYPE_INTPTR),
+    TYPE_INIT("System", "String", System_String, 5),
+    VALUE_TYPE_INIT("System", "Boolean", System_Boolean, STACK_TYPE_INT32, 0),
+    VALUE_TYPE_INIT("System", "Char", System_Char, STACK_TYPE_INT32, 0),
+    VALUE_TYPE_INIT("System", "SByte", System_SByte, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "Byte", System_Byte, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "Int16", System_Int16, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "UInt16", System_UInt16, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "Int32", System_Int32, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "UInt32", System_UInt32, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "Int64", System_Int64, STACK_TYPE_INT64, 3),
+    VALUE_TYPE_INIT("System", "UInt64", System_UInt64, STACK_TYPE_INT64, 3),
+    VALUE_TYPE_INIT("System", "Single", System_Single, STACK_TYPE_FLOAT, 0),
+    VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT, 0),
+    VALUE_TYPE_INIT("System", "IntPtr", System_IntPtr, STACK_TYPE_INTPTR, 3),
+    VALUE_TYPE_INIT("System", "UIntPtr", System_UIntPtr, STACK_TYPE_INTPTR, 3),
     TYPE_INIT("System", "Delegate", System_Delegate, 3),
     TYPE_INIT("System", "MulticastDelegate", System_MulticastDelegate, 3),
     TYPE_INIT("System.Reflection", "Module", System_Reflection_Module, 3),
@@ -1686,6 +1686,29 @@ static void init_type(metadata_type_def_t* type_def, System_Type type) {
             break;
         }
     }
+}
+
+static err_t validate_vtable_size() {
+    err_t err = NO_ERROR;
+
+    // check if this is a builtin type
+    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
+        type_init_t* bt = &m_type_init[i];
+        System_Type type = *bt->global;
+        if (type->VirtualMethods == NULL) {
+            CHECK(bt->vtable_size == 0,
+                  "%s.%s has 0 vtable entries but it was initialized with %d",
+                  bt->namespace, bt->name, bt->vtable_size);
+        } else {
+            CHECK(type->VirtualMethods->Length == bt->vtable_size,
+                  "%s.%s has %d vtable entries but it was initialized with %d",
+                  bt->namespace, bt->name,
+                  type->VirtualMethods->Length, bt->vtable_size);
+        }
+    }
+
+cleanup:
+    return err;
 }
 
 static err_t validate_have_init_types() {
@@ -1792,6 +1815,9 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
         System_Type type = *bt->global;
         CHECK_AND_RETHROW(loader_fill_type(type));
     }
+
+    // now validate that we had correct vtable size
+    CHECK_AND_RETHROW(validate_vtable_size());
 
     //
     // now set all the page tables, because we are missing them at
