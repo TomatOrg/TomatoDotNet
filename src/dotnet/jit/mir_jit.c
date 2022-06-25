@@ -3980,7 +3980,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
                                 // copying into a class, use the managed memcpy
                                 MIR_append_insn(mir_ctx, mir_func,
-                                                MIR_new_call_insn(mir_ctx, 5,
+                                                MIR_new_call_insn(mir_ctx, 6,
                                                                   MIR_new_ref_op(mir_ctx, m_managed_memcpy_proto),
                                                                   MIR_new_ref_op(mir_ctx, m_managed_memcpy_func),
                                                                   MIR_new_reg_op(mir_ctx, obj_reg),
@@ -4098,6 +4098,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         // take the offset and copy it
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_ADD,
+                                                     MIR_new_reg_op(mir_ctx, obj_reg),
                                                      MIR_new_reg_op(mir_ctx, obj_reg),
                                                      MIR_new_int_op(mir_ctx, (int)operand_field->MemoryOffset)));
                         jit_emit_memcpy(ctx, value_reg, obj_reg, field_type->StackSize);
