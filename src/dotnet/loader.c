@@ -1016,7 +1016,7 @@ err_t loader_fill_type(System_Type type) {
     }
 
     // first check the parent
-    bool need_new_vtable = false;
+    int virtualCount = 0;
     int virtualOfs = 0;
     int managedSize = 0;
     int managedSizePrev = 0;
@@ -1040,7 +1040,8 @@ err_t loader_fill_type(System_Type type) {
 
         // now check if it has virtual methods
         if (type->BaseType->VirtualMethods != NULL) {
-            virtualOfs = type->BaseType->VirtualMethods->Length;
+            virtualCount = type->BaseType->VirtualMethods->Length;
+            virtualOfs = virtualCount;
         }
 
         // get the managed size
@@ -1073,18 +1074,17 @@ err_t loader_fill_type(System_Type type) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
 
             if (method_is_virtual(methodInfo)) {
-                // we have a virtual method, we must have a new vtable
-                need_new_vtable = true;
-
                 if (method_is_new_slot(methodInfo)) {
                     // this is a newslot, always allocate a new slot
-                    methodInfo->VTableOffset = virtualOfs++;
+                    methodInfo->VTableOffset = -1;
+                    virtualCount++;
                 } else {
                     System_Reflection_MethodInfo overridden = find_virtually_overridden_method(type->BaseType,
                                                                                                methodInfo);
                     if (overridden == NULL) {
                         // The base method was not found, just allocate a new slot per the spec.
-                        methodInfo->VTableOffset = virtualOfs++;
+                        methodInfo->VTableOffset = -1;
+                        virtualCount++;
                     } else {
                         if (method_is_strict(overridden)) {
                             CHECK_FAIL("TODO: handle strict");
@@ -1114,27 +1114,17 @@ err_t loader_fill_type(System_Type type) {
         // create a vtable if needed, interfaces and abstract classes are never going
         // to have a vtable, so no need to create one
         if (type->VTable == NULL && !type_is_interface(type) && !type_is_abstract(type)) {
-            type->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * virtualOfs);
+            type->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * virtualCount);
             CHECK(type->VTable != NULL);
             type->VTable->type = type;
         }
 
-        // we must create the vtable before other type resolution is done because we must
-        // have the subtypes know about the amount of virtual entries we have, and we must populate
-        // our stuff at the very end
-        if (need_new_vtable) {
-            // we have our own vtable, if we have a parent with a vtable then copy
-            // its vtable entries to our vtable
-            GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtualOfs));
-            if (type->BaseType != NULL && type->BaseType->VirtualMethods != NULL) {
-                for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
-                    GC_UPDATE_ARRAY(type->VirtualMethods, i, type->BaseType->VirtualMethods->Data[i]);
-                }
-            }
-        } else {
-            // just inherit the vtable
-            if (type->BaseType != NULL) {
-                GC_UPDATE(type, VirtualMethods, type->BaseType->VirtualMethods);
+        // we have our own vtable, if we have a parent with a vtable then copy
+        // its vtable entries to our vtable
+        GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtualCount));
+        if (type->BaseType != NULL && type->BaseType->VirtualMethods != NULL) {
+            for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
+                GC_UPDATE_ARRAY(type->VirtualMethods, i, type->BaseType->VirtualMethods->Data[i]);
             }
         }
 
@@ -1143,7 +1133,41 @@ err_t loader_fill_type(System_Type type) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
 
             if (method_is_virtual(methodInfo)) {
+                // skip for now
+                if (methodInfo->VTableOffset < 0) continue;
+
+                // set it, the entry should have something because it is still
+                // only methods that get overridden
+                CHECK(methodInfo->VTableOffset < type->VirtualMethods->Length);
+                CHECK(type->VirtualMethods->Data[methodInfo->VTableOffset] != NULL);
                 GC_UPDATE_ARRAY(type->VirtualMethods, methodInfo->VTableOffset, methodInfo);
+            }
+        }
+
+        // make sure all the lower entries are taken and that
+        // all the upper entries are not taken
+        for (int i = 0; i < virtualCount; i++) {
+            if (i < virtualOfs) {
+                CHECK(type->VirtualMethods->Data[i] != NULL);
+            } else {
+                CHECK(type->VirtualMethods->Data[i] == NULL);
+            }
+        }
+
+        // now put the other entries in the array just so we can find
+        // them when we sort out the virtual impl stuff
+        int virtual_index = virtualOfs;
+        for (int i = 0; i < type->Methods->Length; i++) {
+            System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
+
+            if (method_is_virtual(methodInfo)) {
+                // now we only handle unallocated entries
+                if (methodInfo->VTableOffset >= 0) continue;
+
+                // set it
+                CHECK(type->VirtualMethods->Data[virtual_index] == NULL);
+                GC_UPDATE_ARRAY(type->VirtualMethods, virtual_index, methodInfo);
+                virtual_index++;
             }
         }
 
@@ -1357,44 +1381,36 @@ err_t loader_fill_type(System_Type type) {
                 System_Type interface = interfaceImpl->InterfaceType;
                 CHECK_AND_RETHROW(loader_fill_type(interface));
 
-                int lastOffset = -1;
+                // set the interface to be implemented at the next offset
+                interfaceImpl->VTableOffset = virtualOfs;
+
+                // give all the methods their own offset
                 for (int vi = 0; vi < interface->VirtualMethods->Length; vi++) {
                     System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, interface->VirtualMethods->Data[vi]);
                     CHECK(implementation != NULL);
 
-                    // resolve/verify the offset is sequential
-                    if (lastOffset == -1) {
-                        lastOffset = implementation->VTableOffset;
-                        interfaceImpl->VTableOffset = lastOffset;
-                    } else {
-                        // try and reorder the vtable to make it fit
-                        if (lastOffset + 1 != implementation->VTableOffset) {
-                            int wanted_offset = lastOffset + 1;
-                            int got_offset = implementation->VTableOffset;
-                            System_Reflection_MethodInfo wanted_method = implementation;
-                            System_Reflection_MethodInfo got_method = type->VirtualMethods->Data[wanted_offset];
+                    // TODO: is there a case where this is not true?
+                    CHECK(implementation->VTableOffset == -1);
 
-                            // make sure we only reorder forward and not backwards, otherwise
-                            // we might break an existing vtable offset
-                            CHECK(wanted_offset < got_offset);
-
-                            // check that both can be replaced
-                            CHECK(method_is_new_slot(wanted_method));
-                            CHECK(method_is_new_slot(got_method));
-
-                            // replace the got method with the implementation for the vtable
-                            wanted_method->VTableOffset = wanted_offset;
-                            got_method->VTableOffset = got_offset;
-
-                            // update the vtable
-                            GC_UPDATE_ARRAY(type->VirtualMethods, got_method->VTableOffset, got_method);
-                            GC_UPDATE_ARRAY(type->VirtualMethods, wanted_method->VTableOffset, wanted_method);
-                        }
-
-                        CHECK(lastOffset + 1 == implementation->VTableOffset);
-                    }
-                    lastOffset = implementation->VTableOffset;
+                    implementation->VTableOffset = virtualOfs++;
                 }
+            }
+        }
+
+        // now that we have delt with all the interface implementations, we can
+        // set the entries for all the other virtual methods
+        for (int i = 0; i < type->Methods->Length; i++) {
+            System_Reflection_MethodInfo method = type->Methods->Data[i];
+
+            if (method_is_virtual(method)) {
+                // not assigned an offset yet, meaning that this
+                // is not an interface implementation
+                if (method->VTableOffset == -1) {
+                    method->VTableOffset = virtualOfs++;
+                }
+
+                // set in the correct place in the VirtualMethods table
+                GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
             }
         }
 
