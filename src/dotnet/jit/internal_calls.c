@@ -6,6 +6,7 @@
 #include "../types.h"
 #include "time/tsc.h"
 #include "thread/waitable.h"
+#include "converter.h"
 
 #include <thread/scheduler.h>
 
@@ -89,7 +90,70 @@ static method_result_t System_Threading_WaitHandle_ReleaseWaitable(waitable_t* w
 // System.Runtime.Intrinsics.X86
 //----------------------------------------------------------------------------------------------------------------------
 
+static System_Exception System_Runtime_Intrinsics_X86_X86Base_Pause() {
+    __builtin_ia32_pause();
+    return NULL;
+}
 
+//----------------------------------------------------------------------------------------------------------------------
+// System.Threading.Thread
+//----------------------------------------------------------------------------------------------------------------------
+
+static method_result_t System_Threading_Thread_get_CurrentThread(System_Object this) {
+    return (method_result_t) { .exception = NULL, .value = (uintptr_t) get_current_thread()->tcb->managed_thread };
+}
+
+static method_result_t System_Threading_Thread_Yield() {
+    // TODO: properly figure out if we got a reschedule or not, probably via
+    //       implementing it in the scheduler_yield function
+    scheduler_yield();
+    return (method_result_t){ .exception = NULL, .value = true };
+}
+
+static method_result_t System_Threading_Thread_GetNativeThreadState() {
+    return (method_result_t){ .exception = NULL, .value = get_thread_status(get_current_thread()) };
+}
+
+static method_result_t System_Threading_CreateNativeThread(System_Delegate delegate, System_Object thread) {
+    // first we need to get the invoke method, since it is going to be the actual
+    // entry point of the function
+    System_Type type = delegate->vtable->type;
+    System_Reflection_MethodInfo invoke = type->DelegateSignature;
+
+    // create the thread, the parameter is the delegate instance, and set
+    // the managed thread that is related to this thread
+    thread_t* new_thread = create_thread(invoke->MirFunc->addr, delegate, "dotnet/thread");
+    new_thread->tcb->managed_thread = new_thread;
+
+    // we need to keep an instance of the thread since
+    // the managed code stores it
+    put_thread(new_thread);
+
+    // return it
+    return (method_result_t){ .exception = NULL, .value = (uintptr_t) new_thread};
+}
+
+static System_Exception System_Threading_StartNativeThread(thread_t* thread, System_Object parameter) {
+    // the first argument is set to be the delegate, the second
+    // is going to be the actual parameter we want to pass
+    thread->save_state.rsi = (uint64_t) parameter;
+
+    // queue the thread for scheduling
+    scheduler_ready_thread(thread);
+
+    // no exception
+    return NULL;
+}
+
+static System_Exception System_Threading_ReleaseNativeThread(thread_t* thread) {
+    release_thread(thread);
+    return NULL;
+}
+
+static System_Exception System_Threading_SetNativeThreadName(thread_t* thread, System_String name) {
+    utf16_to_utf8(name->Chars, name->Length, (utf8_t*)thread->name, sizeof(thread->name));
+    return NULL;
+}
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Object
@@ -272,41 +336,33 @@ static System_Exception System_GC_KeepAlive(void* obj) {
 //----------------------------------------------------------------------------------------------------------------------
 
 internal_call_t g_internal_calls[] = {
-    {
-        "[Corelib-v1]System.Diagnostics.Stopwatch::GetTscFrequency()",
-        System_Diagnostic_Stopwatch_GetTscFrequency
-    },
-    {
-        "[Corelib-v1]System.Diagnostics.Stopwatch::GetTimestamp()",
-        System_Diagnostic_Stopwatch_GetTimestamp
-    },
-    {
-        "object::GetType()",
-            object_GetType,
-    },
-    {
-        "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)",
-        System_Array_ClearInternal,
-    },
-    {
-        "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)",
-        System_Array_CopyInternal,
-    },
-    {
-        "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)",
-        System_GC_Collect,
-    },
-    {
-        "[Corelib-v1]System.GC::KeepAlive(object)",
-        System_GC_KeepAlive,
-    },
+    { "object::GetType()", object_GetType },
 
-    { "[Corelib-v1]System.Threading.WaitHandle::WaitableSend(uint64,bool)", System_Threading_WaitHandle_WaitableSend },
-    { "[Corelib-v1]System.Threading.WaitHandle::WaitableWait(uint64,bool)", System_Threading_WaitHandle_WaitableWait },
-    { "[Corelib-v1]System.Threading.WaitHandle::WaitableSelect2(uint64,uint64,bool)", System_Threading_WaitHandle_WaitableSelect2 },
-    { "[Corelib-v1]System.Threading.WaitHandle::CreateWaitable(int32)", System_Threading_WaitHandle_CreateWaitable },
-    { "[Corelib-v1]System.Threading.WaitHandle::WaitableAfter(int64)", System_Threading_WaitHandle_WaitableAfter },
-    { "[Corelib-v1]System.Threading.WaitHandle::ReleaseWaitable(uint64)", System_Threading_WaitHandle_ReleaseWaitable },
+    { "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)", System_Array_ClearInternal },
+    { "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)", System_Array_CopyInternal },
+
+    { "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)", System_GC_Collect },
+    { "[Corelib-v1]System.GC::KeepAlive(object)", System_GC_KeepAlive },
+
+    { "[Corelib-v1]System.Runtime.Intrinsics.X86.X86Base::Pause()", System_Runtime_Intrinsics_X86_X86Base_Pause },
+
+    { "[Corelib-v1]System.Diagnostics.Stopwatch::GetTscFrequency()", System_Diagnostic_Stopwatch_GetTscFrequency },
+    { "[Corelib-v1]System.Diagnostics.Stopwatch::GetTimestamp()", System_Diagnostic_Stopwatch_GetTimestamp },
+
+    { "[Corelib-v1]System.Threading.Thread::get_CurrentThread()", System_Threading_Thread_get_CurrentThread },
+    { "[Corelib-v1]System.Threading.Thread::Yield()", System_Threading_Thread_Yield },
+    { "[Corelib-v1]System.Threading.Thread::GetNativeThreadState(uint64)", System_Threading_Thread_GetNativeThreadState },
+    { "[Corelib-v1]System.Threading.Thread::CreateNativeThread([Corelib-v1]System.Delegate,[Corelib-v1]System.Threading.Thread)", System_Threading_CreateNativeThread },
+    { "[Corelib-v1]System.Threading.Thread::StartNativeThread(uint64,object)", System_Threading_StartNativeThread },
+    { "[Corelib-v1]System.Threading.Thread::ReleaseNativeThread(uint64)", System_Threading_ReleaseNativeThread },
+    { "[Corelib-v1]System.Threading.Thread::SetNativeThreadName(uint64,string)", System_Threading_SetNativeThreadName },
+
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableSend(uint64,bool)",             System_Threading_WaitHandle_WaitableSend },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableWait(uint64,bool)",             System_Threading_WaitHandle_WaitableWait },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableSelect2(uint64,uint64,bool)",   System_Threading_WaitHandle_WaitableSelect2 },
+    { "[Corelib-v1]System.Threading.WaitHandle::CreateWaitable(int32)",                 System_Threading_WaitHandle_CreateWaitable },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableAfter(int64)",                  System_Threading_WaitHandle_WaitableAfter },
+    { "[Corelib-v1]System.Threading.WaitHandle::ReleaseWaitable(uint64)",               System_Threading_WaitHandle_ReleaseWaitable },
 
     { "[Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int32&,int32)", interlocked_add_i32 },
     { "[Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.UInt32&,uint32)", interlocked_add_u32 },

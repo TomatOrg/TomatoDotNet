@@ -217,6 +217,9 @@ static void gc_handshake_thread(void* arg) {
             gc_mark_ptr(regs->rcx);
             gc_mark_ptr(regs->rbx);
             gc_mark_ptr(regs->rax);
+
+            // the managed thread instance for this thread
+            gc_mark_ptr((uintptr_t) thread->tcb->managed_thread);
         }
 
         // set the status

@@ -5221,7 +5221,8 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "arg%d", i);
         MIR_reg_t arg_reg = MIR_reg(ctx->ctx, buffer, method->MirUnboxerFunc->u.func);
-        if (type_get_stack_type(method->Parameters->Data[i]->ParameterType) == STACK_TYPE_VALUE_TYPE) {
+        System_Type parameter_type = method->Parameters->Data[i]->ParameterType;
+        if (type_get_stack_type(parameter_type) == STACK_TYPE_VALUE_TYPE || type_is_interface(parameter_type)) {
             // pass struct by-value
             arrpush(ops, MIR_new_mem_op(ctx->ctx, MIR_T_BLK, method->Parameters->Data[i]->ParameterType->StackSize, arg_reg, 0, 1));
         } else {
