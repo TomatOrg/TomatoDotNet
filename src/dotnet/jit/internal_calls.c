@@ -27,7 +27,7 @@ void managed_memcpy(System_Object this, System_Type struct_type, size_t offset, 
         }
 
         // copy the managed reference
-        gc_update(this, offset + current_offset, *((System_Object*)from + current_offset));
+        gc_update(this, offset + current_offset, *(System_Object*)(from + current_offset));
 
         // increment past the pointer
         current_offset += sizeof(void*);

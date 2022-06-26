@@ -139,7 +139,7 @@ void gc_update_ref(void* ptr, void* new) {
     if (object != NULL) {
         gc_update(object, (uintptr_t)ptr - (uintptr_t)object, new);
     } else {
-        *((void**)ptr) = new;
+        write_field(ptr, 0, new);
     }
 }
 

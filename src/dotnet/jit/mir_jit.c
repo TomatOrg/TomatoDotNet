@@ -2926,11 +2926,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                             // storing to an object from an object
                             MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_call_insn(mir_ctx, 5,
-                                                              MIR_new_ref_op(mir_ctx, m_gc_update_proto),
-                                                              MIR_new_ref_op(mir_ctx, m_gc_update_func),
+                                            MIR_new_call_insn(mir_ctx, 4,
+                                                              MIR_new_ref_op(mir_ctx, m_gc_update_ref_proto),
+                                                              MIR_new_ref_op(mir_ctx, m_gc_update_ref_func),
                                                               MIR_new_reg_op(mir_ctx, addr_reg),
-                                                              MIR_new_int_op(mir_ctx, 0),
                                                               MIR_new_reg_op(mir_ctx, value_reg)));
                         }
                     } break;
