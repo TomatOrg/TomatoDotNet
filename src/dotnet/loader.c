@@ -1093,12 +1093,26 @@ err_t loader_fill_type(System_Type type) {
                         // should be a virtual method which can be overridden
                         CHECK(method_is_virtual(overridden));
                         CHECK(!method_is_final(overridden));
+                        CHECK(overridden->VTableOffset >= 0);
                         methodInfo->VTableOffset = overridden->VTableOffset;
                     }
                 }
             } else {
-                // make sure there isn't another method with this signature
-                CHECK(find_virtually_overridden_method(type, methodInfo) == NULL);
+                int index = 0;
+                System_Reflection_MethodInfo otherMethod = NULL;
+                while ((otherMethod = type_iterate_methods(type, methodInfo->Name, &index)) != NULL) {
+                    if (otherMethod == methodInfo) continue;
+                    if (otherMethod->ReturnType != methodInfo->ReturnType) continue;
+                    if (otherMethod->Parameters->Length != methodInfo->Parameters->Length) continue;
+                    bool all_matching = true;
+                    for (int j = 0; j < otherMethod->Parameters->Length; j++) {
+                        if (otherMethod->Parameters->Data[j] != methodInfo->Parameters->Data[j]) {
+                            all_matching = false;
+                            break;
+                        }
+                    }
+                    CHECK(!all_matching);
+                }
             }
 
             // for interfaces all methods need to be abstract
@@ -1165,9 +1179,51 @@ err_t loader_fill_type(System_Type type) {
                 if (methodInfo->VTableOffset >= 0) continue;
 
                 // set it
+                CHECK(virtual_index < virtualCount);
                 CHECK(type->VirtualMethods->Data[virtual_index] == NULL);
                 GC_UPDATE_ARRAY(type->VirtualMethods, virtual_index, methodInfo);
                 virtual_index++;
+            }
+        }
+        CHECK(virtual_index == virtualCount);
+
+        // setup the interface implementation offsets
+        if (type->InterfaceImpls != NULL) {
+            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
+                TinyDotNet_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
+                System_Type interface = interfaceImpl->InterfaceType;
+                CHECK_AND_RETHROW(loader_fill_type(interface));
+
+                // set the interface to be implemented at the next offset
+                interfaceImpl->VTableOffset = virtualOfs;
+
+                // give all the methods their own offset
+                for (int vi = 0; vi < interface->VirtualMethods->Length; vi++) {
+                    System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, interface->VirtualMethods->Data[vi]);
+                    CHECK(implementation != NULL);
+
+                    // TODO: is there a case where this is not true?
+                    CHECK(implementation->VTableOffset == -1);
+
+                    implementation->VTableOffset = virtualOfs++;
+                }
+            }
+        }
+
+        // now that we have delt with all the interface implementations, we can
+        // set the entries for all the other virtual methods
+        for (int i = 0; i < type->Methods->Length; i++) {
+            System_Reflection_MethodInfo method = type->Methods->Data[i];
+
+            if (method_is_virtual(method)) {
+                // not assigned an offset yet, meaning that this
+                // is not an interface implementation
+                if (method->VTableOffset == -1) {
+                    method->VTableOffset = virtualOfs++;
+                }
+
+                // set in the correct place in the VirtualMethods table
+                GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
             }
         }
 
@@ -1372,47 +1428,8 @@ err_t loader_fill_type(System_Type type) {
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // interface implementation handling
+        // Setup interface size and such
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        if (!type_is_abstract(type) && !type_is_interface(type) && type->InterfaceImpls != NULL) {
-            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
-                TinyDotNet_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
-                System_Type interface = interfaceImpl->InterfaceType;
-                CHECK_AND_RETHROW(loader_fill_type(interface));
-
-                // set the interface to be implemented at the next offset
-                interfaceImpl->VTableOffset = virtualOfs;
-
-                // give all the methods their own offset
-                for (int vi = 0; vi < interface->VirtualMethods->Length; vi++) {
-                    System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, interface->VirtualMethods->Data[vi]);
-                    CHECK(implementation != NULL);
-
-                    // TODO: is there a case where this is not true?
-                    CHECK(implementation->VTableOffset == -1);
-
-                    implementation->VTableOffset = virtualOfs++;
-                }
-            }
-        }
-
-        // now that we have delt with all the interface implementations, we can
-        // set the entries for all the other virtual methods
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo method = type->Methods->Data[i];
-
-            if (method_is_virtual(method)) {
-                // not assigned an offset yet, meaning that this
-                // is not an interface implementation
-                if (method->VTableOffset == -1) {
-                    method->VTableOffset = virtualOfs++;
-                }
-
-                // set in the correct place in the VirtualMethods table
-                GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
-            }
-        }
 
         if (type_is_interface(type)) {
             // make sure we have no fields
