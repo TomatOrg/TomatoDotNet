@@ -2000,8 +2000,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // prepare the variable type
         CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, variable->LocalType));
 
-        CHECK(body->InitLocals);
-
         // we are going to initialize all of the variables
         MIR_reg_t reg = new_reg(ctx, variable->LocalType);
         arrpush(locals, MIR_new_reg_op(mir_ctx, reg));
@@ -2012,6 +2010,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case STACK_TYPE_INT64:
             case STACK_TYPE_REF:
             case STACK_TYPE_INTPTR: {
+                // interface is a fat pointer, so treat it like a value type
+                if (type_is_interface(variable->LocalType)) {
+                    goto init_local_value_type;
+                }
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_MOV,
                                              MIR_new_reg_op(mir_ctx, reg),
@@ -2033,6 +2035,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 }
             } break;
 
+            init_local_value_type:
             case STACK_TYPE_VALUE_TYPE: {
                 jit_emit_zerofill(ctx, reg, variable->LocalType->StackSize);
             } break;
