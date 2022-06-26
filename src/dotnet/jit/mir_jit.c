@@ -23,6 +23,12 @@
 
 // TODO: we need a mir try-catch so we can recover from mir errors
 
+/**
+ * Uncomment to remove null-checks, out of memory checks, oob checks and more
+ * to make the JITed code a bit more readable
+ */
+//#define READABLE_JIT
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1283,6 +1289,10 @@ static err_t jit_new(jit_method_context_t* ctx, MIR_reg_t result, System_Type ty
                                       MIR_new_ref_op(mir_ctx, type->MirType),
                                       size));
 
+#ifdef READABLE_JIT
+    goto cleanup;
+#endif
+
     // this is an edge case, if we get to this point then just let it crash...
     if (type != tSystem_OutOfMemoryException) {
         // if we got NULL from the gc_new function it means we got an OOM
@@ -1532,6 +1542,10 @@ cleanup:
 static err_t jit_null_check(jit_method_context_t* ctx, MIR_reg_t reg, System_Type type) {
     err_t err = NO_ERROR;
 
+#ifdef READABLE_JIT
+    goto cleanup;
+#endif
+
     if (type == NULL) {
         // this is a null type, just throw it
         CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_NullReferenceException));
@@ -1573,6 +1587,10 @@ cleanup:
  */
 static err_t jit_oob_check(jit_method_context_t* ctx, MIR_reg_t array_reg, MIR_reg_t index_reg) {
     err_t err = NO_ERROR;
+
+#ifdef READABLE_JIT
+    goto cleanup;
+#endif
 
     MIR_label_t not_oob = MIR_new_label(mir_ctx);
     MIR_append_insn(mir_ctx, mir_func,
@@ -2745,16 +2763,17 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     case STACK_TYPE_VALUE_TYPE: {
                         // memcpy it
+                        MIR_reg_t memcpy_base_reg = new_reg(ctx, tSystem_Object);
 
                         // first get the base for memcpy
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_ADD,
-                                                     MIR_new_reg_op(mir_ctx, obj_reg),
+                                                     MIR_new_reg_op(mir_ctx, memcpy_base_reg),
                                                      MIR_new_reg_op(mir_ctx, obj_reg),
                                                      MIR_new_int_op(mir_ctx, tSystem_Object->ManagedSize)));
 
                         // now emit the memcpy
-                        jit_emit_memcpy(ctx, obj_reg, val_reg, operand_type->ManagedSize);
+                        jit_emit_memcpy(ctx, memcpy_base_reg, val_reg, operand_type->ManagedSize);
                     } break;
 
                     case STACK_TYPE_REF:
@@ -4452,8 +4471,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // TODO: optimize dispatch on sealed classes
                 if (
                     opcode == CEE_CALLVIRT &&
-                    method_is_virtual(operand_method) &&
-                    !this_type->IsByRef
+                    method_is_virtual(operand_method)
                 ) {
                     // we are using callvirt and this is a virtual method, so we have to
                     // use a dynamic dispatch
@@ -4497,16 +4515,28 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         }
                     }
 
-                    // get the address of the function from the vtable
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                                 MIR_new_reg_op(mir_ctx, temp_reg),
-                                                 MIR_new_mem_op(mir_ctx, MIR_T_P,
-                                                                offset + vtable_index * sizeof(void*),
-                                                                temp_reg, 0, 1)));
+                    if (this_type->IsByRef) {
+                        // we have a ref on the stack, which means it must be a value type, so we can call the actual
+                        // method directly since all value types are sealed by default
+                        CHECK(type_is_sealed(this_type->BaseType));
+                        arg_ops[1] = MIR_new_ref_op(mir_ctx, this_type->BaseType->VirtualMethods->Data[vtable_index]->MirFunc);
+                    } else if (type_is_sealed(this_type)) {
+                        // this is an instance class which is a sealed class, choose the unboxer form if exists and the
+                        // normal one otherwise
+                        System_Reflection_MethodInfo m = this_type->VirtualMethods->Data[vtable_index];
+                        arg_ops[1] = MIR_new_ref_op(mir_ctx, m->MirUnboxerFunc ?: m->MirFunc);
+                    } else {
+                        // get the address of the function from the vtable
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                     MIR_new_reg_op(mir_ctx, temp_reg),
+                                                     MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                                    offset + vtable_index * sizeof(void*),
+                                                                    temp_reg, 0, 1)));
 
-                    // indirect call
-                    arg_ops[1] = MIR_new_reg_op(mir_ctx, temp_reg);
+                        // indirect call
+                        arg_ops[1] = MIR_new_reg_op(mir_ctx, temp_reg);
+                    }
                 } else {
                     // static dispatch
                     arg_ops[1] = MIR_new_ref_op(mir_ctx, operand_method->MirFunc);

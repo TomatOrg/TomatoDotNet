@@ -1012,7 +1012,6 @@ err_t loader_fill_type(System_Type type) {
     if (type == tSystem_ValueType) {
         type->IsValueType = true;
         type->StackType = STACK_TYPE_VALUE_TYPE;
-        goto cleanup;
     }
 
     // first check the parent
@@ -1044,10 +1043,13 @@ err_t loader_fill_type(System_Type type) {
             virtualOfs = virtualCount;
         }
 
-        // get the managed size
-        managedSize = type->BaseType->ManagedSize;
-        managedSizePrev = managedSize;
-        managedAlignment = type->BaseType->ManagedAlignment;
+        // get the managed size, only needed for any type which is not the
+        // value type which starts without the actual size of the object class
+        if (type != tSystem_ValueType) {
+            managedSize = type->BaseType->ManagedSize;
+            managedSizePrev = managedSize;
+            managedAlignment = type->BaseType->ManagedAlignment;
+        }
 
         // copy the managed pointers offsets
         for (int i = 0; i < arrlen(type->BaseType->ManagedPointersOffsets); i++) {
@@ -1635,14 +1637,14 @@ typedef struct type_init {
 
 static type_init_t m_type_init[] = {
     TYPE_INIT("System", "Exception", System_Exception, 5),
-    VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE, 0),
-    VALUE_TYPE_INIT("System", "ValueType", System_ValueType, STACK_TYPE_VALUE_TYPE, 0),
+    VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE, 3),
+    VALUE_TYPE_INIT("System", "ValueType", System_ValueType, STACK_TYPE_VALUE_TYPE, 3),
     TYPE_INIT("System", "Object", System_Object, 3),
     TYPE_INIT("System", "Type", System_Type, 3),
     TYPE_INIT("System", "Array", System_Array, 3),
     TYPE_INIT("System", "String", System_String, 5),
-    VALUE_TYPE_INIT("System", "Boolean", System_Boolean, STACK_TYPE_INT32, 0),
-    VALUE_TYPE_INIT("System", "Char", System_Char, STACK_TYPE_INT32, 0),
+    VALUE_TYPE_INIT("System", "Boolean", System_Boolean, STACK_TYPE_INT32, 3),
+    VALUE_TYPE_INIT("System", "Char", System_Char, STACK_TYPE_INT32, 3),
     VALUE_TYPE_INIT("System", "SByte", System_SByte, STACK_TYPE_INT32, 3),
     VALUE_TYPE_INIT("System", "Byte", System_Byte, STACK_TYPE_INT32, 3),
     VALUE_TYPE_INIT("System", "Int16", System_Int16, STACK_TYPE_INT32, 3),
@@ -1651,8 +1653,8 @@ static type_init_t m_type_init[] = {
     VALUE_TYPE_INIT("System", "UInt32", System_UInt32, STACK_TYPE_INT32, 3),
     VALUE_TYPE_INIT("System", "Int64", System_Int64, STACK_TYPE_INT64, 3),
     VALUE_TYPE_INIT("System", "UInt64", System_UInt64, STACK_TYPE_INT64, 3),
-    VALUE_TYPE_INIT("System", "Single", System_Single, STACK_TYPE_FLOAT, 0),
-    VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT, 0),
+    VALUE_TYPE_INIT("System", "Single", System_Single, STACK_TYPE_FLOAT, 3),
+    VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT, 3),
     VALUE_TYPE_INIT("System", "IntPtr", System_IntPtr, STACK_TYPE_INTPTR, 3),
     VALUE_TYPE_INIT("System", "UIntPtr", System_UIntPtr, STACK_TYPE_INTPTR, 3),
     TYPE_INIT("System", "Delegate", System_Delegate, 3),
