@@ -1190,7 +1190,7 @@ err_t loader_fill_type(System_Type type) {
         CHECK(virtual_index == virtualCount);
 
         // setup the interface implementation offsets
-        if (type->InterfaceImpls != NULL) {
+        if (!type_is_interface(type) && type->InterfaceImpls != NULL) {
             for (int i = 0; i < type->InterfaceImpls->Length; i++) {
                 TinyDotNet_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
                 System_Type interface = interfaceImpl->InterfaceType;
