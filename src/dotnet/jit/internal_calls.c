@@ -7,6 +7,7 @@
 #include "time/tsc.h"
 #include "thread/waitable.h"
 #include "converter.h"
+#include "dotnet/monitor.h"
 
 #include <thread/scheduler.h>
 
@@ -57,6 +58,25 @@ static method_result_t System_Diagnostic_Stopwatch_GetTscFrequency() {
 
 static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
     return (method_result_t) { .exception = NULL, .value = get_tsc() };
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// System.Threading.Monitor
+//----------------------------------------------------------------------------------------------------------------------
+
+// TODO: figure how to properly throw errors from native code...
+
+static method_result_t System_Threading_Monitor_EnterInternal(System_Object obj, bool* lockTaken) {
+    err_t err = monitor_enter(obj);
+    if (err == NO_ERROR) {
+        *lockTaken = true;
+    }
+    return (method_result_t) { .exception = NULL, .value = err };
+}
+
+static method_result_t System_Threading_Monitor_ExitInternal(System_Object obj) {
+    err_t err = monitor_exit(obj);
+    return (method_result_t) { .exception = NULL, .value = err };
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -346,6 +366,9 @@ internal_call_t g_internal_calls[] = {
 
     { "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)", System_GC_Collect },
     { "[Corelib-v1]System.GC::KeepAlive(object)", System_GC_KeepAlive },
+
+    { "[Corelib-v1]System.Threading.Monitor::EnterInternal(object,[Corelib-v1]System.Boolean&)", System_Threading_Monitor_EnterInternal },
+    { "[Corelib-v1]System.Threading.Monitor::ExitInternal(object)", System_Threading_Monitor_ExitInternal },
 
     { "[Corelib-v1]System.Runtime.Intrinsics.X86.X86Base::Pause()", System_Runtime_Intrinsics_X86_X86Base_Pause },
 
