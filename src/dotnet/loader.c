@@ -667,25 +667,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE_ARRAY(assembly->DefinedMemberRefs, i, member);
     }
 
-    //
-    // Save aside everything from the method spec
-    //
-
-    int method_spec_count = metadata->tables[METADATA_METHOD_SPEC].rows;
-    metadata_method_spec_t* method_spec = metadata->tables[METADATA_METHOD_SPEC].table;
-    GC_UPDATE(assembly, DefinedMethodSpecs, GC_NEW_ARRAY(get_array_type(tTinyDotNet_Reflection_MethodSpec), method_spec_count));
-    for (int i = 0; i < method_spec_count; i++) {
-        System_Reflection_MethodInfo method = NULL;
-        metadata_method_spec_t* spec = &method_spec[i];
-        TinyDotNet_Reflection_MethodSpec methodSpec = GC_NEW(tTinyDotNet_Reflection_MethodSpec);
-        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->method, NULL, NULL, &method));
-        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->instantiation.size);
-        memcpy(blob->Data, spec->instantiation.data, spec->instantiation.size);
-        GC_UPDATE(methodSpec, Instantiation, blob);
-        GC_UPDATE(methodSpec, Method, method);
-        GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
-    }
-
     //------------------------------------------------------------------------------------------------------------------
     // Setup generic type/method arguments
     //------------------------------------------------------------------------------------------------------------------
@@ -717,11 +698,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         if (parami == -1) {
             CHECK(generic_param->number == 0);
             System_Type* arr = NULL;
-            arrpush(arr, typeParam);
+                    arrpush(arr, typeParam);
             hmput(owner_generic_params, owner, arr);
         } else {
             CHECK(generic_param->number == arrlen(owner_generic_params[parami].value));
-            arrpush(owner_generic_params[parami].value, typeParam);
+                    arrpush(owner_generic_params[parami].value, typeParam);
         }
     }
 
@@ -758,6 +739,30 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
                 }
             }
         }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Now continue with anything that requires assembly_get_type_by_token, as we have all
+    // the basic definitions (including generics)
+    //------------------------------------------------------------------------------------------------------------------
+
+    //
+    // Save aside everything from the method spec
+    //
+
+    int method_spec_count = metadata->tables[METADATA_METHOD_SPEC].rows;
+    metadata_method_spec_t* method_spec = metadata->tables[METADATA_METHOD_SPEC].table;
+    GC_UPDATE(assembly, DefinedMethodSpecs, GC_NEW_ARRAY(get_array_type(tTinyDotNet_Reflection_MethodSpec), method_spec_count));
+    for (int i = 0; i < method_spec_count; i++) {
+        System_Reflection_MethodInfo method = NULL;
+        metadata_method_spec_t* spec = &method_spec[i];
+        TinyDotNet_Reflection_MethodSpec methodSpec = GC_NEW(tTinyDotNet_Reflection_MethodSpec);
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->method, NULL, NULL, &method));
+        System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->instantiation.size);
+        memcpy(blob->Data, spec->instantiation.data, spec->instantiation.size);
+        GC_UPDATE(methodSpec, Instantiation, blob);
+        GC_UPDATE(methodSpec, Method, method);
+        GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
     }
 
     //------------------------------------------------------------------------------------------------------------------
