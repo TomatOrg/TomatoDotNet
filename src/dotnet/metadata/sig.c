@@ -4,28 +4,6 @@
 #include "sig_spec.h"
 #include "dotnet/loader.h"
 
-
-static err_t parse_custom_mod(blob_entry_t* sig, bool* found) {
-    err_t err = NO_ERROR;
-
-    CHECK(sig->size > 0);
-
-    if (sig->data[0] == ELEMENT_TYPE_CMOD_OPT || sig->data[0] == ELEMENT_TYPE_CMOD_REQD) {
-        // got a custom mod
-        NEXT_BYTE;
-
-        // TODO: this
-        ASSERT(!"TODO: handle this!");
-
-        *found = true;
-    } else {
-        *found = false;
-    }
-
-cleanup:
-    return err;
-}
-
 static int m_idx_to_table[] = {
     [0] = METADATA_TYPE_DEF,
     [1] = METADATA_TYPE_REF,
@@ -77,6 +55,34 @@ static err_t parse_type_def_or_ref_or_spec_encoded(blob_entry_t* sig, token_t* t
         .table = table,
         .index = index
     };
+
+cleanup:
+    return err;
+}
+
+
+static err_t parse_custom_mod(blob_entry_t* sig, System_Reflection_Assembly assembly, System_Type* out_type, bool* required) {
+    err_t err = NO_ERROR;
+
+    CHECK(sig->size > 0);
+
+    if (sig->data[0] == ELEMENT_TYPE_CMOD_OPT || sig->data[0] == ELEMENT_TYPE_CMOD_REQD) {
+        // set the required properly
+        *required = sig->data[0] == ELEMENT_TYPE_CMOD_REQD;
+        NEXT_BYTE;
+
+        // get the token
+        token_t token;
+        CHECK_AND_RETHROW(parse_type_def_or_ref_or_spec_encoded(sig, &token));
+        CHECK(token.table == METADATA_TYPE_DEF || token.table == METADATA_TYPE_REF);
+
+        // resolve the token
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, token, NULL, NULL, out_type));
+
+        TRACE("Got modifier %U - %s", (*out_type)->Name, required ? "required" : "optional");
+    } else {
+        *out_type = NULL;
+    }
 
 cleanup:
     return err;
@@ -207,12 +213,19 @@ static err_t parse_ret_type(
 )  {
     err_t err = NO_ERROR;
 
-    // get custom mods
-    // TODO: wtf is a custom mod
-    bool found = false;
-    do {
-        CHECK_AND_RETHROW(parse_custom_mod(sig, &found));
-    } while (found);
+
+    // Handle custom mod
+    System_Type mod = NULL;
+    bool required = false;
+    while (true) {
+        CHECK_AND_RETHROW(parse_custom_mod(sig, assembly, &mod, &required));
+        if (mod == NULL) {
+            break;
+        }
+
+        // TODO: wth
+        CHECK(!required);
+    }
 
     // actually get the type
     bool is_by_ref = false;
@@ -260,12 +273,19 @@ static err_t parse_param(
 ) {
     err_t err = NO_ERROR;
 
-    // get custom mods
-    // TODO: wtf is a custom mod
-    bool found = false;
-    do {
-        CHECK_AND_RETHROW(parse_custom_mod(sig, &found));
-    } while (found);
+
+    // Handle custom mod
+    System_Type mod = NULL;
+    bool required = false;
+    while (true) {
+        CHECK_AND_RETHROW(parse_custom_mod(sig, assembly, &mod, &required));
+        if (mod == NULL) {
+            break;
+        }
+
+        // TODO: wth
+        CHECK(!required);
+    }
 
     // actually get the type
     bool is_by_ref = false;
@@ -306,12 +326,18 @@ err_t parse_field_sig(blob_entry_t _sig, System_Reflection_FieldInfo field, pe_f
     // make sure this even points to a field
     EXPECT_BYTE(FIELD);
 
-    // get custom mods
-    // TODO: wtf is a custom mod
-    bool found = false;
-    do {
-        CHECK_AND_RETHROW(parse_custom_mod(sig, &found));
-    } while (found);
+    // Handle custom mod
+    System_Type mod = NULL;
+    bool required = false;
+    while (true) {
+        CHECK_AND_RETHROW(parse_custom_mod(sig, field->Module->Assembly, &mod, &required));
+        if (mod == NULL) {
+            break;
+        }
+
+        // TODO: wth
+        CHECK(!required);
+    }
 
     // parse the actual field
     CHECK_AND_RETHROW(parse_type(
@@ -486,7 +512,7 @@ cleanup:
     return err;
 }
 
-err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata) {
+err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
 
@@ -512,8 +538,7 @@ err_t parse_stand_alone_local_var_sig(blob_entry_t _sig, System_Reflection_Metho
         }
 
         // handle custom mod
-        bool found = false;
-        CHECK_AND_RETHROW(parse_custom_mod(sig, &found));
+        // TODO:
 
         // handle constraint
         // TODO:

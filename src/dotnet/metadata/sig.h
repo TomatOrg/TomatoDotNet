@@ -37,4 +37,4 @@ err_t parse_method_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, 
 
 err_t parse_type_spec(blob_entry_t sig, System_Reflection_Assembly assembly, System_Type* out_type, System_Type_Array typeArgs, System_Type_Array methodArgs);
 
-err_t parse_stand_alone_local_var_sig(blob_entry_t sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata);
+err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata);

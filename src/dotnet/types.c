@@ -185,9 +185,6 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
         case METADATA_METHOD_DEF: {
             CHECK(token.index - 1 < assembly->DefinedMethods->Length);
             System_Reflection_MethodInfo method = assembly->DefinedMethods->Data[token.index - 1];
-            if (method->GenericArguments != NULL) {
-                CHECK_FAIL("TODO: instantiate generic method");
-            }
             *out_method = method;
         } break;
 

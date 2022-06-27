@@ -136,7 +136,7 @@ static err_t parse_method_cil(System_Reflection_MethodInfo method, blob_entry_t 
             CHECK(header->local_var_sig_tok.index > 0);
             CHECK(header->local_var_sig_tok.index <= standalone_sigs_count);
             blob_entry_t signature = standalone_sigs[header->local_var_sig_tok.index - 1].signature;
-            CHECK_AND_RETHROW(parse_stand_alone_local_var_sig(signature, method, file, metadata));
+            CHECK_AND_RETHROW(parse_local_var_sig(signature, method, file, metadata));
         } else {
             // empty array for ease of use
             GC_UPDATE(body, LocalVariables, GC_NEW_ARRAY(tSystem_Reflection_LocalVariableInfo, 0));
@@ -742,6 +742,16 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     }
 
     //------------------------------------------------------------------------------------------------------------------
+    // We are done with all the basics, now for the real fun which is parsing all the fields and methods, this
+    // requires us to work in a recursive manner sadly, because there is no order made by the compiler
+    //------------------------------------------------------------------------------------------------------------------
+
+    for (int i = 0; i < types_count; i++) {
+        System_Type type = assembly->DefinedTypes->Data[i];
+        CHECK_AND_RETHROW(loader_setup_type(file, metadata, type));
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
     // Now continue with anything that requires assembly_get_type_by_token, as we have all
     // the basic definitions (including generics)
     //------------------------------------------------------------------------------------------------------------------
@@ -763,16 +773,6 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE(methodSpec, Instantiation, blob);
         GC_UPDATE(methodSpec, Method, method);
         GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
-    }
-
-    //------------------------------------------------------------------------------------------------------------------
-    // We are done with all the basics, now for the real fun which is parsing all the fields and methods, this
-    // requires us to work in a recursive manner sadly, because there is no order made by the compiler
-    //------------------------------------------------------------------------------------------------------------------
-
-    for (int i = 0; i < types_count; i++) {
-        System_Type type = assembly->DefinedTypes->Data[i];
-        CHECK_AND_RETHROW(loader_setup_type(file, metadata, type));
     }
 
     //------------------------------------------------------------------------------------------------------------------
