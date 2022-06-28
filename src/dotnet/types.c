@@ -1304,6 +1304,8 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
     GC_UPDATE(instance, Module, method->Module);
     GC_UPDATE(instance, DeclaringType, type);
     GC_UPDATE(instance, Name, method->Name);
+    GC_UPDATE(instance, GenericArguments, method->GenericArguments);
+    GC_UPDATE(instance, GenericMethodDefinition, method->GenericMethodDefinition);
     GC_UPDATE(instance, ReturnType, expand_type(method->ReturnType, arguments, ignore_arguments));
     instance->Attributes = method->Attributes;
     instance->ImplAttributes = method->ImplAttributes;
@@ -1628,6 +1630,8 @@ System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo me
     System_Reflection_MethodInfo instance = expand_method(method->DeclaringType, method, arguments, true);
 
     GC_UPDATE(instance, GenericArguments, arguments);
+    GC_UPDATE(instance, GenericMethodDefinition, method);
+
     GC_UPDATE(instance, NextGenericInstance, method->NextGenericInstance);
     GC_UPDATE(method, NextGenericInstance, instance);
 
