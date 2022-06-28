@@ -147,6 +147,8 @@ static err_t parse_type(
             CHECK_AND_RETHROW(parse_compressed_integer(sig, &gen_arg_count));
             CHECK(gen_arg_count == type->GenericArguments->Length);
 
+            typeArgs = typeArgs ?: type->GenericArguments;
+
             System_Type_Array newTypeArgs = GC_NEW_ARRAY(tSystem_Type, gen_arg_count);
             for (int i = 0; i < gen_arg_count; i++) {
                 System_Type type_arg = NULL;
