@@ -1094,7 +1094,7 @@ err_t loader_fill_type(System_Type type) {
                         virtualCount++;
                     } else {
                         if (method_is_strict(overridden)) {
-                            CHECK_FAIL("TODO: handle strict");
+                            CHECK(check_method_accessibility(methodInfo, overridden));
                         }
 
                         // should be a virtual method which can be overridden
