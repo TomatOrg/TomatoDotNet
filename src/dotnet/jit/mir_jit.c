@@ -3862,6 +3862,25 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 }
             } break;
 
+            case CEE_LDSFLDA: {
+                // only static fields
+                CHECK(field_is_static(operand_field));
+
+                // Get the field type
+                System_Type field_stack_type = get_by_ref_type(type_get_verification_type(operand_field->FieldType));
+                System_Type field_type = type_get_underlying_type(operand_field->FieldType);
+
+                // push it
+                MIR_reg_t value_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
+
+                // very simple, just move the reference to the value field
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, value_reg),
+                                             MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+            } break;
+
             case CEE_STFLD: {
                 // get the values
                 MIR_reg_t obj_reg;
