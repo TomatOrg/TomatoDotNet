@@ -1576,10 +1576,10 @@ static err_t connect_nested_types(System_Reflection_Assembly assembly, metadata_
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, nested_class->enclosing_class, NULL, NULL, &enclosing));
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, nested_class->nested_class, NULL, NULL, &nested));
         CHECK(enclosing != NULL && nested != NULL);
-        nested->DeclaringType = enclosing;
+        GC_UPDATE(nested, DeclaringType, enclosing);
 
-        nested->NextNestedType = enclosing->NestedTypes;
-        enclosing->NestedTypes = nested;
+        GC_UPDATE(nested, NextNestedType, enclosing->NestedTypes);
+        GC_UPDATE(enclosing, NestedTypes, nested);
     }
 
 cleanup:
