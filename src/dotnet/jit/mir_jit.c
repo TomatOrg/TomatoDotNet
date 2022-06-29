@@ -5579,7 +5579,8 @@ err_t jit_type(System_Type type) {
         if (created_type->StaticCtor != NULL) {
             System_Exception(*cctor)() = created_type->StaticCtor->MirFunc->addr;
             System_Exception exception = cctor();
-            CHECK(exception == NULL);
+            CHECK(exception == NULL, "Type initializer for %U: `%U`",
+                  created_type->Name, exception->Message);
         }
     }
 
