@@ -27,7 +27,7 @@
  * Uncomment to remove null-checks, out of memory checks, oob checks and more
  * to make the JITed code a bit more readable
  */
-//#define READABLE_JIT
+#define READABLE_JIT
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
@@ -2355,9 +2355,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             // save the constrained type for use in the next instruction
             case CEE_CONSTRAINED: {
                 constrainedType = operand_type;
-
-                // TODO: does it make sense to have ref type in here
-                CHECK(operand_type->IsValueType);
             } break;
 
             case CEE_READONLY: {
@@ -4452,7 +4449,20 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                         if (constrainedType != NULL) {
                             CHECK(this_type->IsByRef);
-                            signature_this_type = get_by_ref_type(constrainedType);
+                            CHECK(this_type->BaseType == constrainedType);
+
+                            // If this_type is a reference type (as opposed to a value type)
+                            if (type_is_object_ref(constrainedType)) {
+                                // ptr is dereferenced and passed as the ‘this’ pointer to the callvirt of method
+                                this_type = constrainedType;
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                                                MIR_new_reg_op(mir_ctx, this_reg),
+                                                                MIR_new_mem_op(mir_ctx, MIR_T_P, 0, this_reg, 0, 1)));
+                            } else {
+                                // this is a value type, the signature this is a reference
+                                signature_this_type = get_by_ref_type(constrainedType);
+                            }
 
                             // get the static dispatch, the call later will
                             // actually handle making sure this is correct
