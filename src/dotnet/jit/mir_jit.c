@@ -1984,10 +1984,16 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     method_print_full_name(method, &method_name);
 
 #ifdef JIT_TRACE
-    TRACE(".method %s %s %s",
+    strbuilder_t ret_type_name = strbuilder_new();
+    type_print_full_name(method->ReturnType, &ret_type_name);
+
+    TRACE(".method %s %s %s %s",
           method_access_str(method_get_access(method)),
           method_is_static(method) ? "static" : "instance",
+          strbuilder_get(&method_name),
           strbuilder_get(&method_name));
+    strbuilder_free(&ret_type_name);
+
     TRACE("{");
     TRACE("\t.maxstack %d", body->MaxStackSize);
 #endif

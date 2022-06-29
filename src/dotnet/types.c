@@ -835,6 +835,7 @@ static const char* handle_builtin(System_Type type) {
     else if (type == tSystem_String) return "string";
     else if (type == tSystem_Single) return "float32";
     else if (type == tSystem_Double) return "float64";
+    else if (type == NULL) return "void";
     else return NULL;
 }
 
