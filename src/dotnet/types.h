@@ -732,6 +732,19 @@ System_Type get_this_type(System_Reflection_MethodInfo signature);
 System_Type type_make_generic(System_Type type, System_Type_Array arguments);
 
 /**
+ * Updates the interface impl to the given one, this is needed because interface impls are created
+ * during a later stage than the inital type loading, which could cause a generic type to be created
+ * before an interface impl was done, but it still depends on interface impls, so we just udpate it
+ * again at a later stage during type init (during runtime it should be fine)
+ */
+void type_expand_interface_impls(System_Type type, TinyDotNet_Reflection_InterfaceImpl_Array interfaceImpls);
+
+/**
+ * Same as the interface impls
+ */
+void type_expand_method_impls(System_Type type, TinyDotNet_Reflection_MethodImpl_Array impls);
+
+/**
  * Make a new generic method with the given generic arguments
  */
 System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments);

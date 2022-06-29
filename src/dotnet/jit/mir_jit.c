@@ -1990,7 +1990,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     TRACE(".method %s %s %s %s",
           method_access_str(method_get_access(method)),
           method_is_static(method) ? "static" : "instance",
-          strbuilder_get(&method_name),
+          strbuilder_get(&ret_type_name),
           strbuilder_get(&method_name));
     strbuilder_free(&ret_type_name);
 

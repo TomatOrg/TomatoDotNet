@@ -1483,6 +1483,25 @@ static System_Reflection_MethodInfo find_expanded_method(System_Reflection_Metho
     return methodInfo;
 }
 
+void type_expand_interface_impls(System_Type instance, TinyDotNet_Reflection_InterfaceImpl_Array interfaceImpls) {
+    GC_UPDATE(instance, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, interfaceImpls->Length));
+    for (int i = 0; i < instance->InterfaceImpls->Length; i++) {
+        TinyDotNet_Reflection_InterfaceImpl impl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+        impl->InterfaceType = expand_type(interfaceImpls->Data[i]->InterfaceType, instance->GenericArguments, NULL);
+        GC_UPDATE_ARRAY(instance->InterfaceImpls, i, impl);
+    }
+}
+
+void type_expand_method_impls(System_Type instance, TinyDotNet_Reflection_MethodImpl_Array impls) {
+    GC_UPDATE(instance, MethodImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_MethodImpl, impls->Length));
+    for (int i = 0; i < instance->MethodImpls->Length; i++) {
+        TinyDotNet_Reflection_MethodImpl impl = GC_NEW(tTinyDotNet_Reflection_MethodImpl);
+        GC_UPDATE(impl, Body, find_expanded_method(impls->Data[i]->Body, instance->GenericArguments));
+        GC_UPDATE(impl, Declaration, find_expanded_method(impls->Data[i]->Declaration, instance->GenericArguments));
+        GC_UPDATE_ARRAY(instance->MethodImpls, i, impl);
+    }
+}
+
 System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
     ASSERT(type_is_generic_definition(type));
 
@@ -1580,22 +1599,12 @@ System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
 
     // interfaces
     if (type->InterfaceImpls != NULL) {
-        GC_UPDATE(instance, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, type->InterfaceImpls->Length));
-        for (int i = 0; i < instance->InterfaceImpls->Length; i++) {
-            TinyDotNet_Reflection_InterfaceImpl impl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
-            impl->InterfaceType = expand_type(type->InterfaceImpls->Data[i]->InterfaceType, arguments, NULL);
-            GC_UPDATE_ARRAY(instance->InterfaceImpls, i, impl);
-        }
+        type_expand_interface_impls(instance, type->InterfaceImpls);
     }
 
+    // method impls
     if (type->MethodImpls != NULL) {
-        GC_UPDATE(instance, MethodImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_MethodImpl, type->MethodImpls->Length));
-        for (int i = 0; i < instance->MethodImpls->Length; i++) {
-            TinyDotNet_Reflection_MethodImpl impl = GC_NEW(tTinyDotNet_Reflection_MethodImpl);
-            GC_UPDATE(impl, Body, find_expanded_method(type->MethodImpls->Data[i]->Body, arguments));
-            GC_UPDATE(impl, Declaration, find_expanded_method(type->MethodImpls->Data[i]->Declaration, arguments));
-            GC_UPDATE_ARRAY(instance->MethodImpls, i, impl);
-        }
+        type_expand_method_impls(instance, type->MethodImpls);
     }
 
     return instance;

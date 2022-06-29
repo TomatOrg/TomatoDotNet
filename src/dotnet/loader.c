@@ -809,6 +809,13 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             GC_UPDATE(interfaceImpl, InterfaceType, interfaces[i].value[j]);
             GC_UPDATE_ARRAY(type->InterfaceImpls, j, interfaceImpl);
         }
+
+        // Update the created interfaces of the interface impls
+        System_Type genericChild = type->NextGenericInstance;
+        while (genericChild != NULL) {
+            type_expand_interface_impls(genericChild, type->InterfaceImpls);
+            genericChild = genericChild->NextGenericInstance;
+        }
     }
 
     //------------------------------------------------------------------------------------------------------------------
@@ -865,6 +872,13 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE(type, MethodImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_MethodImpl, arrlen(method_impls_table[i].value)));
         for (int j = 0; j < arrlen(method_impls_table[i].value); j++) {
             GC_UPDATE_ARRAY(type->MethodImpls, j, method_impls_table[i].value[j]);
+        }
+
+        // Update the created interfaces of the interface impls
+        System_Type genericChild = type->NextGenericInstance;
+        while (genericChild != NULL) {
+            type_expand_method_impls(genericChild, type->MethodImpls);
+            genericChild = genericChild->NextGenericInstance;
         }
     }
 
@@ -1070,12 +1084,12 @@ err_t loader_fill_type(System_Type type) {
         }
     }
 
-    // make sure this was primed already
-    CHECK(type->Methods != NULL);
-    CHECK(type->Fields != NULL);
-
     // this is only needed for non-generic types
-    if (!type_is_generic_definition(type)) {
+    if (!type_is_generic_definition(type) && !type_is_generic_parameter(type)) {
+        // make sure this was primed already
+        CHECK(type->Methods != NULL);
+        CHECK(type->Fields != NULL);
+
         // first we need to take care of the virtual method table
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
@@ -1830,6 +1844,9 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     assembly->DefinedFields = gc_new(NULL, sizeof(struct System_Array) + field_count * sizeof(System_Reflection_FieldInfo));
     assembly->DefinedFields->Length = field_count;
 
+    // we need the nested types before we finish up the setup type info
+    CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
+
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
@@ -1857,8 +1874,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
         assembly->DefinedTypes->Data[i]->vtable = tSystem_Type->VTable;
     }
 
-    // all the last setup
-    CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
+    // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
 
     // save this
@@ -1920,11 +1936,13 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     GC_UPDATE(assembly, DefinedMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, method_count));
     GC_UPDATE(assembly, DefinedFields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, field_count));
 
+    // we need the nested types before we finish up the setup type info
+    CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
+
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
-    // all the last setup
-    CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
+    // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
 
     // get the entry point
