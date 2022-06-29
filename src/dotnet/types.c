@@ -1639,9 +1639,25 @@ System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo me
 
     System_Reflection_MethodInfo instance = expand_method(method->DeclaringType, method, arguments, true);
 
+    // create the unique name
+    strbuilder_t builder = strbuilder_new();
+    strbuilder_utf16(&builder, instance->Name->Chars, instance->Name->Length);
+    strbuilder_char(&builder, '<');
+    for (int i = 0; i < arguments->Length; i++) {
+        type_print_full_name(arguments->Data[i], &builder);
+        if (i + 1 != arguments->Length) {
+            strbuilder_char(&builder, ',');
+        }
+    }
+    strbuilder_char(&builder, '>');
+    GC_UPDATE(instance, Name, new_string_from_cstr(strbuilder_get(&builder)));
+    strbuilder_free(&builder);
+
+    // set the generic arguments
     GC_UPDATE(instance, GenericArguments, arguments);
     GC_UPDATE(instance, GenericMethodDefinition, method);
 
+    // insert to the list
     GC_UPDATE(instance, NextGenericInstance, method->NextGenericInstance);
     GC_UPDATE(method, NextGenericInstance, instance);
 
