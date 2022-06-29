@@ -29,6 +29,12 @@
  */
 //#define READABLE_JIT
 
+
+/**
+ * Uncomment to make the jit trace the IL opcodes it is trying to figure out
+ */
+//#define JIT_TRACE
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1977,6 +1983,15 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     strbuilder_t method_name = strbuilder_new();
     method_print_full_name(method, &method_name);
 
+#ifdef JIT_TRACE
+    TRACE(".method %s %s %s",
+          method_access_str(method_get_access(method)),
+          method_is_static(method) ? "static" : "instance",
+          strbuilder_get(&method_name));
+    TRACE("{");
+    TRACE("\t.maxstack %d", body->MaxStackSize);
+#endif
+
     // variables
     MIR_op_t* locals = NULL;
 
@@ -1992,10 +2007,24 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         return_block_reg = MIR_reg(mir_ctx, "return_block", mir_func->u.func);
     }
 
+#ifdef JIT_TRACE
+    if (body->LocalVariables->Length > 0) {
+        TRACE("\t.locals %s(", body->InitLocals ? "init " : "");
+    }
+#endif
+
     // actually create locals
     for (int i = 0; i < body->LocalVariables->Length; i++) {
         System_Reflection_LocalVariableInfo variable = body->LocalVariables->Data[i];
         CHECK(variable->LocalIndex == i);
+
+#ifdef JIT_TRACE
+        strbuilder_t local_type_name = strbuilder_new();
+        type_print_full_name(variable->LocalType, &local_type_name);
+        TRACE("\t\t[%d] %s%s", i, strbuilder_get(&local_type_name), i == body->LocalVariables->Length - 1 ? "" : ",");
+        strbuilder_free(&local_type_name);
+#endif
+
 
         // prepare the variable type
         CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, variable->LocalType));
@@ -2041,6 +2070,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             } break;
         }
     }
+
+#ifdef JIT_TRACE
+    if (body->LocalVariables->Length > 0) {
+        TRACE("\t)");
+    }
+#endif
 
     // TODO: we need to validate that all branch targets and that all the
     //       try and handler offsets are actually in valid instructions and
@@ -2183,6 +2218,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // get the opcode info
         opcode_info_t* opcode_info = &g_dotnet_opcodes[opcode];
 
+#ifdef JIT_TRACE
+        printf("[*] \tIL_%04x: %s ", ctx->il_offset, opcode_info->name);
+#endif
+
         // set the last control flow to this one
         last_cf = opcode_info->control_flow;
 
@@ -2207,6 +2246,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_i32 = *(int32_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int32_t);
                 operand_i32 += il_ptr;
+
+#ifdef JIT_TRACE
+                printf("IL_%04x", operand_i32);
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineField: {
@@ -2219,6 +2262,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                               method->GenericArguments, &operand_field));
                 CHECK(operand_field != NULL);
 
+#ifdef JIT_TRACE
+                strbuilder_t type_name = strbuilder_new();
+                type_print_full_name(operand_field->DeclaringType, &type_name);
+                printf("%s::%U", strbuilder_get(&type_name), operand_field->Name);
+                strbuilder_free(&type_name);
+#endif
+
                 // check we can access it
                 CHECK(check_field_accessibility(method, operand_field));
 
@@ -2229,11 +2279,19 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case OPCODE_OPERAND_InlineI: {
                 operand_i32 = *(int32_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int32_t);
+
+#ifdef JIT_TRACE
+                printf("%d", operand_i32);
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineI8: {
                 operand_i64 = *(int64_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int64_t);
+
+#ifdef JIT_TRACE
+                printf("%ld", operand_i64);
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineMethod: {
@@ -2245,6 +2303,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, value, method->DeclaringType->GenericArguments,
                                                                method->GenericArguments, &operand_method));
                 CHECK(operand_method != NULL);
+
+#ifdef JIT_TRACE
+                strbuilder_t type_name = strbuilder_new();
+                method_print_full_name(operand_method, &type_name);
+                printf("%s", strbuilder_get(&type_name));
+                strbuilder_free(&type_name);
+#endif
 
                 // check we can access it
                 CHECK(check_method_accessibility(method, operand_method));
@@ -2261,6 +2326,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case OPCODE_OPERAND_InlineR: {
                 operand_f64 = *(double*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(double);
+
+#ifdef JIT_TRACE
+                printf("<InlineR>");
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineSig: CHECK_FAIL("TODO: sig support"); break;
@@ -2270,6 +2339,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 il_ptr += sizeof(token_t);
                 operand_string = assembly_get_string_by_token(assembly, value);
                 CHECK(operand_string != NULL);
+
+#ifdef JIT_TRACE
+                printf("\"%U\"", operand_string);
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineSwitch: {
@@ -2277,6 +2350,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 il_ptr += 4;
                 operand_switch_dests = (int32_t*)&body->Il->Data[il_ptr];
                 il_ptr += operand_switch_n * 4;
+
+#ifdef JIT_TRACE
+                printf("<InlineSwitch>");
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineTok: CHECK_FAIL("TODO: tok support"); break;
@@ -2291,6 +2368,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         , method->GenericArguments, &operand_type));
                 CHECK(operand_type != NULL);
 
+#ifdef JIT_TRACE
+                strbuilder_t type_name = strbuilder_new();
+                type_print_full_name(operand_type, &type_name);
+                printf("%s", strbuilder_get(&type_name));
+                strbuilder_free(&type_name);
+#endif
+
                 // check it is visible
                 CHECK(check_type_visibility(method, operand_type));
 
@@ -2301,27 +2385,47 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case OPCODE_OPERAND_InlineVar: {
                 operand_i32 = *(uint16_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(uint16_t);
+
+#ifdef JIT_TRACE
+                printf("%d", operand_i32);
+#endif
             } break;
 
             case OPCODE_OPERAND_ShortInlineBrTarget: {
                 operand_i32 = *(int8_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int8_t);
                 operand_i32 += il_ptr;
+
+#ifdef JIT_TRACE
+                printf("IL_%04x", operand_i32);
+#endif
             } break;
 
             case OPCODE_OPERAND_ShortInlineI: {
                 operand_i32 = *(int8_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int8_t);
+
+#ifdef JIT_TRACE
+                printf("%d", operand_i32);
+#endif
             } break;
 
             case OPCODE_OPERAND_ShortInlineR: {
                 operand_f32 = *(float*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(float);
+
+#ifdef JIT_TRACE
+                printf("<ShortInlineR>");
+#endif
             } break;
 
             case OPCODE_OPERAND_ShortInlineVar: {
                 operand_i32 = *(uint8_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(uint8_t);
+
+#ifdef JIT_TRACE
+                printf("%d", operand_i32);
+#endif
             } break;
 
             case OPCODE_OPERAND_InlineNone:
@@ -2330,6 +2434,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             default:
                 CHECK_FAIL();
         }
+
+#ifdef JIT_TRACE
+        printf("\r\n");
+#endif
 
         //--------------------------------------------------------------------------------------------------------------
         // Handle the opcode
@@ -5165,6 +5273,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         last_cf == OPCODE_CONTROL_FLOW_BRANCH ||
         last_cf == OPCODE_CONTROL_FLOW_RETURN
     );
+
+#ifdef JIT_TRACE
+    TRACE("}");
+    TRACE();
+#endif
 
 cleanup:
     if (IS_ERROR(err)) {
