@@ -15,6 +15,8 @@ Right now the main work is on the runtime itself, the main features of the runti
 - Full support for reference types
   - With abstract/virtual methods support
   - Upcasting fully implemented
+- Full support for exceptions
+  - Done using generated control flow 
 - Full support for integer and floating point types
 - Full support for array types
 - Full support for struct types
@@ -24,11 +26,32 @@ Right now the main work is on the runtime itself, the main features of the runti
   - Supports locals, fields and array elements
 - Full support for boxing/unboxing 
 - Full support for Generics (Type and Methods)
+- Full support for delegates and multicast delegates
+  - Missing some corelib methods to make them fully work
 - Most common CIL instructions implemented
 - Visibility and Accessibility checking
 
+Note that the runtime is still not stable and even tho the features are implemented bugs are likely to be found, we try to fix anything we find.
+
+### Corelib support
+- Basic types 
+  - All built-in types
+  - Basic exceptions 
+- Basic reflection
+  - The base classes are defined, no actual methods or attributes 
+- Basic collections 
+  - Enumerators
+  - Basic generic List implementation 
+- Mostly implemented threading library
+  - Interlocked class (missing some signatures)
+  - WaitHandle with WaitEvent, Mutex, Semaphore 
+  - Thread class
+  - minimal Monitor support (enough for lock statement)
+
 ### Main missing features
-- Bit-shifting
+- Async runtime support (wip)
+- Proper collections library 
+- String manipulation
+- Streams core functionality 
 - Controlled-mutability managed pointers
-- Delegates
-- Overflow math
+- Overflow math (will come once MIR supports them)
