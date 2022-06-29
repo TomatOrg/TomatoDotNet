@@ -27,7 +27,7 @@
  * Uncomment to remove null-checks, out of memory checks, oob checks and more
  * to make the JITed code a bit more readable
  */
-#define READABLE_JIT
+//#define READABLE_JIT
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
@@ -4472,7 +4472,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             int vtable_offset = operand_method->VTableOffset;
                             if (type_is_interface(operand_method->DeclaringType)) {
                                 // comes from interface, need to give a static offset
-                                vtable_offset += type_get_interface_impl(constrainedType, operand_method->DeclaringType)->VTableOffset;
+                                TinyDotNet_Reflection_InterfaceImpl impl = type_get_interface_impl(constrainedType, operand_method->DeclaringType);
+                                CHECK(impl != NULL);
+                                vtable_offset += impl->VTableOffset;
                             }
                             operand_method = constrainedType->VirtualMethods->Data[vtable_offset];
 
