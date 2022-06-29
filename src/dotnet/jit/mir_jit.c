@@ -2031,7 +2031,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         strbuilder_free(&local_type_name);
 #endif
 
-
         // prepare the variable type
         CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, variable->LocalType));
 
@@ -2100,6 +2099,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         };
 
         if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+            CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, clause->CatchType));
+
             stack_entry_t entry = {
                 .type = clause->CatchType,
                 .reg = new_reg(ctx, clause->CatchType),
@@ -2113,6 +2114,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // add to label lookup
         hmput(ctx->clause_to_label, clause, label);
     }
+
+#ifdef JIT_TRACE
+    int jit_trace_indent = 4;
+#endif
 
     //
     // The main loop for decoding and jitting opcodes
@@ -2174,6 +2179,34 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
+#ifdef JIT_TRACE
+            if (clause->TryOffset == ctx->il_offset) {
+                TRACE("%*s.try", jit_trace_indent, "");
+                TRACE("%*s{", jit_trace_indent, "");
+                jit_trace_indent += 4;
+            } else if (clause->TryOffset + clause->TryLength == ctx->il_offset) {
+                jit_trace_indent -= 4;
+                TRACE("%*s} // end .try", jit_trace_indent, "");
+            }
+
+            if (clause->HandlerOffset == ctx->il_offset) {
+                if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                    TRACE("%*scatch %U.%U", jit_trace_indent, "", clause->CatchType->Namespace, clause->CatchType->Name);
+                } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+                    TRACE("%*sfinally", jit_trace_indent, "");
+                } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
+                    TRACE("%*sfault", jit_trace_indent, "");
+                } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
+                    TRACE("%*sfilter", jit_trace_indent, "");
+                }
+                TRACE("%*s{", jit_trace_indent, "");
+                jit_trace_indent += 4;
+            } else if (clause->HandlerOffset + clause->HandlerLength == ctx->il_offset) {
+                jit_trace_indent -= 4;
+                TRACE("%*s} // end handler", jit_trace_indent, "");
+            }
+#endif
+
             if (
                 clause->HandlerOffset == ctx->il_offset ||
                 clause->HandlerOffset + clause->HandlerLength == ctx->il_offset ||
@@ -2225,7 +2258,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         opcode_info_t* opcode_info = &g_dotnet_opcodes[opcode];
 
 #ifdef JIT_TRACE
-        printf("[*] \tIL_%04x: %s ", ctx->il_offset, opcode_info->name);
+        printf("[*] %*sIL_%04x: %s ", jit_trace_indent, "", ctx->il_offset, opcode_info->name);
 #endif
 
         // set the last control flow to this one
