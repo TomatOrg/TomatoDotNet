@@ -484,25 +484,26 @@ static MIR_reg_t push_new_reg(jit_method_context_t* ctx, System_Type type, bool 
         // create it
         reg = MIR_new_func_reg(mir_ctx, mir_func->u.func, reg_type, name);
         arrpush(stack->regs, reg);
+    }
 
-        // if its a value type we need to allocate place on the stack for it, we are gonna save it in another
-        // reg that is never going to change and then move it to place
-        if (mir_type == MIR_T_BLK) {
-            snprintf(name, sizeof(name), "%cv%d", prefix, ctx->value_type_name_gen++);
-            MIR_reg_t stack_value = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, name);
+    // if its a value type we need to allocate place on the stack for it, we are gonna save it in another
+    // reg that is never going to change and then move it to place
+    if (mir_type == MIR_T_BLK) {
+        char name[64] = { 0 };
+        snprintf(name, sizeof(name), "%cv%d", prefix, ctx->value_type_name_gen++);
+        MIR_reg_t stack_value = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, name);
 
-            // at the start allocate it and store it in the stack value reg
-            MIR_prepend_insn(mir_ctx, mir_func,
-                             MIR_new_insn(mir_ctx, MIR_ALLOCA,
-                                          MIR_new_reg_op(mir_ctx, stack_value),
-                                          MIR_new_int_op(mir_ctx, type->StackSize)));
+        // at the start allocate it and store it in the stack value reg
+        MIR_prepend_insn(mir_ctx, mir_func,
+                         MIR_new_insn(mir_ctx, MIR_ALLOCA,
+                                      MIR_new_reg_op(mir_ctx, stack_value),
+                                      MIR_new_int_op(mir_ctx, type->StackSize)));
 
-            // then in the current place in the code move it to the stack position
-            MIR_append_insn(mir_ctx, mir_func,
-                            MIR_new_insn(mir_ctx, MIR_MOV,
-                                         MIR_new_reg_op(mir_ctx, reg),
-                                         MIR_new_reg_op(mir_ctx, stack_value)));
-        }
+        // then in the current place in the code move it to the stack position
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                     MIR_new_reg_op(mir_ctx, reg),
+                                     MIR_new_reg_op(mir_ctx, stack_value)));
     }
 
     // increment the depth
@@ -5412,8 +5413,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     TRACE("}");
     TRACE();
 #endif
-
-    MIR_output_item(mir_ctx, stdout, mir_func);
 
 cleanup:
     if (IS_ERROR(err)) {
