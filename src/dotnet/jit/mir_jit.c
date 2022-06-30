@@ -758,12 +758,49 @@ void jit_emit_memcpy(jit_method_context_t* ctx, MIR_reg_t dest, MIR_reg_t src, s
  * Same as memcpy, but for zeroing memory.
  */
 void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) {
-    if (count <= 32 && (count % 8) == 0) {
-        for (size_t off = 0; off < count; off += 8) {
+    if (count <= 64) {
+        int off = 0;
+        while (count >= 8) {
+            //
+            // TODO: fine tune it to emit something like
+            //       r0 = load64()
+            //       r1 = load64()
+            //       r2 = load64()
+            //       ...
+            //       store64(r2)
+            //       store64(r1)
+            //       store64(r0)
+            //
             MIR_append_insn(mir_ctx, mir_func,
                             MIR_new_insn(mir_ctx, MIR_MOV,
                                          MIR_new_mem_op(mir_ctx, MIR_T_I64, off, dest, 0, 1),
                                          MIR_new_int_op(mir_ctx, 0)));
+            off += 8;
+            count -= 8;
+        }
+        if (count >= 4) {
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_MOV,
+                                         MIR_new_mem_op(mir_ctx, MIR_T_I32, off, dest, 0, 1),
+                                         MIR_new_int_op(mir_ctx, 0)));
+            off += 4;
+            count -= 4;
+        }
+        if (count >= 2) {
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_MOV,
+                                         MIR_new_mem_op(mir_ctx, MIR_T_I16, off, dest, 0, 1),
+                                         MIR_new_int_op(mir_ctx, 0)));
+            off += 2;
+            count -= 2;
+        }
+        if (count >= 1) {
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_MOV,
+                                         MIR_new_mem_op(mir_ctx, MIR_T_I8, off, dest, 0, 1),
+                                         MIR_new_int_op(mir_ctx, 0)));
+            off += 1;
+            count -= 1;
         }
     } else {
         MIR_append_insn(mir_ctx, mir_func,
@@ -772,7 +809,7 @@ void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) 
                                           MIR_new_ref_op(mir_ctx, m_memset_func),
                                           MIR_new_reg_op(mir_ctx, dest),
                                           MIR_new_int_op(mir_ctx, 0),
-                                          MIR_new_int_op(mir_ctx, count)));
+                                          MIR_new_uint_op(mir_ctx, count)));
     }
 }
 
