@@ -704,6 +704,7 @@ static bool type_is_compatible_with_I_8_7_1(System_Type T, System_Type U) {
         return true;
     }
 
+    // TODO: idk if this is correct
     if (T == NULL || U == NULL) {
         return false;
     }
@@ -806,7 +807,7 @@ bool type_is_verifier_assignable_to(System_Type Q, System_Type R) {
     }
 
     // T is boxed V
-    if (T != NULL && T->IsBoxed) {
+    if (T != NULL && T->IsBoxed && U != NULL) {
         System_Type V = T->UnboxedType;
 
         // and U is the immediate base class of V
