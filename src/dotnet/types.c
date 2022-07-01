@@ -1196,7 +1196,7 @@ bool check_method_accessibility(System_Reflection_MethodInfo from_method, System
     bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
 
     // make sure all the arguments are known
-    if (to->GenericArguments != NULL) {
+    if (to->GenericArguments != NULL && to->GenericMethodDefinition != NULL) {
         for (int i = 0; i < to->GenericArguments->Length; i++) {
             if (!check_type_visibility(from_method, to->GenericArguments->Data[i])) {
                 return false;
@@ -1205,7 +1205,7 @@ bool check_method_accessibility(System_Reflection_MethodInfo from_method, System
     }
 
     System_Type to_type = to->DeclaringType;
-    if (to_type->GenericArguments != NULL) {
+    if (to_type->GenericArguments != NULL && !type_is_generic_definition(to_type)) {
         for (int i = 0; i < to_type->GenericArguments->Length; i++) {
             if (!check_type_visibility(from_method, to_type->GenericArguments->Data[i])) {
                 return false;
