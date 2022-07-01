@@ -100,7 +100,7 @@ cleanup:
 static err_t parse_method_cil(System_Reflection_MethodInfo method, blob_entry_t sig, pe_file_t* file, metadata_t* metadata) {
     err_t err = NO_ERROR;
 
-    System_Reflection_MethodBody body = GC_NEW(tSystem_Reflection_MethodBody);
+    System_Reflection_MethodBody body = UNSAFE_GC_NEW(tSystem_Reflection_MethodBody);
 
     // set it
     GC_UPDATE(method, MethodBody, body);
@@ -206,7 +206,7 @@ static err_t parse_method_cil(System_Reflection_MethodInfo method, blob_entry_t 
 
                     // parse it
                     for (int i = 0; i < count; i++) {
-                        System_Reflection_ExceptionHandlingClause clause = GC_NEW(tSystem_Reflection_ExceptionHandlingClause);
+                        System_Reflection_ExceptionHandlingClause clause = UNSAFE_GC_NEW(tSystem_Reflection_ExceptionHandlingClause);
                         GC_UPDATE_ARRAY(body->ExceptionHandlingClauses, i, clause);
 
                         if (flags & CorILMethod_Sect_FatFormat) {
@@ -592,7 +592,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         for (int mi = 0; mi < type->Methods->Length; mi++) {
             size_t index = type_def->method_list.index + mi - 1;
             metadata_method_def_t* method_def = metadata_get_method_def(metadata, index);
-            System_Reflection_MethodInfo methodInfo = GC_NEW(tSystem_Reflection_MethodInfo);
+            System_Reflection_MethodInfo methodInfo = UNSAFE_GC_NEW(tSystem_Reflection_MethodInfo);
             GC_UPDATE_ARRAY(type->Methods, mi, methodInfo);
             GC_UPDATE_ARRAY(assembly->DefinedMethods, index, methodInfo);
 
@@ -613,7 +613,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         for (int fi = 0; fi < type->Fields->Length; fi++) {
             size_t index = type_def->field_list.index + fi - 1;
             metadata_field_t* field = metadata_get_field(metadata, index);
-            System_Reflection_FieldInfo fieldInfo = GC_NEW(tSystem_Reflection_FieldInfo);
+            System_Reflection_FieldInfo fieldInfo = UNSAFE_GC_NEW(tSystem_Reflection_FieldInfo);
             GC_UPDATE_ARRAY(type->Fields, fi, fieldInfo);
             GC_UPDATE_ARRAY(assembly->DefinedFields, index, fieldInfo);
 
@@ -658,7 +658,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     GC_UPDATE(assembly, DefinedMemberRefs, GC_NEW_ARRAY(get_array_type(tSystem_Byte), member_refs_count));
     for (int i = 0; i < member_refs_count; i++) {
         metadata_member_ref_t* ref = &member_refs[i];
-        TinyDotNet_Reflection_MemberReference member = GC_NEW(tTinyDotNet_Reflection_MemberReference);
+        TinyDotNet_Reflection_MemberReference member = UNSAFE_GC_NEW(tTinyDotNet_Reflection_MemberReference);
         GC_UPDATE(member, Name, new_string_from_utf8(ref->name, strlen(ref->name)));
         System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, ref->signature.size);
         memcpy(blob->Data, ref->signature.data, ref->signature.size);
@@ -688,7 +688,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, generic_param->owner, NULL, NULL, (void*)&owner));
         }
 
-        System_Type typeParam = GC_NEW(tSystem_Type);
+        System_Type typeParam = UNSAFE_GC_NEW(tSystem_Type);
         typeParam->MetadataToken = (token_t) { .table = METADATA_GENERIC_PARAM, .index = i + 1 };
         GC_UPDATE(typeParam, Name, new_string_from_utf8(generic_param->name, strlen(generic_param->name)));
         typeParam->GenericParameterPosition = generic_param->number;
@@ -766,7 +766,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     for (int i = 0; i < method_spec_count; i++) {
         System_Reflection_MethodInfo method = NULL;
         metadata_method_spec_t* spec = &method_spec[i];
-        TinyDotNet_Reflection_MethodSpec methodSpec = GC_NEW(tTinyDotNet_Reflection_MethodSpec);
+        TinyDotNet_Reflection_MethodSpec methodSpec = UNSAFE_GC_NEW(tTinyDotNet_Reflection_MethodSpec);
         CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->method, NULL, NULL, &method));
         System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->instantiation.size);
         memcpy(blob->Data, spec->instantiation.data, spec->instantiation.size);
@@ -805,7 +805,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         System_Type type = interfaces[i].key;
         GC_UPDATE(type, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, arrlen(interfaces[i].value)));
         for (int j = 0; j < arrlen(interfaces[i].value); j++) {
-            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = UNSAFE_GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
             GC_UPDATE(interfaceImpl, InterfaceType, interfaces[i].value[j]);
             GC_UPDATE_ARRAY(type->InterfaceImpls, j, interfaceImpl);
         }
@@ -852,7 +852,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
 //        CHECK(found);
         CHECK(!method_is_final(declaration));
 
-        TinyDotNet_Reflection_MethodImpl methodImpl = GC_NEW(tTinyDotNet_Reflection_MethodImpl);
+        TinyDotNet_Reflection_MethodImpl methodImpl = UNSAFE_GC_NEW(tTinyDotNet_Reflection_MethodImpl);
         GC_UPDATE(methodImpl, Body, body);
         GC_UPDATE(methodImpl, Declaration, declaration);
 
@@ -1399,21 +1399,22 @@ err_t loader_fill_type(System_Type type) {
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
 
-            // handle special methods
-            if (string_equals_cstr(methodInfo->Name, ".cctor")) {
-                CHECK(method_is_rt_special_name(methodInfo));
+
+            if (method_is_rt_special_name(methodInfo)) {
                 CHECK(method_is_special_name(methodInfo));
-                CHECK(method_is_static(methodInfo));
-                CHECK(methodInfo->Parameters->Length == 0);
-                CHECK(methodInfo->ReturnType == NULL);
-                CHECK(type->StaticCtor == NULL);
-                type->StaticCtor = methodInfo;
-            } else if (string_equals_cstr(methodInfo->Name, ".ctor")) {
-                CHECK(method_is_rt_special_name(methodInfo));
-                CHECK(method_is_special_name(methodInfo));
-                CHECK(!method_is_static(methodInfo));
-                CHECK(methodInfo->ReturnType == NULL);
+
+                if (string_equals_cstr(methodInfo->Name, ".cctor")) {
+                    CHECK(method_is_static(methodInfo));
+                    CHECK(methodInfo->Parameters->Length == 0);
+                    CHECK(methodInfo->ReturnType == NULL);
+                    CHECK(type->StaticCtor == NULL);
+                    type->StaticCtor = methodInfo;
+                } else if (string_equals_cstr(methodInfo->Name, ".ctor")) {
+                    CHECK(!method_is_static(methodInfo));
+                    CHECK(methodInfo->ReturnType == NULL);
+                }
             } else {
+                // finalize is extra special
                 if (string_equals_cstr(methodInfo->Name, "Finalize")) {
                     // for performance reason we are not going to have every method have a finalizer
                     // but instead we are going to have it virtually virtual
@@ -1783,7 +1784,7 @@ static err_t loader_setup_module(System_Reflection_Assembly assembly, metadata_t
 
     // create the module
     metadata_module_t* module = metadata->tables[METADATA_MODULE].table;
-    GC_UPDATE(assembly, Module, GC_NEW(tSystem_Reflection_Module));
+    GC_UPDATE(assembly, Module, UNSAFE_GC_NEW(tSystem_Reflection_Module));
     GC_UPDATE(assembly->Module, Name, new_string_from_cstr(module->name));
     GC_UPDATE(assembly->Module, Assembly, assembly);
 
@@ -1915,7 +1916,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     CHECK_AND_RETHROW(decode_metadata(&file, &metadata));
 
     // allocate the new assembly
-    System_Reflection_Assembly assembly = GC_NEW(tSystem_Reflection_Assembly);
+    System_Reflection_Assembly assembly = UNSAFE_GC_NEW(tSystem_Reflection_Assembly);
 
     // load all the types and stuff
     int types_count = metadata.tables[METADATA_TYPE_DEF].rows;
@@ -1927,7 +1928,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // create all the types
     GC_UPDATE(assembly, DefinedTypes, GC_NEW_ARRAY(tSystem_Type, types_count));
     for (int i = 0; i < types_count; i++) {
-        GC_UPDATE_ARRAY(assembly->DefinedTypes, i, GC_NEW(tSystem_Type));
+        GC_UPDATE_ARRAY(assembly->DefinedTypes, i, UNSAFE_GC_NEW(tSystem_Type));
     }
 
     CHECK_AND_RETHROW(loader_setup_module(assembly, &metadata));

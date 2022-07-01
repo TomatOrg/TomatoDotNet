@@ -356,7 +356,10 @@ System_Type get_array_type(System_Type type) {
     }
 
     // allocate the new type
-    System_Type ArrayType = GC_NEW(tSystem_Type);
+    System_Type ArrayType = UNSAFE_GC_NEW(tSystem_Type);
+    if (ArrayType == NULL) {
+        return ArrayType;
+    }
 
     // make sure this was called after system array was initialized
     ASSERT(tSystem_Array->Assembly != NULL);
@@ -414,7 +417,10 @@ System_Type get_by_ref_type(System_Type type) {
     ASSERT(!type->IsByRef);
 
     // allocate the new ref type
-    System_Type ByRefType = GC_NEW(tSystem_Type);
+    System_Type ByRefType = UNSAFE_GC_NEW(tSystem_Type);
+    if (ByRefType == NULL) {
+        return NULL;
+    }
 
     // this is an array
     ByRefType->IsByRef = true;
@@ -461,7 +467,11 @@ System_Type get_boxed_type(System_Type type) {
     loader_fill_type(type);
 
     // allocate the new ref type
-    System_Type BoxedType = GC_NEW(tSystem_Type);
+    System_Type BoxedType = UNSAFE_GC_NEW(tSystem_Type);
+    if (BoxedType == NULL) {
+        return BoxedType;
+    }
+
     GC_UPDATE(BoxedType, DeclaringType, type->DeclaringType);
     GC_UPDATE(BoxedType, Module, type->Module);
     GC_UPDATE(BoxedType, Name, string_append_cstr(type->Name, "{boxed}"));
@@ -917,6 +927,16 @@ System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_Strin
     return NULL;
 }
 
+System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const char* name, int* index) {
+    for (int i = *index; i < type->Methods->Length; i++) {
+        if (string_equals_cstr(type->Methods->Data[i]->Name, name)) {
+            *index = i + 1;
+            return type->Methods->Data[i];
+        }
+    }
+    return NULL;
+}
+
 System_Reflection_MethodInfo type_get_interface_method_impl(System_Type targetType, System_Reflection_MethodInfo targetMethod) {
     TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(targetType, targetMethod->DeclaringType);
     if (interface == NULL) {
@@ -1286,28 +1306,42 @@ bool check_type_visibility(System_Reflection_MethodInfo from_method, System_Type
     return true;
 }
 
-static System_Type expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments);
+static err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type);
 
-static System_Reflection_FieldInfo expand_field(System_Type type, System_Reflection_FieldInfo field, System_Type_Array arguments) {
+static err_t expand_field(System_Type type, System_Reflection_FieldInfo field, System_Type_Array arguments, System_Reflection_FieldInfo* out_instance) {
+    err_t err = NO_ERROR;
+    System_Type fieldType;
+
     System_Reflection_FieldInfo instance = GC_NEW(tSystem_Reflection_FieldInfo);
-    instance->FieldType = expand_type(field->FieldType, arguments, NULL);
-    instance->Attributes = field->Attributes;
+    CHECK_AND_RETHROW(expand_type(field->FieldType, arguments, NULL, &fieldType));
+    GC_UPDATE(instance, FieldType, fieldType);
     GC_UPDATE(instance, Module, field->Module);
     GC_UPDATE(instance, DeclaringType, type);
     GC_UPDATE(instance, Name, field->Name);
-    return instance;
+    instance->Attributes = field->Attributes;
+
+    *out_instance = instance;
+
+cleanup:
+    return err;
 }
 
-static System_Reflection_MethodInfo expand_method(System_Type type, System_Reflection_MethodInfo method, System_Type_Array arguments, bool include_method_args) {
+static err_t expand_method(System_Type type, System_Reflection_MethodInfo method, System_Type_Array arguments, bool include_method_args, System_Reflection_MethodInfo* out_method) {
+    err_t err = NO_ERROR;
+    System_Type expanded = NULL;
     System_Type_Array ignore_arguments = include_method_args ? NULL : method->GenericArguments;
 
     System_Reflection_MethodInfo instance = GC_NEW(tSystem_Reflection_MethodInfo);
+
     GC_UPDATE(instance, Module, method->Module);
     GC_UPDATE(instance, DeclaringType, type);
     GC_UPDATE(instance, Name, method->Name);
     GC_UPDATE(instance, GenericArguments, method->GenericArguments);
     GC_UPDATE(instance, GenericMethodDefinition, method->GenericMethodDefinition);
-    GC_UPDATE(instance, ReturnType, expand_type(method->ReturnType, arguments, ignore_arguments));
+
+    CHECK_AND_RETHROW(expand_type(method->ReturnType, arguments, ignore_arguments, &expanded));
+    GC_UPDATE(instance, ReturnType, expanded);
+
     instance->Attributes = method->Attributes;
     instance->ImplAttributes = method->ImplAttributes;
 
@@ -1348,7 +1382,8 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
                     if (type_is_generic_parameter(methodBody->LocalVariables->Data[i]->LocalType)) {
                         // expand
                         System_Reflection_LocalVariableInfo variable = GC_NEW(tSystem_Reflection_LocalVariableInfo);
-                        GC_UPDATE(variable, LocalType, expand_type(methodBody->LocalVariables->Data[i]->LocalType, arguments, ignore_arguments));
+                        CHECK_AND_RETHROW(expand_type(methodBody->LocalVariables->Data[i]->LocalType, arguments, ignore_arguments, &expanded));
+                        GC_UPDATE(variable, LocalType, expanded);
                         variable->LocalIndex = methodBody->LocalVariables->Data[i]->LocalIndex;
                         GC_UPDATE_ARRAY(new_body->LocalVariables, i, variable);
                     } else {
@@ -1367,7 +1402,8 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
                     if (clause->CatchType != NULL && type_is_generic_parameter(clause->CatchType)) {
                         // expand
                         System_Reflection_ExceptionHandlingClause new_clause = GC_NEW(tSystem_Reflection_ExceptionHandlingClause);
-                        GC_UPDATE(new_clause, CatchType, expand_type(clause->CatchType, arguments, ignore_arguments));
+                        CHECK_AND_RETHROW(expand_type(clause->CatchType, arguments, ignore_arguments, &expanded));
+                        GC_UPDATE(new_clause, CatchType, expanded);
                         new_clause->Flags = clause->Flags;
                         new_clause->FilterOffset = clause->FilterOffset;
                         new_clause->HandlerLength = clause->HandlerLength;
@@ -1399,18 +1435,26 @@ static System_Reflection_MethodInfo expand_method(System_Type type, System_Refle
         System_Reflection_ParameterInfo fieldParameter = method->Parameters->Data[i];
         parameter->Attributes = fieldParameter->Attributes;
         GC_UPDATE(parameter, Name, fieldParameter->Name);
-        GC_UPDATE(parameter, ParameterType, expand_type(fieldParameter->ParameterType, arguments, ignore_arguments));
+        CHECK_AND_RETHROW(expand_type(fieldParameter->ParameterType, arguments, ignore_arguments, &expanded));
+        GC_UPDATE(parameter, ParameterType, expanded);
         GC_UPDATE_ARRAY(instance->Parameters, i, parameter);
     }
 
-    return instance;
+    *out_method = instance;
+
+cleanup:
+    return err;
 }
 
-static System_Type expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments) {
+static err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type) {
+    err_t err = NO_ERROR;
+
     if (type == NULL) {
-        return NULL;
+        // nothing to do
+
     } else if (!type_is_generic_parameter(type)) {
-        return type;
+        // nothing to do
+
     } else if (type->GenericParameterPosition >= 0) {
         // type is a generic argument, resolve it
 
@@ -1418,22 +1462,27 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments, Sy
             // we have an ignored list, so ignore anything that matches it
             for (int i = 0; i < ignore_arguments->Length; i++) {
                 if (ignore_arguments->Data[i] == type) {
-                    return type;
+                    goto cleanup;
                 }
             }
         }
 
         // not in the ignore list, expand it
         ASSERT(type->GenericParameterPosition < arguments->Length);
-        return arguments->Data[type->GenericParameterPosition];
+        type = arguments->Data[type->GenericParameterPosition];
+
     } else if (type->IsArray) {
         // type is an array, resolve the element type
-        System_Type real_array_type = expand_type(type->ElementType, arguments, ignore_arguments);
-        return get_array_type(real_array_type);
+        System_Type real_array_type;
+        CHECK_AND_RETHROW(expand_type(type->ElementType, arguments, ignore_arguments, &real_array_type));
+        type = get_array_type(real_array_type);
+
     } else if (type->IsByRef) {
         // type is a byref, resolve the base type
-        System_Type real_byref_base = expand_type(type->BaseType, arguments, ignore_arguments);
-        return get_by_ref_type(real_byref_base);
+        System_Type real_byref_base;
+        CHECK_AND_RETHROW(expand_type(type->BaseType, arguments, ignore_arguments, &real_byref_base));
+        type = get_by_ref_type(real_byref_base);
+
     } else if (type->GenericArguments != NULL) {
         // type has generic arguments, expand them and create the
         // new generic type
@@ -1441,18 +1490,33 @@ static System_Type expand_type(System_Type type, System_Type_Array arguments, Sy
         if (type->GenericTypeDefinition != NULL) {
             definition = type->GenericTypeDefinition;
         }
+
+        // expand the types
         System_Type_Array new_arguments = GC_NEW_ARRAY(tSystem_Type, type->GenericArguments->Length);
         for (int i = 0; i < new_arguments->Length; i++) {
-            GC_UPDATE_ARRAY(new_arguments, i, expand_type(type->GenericArguments->Data[i], arguments, ignore_arguments));
+            System_Type argt;
+            CHECK_AND_RETHROW(expand_type(type->GenericArguments->Data[i], arguments, ignore_arguments, &argt));
+            GC_UPDATE_ARRAY(new_arguments, i, argt);
         }
-        return type_make_generic(definition, new_arguments);
+
+        // create it
+        CHECK_AND_RETHROW(type_make_generic(definition, new_arguments, &type));
+
     } else {
         ASSERT(!"Invalid generic type");
     }
+
+    *out_type = type;
+
+cleanup:
+    return err;
 }
 
-static System_Reflection_MethodInfo find_expanded_method(System_Reflection_MethodInfo method, System_Type_Array arguments) {
-    System_Type type = expand_type(method->DeclaringType, arguments, NULL);
+static err_t find_expanded_method(System_Reflection_MethodInfo method, System_Type_Array arguments, System_Reflection_MethodInfo* out_method) {
+    err_t err = NO_ERROR;
+
+    System_Type type;
+    CHECK_AND_RETHROW(expand_type(method->DeclaringType, arguments, NULL, &type));
 
     int index = 0;
     System_Reflection_MethodInfo methodInfo = NULL;
@@ -1461,13 +1525,19 @@ static System_Reflection_MethodInfo find_expanded_method(System_Reflection_Metho
         if (method_is_static(methodInfo) != method_is_static(method)) continue;
 
         // check the return type and parameters count is the same
-        if (methodInfo->ReturnType != expand_type(method->ReturnType, arguments, NULL)) continue;
+        System_Type returnType = NULL;
+        CHECK_AND_RETHROW(expand_type(method->ReturnType, arguments, NULL, &returnType));
+
+        if (methodInfo->ReturnType != returnType) continue;
         if (methodInfo->Parameters->Length != method->Parameters->Length) continue;
 
         // check that the parameters are the same
         bool found = true;
         for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
-            if (methodInfo->Parameters->Data[pi]->ParameterType != expand_type(method->Parameters->Data[pi]->ParameterType, arguments, NULL)) {
+
+            System_Type parameterType;
+            CHECK_AND_RETHROW(expand_type(method->Parameters->Data[pi]->ParameterType, arguments, NULL, &parameterType));
+            if (methodInfo->Parameters->Data[pi]->ParameterType != parameterType) {
                 found = false;
                 break;
             }
@@ -1480,32 +1550,59 @@ static System_Reflection_MethodInfo find_expanded_method(System_Reflection_Metho
 
     ASSERT(methodInfo != NULL);
 
-    return methodInfo;
+    *out_method = methodInfo;
+
+cleanup:
+    return err;
 }
 
-void type_expand_interface_impls(System_Type instance, TinyDotNet_Reflection_InterfaceImpl_Array interfaceImpls) {
+err_t type_expand_interface_impls(System_Type instance, TinyDotNet_Reflection_InterfaceImpl_Array interfaceImpls) {
+    err_t err = NO_ERROR;
+
     GC_UPDATE(instance, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, interfaceImpls->Length));
     for (int i = 0; i < instance->InterfaceImpls->Length; i++) {
         TinyDotNet_Reflection_InterfaceImpl impl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
-        impl->InterfaceType = expand_type(interfaceImpls->Data[i]->InterfaceType, instance->GenericArguments, NULL);
+        System_Type interfaceType;
+        CHECK_AND_RETHROW(expand_type(interfaceImpls->Data[i]->InterfaceType, instance->GenericArguments, NULL, &interfaceType));
+        GC_UPDATE(impl, InterfaceType, interfaceType);
         GC_UPDATE_ARRAY(instance->InterfaceImpls, i, impl);
     }
+
+cleanup:
+    return err;
 }
 
-void type_expand_method_impls(System_Type instance, TinyDotNet_Reflection_MethodImpl_Array impls) {
+err_t type_expand_method_impls(System_Type instance, TinyDotNet_Reflection_MethodImpl_Array impls) {
+    err_t err = NO_ERROR;
+
     GC_UPDATE(instance, MethodImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_MethodImpl, impls->Length));
     for (int i = 0; i < instance->MethodImpls->Length; i++) {
         TinyDotNet_Reflection_MethodImpl impl = GC_NEW(tTinyDotNet_Reflection_MethodImpl);
-        GC_UPDATE(impl, Body, find_expanded_method(impls->Data[i]->Body, instance->GenericArguments));
-        GC_UPDATE(impl, Declaration, find_expanded_method(impls->Data[i]->Declaration, instance->GenericArguments));
+
+        System_Reflection_MethodInfo body;
+        CHECK_AND_RETHROW(find_expanded_method(impls->Data[i]->Body, instance->GenericArguments, &body));
+
+        System_Reflection_MethodInfo declaration;
+        CHECK_AND_RETHROW(find_expanded_method(impls->Data[i]->Declaration, instance->GenericArguments, &declaration));
+
+        GC_UPDATE(impl, Body, body);
+        GC_UPDATE(impl, Declaration, declaration);
         GC_UPDATE_ARRAY(instance->MethodImpls, i, impl);
     }
+
+cleanup:
+    return err;
 }
 
-System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
-    ASSERT(type_is_generic_definition(type));
+err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Type* out_type) {
+    err_t err = NO_ERROR;
+    bool locked = false;
 
     monitor_enter(type);
+    locked = true;
+
+    CHECK(type_is_generic_definition(type));
+    CHECK(type->GenericArguments->Length == arguments->Length);
 
     // add it
     bool is_full_instantiation = true;
@@ -1537,8 +1634,38 @@ System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
         }
 
         if (found) {
-            monitor_exit(type);
-            return inst;
+            *out_type = inst;
+            goto cleanup;
+        }
+
+        // check that the arguments and type arguments don't have any
+        // problem with each other
+        for (int i = 0; i < arguments->Length; i++) {
+            System_Type arg = type->GenericArguments->Data[i];
+            // check that we have a reference type
+            if (generic_argument_is_reference_type(arg)) {
+                CHECK(type_is_object_ref(arg));
+            }
+
+            // check that we have a not-nullable value type
+            if (generic_argument_is_not_nullable_value_type(arg)) {
+                CHECK(type_is_value_type(arg));
+            }
+
+            // check that we have a default ctor
+            if (generic_argument_is_default_constructor(arg)) {
+                bool found_ctor = false;
+                int index = 0;
+                System_Reflection_MethodInfo info = NULL;
+                while ((info = type_iterate_methods_cstr(type, ".ctor", &index)) != NULL) {
+                    if (method_is_rt_special_name(info)) continue;
+                    if (info->Parameters->Length == 0) {
+                        found_ctor = true;
+                        break;
+                    }
+                }
+                CHECK(found_ctor);
+            }
         }
     }
 
@@ -1573,44 +1700,60 @@ System_Type type_make_generic(System_Type type, System_Type_Array arguments) {
     // we are going to add it, and only after leaving the lock expand it, so we
     // allow the other person to expand it properly
     if (!is_full_instantiation) {
-        monitor_exit(type);
-        return instance;
+        *out_type = instance;
+        goto cleanup;
     } else {
         GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
         GC_UPDATE(type, NextGenericInstance, instance);
 
+        locked = false;
         monitor_exit(type);
     }
 
     // base type
-    GC_UPDATE(instance, BaseType, expand_type(type->BaseType, arguments, NULL));
+    System_Type baseType;
+    CHECK_AND_RETHROW(expand_type(type->BaseType, arguments, NULL, &baseType));
+    GC_UPDATE(instance, BaseType, baseType);
 
     // fields
     GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
     for (int i = 0; i < instance->Fields->Length; i++) {
-        GC_UPDATE_ARRAY(instance->Fields, i, expand_field(instance, type->Fields->Data[i], arguments));
+        System_Reflection_FieldInfo field;
+        CHECK_AND_RETHROW(expand_field(instance, type->Fields->Data[i], arguments, &field));
+        GC_UPDATE_ARRAY(instance->Fields, i, field);
     }
 
     // methods
     GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
     for (int i = 0; i < instance->Methods->Length; i++) {
-        GC_UPDATE_ARRAY(instance->Methods, i, expand_method(instance, type->Methods->Data[i], arguments, false));
+        System_Reflection_MethodInfo method;
+        CHECK_AND_RETHROW(expand_method(instance, type->Methods->Data[i], arguments, false, &method));
+        GC_UPDATE_ARRAY(instance->Methods, i, method);
     }
 
     // interfaces
     if (type->InterfaceImpls != NULL) {
-        type_expand_interface_impls(instance, type->InterfaceImpls);
+        CHECK_AND_RETHROW(type_expand_interface_impls(instance, type->InterfaceImpls));
     }
 
     // method impls
     if (type->MethodImpls != NULL) {
-        type_expand_method_impls(instance, type->MethodImpls);
+        CHECK_AND_RETHROW(type_expand_method_impls(instance, type->MethodImpls));
     }
 
-    return instance;
+    *out_type = instance;
+
+cleanup:
+    if (locked) {
+        monitor_exit(type);
+    }
+
+    return err;
 }
 
-System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments) {
+err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments, System_Reflection_MethodInfo* out_method) {
+    err_t err = NO_ERROR;
+
     monitor_enter(method);
 
     // check for an existing instance
@@ -1633,11 +1776,12 @@ System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo me
     }
 
     if (found) {
-        monitor_exit(method);
-        return inst;
+        *out_method = inst;
+        goto cleanup;
     }
 
-    System_Reflection_MethodInfo instance = expand_method(method->DeclaringType, method, arguments, true);
+    System_Reflection_MethodInfo instance;
+    CHECK_AND_RETHROW(expand_method(method->DeclaringType, method, arguments, true, &instance));
 
     // create the unique name
     strbuilder_t builder = strbuilder_new();
@@ -1661,9 +1805,12 @@ System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo me
     GC_UPDATE(instance, NextGenericInstance, method->NextGenericInstance);
     GC_UPDATE(method, NextGenericInstance, instance);
 
+    *out_method = instance;
+
+cleanup:
     monitor_exit(method);
 
-    return instance;
+    return err;
 }
 
 bool type_is_generic_parameter(System_Type type) {

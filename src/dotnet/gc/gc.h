@@ -41,11 +41,19 @@ void gc_get_memory_info(System_GCMemoryInfo* memoryInfo);
 /**
  * Helper to allocate a new gc object
  */
-#define GC_NEW(type) \
+#define UNSAFE_GC_NEW(type) \
     ({ \
         System_Type __type = type; \
         void* object = gc_new(__type, __type->ManagedSize); \
         ASSERT(object != NULL); \
+        object; \
+    })
+
+#define GC_NEW(type) \
+    ({ \
+        System_Type __type = type; \
+        void* object = gc_new(__type, __type->ManagedSize); \
+        CHECK_ERROR(object != NULL, ERROR_OUT_OF_MEMORY); \
         object; \
     })
 

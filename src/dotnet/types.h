@@ -571,6 +571,10 @@ struct System_Type {
     System_Type NestedTypes;
 };
 
+static inline bool generic_argument_is_reference_type(System_Type type) { return type->GenericTypeAttributes & 0x0004; }
+static inline bool generic_argument_is_not_nullable_value_type(System_Type type) { return type->GenericTypeAttributes & 0x0008; }
+static inline bool generic_argument_is_default_constructor(System_Type type) { return type->GenericTypeAttributes & 0x0010; }
+
 static inline stack_type_t type_get_stack_type(System_Type type) { return type == NULL ? STACK_TYPE_O : type->StackType; }
 static inline bool type_is_generic_type(System_Type type) { return type->GenericArguments != NULL; }
 static inline bool type_is_generic_definition(System_Type type) { return type_is_generic_type(type) && type->GenericTypeDefinition == NULL; }
@@ -639,13 +643,14 @@ void type_print_full_name(System_Type Type, strbuilder_t* builder);
 System_Reflection_FieldInfo type_get_field(System_Type type, System_String name);
 
 /**
- * Iterate all the methods of the type with the same name
- *
- * @param type      [IN] The declaring type
- * @param name      [IN] The name of the type
- * @param index     [IN] The index from which to continue
+ * Iterate all the methods of the type with the same name, starting at the given index
  */
 System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index);
+
+/**
+ * Just like the type_iterate_methods, but takes in a c-string instead of a normal string
+ */
+System_Reflection_MethodInfo type_iterate_methods_cstr(System_Type type, const char* name, int* index);
 
 /**
  * Get the implementation of the given interface method
@@ -729,7 +734,7 @@ System_Type get_this_type(System_Reflection_MethodInfo signature);
 /**
  * Create a new generic type with the given generic arguments
  */
-System_Type type_make_generic(System_Type type, System_Type_Array arguments);
+err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Type* out_type);
 
 /**
  * Updates the interface impl to the given one, this is needed because interface impls are created
@@ -737,14 +742,14 @@ System_Type type_make_generic(System_Type type, System_Type_Array arguments);
  * before an interface impl was done, but it still depends on interface impls, so we just udpate it
  * again at a later stage during type init (during runtime it should be fine)
  */
-void type_expand_interface_impls(System_Type type, TinyDotNet_Reflection_InterfaceImpl_Array interfaceImpls);
+err_t type_expand_interface_impls(System_Type type, TinyDotNet_Reflection_InterfaceImpl_Array interfaceImpls);
 
 /**
  * Same as the interface impls
  */
-void type_expand_method_impls(System_Type type, TinyDotNet_Reflection_MethodImpl_Array impls);
+err_t type_expand_method_impls(System_Type type, TinyDotNet_Reflection_MethodImpl_Array impls);
 
 /**
  * Make a new generic method with the given generic arguments
  */
-System_Reflection_MethodInfo method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments);
+err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments, System_Reflection_MethodInfo* out_method);

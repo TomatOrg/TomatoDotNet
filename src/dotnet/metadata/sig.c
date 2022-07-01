@@ -157,7 +157,7 @@ static err_t parse_type(
             }
 
             // we done
-            *out_type = type_make_generic(type, newTypeArgs);
+            CHECK_AND_RETHROW(type_make_generic(type, newTypeArgs, out_type));
         } break;
 
         case ELEMENT_TYPE_OBJECT: *out_type = tSystem_Object; break;
@@ -201,6 +201,8 @@ static err_t parse_type(
 
         default: CHECK_FAIL("Got invalid element type: 0x%02x", element_type);
     }
+
+    ASSERT(*out_type != NULL);
 
 cleanup:
     return err;
@@ -498,7 +500,7 @@ err_t parse_method_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, 
     }
 
     // we're done
-    *out_method = method_make_generic(method, newTypeArgs);
+    CHECK_AND_RETHROW(method_make_generic(method, newTypeArgs, out_method));
 
 cleanup:
     return err;
