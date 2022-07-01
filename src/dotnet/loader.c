@@ -1640,6 +1640,7 @@ typedef struct type_init {
         .managed_size = sizeof(struct System_Exception),        \
         .managed_alignment = alignof(struct System_Exception),  \
         .vtable_size = 5                                        \
+        .stack_type = STACK_TYPE_O,                             \
     }
 
 #define VALUE_TYPE_INIT(_namespace, _name, code, stype, _vtable_size)         \
