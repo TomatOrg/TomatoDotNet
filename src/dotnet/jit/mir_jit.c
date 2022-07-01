@@ -5711,7 +5711,7 @@ err_t jit_type(System_Type type) {
     }
 
     // and finally, we can run all the ctors that should run from this
-    for (int i = 0; i < arrlen(ctx.created_types); i++) {
+    for (int i = arrlen(ctx.created_types) - 1; i >= 0; i--) {
         System_Type created_type = ctx.created_types[i];
 
         // call the ctor
