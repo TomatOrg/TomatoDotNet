@@ -4669,7 +4669,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     }
 
                     // verify a normal argument
-                    CHECK(type_is_verifier_assignable_to(type_get_verification_type(arg_type), signature_type));
+                    CHECK(type_is_verifier_assignable_to(arg_type, signature_type));
                 }
 
                 // handle the `this` argument
@@ -5399,7 +5399,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg));
 
                     // check that the method matches the object
-                    CHECK(type_is_verifier_assignable_to(type_get_verification_type(object_type), operand_method->DeclaringType));
+                    CHECK(type_is_verifier_assignable_to(object_type, operand_method->DeclaringType));
 
                     // resolve it
                     CHECK(method_is_virtual(operand_method));

@@ -1639,7 +1639,7 @@ typedef struct type_init {
         .stack_alignment = alignof(code),                       \
         .managed_size = sizeof(struct System_Exception),        \
         .managed_alignment = alignof(struct System_Exception),  \
-        .vtable_size = 5                                        \
+        .vtable_size = 5,                                       \
         .stack_type = STACK_TYPE_O,                             \
     }
 
