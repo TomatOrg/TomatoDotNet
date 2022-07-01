@@ -1450,26 +1450,30 @@ static err_t expand_type(System_Type type, System_Type_Array arguments, System_T
     err_t err = NO_ERROR;
 
     if (type == NULL) {
-        // nothing to do
+        // type stays as null
 
     } else if (!type_is_generic_parameter(type)) {
-        // nothing to do
+        // type stays as it was
 
     } else if (type->GenericParameterPosition >= 0) {
         // type is a generic argument, resolve it
 
+        bool ignore_argument = false;
         if (ignore_arguments != NULL) {
             // we have an ignored list, so ignore anything that matches it
             for (int i = 0; i < ignore_arguments->Length; i++) {
                 if (ignore_arguments->Data[i] == type) {
-                    goto cleanup;
+                    ignore_argument = true;
+                    break;
                 }
             }
         }
 
-        // not in the ignore list, expand it
-        ASSERT(type->GenericParameterPosition < arguments->Length);
-        type = arguments->Data[type->GenericParameterPosition];
+        if (!ignore_argument) {
+            // not in the ignore list, expand it
+            ASSERT(type->GenericParameterPosition < arguments->Length);
+            type = arguments->Data[type->GenericParameterPosition];
+        }
 
     } else if (type->IsArray) {
         // type is an array, resolve the element type
