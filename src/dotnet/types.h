@@ -373,6 +373,7 @@ struct System_Reflection_MethodInfo {
     System_Type ReturnType;
     bool IsFilled;
     int VTableOffset;
+    int MethodIndex;
     MIR_item_t MirFunc;
     MIR_item_t MirUnboxerFunc;
     MIR_item_t MirProto;

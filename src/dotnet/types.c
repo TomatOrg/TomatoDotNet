@@ -1343,6 +1343,7 @@ static err_t expand_method(System_Type type, System_Reflection_MethodInfo method
     CHECK_AND_RETHROW(expand_type(method->ReturnType, arguments, ignore_arguments, &expanded));
     GC_UPDATE(instance, ReturnType, expanded);
 
+    instance->MethodIndex = method->MethodIndex;
     instance->Attributes = method->Attributes;
     instance->ImplAttributes = method->ImplAttributes;
 
@@ -1760,6 +1761,8 @@ err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array
     err_t err = NO_ERROR;
 
     monitor_enter(method);
+
+    CHECK(!type_is_generic_definition(method->DeclaringType));
 
     // check for an existing instance
     System_Reflection_MethodInfo inst = method->NextGenericInstance;

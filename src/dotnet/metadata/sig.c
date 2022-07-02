@@ -486,6 +486,16 @@ err_t parse_method_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, 
     blob_entry_t* sig = &_sig;
     System_Reflection_MethodInfo method = *out_method;
 
+    // first handle the declaring type, if it is a generic type then we need to expand it
+    if (type_is_generic_definition(method->DeclaringType)) {
+        // expand it
+        System_Type declaring;
+        CHECK_AND_RETHROW(type_make_generic(method->DeclaringType, typeArgs, &declaring));
+
+        // now find the method in the new type
+        method = declaring->Methods->Data[method->MethodIndex];
+    }
+
     EXPECT_BYTE(0x0A);
 
     uint32_t gen_arg_count = 0;

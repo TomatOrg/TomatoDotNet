@@ -590,9 +590,10 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
 
         type->Methods = GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, last_idx - type_def->method_list.index + 1);
         for (int mi = 0; mi < type->Methods->Length; mi++) {
-            size_t index = type_def->method_list.index + mi - 1;
+            int index = type_def->method_list.index + mi - 1;
             metadata_method_def_t* method_def = metadata_get_method_def(metadata, index);
-            System_Reflection_MethodInfo methodInfo = UNSAFE_GC_NEW(tSystem_Reflection_MethodInfo);
+            System_Reflection_MethodInfo methodInfo = GC_NEW(tSystem_Reflection_MethodInfo);
+            methodInfo->MethodIndex = mi;
             GC_UPDATE_ARRAY(type->Methods, mi, methodInfo);
             GC_UPDATE_ARRAY(assembly->DefinedMethods, index, methodInfo);
 
