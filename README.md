@@ -3,6 +3,10 @@
 A dotnet runtime designed to be more light weight and also work on embedded (inside pentagon more specifically) 
 but also has a linux runtime for ease of development and use.
 
+In addition to attempting to be small, it also attempts to fully verify the CIL that is being run on top of it 
+to be fully memory safe, this allows for proper Type isolation and security, but does prevent some of the more 
+advanced and unsafe features of C# to not be usable (for example `stackalloc`).
+
 Another bonus with this design is that porting to new kernels and hosted environments should not be too hard 
 alongside the ability to embed inside programs as something more light weight than mono.
 
@@ -47,9 +51,12 @@ Note that the runtime is still not stable and even tho the features are implemen
   - WaitHandle with WaitEvent, Mutex, Semaphore 
   - Thread class
   - minimal Monitor support (enough for lock statement)
+- Support for Span
+  - Only from array types, as void* is not valid
 
 ### Main missing features
 - Async runtime support (wip)
+- Proper for `ref struct` (check they are only stored in other ref structs or on the stack)
 - Proper collections library 
 - String manipulation
 - Streams core functionality 
