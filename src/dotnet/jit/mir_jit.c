@@ -144,6 +144,43 @@ static void jit_generate_System_String_GetCharInternal() {
     MIR_new_export(m_mir_context, fname);
 }
 
+static void jit_generate_System_Array_GetDataPtr() {
+    const char* fname = "[Corelib-v1]System.Array::GetDataPtr()";
+    MIR_type_t res[] = {
+        MIR_T_P,
+        MIR_T_P
+    };
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "this");
+    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_insn(m_mir_context, MIR_ADD,
+                                 MIR_new_reg_op(m_mir_context, this),
+                                 MIR_new_reg_op(m_mir_context, this),
+                                 MIR_new_int_op(m_mir_context, sizeof(struct System_Array))));
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 2,
+                                     MIR_new_int_op(m_mir_context, 0),
+                                     MIR_new_reg_op(m_mir_context, this)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
+static void jit_generate_System_Type_GetTypeFromHandle() {
+    const char* fname = "[Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
+    MIR_type_t res[] = {
+        MIR_T_P,
+        MIR_T_P
+    };
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "handle");
+    MIR_reg_t handle = MIR_reg(m_mir_context, "handle", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 2,
+                                     MIR_new_int_op(m_mir_context, 0),
+                                     MIR_new_mem_op(m_mir_context, MIR_T_P, 0, handle, 0, 1)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
 /**
  * All delegates have the exact same ctor, so we are going to just use
  * generate the ctor once and use it every time that we need to init
@@ -229,6 +266,8 @@ err_t init_jit() {
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
     jit_generate_System_String_GetCharInternal();
+    jit_generate_System_Array_GetDataPtr();
+    jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
 
     MIR_finish_module(m_mir_context);
@@ -821,6 +860,42 @@ void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit span functions
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static err_t jit_generate_System_Span_GetItemInternal(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func) {
+    err_t err = NO_ERROR;
+
+    System_Type type = method->DeclaringType->GenericArguments->Data[0];
+
+    MIR_reg_t this_reg = MIR_reg(ctx->ctx, "this", func->u.func);
+    MIR_reg_t arg0_reg = MIR_reg(ctx->ctx, "arg0", func->u.func);
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(ctx->ctx, MIR_MUL,
+                                 MIR_new_reg_op(ctx->ctx, arg0_reg),
+                                 MIR_new_reg_op(ctx->ctx, arg0_reg),
+                                 MIR_new_int_op(ctx->ctx, type->StackSize)));
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_insn(m_mir_context, MIR_ADD,
+                                 MIR_new_reg_op(ctx->ctx, this_reg),
+                                 MIR_new_mem_op(ctx->ctx, MIR_T_P,
+                                                offsetof(System_Span, Ptr),
+                                                this_reg, 0, 1),
+                                 MIR_new_reg_op(ctx->ctx, arg0_reg)));
+
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_ret_insn(ctx->ctx, 2,
+                                     MIR_new_int_op(ctx->ctx, 0),
+                                     MIR_new_reg_op(ctx->ctx, this_reg)));
+
+cleanup:
+
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit the delegate wrappers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1175,6 +1250,8 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             // generate the dispatcher
             CHECK_AND_RETHROW(jit_multicast_delegate_invoke(ctx, method, method->MirFunc, static_invoke_proto));
             MIR_finish_func(ctx->ctx);
+            MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+
         } else {
             CHECK_FAIL();
         }
@@ -1193,8 +1270,25 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             }
             CHECK(found, "Assembly `%U` is not allowed to have internal calls", method->Module->Name);
 
-            // create the import for it
-            method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
+            if (method->DeclaringType->GenericTypeDefinition == tSystem_Span) {
+
+                // create the function
+                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+
+                // Span has special stuff
+                if (string_equals_cstr(method->Name, "GetItemInternal")) {
+                    CHECK_AND_RETHROW(jit_generate_System_Span_GetItemInternal(ctx, method, method->MirFunc));
+                } else {
+                    CHECK_FAIL();
+                }
+
+                MIR_finish_func(ctx->ctx);
+                MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+
+            } else {
+                // create the import for it
+                method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
+            }
         } else {
             // create a function, we will finish it right away and append to it in the future
             method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
@@ -2423,6 +2517,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // Handle operands of the opcode
         //--------------------------------------------------------------------------------------------------------------
 
+        token_t operand_token = { 0 };
         int32_t operand_i32 = 0;
         int64_t operand_i64 = 0;
         System_Reflection_FieldInfo operand_field = NULL;
@@ -2550,7 +2645,15 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 #endif
             } break;
 
-            case OPCODE_OPERAND_InlineTok: CHECK_FAIL("TODO: tok support"); break;
+            case OPCODE_OPERAND_InlineTok: {
+                // fetch it
+                operand_token = *(token_t*)&body->Il->Data[il_ptr];
+                il_ptr += sizeof(token_t);
+
+#ifdef JIT_TRACE
+                printf("<InlineTok>");
+#endif
+            } break;
 
             case OPCODE_OPERAND_InlineType: {
                 // fetch it
@@ -3330,6 +3433,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_BEQ_S: CHECK_AND_RETHROW(jit_compare_branch(ctx, operand_i32, MIR_BEQ)); break;
             case CEE_BGE:
             case CEE_BGE_S: CHECK_AND_RETHROW(jit_compare_branch(ctx, operand_i32, MIR_BGE)); break;
+            case CEE_BGT:
+            case CEE_BGT_S: CHECK_AND_RETHROW(jit_compare_branch(ctx, operand_i32, MIR_BGT)); break;
             case CEE_BLE:
             case CEE_BLE_S: CHECK_AND_RETHROW(jit_compare_branch(ctx, operand_i32, MIR_BLE)); break;
             case CEE_BLT:
@@ -3941,6 +4046,57 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 MIR_new_insn(mir_ctx, MIR_MOV,
                                              MIR_new_reg_op(mir_ctx, null_reg),
                                              MIR_new_int_op(mir_ctx, 0)));
+            } break;
+
+            case CEE_LDTOKEN: {
+                // all of them are about the same, they have a single pointer of this
+                MIR_item_t runtime_handle_item = NULL;
+                MIR_reg_t runtime_handle_reg = 0;
+
+                // first resolve what we are going to even be pushing
+                switch (operand_token.table) {
+                    case METADATA_METHOD_DEF:
+                    case METADATA_METHOD_SPEC: {
+                        CHECK_FAIL("TODO: RuntimeMethodHandle");
+                    } break;
+
+                    case METADATA_TYPE_DEF:
+                    case METADATA_TYPE_REF:
+                    case METADATA_TYPE_SPEC: {
+                        // get the value
+                        System_Type type;
+                        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, operand_token,
+                                                                     method->DeclaringType->GenericArguments,
+                                                                     method->GenericArguments,
+                                                                     &type));
+
+                        // make sure the type is prepared
+                        CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, type));
+
+                        // push it
+                        CHECK_AND_RETHROW(stack_push(ctx, tSystem_RuntimeTypeHandle, &runtime_handle_reg));
+
+                        // the ptr is the type
+                        runtime_handle_item = type->MirType;
+                    } break;
+
+                    case METADATA_FIELD: {
+                        CHECK_FAIL("TODO: RuntimeFieldHandle");
+                    } break;
+
+                    case METADATA_MEMBER_REF: {
+                        CHECK_FAIL("TODO: figure method or field");
+                    } break;
+
+                    default:
+                        CHECK_FAIL();
+                }
+
+                // move it
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_mem_op(mir_ctx, MIR_T_P, 0, runtime_handle_reg, 0, 1),
+                                             MIR_new_ref_op(mir_ctx, runtime_handle_item)));
             } break;
 
             case CEE_DUP: {
@@ -4897,7 +5053,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     MIR_reg_t ret_reg;
                     CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_method->ReturnType), &ret_reg));
 
-                    if (get_mir_stack_type(operand_method->ReturnType) == STACK_TYPE_VALUE_TYPE) {
+                    if (get_mir_stack_type(operand_method->ReturnType) == STACK_TYPE_REF) {
                         // we did not pass any local references to this, so we know for sure it can't be a local address
                         // being returned from the method
                         ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = ret_is_non_local_ref;
@@ -5820,4 +5976,8 @@ cleanup:
 
 void jit_dump_method(System_Reflection_MethodInfo method) {
     MIR_output_item(m_mir_context, stdout, method->MirFunc);
+}
+
+void jit_dump_context() {
+    MIR_output(m_mir_context, stdout);
 }

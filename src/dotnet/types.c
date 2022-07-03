@@ -55,6 +55,8 @@ System_Type tSystem_NullReferenceException = NULL;
 System_Type tSystem_InvalidCastException = NULL;
 System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
+System_Type tSystem_RuntimeTypeHandle = NULL;
+System_Type tSystem_Span = NULL;
 
 System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
 System_Type tTinyDotNet_Reflection_MemberReference = NULL;

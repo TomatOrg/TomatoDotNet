@@ -1703,6 +1703,8 @@ static type_init_t m_type_init[] = {
     TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference, 3),
     TYPE_INIT("TinyDotNet.Reflection", "MethodImpl", TinyDotNet_Reflection_MethodImpl, 3),
     TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec, 3),
+    VALUE_TYPE_INIT("System", "RuntimeTypeHandle", System_RuntimeTypeHandle, STACK_TYPE_VALUE_TYPE, 3),
+    VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE, 0),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {

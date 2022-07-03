@@ -114,6 +114,13 @@ struct System_Object {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_Span {
+    uintptr_t Ptr;
+    int32_t Length;
+} System_Span;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef struct System_Array {
     struct System_Object;
     int Length;
@@ -507,6 +514,10 @@ typedef enum stack_type {
     STACK_TYPE_REF,
 } stack_type_t;
 
+typedef struct System_RuntimeTypeHandle {
+    System_Type Type;
+} System_RuntimeTypeHandle;
+
 struct System_Type {
     // basic type information
     struct System_Reflection_MemberInfo;
@@ -706,6 +717,8 @@ extern System_Type tSystem_NullReferenceException;
 extern System_Type tSystem_InvalidCastException;
 extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
+extern System_Type tSystem_RuntimeTypeHandle;
+extern System_Type tSystem_Span;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
 extern System_Type tTinyDotNet_Reflection_MemberReference;
