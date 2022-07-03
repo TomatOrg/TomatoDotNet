@@ -321,9 +321,14 @@ static MIR_type_t get_mir_type(System_Type type) {
 // jitting context (for parallel jitting)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct stack_entry {
+    System_Type type;
+    bool non_local_ref;
+} stack_entry_t;
+
 typedef struct stack {
     // the stack entries
-    System_Type* entries;
+    stack_entry_t* entries;
 } stack_t;
 
 typedef struct stack_snapshot {
@@ -538,7 +543,7 @@ static err_t stack_push(jit_method_context_t* ctx, System_Type type, MIR_reg_t* 
     *out_reg = push_new_reg(ctx, type, false);
 
     // append to the stack
-    arrpush(ctx->stack.entries, type);
+    arrpush(ctx->stack.entries, (stack_entry_t){ .type = type });
 
 cleanup:
     return err;
@@ -548,13 +553,15 @@ cleanup:
  * Pop an item from the stack, returning its type and register location, will fail
  * if there are not enough items on the stack
  */
-static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg) {
+static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, bool* non_local_ref) {
     err_t err = NO_ERROR;
 
     // pop the entry
     CHECK(arrlen(ctx->stack.entries) > 0);
-    System_Type type = arrpop(ctx->stack.entries);
+    stack_entry_t entry = arrpop(ctx->stack.entries);
+    System_Type type = entry.type;
     if (out_type != NULL) *out_type = type;
+    if (non_local_ref != NULL) *non_local_ref = entry.non_local_ref;
 
     // get the reg stack
     stack_keeping_t* stack = NULL;
@@ -623,8 +630,8 @@ static err_t stack_merge(jit_method_context_t* ctx, stack_t* stack, bool allow_c
 
     // now merge it
     for (int i = 0; i < arrlen(stack->entries); i++) {
-        System_Type T = ctx->stack.entries[i];
-        System_Type S = stack->entries[i];
+        System_Type T = ctx->stack.entries[i].type;
+        System_Type S = stack->entries[i].type;
 
         // figure the new value that should be in here
         System_Type U = NULL;
@@ -640,11 +647,11 @@ static err_t stack_merge(jit_method_context_t* ctx, stack_t* stack, bool allow_c
 
         if (allow_change) {
             // for forward jumps we allow to merge properly
-            stack->entries[i] = U;
+            stack->entries[i].type = U;
         } else {
             // for backwards jumps we are going to check the stack
             // does not change after merging
-            CHECK(stack->entries[i] == U);
+            CHECK(stack->entries[i].type == U);
         }
     }
 
@@ -1465,7 +1472,7 @@ static err_t jit_jump_to_exception_clause(jit_method_context_t* ctx, System_Refl
 
         // validate it is the correct one
         CHECK(arrlen(stack.entries) == 1);
-        CHECK(stack.entries[0] == clause->CatchType);
+        CHECK(stack.entries[0].type == clause->CatchType);
 
         // move the exception to it
         MIR_append_insn(mir_ctx, mir_func,
@@ -1808,8 +1815,8 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
     MIR_reg_t value1_reg;
     System_Type value2_type;
     System_Type value1_type;
-    CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg));
-    CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg));
+    CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg, NULL));
+    CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg, NULL));
 
     MIR_reg_t result_reg = 0;
     MIR_label_t label = NULL;
@@ -1942,8 +1949,8 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
     MIR_reg_t result_reg;
     System_Type value2_type;
     System_Type value1_type;
-    CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg));
-    CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg));
+    CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg, NULL));
+    CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg, NULL));
 
     stack_type_t value1_stacktype = type_get_stack_type(value1_type);
     stack_type_t value2_stacktype = type_get_stack_type(value2_type);
@@ -2235,7 +2242,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
             // this is an exception caluse, we need to have the exception pushed on the stack
             // prepare it
-            arrpush(snapshot.stack.entries, clause->CatchType);
+            arrpush(snapshot.stack.entries, (stack_entry_t) { .type = clause->CatchType });
             snapshot.ireg_depth++;
             if (!created_first_entry) {
                 // create the first stack entry just in case, we are going to create a reg
@@ -2699,7 +2706,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_NEG: {
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 MIR_reg_t result_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, value_type, &result_reg));
@@ -2740,7 +2747,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_NOT: {
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 MIR_reg_t result_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, value_type, &result_reg));
@@ -2794,7 +2801,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_CONV_R_UN: {
                 MIR_reg_t reg;
                 System_Type type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &type, &reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &type, &reg, NULL));
 
                 MIR_reg_t result_reg;
                 System_Type result_type;
@@ -2901,7 +2908,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_UNBOX_ANY: {
                 MIR_reg_t obj_reg;
                 System_Type obj_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // the object type must always be a ref type for unboxing
                 CHECK(obj_type->StackType == STACK_TYPE_O);
@@ -3018,7 +3025,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_BOX: {
                 System_Type val_type;
                 MIR_reg_t val_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &val_type, &val_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &val_type, &val_reg, NULL));
 
                 // make sure that this is fine
                 CHECK(type_is_verifier_assignable_to(val_type, operand_type));
@@ -3099,7 +3106,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // pop all the values from the stack
                 MIR_reg_t addr_reg;
                 System_Type addr_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, NULL));
 
                 // this must be an array
                 CHECK(addr_type->IsByRef);
@@ -3181,8 +3188,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t addr_reg;
                 System_Type value_type;
                 System_Type addr_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
-                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, NULL));
 
                 // this must be an array
                 CHECK(addr_type->IsByRef);
@@ -3283,7 +3290,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the value
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // get the label
                 MIR_label_t label;
@@ -3342,7 +3349,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_SWITCH: {
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // allocate enough space for the ops
                 switch_ops = realloc(switch_ops, (operand_switch_n + 1) * sizeof(MIR_op_t));
@@ -3384,7 +3391,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the return argument
                 MIR_reg_t obj_reg;
                 System_Type obj_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // free this entirely
                 arrfree(ctx->stack.entries);
@@ -3557,7 +3564,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the top value
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // get the variable
                 CHECK(operand_i32 < body->LocalVariables->Length);
@@ -3770,8 +3777,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     case STACK_TYPE_INT32:
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
-                    case STACK_TYPE_FLOAT:
-                    case STACK_TYPE_REF: {
+                    case STACK_TYPE_FLOAT: {
                         MIR_insn_code_t code = jit_number_inscode(arg_stack_type);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
@@ -3783,6 +3789,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     case STACK_TYPE_VALUE_TYPE: {
                         jit_emit_memcpy(ctx, value_reg, arg_reg, arg_stack_type->StackSize);
                     } break;
+
+                    case STACK_TYPE_REF:
+                        // mark that this is a non-local ref type, as it comes from the outside
+                        ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = true;
+                        goto ldarg_primitive_type;
                 }
             } break;
 
@@ -3936,7 +3947,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the top value
                 MIR_reg_t top_reg;
                 System_Type top_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &top_type, &top_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &top_type, &top_reg, NULL));
 
                 // create new two values
                 MIR_reg_t value_1;
@@ -3986,7 +3997,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             } break;
 
             case CEE_POP: {
-                CHECK_AND_RETHROW(stack_pop(ctx, NULL, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, NULL, NULL, NULL));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3997,7 +4008,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the top value
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // get the field type, ignoring stuff like enums
                 System_Type field_type = type_get_underlying_type(operand_field->FieldType);
@@ -4148,6 +4159,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // push it
                 MIR_reg_t value_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
+                ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = true; // static field, not local
 
                 // very simple, just move the reference to the value field
                 MIR_append_insn(mir_ctx, mir_func,
@@ -4162,8 +4174,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t value_reg;
                 System_Type obj_type;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // validate that the object type is a valid one for stfld
                 if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
@@ -4333,7 +4345,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the object instance
                 System_Type obj_type;
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // validate that the object type is a valid one for stfld
                 if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
@@ -4426,9 +4438,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
             case CEE_LDFLDA: {
                 // get the object instance
+                bool obj_non_local_ref;
                 System_Type obj_type;
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, &obj_non_local_ref));
 
                 // validate that the object type is a valid one for ldfld
                 CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O || type_get_stack_type(obj_type) == STACK_TYPE_REF);
@@ -4452,6 +4465,17 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t value_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
 
+                // check if this comes as an outside reference
+                bool non_stack_local = false;
+                if (get_mir_stack_type(obj_type) == STACK_TYPE_O) {
+                    // heap object
+                    non_stack_local = true;
+                } else if (get_mir_stack_type(obj_type) == STACK_TYPE_REF) {
+                    // check if the reference is a non-value type
+                    CHECK(type_is_value_type(obj_type->BaseType));
+                    non_stack_local = obj_non_local_ref;
+                }
+
                 // check the object is not null
                 if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
                     CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
@@ -4469,11 +4493,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             // Calls and Returns
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-                //
-                // we are going to do NEWOBJ in here as well, because it is essentially like a call
-                // but we create the object right now instead of getting it from the stack, so I
-                // think this will remove alot of duplicate code if we just handle it in here
-                //
+            //
+            // we are going to do NEWOBJ in here as well, because it is essentially like a call
+            // but we create the object right now instead of getting it from the stack, so I
+            // think this will remove alot of duplicate code if we just handle it in here
+            //
 
             case CEE_NEWOBJ:
             case CEE_CALLVIRT:
@@ -4531,15 +4555,19 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 if (!method_is_static(operand_method)) other_args++;
                 MIR_op_t arg_ops[other_args + arg_count];
 
+                // to track if we passed local refs
+                bool ret_is_non_local_ref = true;
+
                 // pop all the arguments from the stack
                 int i;
                 for (i = arg_count + other_args - 1; i >= other_args; i--) {
                     System_Type signature_type = operand_method->Parameters->Data[i - other_args]->ParameterType;
 
                     // get the argument value
+                    bool arg_non_local_ref;
                     MIR_reg_t arg_reg;
                     System_Type arg_type;
-                    CHECK_AND_RETHROW(stack_pop(ctx, &arg_type, &arg_reg));
+                    CHECK_AND_RETHROW(stack_pop(ctx, &arg_type, &arg_reg, &arg_non_local_ref));
 
                     // do implicit conversion as needed
                     bool mem_op = false;
@@ -4626,8 +4654,16 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             }
                         } break;
 
+                        case STACK_TYPE_REF: {
+                            // if this is a reference that might be returned from the method we are calling
+                            // to, and the argument is a local reference on its own, then we need to mark
+                            // that the  reference type can't be trusted
+                            if (!arg_non_local_ref && type_is_verifier_assignable_to(arg_type, method->ReturnType)) {
+                                ret_is_non_local_ref = false;
+                            }
+                        } break;
+
                         // nothing to do
-                        case STACK_TYPE_REF: break;
                         case STACK_TYPE_INT64: break;
 
                         // in mir when calling
@@ -4714,7 +4750,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         }
                     } else {
                         // this is a call, get it from the stack
-                        CHECK_AND_RETHROW(stack_pop(ctx, &this_type, &this_reg));
+                        CHECK_AND_RETHROW(stack_pop(ctx, &this_type, &this_reg, NULL));
 
                         // Value types have their this as a by-ref
                         System_Type signature_this_type = operand_method->DeclaringType;
@@ -4861,6 +4897,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     MIR_reg_t ret_reg;
                     CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_method->ReturnType), &ret_reg));
 
+                    if (get_mir_stack_type(operand_method->ReturnType) == STACK_TYPE_VALUE_TYPE) {
+                        // we did not pass any local references to this, so we know for sure it can't be a local address
+                        // being returned from the method
+                        ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = ret_is_non_local_ref;
+                    }
+
                     // this should just work, because if the value is a struct it is going to be allocated properly
                     // in the stack push, and it is going to be passed by a pointer that we give, and everything will
                     // just work out because of how we have the order of everything :)
@@ -4909,7 +4951,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_INITOBJ: {
                 System_Type dest_type;
                 MIR_reg_t dest_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &dest_type, &dest_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &dest_type, &dest_reg, NULL));
 
                 CHECK(dest_type->IsByRef);
                 CHECK(type_is_verifier_assignable_to(operand_type, dest_type->BaseType));
@@ -4932,7 +4974,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     // pop the return from the stack
                     MIR_reg_t ret_arg;
                     System_Type ret_type;
-                    CHECK_AND_RETHROW(stack_pop(ctx, &ret_type, &ret_arg));
+                    CHECK_AND_RETHROW(stack_pop(ctx, &ret_type, &ret_arg, NULL));
 
                     // verify the stack is empty
                     CHECK(arrlen(ctx->stack.entries) == 0);
@@ -4999,7 +5041,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         } break;
 
                         case STACK_TYPE_REF:
-                            CHECK_FAIL();
+                            // first make sure that the return value is a non-local reference
+                            CHECK(ctx->stack.entries[arrlen(ctx->stack.entries)].non_local_ref);
+
+                            // it is, then return it like we return any other primitive
+                            goto ret_primitive_type;
                     }
                 }
             } break;
@@ -5012,7 +5058,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the number of elements
                 MIR_reg_t num_elems_reg;
                 System_Type num_elems_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &num_elems_type, &num_elems_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &num_elems_type, &num_elems_reg, NULL));
 
                 // make sure it has a valid type
                 CHECK(num_elems_type == tSystem_Int32);
@@ -5056,7 +5102,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the number of elements
                 MIR_reg_t array_reg;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5094,9 +5140,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 System_Type value_type;
                 System_Type index_type;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg));
-                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg));
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5230,8 +5276,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t array_reg;
                 System_Type index_type;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg));
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5323,8 +5369,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t array_reg;
                 System_Type index_type;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg));
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg));
+                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5352,6 +5398,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // push to the stack
                 CHECK_AND_RETHROW(stack_push(ctx, get_by_ref_type(type_get_intermediate_type(operand_type)), &value_reg));
+                ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = true;
 
                 // calculate the element reference offset
                 MIR_append_insn(mir_ctx, mir_func,
@@ -5396,7 +5443,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     // pop the object
                     MIR_reg_t object_reg;
                     System_Type object_type;
-                    CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg));
+                    CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg, NULL));
 
                     // check that the method matches the object
                     CHECK(type_is_verifier_assignable_to(object_type, operand_method->DeclaringType));
