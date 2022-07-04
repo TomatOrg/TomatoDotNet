@@ -109,6 +109,15 @@ static method_result_t System_Threading_WaitHandle_ReleaseWaitable(waitable_t* w
     return (method_result_t) { .exception = NULL, .value = 0 };
 }
 
+static System_Exception System_Threading_WaitHandle_WaitableClose(waitable_t* w) {
+    waitable_close(w);
+    return NULL;
+}
+
+static method_result_t System_Threading_WaitHandle_PutWaitable(waitable_t* w) {
+    return (method_result_t) { .exception = NULL, .value = (uintptr_t)put_waitable(w) };
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // System.Runtime.Intrinsics.X86
 //----------------------------------------------------------------------------------------------------------------------
@@ -389,6 +398,8 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Threading.WaitHandle::CreateWaitable(int32)",                 System_Threading_WaitHandle_CreateWaitable },
     { "[Corelib-v1]System.Threading.WaitHandle::WaitableAfter(int64)",                  System_Threading_WaitHandle_WaitableAfter },
     { "[Corelib-v1]System.Threading.WaitHandle::ReleaseWaitable(uint64)",               System_Threading_WaitHandle_ReleaseWaitable },
+    { "[Corelib-v1]System.Threading.WaitHandle::WaitableClose(uint64)",                 System_Threading_WaitHandle_WaitableClose },
+    { "[Corelib-v1]System.Threading.WaitHandle::PutWaitable(uint64)",                   System_Threading_WaitHandle_PutWaitable },
 
     { "[Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int32&,int32)", interlocked_add_i32 },
     { "[Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.UInt32&,uint32)", interlocked_add_u32 },

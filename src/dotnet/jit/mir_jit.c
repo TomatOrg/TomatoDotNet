@@ -645,7 +645,7 @@ cleanup:
 static stack_t stack_snapshot(jit_method_context_t* ctx) {
     stack_t snapshot = { 0 };
     arrsetlen(snapshot.entries, arrlen(ctx->stack.entries));
-    memcpy(snapshot.entries, ctx->stack.entries, arrlen(ctx->stack.entries) * sizeof(System_Type));
+    memcpy(snapshot.entries, ctx->stack.entries, arrlen(ctx->stack.entries) * sizeof(ctx->stack.entries[0]));
     return snapshot;
 }
 
@@ -654,7 +654,7 @@ static stack_t stack_snapshot(jit_method_context_t* ctx) {
  */
 static void stack_copy(jit_method_context_t* ctx, stack_t* stack) {
     arrsetlen(ctx->stack.entries, arrlen(stack->entries));
-    memcpy(ctx->stack.entries, stack->entries, arrlen(stack->entries) * sizeof(System_Type));
+    memcpy(ctx->stack.entries, stack->entries, arrlen(stack->entries) * sizeof(stack->entries[0]));
 }
 
 /**
@@ -4623,10 +4623,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // check if this comes as an outside reference
                 bool non_stack_local = false;
-                if (get_mir_stack_type(obj_type) == STACK_TYPE_O) {
+                if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
                     // heap object
                     non_stack_local = true;
-                } else if (get_mir_stack_type(obj_type) == STACK_TYPE_REF) {
+                } else if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
                     // check if the reference is a non-value type
                     CHECK(type_is_value_type(obj_type->BaseType));
                     non_stack_local = obj_non_local_ref;
@@ -5053,7 +5053,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     MIR_reg_t ret_reg;
                     CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_method->ReturnType), &ret_reg));
 
-                    if (get_mir_stack_type(operand_method->ReturnType) == STACK_TYPE_REF) {
+                    if (type_get_stack_type(operand_method->ReturnType) == STACK_TYPE_REF) {
                         // we did not pass any local references to this, so we know for sure it can't be a local address
                         // being returned from the method
                         ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = ret_is_non_local_ref;
