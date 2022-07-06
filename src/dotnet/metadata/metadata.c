@@ -121,23 +121,106 @@ static uint8_t m_coded_index_bits[] = {
     [TYPE_OR_METHOD_DEF] = 1,
 };
 
+#define TAG_BITS(x) (1 << x)
+
 /**
  * A helper for decoding coded indexes, contains the actual table indexes
  */
-static const char* m_coded_index_tags[] = {
-    [TYPE_DEF_OR_REF] = "\x02\x01\x1Bz",
-    [HAS_CONSTANT] = "\x04\x08\x17z",
-    [HAS_CUSTOM_ATTRIBUTE] = "\x06\x04\x01\x02\x08\x09\x0A\x00\x0E\x17\x14\x11\x1A\x1B\x20\x23\x26\x27\x28zzzzzzzzzzzzz",
-    [HAS_FIELD_MARSHALL] = "\x04\x08",
-    [HAS_DECL_SECURITY] = "\x02\x06\x20z",
-    [MEMBER_REF_PARENT] = "\x02\x01\x1A\x06\x1Bzzz",
-    [HAS_SEMANTICS] = "\x14\x17",
-    [METHOD_DEF_OR_REF] = "\x06\x0A",
-    [MEMBER_FORWARDED] = "\x04\x06",
-    [IMPLEMENTATION] = "\x26\x23\x27z",
-    [CUSTOM_ATTRIBUTE_TYPE] = "zz\x06\x0Azzzz",
-    [RESOLUTION_SCOPE] = "\x00\x1A\x23\x01",
-    [TYPE_OR_METHOD_DEF] = "\x02\x06",
+static const uint8_t* m_coded_index_tags[] = {
+    [TYPE_DEF_OR_REF] = (uint8_t[TAG_BITS(2)]){
+        METADATA_TYPE_DEF,
+        METADATA_TYPE_REF,
+        METADATA_TYPE_SPEC,
+        -1
+    },
+    [HAS_CONSTANT] = (uint8_t[TAG_BITS(2)]){
+        METADATA_FIELD,
+        METADATA_PARAM,
+        METADATA_PROPERTY,
+        -1
+    },
+    [HAS_CUSTOM_ATTRIBUTE] = (uint8_t[TAG_BITS(5)]){
+        METADATA_METHOD_DEF,
+        METADATA_FIELD,
+        METADATA_TYPE_REF,
+        METADATA_TYPE_DEF,
+        METADATA_PARAM,
+        METADATA_INTERFACE_IMPL,
+        METADATA_MEMBER_REF,
+        METADATA_MODULE,
+        /* METADATA_PERMISSION */ -1,
+        METADATA_PROPERTY,
+        METADATA_EVENT,
+        METADATA_STAND_ALONE_SIG,
+            /* METADATA_MODULE_REF */ -1,
+        METADATA_TYPE_SPEC,
+        METADATA_ASSEMBLY,
+        METADATA_ASSEMBLY_REF,
+        /* METADATA_FILE */ -1,
+        METADATA_EXPORTED_TYPE,
+        /* METADATA_MANIFEST_RESOURCE */ -1,
+        METADATA_GENERIC_PARAM,
+        METADATA_GENERIC_PARAM_CONSTRAINT,
+        METADATA_METHOD_SPEC
+    },
+    [HAS_FIELD_MARSHALL] = (uint8_t[TAG_BITS(1)]){
+        METADATA_FIELD,
+        METADATA_PARAM
+    },
+    [HAS_DECL_SECURITY] = (uint8_t[TAG_BITS(2)]){
+        METADATA_TYPE_DEF,
+        METADATA_METHOD_DEF,
+        METADATA_ASSEMBLY,
+        -1
+    },
+    [MEMBER_REF_PARENT] = (uint8_t[TAG_BITS(3)]){
+        METADATA_TYPE_DEF,
+        METADATA_TYPE_REF,
+        /* METADATA_MODULE_REF*/ -1,
+        METADATA_METHOD_DEF,
+        METADATA_TYPE_SPEC,
+        -1,
+        -1,
+        -1
+    },
+    [HAS_SEMANTICS] = (uint8_t[TAG_BITS(1)]){
+        METADATA_EVENT,
+        METADATA_PROPERTY
+    },
+    [METHOD_DEF_OR_REF] = (uint8_t[TAG_BITS(1)]){
+        METADATA_METHOD_DEF,
+        METADATA_MEMBER_REF
+    },
+    [MEMBER_FORWARDED] = (uint8_t[TAG_BITS(1)]){
+        METADATA_FIELD,
+        METADATA_METHOD_DEF
+    },
+    [IMPLEMENTATION] = (uint8_t[TAG_BITS(2)]){
+        /* METADATA_FILE */ -1,
+        METADATA_ASSEMBLY_REF,
+        METADATA_EXPORTED_TYPE,
+        -1
+    },
+    [CUSTOM_ATTRIBUTE_TYPE] = (uint8_t[TAG_BITS(3)]){
+        -1,
+        -1,
+        METADATA_METHOD_DEF,
+        METADATA_MEMBER_REF,
+        -1,
+        -1,
+        -1,
+        -1,
+    },
+    [RESOLUTION_SCOPE] = (uint8_t[TAG_BITS(2)]){
+        METADATA_MODULE,
+        /* METADATA_MODULE_REF */ -1,
+        METADATA_ASSEMBLY_REF,
+        METADATA_TYPE_REF,
+    },
+    [TYPE_OR_METHOD_DEF] = (uint8_t[TAG_BITS(1)]){
+        METADATA_TYPE_DEF,
+        METADATA_METHOD_DEF
+    }
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -385,14 +468,14 @@ cleanup:
 
 static void resolve_coded_index_sizes(metadata_parse_ctx_t* ctx) {
     for (int i = 0; i < ARRAY_LEN(ctx->long_coded_index); i++) {
-        const char* coding = m_coded_index_tags[i];
+        const uint8_t* coding = m_coded_index_tags[i];
         int tag_bits = m_coded_index_bits[i];
 
         // find the max amount of table entries
         uint32_t max_table_len = 0;
         for (int j = 0; j < (1 << tag_bits); j++) {
-            char tag = coding[j];
-            if (tag != 'z') {
+            uint8_t tag = coding[j];
+            if (tag != (uint8_t)-1) {
                 if (ctx->metadata->tables[tag].rows > max_table_len) {
                     max_table_len = ctx->metadata->tables[tag].rows;
                 }

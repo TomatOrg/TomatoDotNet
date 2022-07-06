@@ -1657,6 +1657,14 @@ typedef struct type_init {
         .stack_type = (stype)                                   \
     }
 
+#define TYPE_LOOKUP(_namespace, _name, code)                    \
+    {                                                           \
+        .namespace = (_namespace),                              \
+        .name = (_name),                                        \
+        .global = &t##code,                                     \
+        .stack_size = -1,                                       \
+    }
+
 static type_init_t m_type_init[] = {
     TYPE_INIT("System", "Exception", System_Exception, 5),
     VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE, 3),
@@ -1705,6 +1713,8 @@ static type_init_t m_type_init[] = {
     TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec, 3),
     VALUE_TYPE_INIT("System", "RuntimeTypeHandle", System_RuntimeTypeHandle, STACK_TYPE_VALUE_TYPE, 3),
     VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE, 0),
+
+    TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", System_Runtime_CompilerServices_Unsafe),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
@@ -1715,15 +1725,17 @@ static void init_type(metadata_type_def_t* type_def, System_Type type) {
             strcmp(type_def->type_namespace, bt->namespace) == 0 &&
             strcmp(type_def->type_name, bt->name) == 0
         ) {
-            type->ManagedSize = bt->managed_size;
-            type->StackSize = bt->stack_size;
-            type->ManagedAlignment = bt->managed_alignment;
-            type->StackAlignment = bt->stack_alignment;
-            type->StackType = bt->stack_type;
-            if (bt->vtable_size != 0) {
-                type->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * bt->vtable_size);
-                ASSERT(type->VTable != NULL);
-                type->VTable->type = type;
+            if (type->StackSize >= 0) {
+                type->ManagedSize = bt->managed_size;
+                type->StackSize = bt->stack_size;
+                type->ManagedAlignment = bt->managed_alignment;
+                type->StackAlignment = bt->stack_alignment;
+                type->StackType = bt->stack_type;
+                if (bt->vtable_size != 0) {
+                    type->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * bt->vtable_size);
+                    ASSERT(type->VTable != NULL);
+                    type->VTable->type = type;
+                }
             }
             *bt->global = type;
             break;
@@ -1737,6 +1749,8 @@ static err_t validate_vtable_size() {
     // check if this is a builtin type
     for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
         type_init_t* bt = &m_type_init[i];
+        if (bt->stack_size < 0) continue;
+
         System_Type type = *bt->global;
         if (type->VirtualMethods == NULL) {
             CHECK(bt->vtable_size == 0,

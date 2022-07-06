@@ -63,6 +63,8 @@ System_Type tTinyDotNet_Reflection_MemberReference = NULL;
 System_Type tTinyDotNet_Reflection_MethodImpl = NULL;
 System_Type tTinyDotNet_Reflection_MethodSpec = NULL;
 
+System_Type tSystem_Runtime_CompilerServices_Unsafe = NULL;
+
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
         return false;
@@ -1218,7 +1220,27 @@ bool check_method_accessibility(System_Reflection_MethodInfo from_method, System
 
     switch (method_get_access(to)) {
         case METHOD_COMPILER_CONTROLLED: ASSERT(!"TODO: METHOD_COMPILER_CONTROLLED"); return false;
-        case METHOD_PRIVATE: return from_type == to->DeclaringType;
+        case METHOD_PRIVATE: {
+            // get the raw to type
+            if (to_type->GenericTypeDefinition != NULL) {
+                to_type = to_type->GenericTypeDefinition;
+            }
+
+            // get the raw declaring type
+            System_Type declaring = from_type;
+            if (declaring->GenericTypeDefinition != NULL) {
+                declaring = declaring->GenericTypeDefinition;
+            }
+
+            // now go ahead a match it
+            while (declaring != NULL) {
+                if (declaring == to_type) {
+                    return true;
+                }
+                declaring = declaring->DeclaringType;
+            }
+            return false;
+        }
         case METHOD_FAMILY: return family;
         case METHOD_ASSEMBLY: return assembly;
         case METHOD_FAMILY_AND_ASSEMBLY: return family && assembly;

@@ -725,6 +725,8 @@ extern System_Type tTinyDotNet_Reflection_MemberReference;
 extern System_Type tTinyDotNet_Reflection_MethodImpl;
 extern System_Type tTinyDotNet_Reflection_MethodSpec;
 
+extern System_Type tSystem_Runtime_CompilerServices_Unsafe;
+
 static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || type_get_stack_type(type) == STACK_TYPE_O; }
 static inline bool type_is_value_type(System_Type type) { return type != NULL && type->IsValueType; }

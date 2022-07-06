@@ -226,7 +226,7 @@ err_t init_jit() {
     //
     // Initialize all internal functions
     //
-   MIR_module_t internal_module = MIR_new_module(m_mir_context, "jit_internal");
+   MIR_module_t internal_module = MIR_new_module(m_mir_context, "tinydotnet");
 
     MIR_type_t res_type = MIR_T_P;
     m_gc_new_proto = MIR_new_proto(m_mir_context, "gc_new$proto", 1, &res_type, 2, MIR_T_P, "type", MIR_T_U64, "size");
@@ -863,9 +863,7 @@ void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) 
 // Jit span functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static err_t jit_generate_System_Span_GetItemInternal(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func) {
-    err_t err = NO_ERROR;
-
+static void jit_generate_System_Span_GetItemInternal(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func) {
     System_Type type = method->DeclaringType->GenericArguments->Data[0];
 
     MIR_reg_t this_reg = MIR_reg(ctx->ctx, "this", func->u.func);
@@ -889,10 +887,18 @@ static err_t jit_generate_System_Span_GetItemInternal(jit_context_t* ctx, System
                     MIR_new_ret_insn(ctx->ctx, 2,
                                      MIR_new_int_op(ctx->ctx, 0),
                                      MIR_new_reg_op(ctx->ctx, this_reg)));
+}
 
-cleanup:
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit the Unsafe builtins
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-    return err;
+static void jit_generate_Unsafe_SizeOf(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func) {
+    System_Type type = method->GenericArguments->Data[0];
+    MIR_append_insn(ctx->ctx, func,
+                    MIR_new_ret_insn(ctx->ctx, 2,
+                                     MIR_new_int_op(ctx->ctx, 0),
+                                     MIR_new_int_op(ctx->ctx, type->StackSize)));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1270,14 +1276,17 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             }
             CHECK(found, "Assembly `%U` is not allowed to have internal calls", method->Module->Name);
 
+            //
+            // Span<T> has special generic functions we want to generate
+            //
             if (method->DeclaringType->GenericTypeDefinition == tSystem_Span) {
-
                 // create the function
-                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars),
+                                                   vars);
 
                 // Span has special stuff
                 if (string_equals_cstr(method->Name, "GetItemInternal")) {
-                    CHECK_AND_RETHROW(jit_generate_System_Span_GetItemInternal(ctx, method, method->MirFunc));
+                    jit_generate_System_Span_GetItemInternal(ctx, method, method->MirFunc);
                 } else {
                     CHECK_FAIL();
                 }
@@ -1285,6 +1294,23 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
                 MIR_finish_func(ctx->ctx);
                 MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
 
+            //
+            // Unsafe has special generic functions we want to generate
+            //
+            } else if (method->DeclaringType == tSystem_Runtime_CompilerServices_Unsafe) {
+                // create the function
+                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars),
+                                                   vars);
+
+                // Span has special stuff
+                if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
+                    jit_generate_Unsafe_SizeOf(ctx, method, method->MirFunc);
+                } else {
+                    CHECK_FAIL();
+                }
+
+                MIR_finish_func(ctx->ctx);
+                MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
             } else {
                 // create the import for it
                 method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
@@ -2601,7 +2627,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 #endif
 
                 // check we can access it
-                CHECK(check_method_accessibility(method, operand_method));
+                CHECK(check_method_accessibility(method, operand_method),
+                      "from %U to %U", method->Name, operand_method->Name);
 
                 // prepare the owning type
                 CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_method->DeclaringType));
@@ -3356,7 +3383,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     stind_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        CHECK_FAIL("TODO: struct value store in array");
+                        // copying into a managed pointer, use the managed ref memcpy
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_call_insn(mir_ctx, 5,
+                                                          MIR_new_ref_op(mir_ctx, m_managed_ref_memcpy_proto),
+                                                          MIR_new_ref_op(mir_ctx, m_managed_ref_memcpy_func),
+                                                          MIR_new_reg_op(mir_ctx, addr_reg),
+                                                          MIR_new_ref_op(mir_ctx, operand_type->MirType),
+                                                          MIR_new_reg_op(mir_ctx, value_reg)));
                     } break;
 
                     case STACK_TYPE_REF:
@@ -4486,7 +4520,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                                   MIR_new_reg_op(mir_ctx, obj_reg),
                                                                   MIR_new_ref_op(mir_ctx, field_type->MirType),
                                                                   MIR_new_reg_op(mir_ctx, value_reg)));
-
                             }
                         }
                     } break;
@@ -4971,7 +5004,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 arg_ops[0] = MIR_new_ref_op(mir_ctx, operand_method->MirProto);
 
                 // byref uses static dispatch since we know the exact type always
-                // TODO: optimize dispatch on sealed classes
                 if (
                     opcode == CEE_CALLVIRT &&
                     method_is_virtual(operand_method)
@@ -5821,6 +5853,15 @@ static mutex_t m_jit_mutex = INIT_MUTEX();
  * For generating mir module names
  */
 static int m_mir_module_gen = 0;
+
+MIR_context_t jit_get_mir_context() {
+    mutex_lock(&m_jit_mutex);
+    return m_mir_context;
+}
+
+void jit_release_mir_context() {
+    mutex_unlock(&m_jit_mutex);
+}
 
 err_t jit_type(System_Type type) {
     err_t err = NO_ERROR;
