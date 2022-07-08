@@ -149,7 +149,7 @@ static method_result_t System_Threading_Thread_GetNativeThreadState() {
 static method_result_t System_Threading_CreateNativeThread(System_Delegate delegate, System_Object thread) {
     // first we need to get the invoke method, since it is going to be the actual
     // entry point of the function
-    System_Type type = delegate->vtable->type;
+    System_Type type = OBJECT_TYPE(delegate);
     System_Reflection_MethodInfo invoke = type->DelegateSignature;
 
     // create the thread, the parameter is the delegate instance, and set
@@ -193,7 +193,7 @@ static System_Exception System_Threading_SetNativeThreadName(thread_t* thread, S
 
 // TODO: generate this instead
 static method_result_t object_GetType(System_Object this) {
-    return (method_result_t){ .exception = NULL, .value = (uintptr_t) this->vtable->type};
+    return (method_result_t){ .exception = NULL, .value = (uintptr_t) OBJECT_TYPE(this) };
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -260,7 +260,7 @@ static method_result_t interlocked_read_u64(_Atomic(uint64_t)* location1)   { re
 //----------------------------------------------------------------------------------------------------------------------
 
 static System_Exception System_Array_ClearInternal(System_Array array, int index, int length) {
-    System_Type elementType = array->vtable->type->ElementType;
+    System_Type elementType = OBJECT_TYPE(array)->ElementType;
     int elementSize = elementType->StackSize;
 
     if (type_get_stack_type(elementType) == STACK_TYPE_O) {
@@ -280,11 +280,11 @@ static System_Exception System_Array_ClearInternal(System_Array array, int index
 }
 
 static System_Exception System_Array_CopyInternal(System_Array sourceArray, int64_t sourceIndex, System_Array destinationArray, int64_t destinationIndex, int64_t length) {
-    System_Type elementType = sourceArray->vtable->type->ElementType;
+    System_Type elementType = OBJECT_TYPE(sourceArray)->ElementType;
     int elementSize = elementType->StackSize;
 
     // TODO: have this check be done in the IL code
-    ASSERT(elementType == destinationArray->vtable->type->ElementType);
+    ASSERT(elementType == OBJECT_TYPE(destinationArray)->ElementType);
 
     void* src_data = (void*)(sourceArray + 1) + sourceIndex * elementSize;
     void* dst_data = (void*)(destinationArray + 1) + destinationIndex * elementSize;

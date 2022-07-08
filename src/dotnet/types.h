@@ -87,11 +87,15 @@ typedef struct object_vtable {
  * Represents a dotnet object
  */
 struct System_Object {
+    // the vtable of the object
+    void** vtable;
+#define OBJECT_TYPE(obj) ((System_Type)((obj)->type | 0xFFFF000000000000))
+
     // the type of the object
-    object_vtable_t* vtable;
+    uint64_t type : 48;
 
     // the color of the object
-    uint8_t color : 3;
+    uint64_t color : 3;
 #define COLOR_BLUE      0   /* unallocated object */
 #define COLOR_WHITE     1   /* object that has not been traced */
 #define COLOR_GRAY      2   /* object that has been traced, but its children have not been traced yet */
@@ -102,15 +106,12 @@ struct System_Object {
 #define COLOR_RESERVED1 7   /* reserved for future use */
 
     // should finalizer be called or not
-    uint8_t suppress_finalizer : 1;
+    uint64_t suppress_finalizer : 1;
 
-    uint8_t _reserved0 : 4;
-
-    uint8_t _reserved1;
-    uint8_t _reserved2;
-    uint8_t _reserved3;
-    uint32_t _reserved4;
+    // unused for now
+    uint64_t _reserved : 12;
 };
+STATIC_ASSERT(sizeof(struct System_Object) == sizeof(void*) * 2);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -554,15 +555,17 @@ struct System_Type {
     bool IsSetup;
     bool IsFilled;
     bool IsValueType;
-    System_Reflection_MethodInfo_Array VirtualMethods;
     System_Reflection_MethodInfo Finalize;
     int ManagedSize;
     int ManagedAlignment;
     int StackSize;
     int StackAlignment;
-    object_vtable_t* VTable;
     stack_type_t StackType;
     System_Reflection_MethodInfo StaticCtor;
+
+    System_Reflection_MethodInfo_Array VirtualMethods;
+    void** VTable;
+    int VTableSize;
 
     TinyDotNet_Reflection_InterfaceImpl_Array InterfaceImpls;
     TinyDotNet_Reflection_MethodImpl_Array MethodImpls;

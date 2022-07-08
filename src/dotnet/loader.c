@@ -948,15 +948,12 @@ static System_Reflection_MethodInfo find_virtually_overridden_method(System_Type
             }
         }
 
-        // this type does not have a method table, meaning
-        // we can stop our search now
-        if (type->VirtualMethods == NULL) {
-            break;
-        }
-
         // Use normal inheritance (I.8.10.4)
-        for (int i = 0; i < type->VirtualMethods->Length; i++) {
-            System_Reflection_MethodInfo info = type->VirtualMethods->Data[i];
+        for (int i = 0; i < type->Methods->Length; i++) {
+            System_Reflection_MethodInfo info = type->Methods->Data[i];
+
+            // not virtual, continue
+            if (!method_is_virtual(info)) continue;
 
             // match the name
             if (!string_equals(info->Name, method->Name)) continue;
@@ -1002,6 +999,32 @@ static bool unprimed_is_value_type(System_Type type) {
     return false;
 }
 
+static err_t fill_vtable_for_interface(System_Type root, System_Type interface, int base_offset) {
+    err_t err = NO_ERROR;
+
+    // fill the vtable for this impl
+    for (int i = 0; i < interface->Methods->Length; i++) {
+        System_Reflection_MethodInfo method = interface->Methods->Data[i];
+        if (!type_is_interface(root)) {
+            method = find_virtually_overridden_method(root, method);
+            CHECK(method != NULL);
+        }
+        GC_UPDATE_ARRAY(root->VirtualMethods, base_offset + i, method);
+    }
+
+    // now go over its interfaces
+    if (interface->InterfaceImpls != NULL) {
+        for (int i = 0; i < interface->InterfaceImpls->Length; i++) {
+            TinyDotNet_Reflection_InterfaceImpl impl = interface->InterfaceImpls->Data[i];
+            // we are going relative to this vtable, so add our base to the offsets
+            CHECK_AND_RETHROW(fill_vtable_for_interface(root, impl->InterfaceType, base_offset + impl->VTableOffset));
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 err_t loader_fill_type(System_Type type) {
     err_t err = NO_ERROR;
     static int depth = 0;
@@ -1027,6 +1050,9 @@ err_t loader_fill_type(System_Type type) {
     // we are going to fill the type now
     type->IsFilled = true;
 
+    // initialize to an invalid value just in case
+    type->VTableSize = -1;
+
     // special case, we should not have anything else in here that is
     // important specifically for ValueType class
     if (type == tSystem_ValueType) {
@@ -1034,13 +1060,20 @@ err_t loader_fill_type(System_Type type) {
         type->StackType = STACK_TYPE_VALUE_TYPE;
     }
 
-    // first check the parent
-    int virtualCount = 0;
-    int virtualOfs = 0;
+    int virtual_count = 0;
+
     int managedSize = 0;
     int managedSizePrev = 0;
     int managedAlignment = 1;
+
+    // first check the parent
     if (type->BaseType != NULL) {
+        if (type_is_interface(type)) {
+            // interfaces must inherit from System.Object
+            // TODO: is that correct?
+            CHECK(type->BaseType == tSystem_Object);
+        }
+
         // validate that we don't inherit from a sealed type
         CHECK(!type_is_sealed(type->BaseType));
 
@@ -1059,8 +1092,7 @@ err_t loader_fill_type(System_Type type) {
 
         // now check if it has virtual methods
         if (type->BaseType->VirtualMethods != NULL) {
-            virtualCount = type->BaseType->VirtualMethods->Length;
-            virtualOfs = virtualCount;
+            virtual_count = type->BaseType->VirtualMethods->Length;
         }
 
         // get the managed size, only needed for any type which is not the
@@ -1099,15 +1131,14 @@ err_t loader_fill_type(System_Type type) {
                 if (method_is_new_slot(methodInfo)) {
                     // this is a newslot, always allocate a new slot
                     methodInfo->VTableOffset = -1;
-                    virtualCount++;
                 } else {
-                    System_Reflection_MethodInfo overridden = find_virtually_overridden_method(type->BaseType,
-                                                                                               methodInfo);
+                    System_Reflection_MethodInfo overridden = find_virtually_overridden_method(type->BaseType, methodInfo);
                     if (overridden == NULL) {
-                        // The base method was not found, just allocate a new slot per the spec.
+                        // not a newslot but we did not find the implementation,
+                        // just allocate a new slot for it instead
                         methodInfo->VTableOffset = -1;
-                        virtualCount++;
                     } else {
+                        // if strict do an accessibility check
                         if (method_is_strict(overridden)) {
                             CHECK(check_method_accessibility(methodInfo, overridden));
                         }
@@ -1144,109 +1175,83 @@ err_t loader_fill_type(System_Type type) {
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Virtual Method Table initial creation, the rest will be handled later
+        // Virtual Method Table initial creation
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-        // create a vtable if needed, interfaces and abstract classes are never going
-        // to have a vtable, so no need to create one
-        if (type->VTable == NULL && !type_is_interface(type) && !type_is_abstract(type)) {
-            type->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * virtualCount);
-            CHECK(type->VTable != NULL);
-            type->VTable->type = type;
+        // first figure out everything to do with interface implementations
+        if (type->InterfaceImpls != NULL) {
+            // TODO: validate that we have all the interfaces the parent has
+
+            // go over and expand all the interfaces needed
+            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
+                TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
+                System_Type interface = impl->InterfaceType;
+
+                CHECK_AND_RETHROW(loader_fill_type(interface));
+                CHECK(interface->VirtualMethods != NULL);
+
+                // set the offset of this impl and increment our vtable count
+                impl->VTableOffset = virtual_count;
+                virtual_count += interface->VirtualMethods->Length;
+
+                // not interface, setup the offsets of all the functions that
+                // implement this interface
+                if (!type_is_interface(type)) {
+                    for (int mi = 0; mi < interface->VirtualMethods->Length; mi++) {
+                        System_Reflection_MethodInfo method = interface->VirtualMethods->Data[mi];
+                        System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, method);
+                        CHECK(implementation != NULL);
+
+                        if (implementation->VTableOffset == -1) {
+                            // this is a newslot method, set its offset, its offset is the base of this
+                            // interface + the offset in the virtual methods table of the offset
+                            implementation->VTableOffset = impl->VTableOffset + mi;
+                        }
+                    }
+                }
+            }
         }
 
-        // we have our own vtable, if we have a parent with a vtable then copy
-        // its vtable entries to our vtable
-        GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtualCount));
-        if (type->BaseType != NULL && type->BaseType->VirtualMethods != NULL) {
+        // now that we have set all the methods that are part of interfaces, check how many
+        // of these methods are not in interfaces, and set them up to be after all of the interfaces
+        for (int i = 0; i < type->Methods->Length; i++) {
+            System_Reflection_MethodInfo method = type->Methods->Data[i];
+            if (!method_is_virtual(method)) continue;
+            if (method->VTableOffset != -1) continue;
+
+            // set its offset
+            method->VTableOffset = virtual_count++;
+        }
+
+        // now we know the exact amount of virtual methods that we have for this type
+        GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtual_count));
+        type->VTable = malloc(sizeof(void*) * virtual_count);
+        CHECK_ERROR(type->VTable != NULL, ERROR_OUT_OF_MEMORY);
+
+        // copy the parent's vtable
+        if (type->BaseType != NULL) {
             for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
                 GC_UPDATE_ARRAY(type->VirtualMethods, i, type->BaseType->VirtualMethods->Data[i]);
             }
         }
 
-        // Now fill with our own methods
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
-
-            if (method_is_virtual(methodInfo)) {
-                // skip for now
-                if (methodInfo->VTableOffset < 0) continue;
-
-                // set it, the entry should have something because it is still
-                // only methods that get overridden
-                CHECK(methodInfo->VTableOffset < type->VirtualMethods->Length);
-                CHECK(type->VirtualMethods->Data[methodInfo->VTableOffset] != NULL);
-                GC_UPDATE_ARRAY(type->VirtualMethods, methodInfo->VTableOffset, methodInfo);
-            }
-        }
-
-        // make sure all the lower entries are taken and that
-        // all the upper entries are not taken
-        for (int i = 0; i < virtualCount; i++) {
-            if (i < virtualOfs) {
-                CHECK(type->VirtualMethods->Data[i] != NULL);
-            } else {
-                CHECK(type->VirtualMethods->Data[i] == NULL);
-            }
-        }
-
-        // now put the other entries in the array just so we can find
-        // them when we sort out the virtual impl stuff
-        int virtual_index = virtualOfs;
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
-
-            if (method_is_virtual(methodInfo)) {
-                // now we only handle unallocated entries
-                if (methodInfo->VTableOffset >= 0) continue;
-
-                // set it
-                CHECK(virtual_index < virtualCount);
-                CHECK(type->VirtualMethods->Data[virtual_index] == NULL);
-                GC_UPDATE_ARRAY(type->VirtualMethods, virtual_index, methodInfo);
-                virtual_index++;
-            }
-        }
-        CHECK(virtual_index == virtualCount);
-
-        // setup the interface implementation offsets
-        if (!type_is_interface(type) && type->InterfaceImpls != NULL) {
-            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
-                TinyDotNet_Reflection_InterfaceImpl interfaceImpl = type->InterfaceImpls->Data[i];
-                System_Type interface = interfaceImpl->InterfaceType;
-                CHECK_AND_RETHROW(loader_fill_type(interface));
-
-                // set the interface to be implemented at the next offset
-                interfaceImpl->VTableOffset = virtualOfs;
-
-                // give all the methods their own offset
-                for (int vi = 0; vi < interface->VirtualMethods->Length; vi++) {
-                    System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, interface->VirtualMethods->Data[vi]);
-                    CHECK(implementation != NULL);
-
-                    // TODO: is there a case where this is not true?
-                    CHECK(implementation->VTableOffset == -1);
-
-                    implementation->VTableOffset = virtualOfs++;
-                }
-            }
-        }
-
-        // now that we have delt with all the interface implementations, we can
-        // set the entries for all the other virtual methods
+        // now place all of our methods in the vtable
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo method = type->Methods->Data[i];
+            if (!method_is_virtual(method)) continue;
+            GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
+        }
 
-            if (method_is_virtual(method)) {
-                // not assigned an offset yet, meaning that this
-                // is not an interface implementation
-                if (method->VTableOffset == -1) {
-                    method->VTableOffset = virtualOfs++;
-                }
-
-                // set in the correct place in the VirtualMethods table
-                GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
+        if (type->InterfaceImpls != NULL) {
+            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
+                TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
+                CHECK_AND_RETHROW(fill_vtable_for_interface(type, impl->InterfaceType, impl->VTableOffset));
             }
+        }
+
+        // just in case, make sure all the methods are set properly
+        for (int i = 0; i < type->VirtualMethods->Length; i++) {
+            CHECK(type->VirtualMethods->Data[i] != NULL);
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1469,8 +1474,6 @@ err_t loader_fill_type(System_Type type) {
 
             // we are going to treat a raw interface type as a
             // value type that has two pointers in it, for simplicity
-            type->StackSize = sizeof(void*) * 2;
-            type->StackAlignment = alignof(void*);
             type->ManagedSize = sizeof(void*);
             type->ManagedAlignment = alignof(void*);
             type->ManagedPointersOffsets = interface_pointers;
@@ -1618,7 +1621,7 @@ typedef struct type_init {
     stack_type_t stack_type;
 } type_init_t;
 
-#define TYPE_INIT(_namespace, _name, code, _vtable_size)        \
+#define TYPE_INIT(_namespace, _name, code)                      \
     {                                                           \
         .namespace = (_namespace),                              \
         .name = (_name),                                        \
@@ -1627,7 +1630,6 @@ typedef struct type_init {
         .stack_alignment = alignof(code),                       \
         .managed_size = sizeof(struct code),                    \
         .managed_alignment = alignof(struct code),              \
-        .vtable_size = (_vtable_size),                          \
         .stack_type = STACK_TYPE_O,                             \
     }
 
@@ -1640,11 +1642,10 @@ typedef struct type_init {
         .stack_alignment = alignof(code),                       \
         .managed_size = sizeof(struct System_Exception),        \
         .managed_alignment = alignof(struct System_Exception),  \
-        .vtable_size = 5,                                       \
         .stack_type = STACK_TYPE_O,                             \
     }
 
-#define VALUE_TYPE_INIT(_namespace, _name, code, stype, _vtable_size)         \
+#define VALUE_TYPE_INIT(_namespace, _name, code, stype)         \
     {                                                           \
         .namespace = (_namespace),                              \
         .name = (_name),                                        \
@@ -1653,7 +1654,6 @@ typedef struct type_init {
         .stack_alignment = alignof(code),                       \
         .managed_size = sizeof(code),                           \
         .managed_alignment = alignof(code),                     \
-        .vtable_size = (_vtable_size),                          \
         .stack_type = (stype)                                   \
     }
 
@@ -1666,39 +1666,39 @@ typedef struct type_init {
     }
 
 static type_init_t m_type_init[] = {
-    TYPE_INIT("System", "Exception", System_Exception, 5),
-    VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE, 3),
-    VALUE_TYPE_INIT("System", "ValueType", System_ValueType, STACK_TYPE_VALUE_TYPE, 3),
-    TYPE_INIT("System", "Object", System_Object, 3),
-    TYPE_INIT("System", "Type", System_Type, 3),
-    TYPE_INIT("System", "Array", System_Array, 3),
-    TYPE_INIT("System", "String", System_String, 5),
-    VALUE_TYPE_INIT("System", "Boolean", System_Boolean, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "Char", System_Char, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "SByte", System_SByte, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "Byte", System_Byte, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "Int16", System_Int16, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "UInt16", System_UInt16, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "Int32", System_Int32, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "UInt32", System_UInt32, STACK_TYPE_INT32, 3),
-    VALUE_TYPE_INIT("System", "Int64", System_Int64, STACK_TYPE_INT64, 3),
-    VALUE_TYPE_INIT("System", "UInt64", System_UInt64, STACK_TYPE_INT64, 3),
-    VALUE_TYPE_INIT("System", "Single", System_Single, STACK_TYPE_FLOAT, 3),
-    VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT, 3),
-    VALUE_TYPE_INIT("System", "IntPtr", System_IntPtr, STACK_TYPE_INTPTR, 3),
-    VALUE_TYPE_INIT("System", "UIntPtr", System_UIntPtr, STACK_TYPE_INTPTR, 3),
-    TYPE_INIT("System", "Delegate", System_Delegate, 3),
-    TYPE_INIT("System", "MulticastDelegate", System_MulticastDelegate, 3),
-    TYPE_INIT("System.Reflection", "Module", System_Reflection_Module, 3),
-    TYPE_INIT("System.Reflection", "Assembly", System_Reflection_Assembly, 3),
-    TYPE_INIT("System.Reflection", "FieldInfo", System_Reflection_FieldInfo, 3),
-    TYPE_INIT("System.Reflection", "MemberInfo", System_Reflection_MemberInfo, 3),
-    TYPE_INIT("System.Reflection", "ParameterInfo", System_Reflection_ParameterInfo, 3),
-    TYPE_INIT("System.Reflection", "LocalVariableInfo", System_Reflection_LocalVariableInfo, 3),
-    TYPE_INIT("System.Reflection", "ExceptionHandlingClause", System_Reflection_ExceptionHandlingClause, 3),
-    TYPE_INIT("System.Reflection", "MethodBase", System_Reflection_MethodBase, 3),
-    TYPE_INIT("System.Reflection", "MethodBody", System_Reflection_MethodBody, 3),
-    TYPE_INIT("System.Reflection", "MethodInfo", System_Reflection_MethodInfo, 3),
+    TYPE_INIT("System", "Exception", System_Exception),
+    VALUE_TYPE_INIT("System", "Enum", System_Enum, STACK_TYPE_VALUE_TYPE),
+    VALUE_TYPE_INIT("System", "ValueType", System_ValueType, STACK_TYPE_VALUE_TYPE),
+    TYPE_INIT("System", "Object", System_Object),
+    TYPE_INIT("System", "Type", System_Type),
+    TYPE_INIT("System", "Array", System_Array),
+    TYPE_INIT("System", "String", System_String),
+    VALUE_TYPE_INIT("System", "Boolean", System_Boolean, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "Char", System_Char, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "SByte", System_SByte, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "Byte", System_Byte, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "Int16", System_Int16, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "UInt16", System_UInt16, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "Int32", System_Int32, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "UInt32", System_UInt32, STACK_TYPE_INT32),
+    VALUE_TYPE_INIT("System", "Int64", System_Int64, STACK_TYPE_INT64),
+    VALUE_TYPE_INIT("System", "UInt64", System_UInt64, STACK_TYPE_INT64),
+    VALUE_TYPE_INIT("System", "Single", System_Single, STACK_TYPE_FLOAT),
+    VALUE_TYPE_INIT("System", "Double", System_Double, STACK_TYPE_FLOAT),
+    VALUE_TYPE_INIT("System", "IntPtr", System_IntPtr, STACK_TYPE_INTPTR),
+    VALUE_TYPE_INIT("System", "UIntPtr", System_UIntPtr, STACK_TYPE_INTPTR),
+    TYPE_INIT("System", "Delegate", System_Delegate),
+    TYPE_INIT("System", "MulticastDelegate", System_MulticastDelegate),
+    TYPE_INIT("System.Reflection", "Module", System_Reflection_Module),
+    TYPE_INIT("System.Reflection", "Assembly", System_Reflection_Assembly),
+    TYPE_INIT("System.Reflection", "FieldInfo", System_Reflection_FieldInfo),
+    TYPE_INIT("System.Reflection", "MemberInfo", System_Reflection_MemberInfo),
+    TYPE_INIT("System.Reflection", "ParameterInfo", System_Reflection_ParameterInfo),
+    TYPE_INIT("System.Reflection", "LocalVariableInfo", System_Reflection_LocalVariableInfo),
+    TYPE_INIT("System.Reflection", "ExceptionHandlingClause", System_Reflection_ExceptionHandlingClause),
+    TYPE_INIT("System.Reflection", "MethodBase", System_Reflection_MethodBase),
+    TYPE_INIT("System.Reflection", "MethodBody", System_Reflection_MethodBody),
+    TYPE_INIT("System.Reflection", "MethodInfo", System_Reflection_MethodInfo),
     EXCEPTION_INIT("System", "ArithmeticException", System_ArithmeticException),
     EXCEPTION_INIT("System", "DivideByZeroException", System_DivideByZeroException),
     EXCEPTION_INIT("System", "ExecutionEngineException", System_ExecutionEngineException),
@@ -1707,12 +1707,12 @@ static type_init_t m_type_init[] = {
     EXCEPTION_INIT("System", "InvalidCastException", System_InvalidCastException),
     EXCEPTION_INIT("System", "OutOfMemoryException", System_OutOfMemoryException),
     EXCEPTION_INIT("System", "OverflowException", System_OverflowException),
-    TYPE_INIT("TinyDotNet.Reflection", "InterfaceImpl", TinyDotNet_Reflection_InterfaceImpl, 3),
-    TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference, 3),
-    TYPE_INIT("TinyDotNet.Reflection", "MethodImpl", TinyDotNet_Reflection_MethodImpl, 3),
-    TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec, 3),
-    VALUE_TYPE_INIT("System", "RuntimeTypeHandle", System_RuntimeTypeHandle, STACK_TYPE_VALUE_TYPE, 3),
-    VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE, 0),
+    TYPE_INIT("TinyDotNet.Reflection", "InterfaceImpl", TinyDotNet_Reflection_InterfaceImpl),
+    TYPE_INIT("TinyDotNet.Reflection", "MemberReference", TinyDotNet_Reflection_MemberReference),
+    TYPE_INIT("TinyDotNet.Reflection", "MethodImpl", TinyDotNet_Reflection_MethodImpl),
+    TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec),
+    VALUE_TYPE_INIT("System", "RuntimeTypeHandle", System_RuntimeTypeHandle, STACK_TYPE_VALUE_TYPE),
+    VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE),
 
     TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", System_Runtime_CompilerServices_Unsafe),
 };
@@ -1731,41 +1731,11 @@ static void init_type(metadata_type_def_t* type_def, System_Type type) {
                 type->ManagedAlignment = bt->managed_alignment;
                 type->StackAlignment = bt->stack_alignment;
                 type->StackType = bt->stack_type;
-                if (bt->vtable_size != 0) {
-                    type->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * bt->vtable_size);
-                    ASSERT(type->VTable != NULL);
-                    type->VTable->type = type;
-                }
             }
             *bt->global = type;
             break;
         }
     }
-}
-
-static err_t validate_vtable_size() {
-    err_t err = NO_ERROR;
-
-    // check if this is a builtin type
-    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
-        type_init_t* bt = &m_type_init[i];
-        if (bt->stack_size < 0) continue;
-
-        System_Type type = *bt->global;
-        if (type->VirtualMethods == NULL) {
-            CHECK(bt->vtable_size == 0,
-                  "%s.%s has 0 vtable entries but it was initialized with %d",
-                  bt->namespace, bt->name, bt->vtable_size);
-        } else {
-            CHECK(type->VirtualMethods->Length == bt->vtable_size,
-                  "%s.%s has %d vtable entries but it was initialized with %d",
-                  bt->namespace, bt->name,
-                  type->VirtualMethods->Length, bt->vtable_size);
-        }
-    }
-
-cleanup:
-    return err;
 }
 
 static err_t validate_have_init_types() {
@@ -1813,6 +1783,13 @@ cleanup:
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // corelib is a bit different so load it as needed
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define RESET_TYPE(instance, __type) \
+    do { \
+        instance->type = (uintptr_t)__type; \
+        instance->vtable = __type->VTable; \
+    } while (0);
+
 
 err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
@@ -1876,21 +1853,18 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
         CHECK_AND_RETHROW(loader_fill_type(type));
     }
 
-    // now validate that we had correct vtable size
-    CHECK_AND_RETHROW(validate_vtable_size());
-
     //
     // now set all the page tables, because we are missing them at
     // this point of writing
     //
 
-    assembly->vtable = tSystem_Reflection_Assembly->VTable;
-    assembly->Module->vtable = tSystem_Reflection_Module->VTable;
-    assembly->DefinedTypes->vtable = get_array_type(tSystem_Type)->VTable;
-    assembly->DefinedMethods->vtable = get_array_type(tSystem_Reflection_MethodInfo)->VTable;
-    assembly->DefinedFields->vtable = get_array_type(tSystem_Reflection_FieldInfo)->VTable;
+    RESET_TYPE(assembly, tSystem_Reflection_Assembly);
+    RESET_TYPE(assembly->Module, tSystem_Reflection_Module);
+    RESET_TYPE(assembly->DefinedTypes, get_array_type(tSystem_Type));
+    RESET_TYPE(assembly->DefinedMethods, get_array_type(tSystem_Reflection_MethodInfo));
+    RESET_TYPE(assembly->DefinedFields, get_array_type(tSystem_Reflection_FieldInfo));
     for (int i = 0; i < types_count; i++) {
-        assembly->DefinedTypes->Data[i]->vtable = tSystem_Type->VTable;
+        RESET_TYPE(assembly->DefinedTypes->Data[i], tSystem_Type);
     }
 
     // get the user strings for the runtime

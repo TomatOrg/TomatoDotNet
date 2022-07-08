@@ -81,7 +81,7 @@ void* gc_new(System_Type type, size_t size) {
 
     // set the object type
     if (type != NULL) {
-        ASSERT(type->VTable != NULL);
+        o->type = (uintptr_t)type;
         o->vtable = type->VTable;
     }
 
@@ -322,7 +322,7 @@ static void gc_mark_fields_gray(void* base, System_Type type) {
 }
 
 static void gc_mark_black(System_Object object) {
-    System_Type type = object->vtable->type;
+    System_Type type = OBJECT_TYPE(object);
 
     // mark all the children as gray
     if (type->IsArray) {
@@ -454,7 +454,7 @@ static void gc_finalize(System_Object object) {
     m_objects_to_finalize--;
 
     // get the finalizer function and run it
-    System_Exception(*finalize)(System_Object this) = object->vtable->type->Finalize->MirFunc->addr;
+    System_Exception(*finalize)(System_Object this) = OBJECT_TYPE(object)->Finalize->MirFunc->addr;
     System_Exception exception = finalize(object);
     if (exception != NULL) {
         WARN("Got exception in finalizer: `%U`", exception->Message);

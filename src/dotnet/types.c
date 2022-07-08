@@ -388,8 +388,9 @@ System_Type get_array_type(System_Type type) {
     ArrayType->ManagedAlignment = tSystem_Array->ManagedAlignment;
 
     // allocate the vtable
-    ArrayType->VTable = malloc(sizeof(object_vtable_t) + sizeof(void*) * 3);
-    ArrayType->VTable->type = ArrayType;
+    GC_UPDATE(ArrayType, VirtualMethods, tSystem_Array->VirtualMethods);
+    ArrayType->VTableSize = tSystem_Array->VTableSize;
+    ArrayType->VTable = tSystem_Array->VTable;
 
     // There are no managed pointers in here (The gc will handle array
     // stuff on its own)
@@ -973,7 +974,7 @@ bool isinstance(System_Object object, System_Type type) {
     if (object == NULL) {
         return true;
     }
-    return type_is_verifier_assignable_to(object->vtable->type, type);
+    return type_is_verifier_assignable_to(OBJECT_TYPE(object), type);
 }
 
 void type_dump(System_Type type) {

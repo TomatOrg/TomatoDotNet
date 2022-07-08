@@ -91,7 +91,7 @@ static void memcpy_wrapper(void* dest, void* src, size_t count) {
 
 static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, System_Type targetInterface) {
     // should only be called after the type checking
-    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(source->vtable->type, targetInterface);
+    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(OBJECT_TYPE(source), targetInterface);
     if (interface == NULL) {
         dest[0] = 0;
         dest[1] = 0;
@@ -99,7 +99,7 @@ static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, Sys
     }
 
     // set the interface fields
-    dest[0] = &source->vtable->virtual_functions[interface->VTableOffset];
+    dest[0] = &source->vtable[interface->VTableOffset];
     dest[1] = source;
 
     return true;
@@ -5914,9 +5914,9 @@ err_t jit_type(System_Type type) {
                 // if this has an unboxer use the unboxer instead of the actual method
                 System_Reflection_MethodInfo method = created_type->VirtualMethods->Data[vi];
                 if (method->MirUnboxerFunc != NULL) {
-                    created_type->VTable->virtual_functions[vi] = method->MirUnboxerFunc->addr;
+                    created_type->VTable[vi] = method->MirUnboxerFunc->addr;
                 } else {
-                    created_type->VTable->virtual_functions[vi] = method->MirFunc->addr;
+                    created_type->VTable[vi] = method->MirFunc->addr;
                 }
             }
         }
