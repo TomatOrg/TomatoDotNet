@@ -3167,8 +3167,32 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t obj_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, boxed_type, &obj_reg));
 
+                MIR_insn_t has_null_value = NULL;
+
                 // check if we need to allocate memory for this
                 if (operand_type->IsValueType) {
+
+                    // if this is a nullable we need to check the HasValue field before
+                    // we actually try and box the value, since otherwise we return null
+                    if (operand_type->GenericTypeDefinition == tSystem_Nullable) {
+                        has_null_value = MIR_new_label(mir_ctx);
+
+                        // zero out the obj_reg, so we can just skip the allocation if its null
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                     MIR_new_reg_op(mir_ctx, obj_reg),
+                                                     MIR_new_int_op(mir_ctx, 0)));
+
+                        // check if the HasValue is zero, if so then jump over
+                        // the allocation and the value copy
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_BF,
+                                                     MIR_new_label_op(mir_ctx, has_null_value),
+                                                     MIR_new_mem_op(mir_ctx, MIR_T_I8,
+                                                                    offsetof(System_Nullable, HasValue),
+                                                                    val_reg, 0, 1)));
+                    }
+
                     // allocate it
                     CHECK_AND_RETHROW(jit_new(ctx, obj_reg, operand_type,
                                               MIR_new_int_op(mir_ctx, tSystem_Object->ManagedSize + val_type->ManagedSize)));
@@ -3208,12 +3232,39 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                      MIR_new_reg_op(mir_ctx, obj_reg),
                                                      MIR_new_int_op(mir_ctx, tSystem_Object->ManagedSize)));
 
+                        int offset = -1;
+                        if (has_null_value != NULL) {
+                            // find the offset of the Value field inside the Nullable instance
+                            for (int i = 0; i < val_type->Fields->Length; i++) {
+                                System_Reflection_FieldInfo field = val_type->Fields->Data[i];
+                                if (string_equals_cstr(field->Name, "_value")) {
+                                    offset = field->MemoryOffset;
+                                }
+                            }
+                            CHECK(offset != -1);
+
+                            // this is a nullable, we need to skip the first
+                            // element when copying over
+                            MIR_append_insn(mir_ctx, mir_func,
+                                            MIR_new_insn(mir_ctx, MIR_ADD,
+                                                         MIR_new_reg_op(mir_ctx, val_reg),
+                                                         MIR_new_reg_op(mir_ctx, val_reg),
+                                                         MIR_new_int_op(mir_ctx, offset)));
+                        } else {
+                            offset = 0;
+                        }
+
                         // now emit the memcpy
-                        jit_emit_memcpy(ctx, memcpy_base_reg, val_reg, operand_type->ManagedSize);
+                        jit_emit_memcpy(ctx, memcpy_base_reg, val_reg, operand_type->ManagedSize - offset);
                     } break;
 
                     case STACK_TYPE_REF:
                         CHECK_FAIL();
+                }
+
+                if (has_null_value != NULL) {
+                    // we had a null value, went to here
+                    MIR_append_insn(mir_ctx, mir_func, has_null_value);
                 }
             } break;
 

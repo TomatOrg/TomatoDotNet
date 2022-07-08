@@ -117,6 +117,12 @@ typedef struct System_Span {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_Nullable {
+    bool HasValue;
+} System_Nullable;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef struct System_Array {
     struct System_Object;
     int Length;
@@ -716,6 +722,7 @@ extern System_Type tSystem_InvalidCastException;
 extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
 extern System_Type tSystem_RuntimeTypeHandle;
+extern System_Type tSystem_Nullable;
 extern System_Type tSystem_Span;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;

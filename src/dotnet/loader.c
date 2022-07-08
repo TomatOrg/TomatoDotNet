@@ -1713,6 +1713,7 @@ static type_init_t m_type_init[] = {
     TYPE_INIT("TinyDotNet.Reflection", "MethodSpec", TinyDotNet_Reflection_MethodSpec),
     VALUE_TYPE_INIT("System", "RuntimeTypeHandle", System_RuntimeTypeHandle, STACK_TYPE_VALUE_TYPE),
     VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE),
+    VALUE_TYPE_INIT("System", "Nullable`1", System_Nullable, STACK_TYPE_VALUE_TYPE),
 
     TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", System_Runtime_CompilerServices_Unsafe),
 };

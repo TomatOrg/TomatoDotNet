@@ -56,6 +56,7 @@ System_Type tSystem_InvalidCastException = NULL;
 System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
 System_Type tSystem_RuntimeTypeHandle = NULL;
+System_Type tSystem_Nullable = NULL;
 System_Type tSystem_Span = NULL;
 
 System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
@@ -1673,29 +1674,33 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
         // problem with each other
         for (int i = 0; i < arguments->Length; i++) {
             System_Type arg = type->GenericArguments->Data[i];
+            System_Type argType = arguments->Data[arg->GenericParameterPosition];
+
             // check that we have a reference type
             if (generic_argument_is_reference_type(arg)) {
-                CHECK(type_is_object_ref(arg));
+                CHECK(type_is_object_ref(argType));
             }
 
             // check that we have a not-nullable value type
             if (generic_argument_is_not_nullable_value_type(arg)) {
-                CHECK(type_is_value_type(arg));
+                CHECK(type_is_value_type(argType));
             }
 
             // check that we have a default ctor
             if (generic_argument_is_default_constructor(arg)) {
-                bool found_ctor = false;
-                int index = 0;
-                System_Reflection_MethodInfo info = NULL;
-                while ((info = type_iterate_methods_cstr(type, ".ctor", &index)) != NULL) {
-                    if (method_is_rt_special_name(info)) continue;
-                    if (info->Parameters->Length == 0) {
-                        found_ctor = true;
-                        break;
+                if (!type_is_value_type(argType)) {
+                    bool found_ctor = false;
+                    int index = 0;
+                    System_Reflection_MethodInfo info = NULL;
+                    while ((info = type_iterate_methods_cstr(argType, ".ctor", &index)) != NULL) {
+                        if (!method_is_rt_special_name(info)) continue;
+                        if (info->Parameters->Length == 0) {
+                            found_ctor = true;
+                            break;
+                        }
                     }
+                    CHECK(found_ctor);
                 }
-                CHECK(found_ctor);
             }
         }
     }
