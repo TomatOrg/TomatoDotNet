@@ -78,11 +78,6 @@ typedef uintptr_t System_UIntPtr;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-typedef struct object_vtable {
-    System_Type type;
-    void* virtual_functions[0];
-} object_vtable_t;
-
 /**
  * Represents a dotnet object
  */

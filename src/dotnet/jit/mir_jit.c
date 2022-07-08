@@ -89,6 +89,7 @@ static void memcpy_wrapper(void* dest, void* src, size_t count) {
     memcpy(dest, src, count);
 }
 
+// TODO: generate this instead?
 static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, System_Type targetInterface) {
     // should only be called after the type checking
     TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(OBJECT_TYPE(source), targetInterface);
@@ -1876,7 +1877,7 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
     TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(from_type, to_type);
     CHECK(interface != NULL);
 
-    // &object->vtable[offsetof(vtable, virtual_functions) + vtable_offset]
+    // &object->vtable[vtable_offset]
     MIR_reg_t vtable_reg = new_temp_reg(ctx, tSystem_IntPtr);
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_insn(mir_ctx, MIR_MOV,
@@ -1888,7 +1889,7 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
                     MIR_new_insn(mir_ctx, MIR_ADD,
                                  MIR_new_reg_op(mir_ctx, vtable_reg),
                                  MIR_new_reg_op(mir_ctx, vtable_reg),
-                                 MIR_new_int_op(mir_ctx, offsetof(object_vtable_t, virtual_functions) + interface->VTableOffset * sizeof(void*))));
+                                 MIR_new_int_op(mir_ctx, interface->VTableOffset * sizeof(void*))));
 
     // set the vtable
     MIR_append_insn(mir_ctx, mir_func,
@@ -5021,12 +5022,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                  MIR_new_mem_op(mir_ctx, MIR_T_P, 0, this_reg, 0, 1)));
 
                     // figure offset and the actual method
-                    int offset;
                     int vtable_index;
                     if (type_is_interface(this_type)) {
                         // we have an interface on the stack, the vtable is the first element
                         // and the vtable index is exactly as given in the operand
-                        offset = 0;
                         vtable_index = operand_method->VTableOffset;
 
                         // read the actual instance pointer of the interface, so we can use it
@@ -5036,10 +5035,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                      MIR_new_reg_op(mir_ctx, this_reg),
                                                      MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), this_reg, 0, 1)));
                     } else {
-                        // we have an object reference on the stack, the vtable is at offset
-                        // of the virtual functions in the object vtable
-                        offset = offsetof(object_vtable_t, virtual_functions);
-
                         if (type_is_interface(operand_method->DeclaringType)) {
                             // we want to call an interface method on the object, so resolve it and get the
                             // object inside the object's vtable instead
@@ -5066,7 +5061,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                      MIR_new_reg_op(mir_ctx, temp_reg),
                                                      MIR_new_mem_op(mir_ctx, MIR_T_P,
-                                                                    offset + vtable_index * sizeof(void*),
+                                                                    vtable_index * sizeof(void*),
                                                                     temp_reg, 0, 1)));
 
                         // indirect call
