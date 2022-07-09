@@ -5483,7 +5483,36 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     stelem_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        CHECK_FAIL("TODO: struct value store in array");
+                        // calculate the offset as `array + index_reg * sizeof(operand_type) + sizeof(System.Array)`
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MUL,
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_int_op(mir_ctx, operand_type->StackSize)));
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_ADD,
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_ADD,
+                                                     MIR_new_reg_op(mir_ctx, array_reg),
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_reg_op(mir_ctx, array_reg)));
+
+                        if (arrlen(value_type->ManagedPointersOffsets) == 0) {
+                            // can use a simple memcpy
+                            jit_emit_memcpy(ctx, array_reg, value_reg, operand_type->StackSize);
+                        } else {
+                            // has pointers, use managed memcpy
+                            MIR_append_insn(mir_ctx, mir_func,
+                                            MIR_new_call_insn(mir_ctx, 5,
+                                                              MIR_new_ref_op(mir_ctx, m_managed_ref_memcpy_proto),
+                                                              MIR_new_ref_op(mir_ctx, m_managed_ref_memcpy_func),
+                                                              MIR_new_reg_op(mir_ctx, array_reg),
+                                                              MIR_new_ref_op(mir_ctx, operand_type->MirType),
+                                                              MIR_new_reg_op(mir_ctx, value_reg)));
+                        }
                     } break;
 
                     case STACK_TYPE_REF:
