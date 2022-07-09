@@ -5537,7 +5537,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_LDELEM:        // operand type is loaded
             cee_ldelem: {
                 // pop all the values from the stack
-                MIR_reg_t value_reg;
                 MIR_reg_t index_reg;
                 MIR_reg_t array_reg;
                 System_Type index_type;
@@ -5575,6 +5574,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_AND_RETHROW(jit_oob_check(ctx, array_reg, index_reg));
 
                 // push to the stack
+                MIR_reg_t value_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_type), &value_reg));
 
                 switch (type_get_stack_type(operand_type)) {
@@ -5620,7 +5620,26 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     ldelem_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        CHECK_FAIL("TODO: struct value load from array");
+                        // just emit a memcpy
+                        // calculate the offset as `array + index_reg * sizeof(operand_type) + sizeof(System.Array)`
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MUL,
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_int_op(mir_ctx, operand_type->StackSize)));
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_ADD,
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_ADD,
+                                                     MIR_new_reg_op(mir_ctx, array_reg),
+                                                     MIR_new_reg_op(mir_ctx, index_reg),
+                                                     MIR_new_reg_op(mir_ctx, array_reg)));
+
+                        // can use a simple memcpy
+                        jit_emit_memcpy(ctx, value_reg, array_reg, operand_type->StackSize);
                     } break;
 
                     case STACK_TYPE_REF:
