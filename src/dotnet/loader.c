@@ -1002,6 +1002,26 @@ static bool unprimed_is_value_type(System_Type type) {
 static err_t fill_vtable_for_interface(System_Type root, System_Type interface, int base_offset) {
     err_t err = NO_ERROR;
 
+    CHECK(type_is_interface(interface));
+    CHECK(base_offset + interface->Methods->Length <= root->VirtualMethods->Length);
+
+    // now go over its interfaces
+    int virtual_offset = 0;
+    if (interface->InterfaceImpls != NULL) {
+        for (int i = 0; i < interface->InterfaceImpls->Length; i++) {
+            TinyDotNet_Reflection_InterfaceImpl impl = interface->InterfaceImpls->Data[i];
+
+            // we are going relative to this vtable, so add our base to the offsets
+            CHECK_AND_RETHROW(fill_vtable_for_interface(root, impl->InterfaceType, base_offset + impl->VTableOffset));
+
+            // count how many interface methods we have to get to our actual offset
+            virtual_offset += impl->InterfaceType->VirtualMethods->Length;
+        }
+    }
+
+    // add the base offset to this, so we start from the base offset
+    base_offset += virtual_offset;
+
     // fill the vtable for this impl
     for (int i = 0; i < interface->Methods->Length; i++) {
         System_Reflection_MethodInfo method = interface->Methods->Data[i];
@@ -1010,15 +1030,6 @@ static err_t fill_vtable_for_interface(System_Type root, System_Type interface, 
             CHECK(method != NULL);
         }
         GC_UPDATE_ARRAY(root->VirtualMethods, base_offset + i, method);
-    }
-
-    // now go over its interfaces
-    if (interface->InterfaceImpls != NULL) {
-        for (int i = 0; i < interface->InterfaceImpls->Length; i++) {
-            TinyDotNet_Reflection_InterfaceImpl impl = interface->InterfaceImpls->Data[i];
-            // we are going relative to this vtable, so add our base to the offsets
-            CHECK_AND_RETHROW(fill_vtable_for_interface(root, impl->InterfaceType, base_offset + impl->VTableOffset));
-        }
     }
 
 cleanup:
