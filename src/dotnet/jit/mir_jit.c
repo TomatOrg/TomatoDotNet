@@ -4817,7 +4817,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             if (type_is_interface(signature_type)) {
                                 if (!type_is_interface(arg_type)) {
                                     // object --> interface
-                                    CHECK_FAIL("TODO: cast to interface");
+                                    MIR_reg_t int_reg = new_temp_reg(ctx, signature_type);
+                                    CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx, int_reg, arg_reg, arg_type, signature_type, 0));
+
+                                    // we now have that class
+                                    arg_reg = int_reg;
+                                    arg_type = signature_type;
                                 }
 
                                 // pass by value
