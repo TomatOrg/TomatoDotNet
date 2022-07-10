@@ -5004,6 +5004,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             signature_this_type = get_by_ref_type(signature_this_type);
                         }
 
+                        // NOTE: for interfaces the `this` is unpacked properly at a later stage since
+                        //       we also need the vtable from the original `this`
+
                         if (constrainedType != NULL) {
                             CHECK(this_type->IsByRef);
                             CHECK(this_type->BaseType == constrainedType);
@@ -5032,6 +5035,19 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 TinyDotNet_Reflection_InterfaceImpl impl = type_get_interface_impl(constrainedType, operand_method->DeclaringType);
                                 CHECK(impl != NULL);
                                 vtable_offset += impl->VTableOffset;
+                            } else if (type_is_interface(constrainedType)) {
+                                // I think this is the only case
+                                CHECK(operand_method->DeclaringType == tSystem_Object);
+
+                                // we need to essentially cast to an object
+                                this_type = tSystem_Object;
+                                constrainedType = tSystem_Object;
+
+                                // upack the this so it will be a simple object
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                                             MIR_new_reg_op(mir_ctx, this_reg),
+                                                             MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), this_reg, 0, 1)));
                             }
                             operand_method = constrainedType->VirtualMethods->Data[vtable_offset];
 
@@ -5890,7 +5906,7 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
 
     // the return value
     MIR_reg_t return_reg = 0;
-    if (nres > 1) {
+    if (method->ReturnType != NULL) {
         if (res_type[1] == MIR_T_BLK) {
             // uses an implicit pointer, get it
             MIR_reg_t return_block = MIR_reg(ctx->ctx, "return_block", method->MirUnboxerFunc->u.func);

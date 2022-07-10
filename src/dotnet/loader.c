@@ -1672,7 +1672,7 @@ typedef struct type_init {
     {                                                           \
         .namespace = (_namespace),                              \
         .name = (_name),                                        \
-        .global = &t##code,                                     \
+        .global = &code,                                        \
         .stack_size = -1,                                       \
     }
 
@@ -1726,7 +1726,7 @@ static type_init_t m_type_init[] = {
     VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE),
     VALUE_TYPE_INIT("System", "Nullable`1", System_Nullable, STACK_TYPE_VALUE_TYPE),
 
-    TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", System_Runtime_CompilerServices_Unsafe),
+    TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", tSystem_Runtime_CompilerServices_Unsafe),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
