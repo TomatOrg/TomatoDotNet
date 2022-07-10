@@ -222,6 +222,9 @@ static void jit_generate_delegate_ctor() {
 err_t init_jit() {
     err_t err = NO_ERROR;
 
+    // we want corelib to have access to extern
+    jit_add_extern_whitelist("Corelib.dll");
+
     m_mir_context = MIR_init();
 
     //
@@ -309,6 +312,18 @@ err_t init_jit() {
 
 cleanup:
     return err;
+}
+
+static jit_generic_extern_hook_t** m_generic_extern_hooks = NULL;
+
+static const char** m_extern_whitelist = NULL;
+
+void jit_add_generic_extern_hook(jit_generic_extern_hook_t* hook) {
+    arrpush(m_generic_extern_hooks, hook);
+}
+
+void jit_add_extern_whitelist(const char* assembly) {
+    arrpush(m_extern_whitelist, assembly);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1115,14 +1130,6 @@ cleanup:
 // Preparing code gen of a function
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Which binaries are allowed to have internal calls
- */
-static const char* m_allowed_internal_call_assemblies[] = {
-    "Corelib.dll",
-    "Pentagon.dll"
-};
-
 // forward declare
 static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
 
@@ -1269,8 +1276,8 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
 
             // only the corelib is allowed to have internal methods
             bool found = false;
-            for (int i = 0; i < ARRAY_LEN(m_allowed_internal_call_assemblies); i++) {
-                if (string_equals_cstr(method->Module->Name, m_allowed_internal_call_assemblies[i])) {
+            for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
+                if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
                     found = true;
                     break;
                 }
@@ -1282,8 +1289,7 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             //
             if (method->DeclaringType->GenericTypeDefinition == tSystem_Span) {
                 // create the function
-                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars),
-                                                   vars);
+                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
 
                 // Span has special stuff
                 if (string_equals_cstr(method->Name, "GetItemInternal")) {
@@ -1299,9 +1305,9 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             // Unsafe has special generic functions we want to generate
             //
             } else if (method->DeclaringType == tSystem_Runtime_CompilerServices_Unsafe) {
+
                 // create the function
-                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars),
-                                                   vars);
+                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
 
                 // Span has special stuff
                 if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
@@ -1313,8 +1319,25 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
                 MIR_finish_func(ctx->ctx);
                 MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
             } else {
+                bool found = false;
+                for (int i = 0; i < arrlen(m_generic_extern_hooks); i++) {
+                    if (m_generic_extern_hooks[i]->can_gen(method)) {
+
+                        // create the function
+                        method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+                        CHECK_AND_RETHROW(m_generic_extern_hooks[i]->gen(ctx->ctx, method));
+                        MIR_finish_func(ctx->ctx);
+                        MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+
+                        found = true;
+                        break;
+                    }
+                }
+
                 // create the import for it
-                method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
+                if (!found) {
+                    method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
+                }
             }
         } else {
             // create a function, we will finish it right away and append to it in the future
@@ -2077,14 +2100,16 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
     stack_type_t value2_stacktype = type_get_stack_type(value2_type);
 
     if (code == MIR_LSH || code == MIR_RSH || code == MIR_URSH) {
+        // check the types are valid
         CHECK(value1_stacktype == STACK_TYPE_INT32 || value1_stacktype == STACK_TYPE_INT64 || value1_stacktype == STACK_TYPE_INTPTR);
-        CHECK(value2_stacktype == STACK_TYPE_INT32 || value1_stacktype == STACK_TYPE_INTPTR);
-        bool is32 = value2_stacktype == STACK_TYPE_INT32;
-        if (is32) {
-            if (code == MIR_LSH) code = MIR_LSHS;
-            else if (code == MIR_RSH) code = MIR_RSHS;
-            else if (code == MIR_URSH) code = MIR_URSHS;
+        CHECK(value2_stacktype == STACK_TYPE_INT32 || value2_stacktype == STACK_TYPE_INTPTR);
+
+        // we are doing a 32bit operation
+        if (value1_stacktype == STACK_TYPE_INT32) {
+            code += 1;
         }
+
+        // push the result
         CHECK_AND_RETHROW(stack_push(ctx, value1_type, &result_reg));
     } else {
         if (code == MIR_DIV || code == MIR_UDIV || code == MIR_MOD || code == MIR_UMOD) {

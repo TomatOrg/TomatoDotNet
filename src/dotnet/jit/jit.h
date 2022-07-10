@@ -14,6 +14,22 @@ err_t init_jit();
  */
 err_t jit_type(System_Type method);
 
+
+typedef struct jit_generic_extern_hook {
+    bool(*can_gen)(System_Reflection_MethodInfo method);
+    err_t(*gen)(MIR_context_t ctx, System_Reflection_MethodInfo method);
+} jit_generic_extern_hook_t;
+
+/**
+ * Allows to add hooks to the generic extern method instantiation
+ */
+void jit_add_generic_extern_hook(jit_generic_extern_hook_t* hook);
+
+/**
+ * Add an assembly to the whitelist of assemblies that can use extern
+ */
+void jit_add_extern_whitelist(const char* assembly);
+
 /**
  * Get the global MIR context, should be used to add externs to the runtime
  */
