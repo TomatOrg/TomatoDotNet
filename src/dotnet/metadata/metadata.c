@@ -366,7 +366,6 @@ static err_t parse_single_table(metadata_parse_ctx_t* ctx, int table_id) {
     ctx->metadata->tables[table_id].table = table;
 
     // now parse it
-    uint8_t* table_before = ctx->table;
     for (int i = 0; i < rows; i++) {
         cur_op = ops;
         while (*cur_op != DONE) {

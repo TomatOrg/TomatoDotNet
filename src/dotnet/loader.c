@@ -1924,8 +1924,6 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     // load all the types and stuff
     int types_count = metadata.tables[METADATA_TYPE_DEF].rows;
-    metadata_type_def_t* type_defs = metadata.tables[METADATA_TYPE_DEF].table;
-
     int method_count = metadata.tables[METADATA_METHOD_DEF].rows;
     int field_count = metadata.tables[METADATA_FIELD].rows;
 

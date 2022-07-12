@@ -2,6 +2,7 @@
 #include "dotnet/monitor.h"
 #include "thread/scheduler.h"
 #include "internal_calls.h"
+#include "kernel.h"
 
 #include <dotnet/opcodes.h>
 #include <dotnet/types.h>
@@ -301,9 +302,11 @@ err_t init_jit() {
     }
 
     // init the code gen
-    // TODO: for real parallel gen we want to have more generators
-    MIR_gen_init(m_mir_context, 1);
-    MIR_gen_set_optimize_level(m_mir_context, 0, 4);
+    int count = get_cpu_count();
+    MIR_gen_init(m_mir_context, count);
+    for (int i = 0; i < count; i++) {
+        MIR_gen_set_optimize_level(m_mir_context, i, 3);
+    }
 
 #if 0
     MIR_gen_set_debug_file(m_mir_context, 0, stdout);
@@ -621,7 +624,6 @@ static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg
     // get the reg stack
     stack_keeping_t* stack = NULL;
     MIR_type_t stack_type = get_mir_stack_type(type);
-    char prefix = '\0';
     switch (stack_type) {
         case MIR_T_BLK: ;
         case MIR_T_I64: stack = &ctx->ireg; break;
@@ -1098,8 +1100,6 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
     // call the next delegate, do that by overriding the this register with the next
     // multicast delegate and then calling it
     //
-
-    MIR_insn_t label_no_next = MIR_new_label(ctx->ctx);
 
     // read the next to the this register
     MIR_append_insn(ctx->ctx, func,
@@ -2545,7 +2545,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             opcode == CEE_PREFIX6 ||
             opcode == CEE_PREFIX7
         ) {
-            opcode_info_t* opcode_info = &g_dotnet_opcodes[opcode];
             CHECK(il_ptr + 1 <= body->Il->Length);
 
             // setup the new prefix
@@ -2581,7 +2580,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         uint32_t operand_switch_n = 0;
         int32_t* operand_switch_dests = NULL;
 
-        char param[128] = { 0 };
         switch (opcode_info->operand) {
             case OPCODE_OPERAND_InlineBrTarget: {
                 operand_i32 = *(int32_t*)&body->Il->Data[il_ptr];
@@ -4421,7 +4419,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // Get the field type
                 System_Type field_stack_type = get_by_ref_type(type_get_verification_type(operand_field->FieldType));
-                System_Type field_type = type_get_underlying_type(operand_field->FieldType);
 
                 // push it
                 MIR_reg_t value_reg;
@@ -4725,7 +4722,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // Get the field type
                 System_Type field_stack_type = get_by_ref_type(type_get_verification_type(operand_field->FieldType));
-                System_Type field_type = type_get_underlying_type(operand_field->FieldType);
 
                 // push it
                 MIR_reg_t value_reg;
@@ -4741,6 +4737,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     CHECK(type_is_value_type(obj_type->BaseType));
                     non_stack_local = obj_non_local_ref;
                 }
+                ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = non_stack_local;
 
                 // check the object is not null
                 if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
@@ -6045,7 +6042,7 @@ err_t jit_type(System_Type type) {
     MIR_load_module(m_mir_context, module);
 
     // link it
-    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
+    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
 
     // now that everything is linked prepare all the types we have created
     for (int i = 0; i < arrlen(ctx.created_types); i++) {

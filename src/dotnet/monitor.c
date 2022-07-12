@@ -174,7 +174,7 @@ void free_monitor(void* object) {
 found:
     // Rotate down to be leaf of tree for removal, respecting priorities
     while (m->next != NULL || m->prev != NULL) {
-        if (m->next == NULL || m->prev != NULL && m->prev->ticket < m->next->ticket) {
+        if (m->next == NULL || (m->prev != NULL && m->prev->ticket < m->next->ticket)) {
             rotate_right(root, m);
         } else {
             rotate_left(root, m);

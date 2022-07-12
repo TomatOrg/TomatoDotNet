@@ -26,9 +26,11 @@ Right now the main work is on the runtime itself, the main features of the runti
 - Full support for struct types
 - Full support for interface types
   - Implemented using Fat-Pointers and implicitly casting as needed
+  - Casting down from one interface/object to another is essentially zero cost (offseting the vtable of the parent)
 - Full support for managed references
   - Supports locals, fields and array elements
 - Full support for boxing/unboxing 
+  - Including Nullable
 - Full support for Generics (Type and Methods)
 - Full support for delegates and multicast delegates
   - Missing some corelib methods to make them fully work
@@ -62,3 +64,4 @@ Note that the runtime is still not stable and even tho the features are implemen
 - Streams core functionality 
 - Controlled-mutability managed pointers
 - Overflow math (will come once MIR supports them)
+- Stack trace (will need some form of JIT support)
