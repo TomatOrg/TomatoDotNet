@@ -6042,7 +6042,7 @@ err_t jit_type(System_Type type) {
     MIR_load_module(m_mir_context, module);
 
     // link it
-    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
+    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
 
     // now that everything is linked prepare all the types we have created
     for (int i = 0; i < arrlen(ctx.created_types); i++) {
