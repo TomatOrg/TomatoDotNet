@@ -156,22 +156,33 @@ cleanup:
 static bool match_generic_type(System_Type a, System_Type b) {
     if (a == b) {
         return true;
+
     } else if (a->IsArray && b->IsArray) {
         return match_generic_type(a->ElementType, b->ElementType);
+
     } else if (a->IsByRef && b->IsByRef) {
         return match_generic_type(a->BaseType, b->BaseType);
+
     } else if (a->GenericParameterPosition >= 0 && b->GenericParameterPosition >= 0) {
         return a->GenericParameterPosition == b->GenericParameterPosition;
+
     } else if (a->GenericArguments != NULL && b->GenericArguments != NULL) {
+        if (a->GenericTypeDefinition != b->GenericTypeDefinition) {
+            return false;
+        }
+
         if (a->GenericArguments->Length != b->GenericArguments->Length) {
             return false;
         }
+
         for (int i = 0; i < a->GenericArguments->Length; i++) {
             if (!match_generic_type(a->GenericArguments->Data[i], b->GenericArguments->Data[i])) {
                 return false;
             }
         }
+
         return true;
+
     } else {
         return false;
     }
@@ -883,7 +894,7 @@ void type_print_full_name(System_Type type, strbuilder_t* builder) {
         return;
     }
 
-    if (type->GenericParameterPosition >= 0) {
+    if (type_is_generic_parameter(type)) {
         strbuilder_utf16(builder, type->Name->Chars, type->Name->Length);
     } else {
         strbuilder_char(builder, '[');
