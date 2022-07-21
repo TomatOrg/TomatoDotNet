@@ -734,7 +734,7 @@ extern System_Type tSystem_Runtime_CompilerServices_Unsafe;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || type_get_stack_type(type) == STACK_TYPE_O; }
-static inline bool type_is_value_type(System_Type type) { return type != NULL && type->IsValueType; }
+static inline bool type_is_value_type(System_Type type) { return type != NULL && (type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum); }
 bool type_is_integer(System_Type type);
 
 System_Type type_get_underlying_type(System_Type T);

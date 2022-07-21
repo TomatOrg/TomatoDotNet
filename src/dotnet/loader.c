@@ -1085,20 +1085,22 @@ err_t loader_fill_type(System_Type type) {
             CHECK(type->BaseType == tSystem_Object);
         }
 
-        // validate that we don't inherit from a sealed type
-        CHECK(!type_is_sealed(type->BaseType));
-
-        if (type->BaseType->IsValueType) {
-            // Can not inherit from value types, except for enum which is allowed
-            CHECK(type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum);
-        }
-
         // fill the type information of the parent
         CHECK_AND_RETHROW(loader_fill_type(type->BaseType));
 
+        // validate that we don't inherit from a sealed type
+        CHECK(!type_is_sealed(type->BaseType));
+
         // check we have a size
-        if (!type->BaseType->IsValueType) {
-            CHECK(type->BaseType->ManagedSize != 0);
+        if (type->BaseType->IsValueType) {
+            // Can not inherit from value types, except for enum which is allowed
+            CHECK(type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum);
+
+            // we are a value type too
+            type->IsValueType = true;
+            if (type->StackType == STACK_TYPE_O) {
+                type->StackType = STACK_TYPE_VALUE_TYPE;
+            }
         }
 
         // now check if it has virtual methods
@@ -1117,14 +1119,6 @@ err_t loader_fill_type(System_Type type) {
         // copy the managed pointers offsets
         for (int i = 0; i < arrlen(type->BaseType->ManagedPointersOffsets); i++) {
             arrpush(type->ManagedPointersOffsets, type->BaseType->ManagedPointersOffsets[i]);
-        }
-    }
-
-    // Set the value type
-    if (type->BaseType != NULL && type->BaseType->IsValueType) {
-        type->IsValueType = true;
-        if (type->StackType == STACK_TYPE_O) {
-            type->StackType = STACK_TYPE_VALUE_TYPE;
         }
     }
 
