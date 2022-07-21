@@ -167,6 +167,28 @@ static void jit_generate_System_Array_GetDataPtr() {
     MIR_new_export(m_mir_context, fname);
 }
 
+static void jit_generate_System_String_GetDataPtr() {
+    const char* fname = "string::GetDataPtr()";
+    MIR_type_t res[] = {
+        MIR_T_P,
+        MIR_T_P
+    };
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "this");
+    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_insn(m_mir_context, MIR_ADD,
+                                 MIR_new_reg_op(m_mir_context, this),
+                                 MIR_new_reg_op(m_mir_context, this),
+                                 MIR_new_int_op(m_mir_context, offsetof(struct System_String, Chars))));
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 2,
+                                     MIR_new_int_op(m_mir_context, 0),
+                                     MIR_new_reg_op(m_mir_context, this)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
+
 static void jit_generate_System_Type_GetTypeFromHandle() {
     const char* fname = "[Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
     MIR_type_t res[] = {
@@ -272,6 +294,7 @@ err_t init_jit() {
     // any unsafe code, and it is not worth having them as native functions
     jit_generate_System_String_GetCharInternal();
     jit_generate_System_Array_GetDataPtr();
+    jit_generate_System_String_GetDataPtr();
     jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
 
@@ -5011,10 +5034,67 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             // For a value type we just need to zero it out before calling the ctor
                             jit_emit_zerofill(ctx, this_reg, this_type->StackSize);
                         } else {
+                            MIR_op_t size_op;
+                            if (this_type == tSystem_String) {
+                                // special handling for string
+                                MIR_reg_t size_reg = new_temp_reg(ctx, tSystem_Int64);
+
+                                // we need to figure what the length is from the ctor, the ctor will
+                                // handle actually copying the data nicely
+                                if (operand_method->Parameters->Length == 3) {
+                                    // String(char[] args, startIndex, length), the size is
+                                    // the last argument times two....
+                                    MIR_append_insn(mir_ctx, mir_func,
+                                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                                 MIR_new_reg_op(mir_ctx, size_reg),
+                                                                 arg_ops[other_args + 3]));
+
+                                } else {
+                                    ASSERT(operand_method->Parameters->Length == 1);
+                                    System_Type arg0_type = operand_method->Parameters->Data[0]->ParameterType;
+
+                                    if (arg0_type->IsArray) {
+                                        // String(char[] chars), the size is the array length
+                                        ASSERT(arg_ops[other_args].mode == MIR_OP_REG);
+                                        MIR_append_insn(mir_ctx, mir_func,
+                                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                                     MIR_new_reg_op(mir_ctx, size_reg),
+                                                                     MIR_new_mem_op(mir_ctx, MIR_T_I32,
+                                                                                    offsetof(struct System_Array, Length),
+                                                                                    arg_ops[other_args].u.reg, 0, 1)));
+                                    } else {
+                                        // String(int length), the size is length
+                                        MIR_append_insn(mir_ctx, mir_func,
+                                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                                     MIR_new_reg_op(mir_ctx, size_reg),
+                                                                     arg_ops[other_args]));
+                                    }
+                                }
+
+                                // multiply by char size
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MUL,
+                                                             MIR_new_reg_op(mir_ctx, size_reg),
+                                                             MIR_new_reg_op(mir_ctx, size_reg),
+                                                             MIR_new_int_op(mir_ctx, sizeof(System_Char))));
+
+                                // add the header size
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_ADD,
+                                                             MIR_new_reg_op(mir_ctx, size_reg),
+                                                             MIR_new_reg_op(mir_ctx, size_reg),
+                                                             MIR_new_int_op(mir_ctx, tSystem_String->ManagedSize)));
+
+                                // create the op
+                                size_op = MIR_new_reg_op(mir_ctx, size_reg);
+                            } else {
+                                // Normal object
+                                size_op = MIR_new_int_op(mir_ctx, operand_method->DeclaringType->ManagedSize);
+                            }
+
                             // allocate the new object
-                            CHECK_AND_RETHROW(jit_new(ctx,
-                                                      this_reg, operand_method->DeclaringType,
-                                                      MIR_new_int_op(mir_ctx, operand_method->DeclaringType->ManagedSize)));
+                            CHECK_AND_RETHROW(jit_new(ctx, this_reg,
+                                                      operand_method->DeclaringType, size_op));
                         }
                     } else {
                         // this is a call, get it from the stack
