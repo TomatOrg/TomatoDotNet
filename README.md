@@ -52,7 +52,8 @@ Note that the runtime is still not stable and even tho the features are implemen
   - Interlocked class (missing some signatures)
   - WaitHandle with WaitEvent, Mutex, Semaphore 
   - Thread class
-  - minimal Monitor support (enough for lock statement)
+  - Monitor support
+    - no support for timeout
 - Support for Span
   - Only from array types, as void* is not valid
 
