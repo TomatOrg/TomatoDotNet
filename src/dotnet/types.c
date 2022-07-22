@@ -364,10 +364,11 @@ System_Type get_array_type(System_Type type) {
         return type->ArrayType;
     }
 
-    monitor_enter(type);
+    // TODO: panic on fail
+    PANIC_ON(monitor_enter(type));
 
     if (type->ArrayType != NULL) {
-        monitor_exit(type);
+        PANIC_ON(monitor_exit(type));
         return type->ArrayType;
     }
 
@@ -413,7 +414,7 @@ System_Type get_array_type(System_Type type) {
 
     // Set the array type
     GC_UPDATE(type, ArrayType, ArrayType);
-    monitor_exit(type);
+    PANIC_ON(monitor_exit(type));
 
     return type->ArrayType;
 }
@@ -423,10 +424,10 @@ System_Type get_by_ref_type(System_Type type) {
         return type->ByRefType;
     }
 
-    monitor_enter(type);
+    PANIC_ON(monitor_enter(type));
 
     if (type->ByRefType != NULL) {
-        monitor_exit(type);
+        PANIC_ON(monitor_exit(type));
         return type->ByRefType;
     }
 
@@ -460,7 +461,7 @@ System_Type get_by_ref_type(System_Type type) {
 
     // Set the array type
     GC_UPDATE(type, ByRefType, ByRefType);
-    monitor_exit(type);
+    PANIC_ON(monitor_exit(type));
 
     return type->ByRefType;
 }
@@ -470,10 +471,10 @@ System_Type get_boxed_type(System_Type type) {
         return type->BoxedType;
     }
 
-    monitor_enter(type);
+    PANIC_ON(monitor_enter(type));
 
     if (type->BoxedType != NULL) {
-        monitor_exit(type);
+        PANIC_ON(monitor_exit(type));
         return type->BoxedType;
     }
 
@@ -510,7 +511,7 @@ System_Type get_boxed_type(System_Type type) {
 
     // Set the array type
     GC_UPDATE(type, BoxedType, BoxedType);
-    monitor_exit(type);
+    PANIC_ON(monitor_exit(type));
 
     return type->BoxedType;
 }

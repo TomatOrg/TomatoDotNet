@@ -1050,7 +1050,7 @@ err_t loader_fill_type(System_Type type) {
     }
 
     // slow path, fill it
-    monitor_enter(type);
+    CHECK_AND_RETHROW(monitor_enter(type));
     locked = true;
 
     // check again just in case
@@ -1523,7 +1523,7 @@ err_t loader_fill_type(System_Type type) {
 cleanup:
 
     if (locked) {
-        monitor_exit(type);
+        PANIC_ON(monitor_exit(type));
     }
 
     depth--;

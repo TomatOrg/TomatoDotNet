@@ -36,6 +36,11 @@
  */
 //#define JIT_TRACE
 
+/**
+ * Uncomment to make the jit trace the MIR generated from the IL
+ */
+//#define JIT_TRACE_MIR
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1732,7 +1737,7 @@ static err_t jit_throw(jit_method_context_t* ctx, System_Type type) {
                                              MIR_new_label_op(mir_ctx, skip),
                                              MIR_new_reg_op(mir_ctx, temp_reg)));
 
-                // emit the jump the to exception handler
+                // emit the jump to the exception handler
                 CHECK_AND_RETHROW(jit_jump_to_exception_clause(ctx, clause));
 
                 // insert the skip label
@@ -5904,6 +5909,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 #ifdef JIT_TRACE
     TRACE("}");
     TRACE();
+#endif
+
+#ifdef JIT_TRACE_MIR
+    MIR_output_item(mir_ctx, stdout, mir_func);
 #endif
 
 cleanup:

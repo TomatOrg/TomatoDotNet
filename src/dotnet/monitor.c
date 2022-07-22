@@ -1,5 +1,6 @@
 #include "monitor.h"
 #include "util/fastrand.h"
+#include "sync/conditional.h"
 
 #include <thread/scheduler.h>
 #include <sync/mutex.h>
@@ -24,8 +25,11 @@ typedef struct monitor {
     // the thread that locked the mutex
     thread_t* locker;
 
-    // the mutex
+    // the mutex for Enter+Exit
     mutex_t mutex;
+
+    // the conditional for Pulse+PulseAll+Wait
+    conditional_t cond;
 } monitor_t;
 
 typedef struct monitor_root {
@@ -202,14 +206,33 @@ found:
 // monitor Implementation
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * take the ownership of the lock
+ */
+static void take_lock(monitor_t* monitor) {
+    ASSERT(monitor->locker == NULL);
+    monitor->locker = put_thread(get_current_thread());
+}
+
+/**
+ * Release the ownership of the lock
+ */
+static void release_lock(monitor_t* monitor) {
+    ASSERT(monitor->locker == get_current_thread());
+    release_thread(monitor->locker);
+    monitor->locker = NULL;
+}
+
 err_t monitor_enter(void* object) {
     err_t err = NO_ERROR;
 
+    // get the monitor object
     monitor_t* monitor = get_monitor(get_monitor_root(object), object);
     CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
 
+    // lock it
     mutex_lock(&monitor->mutex);
-    monitor->locker = get_current_thread();
+    take_lock(monitor);
 
 cleanup:
     return err;
@@ -218,11 +241,73 @@ cleanup:
 err_t monitor_exit(void* object) {
     err_t err = NO_ERROR;
 
+    // get the monitor object
     monitor_t* monitor = get_monitor(get_monitor_root(object), object);
-    CHECK_ERROR(monitor != NULL, ERROR_SYNCHRONIZATION_LOCK);
+    CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
 
-    monitor->locker = NULL;
+    // make sure the locked thread also frees this
+    CHECK_ERROR(monitor->locker == get_current_thread(), ERROR_SYNCHRONIZATION_LOCK);
+
+    // unlock the mutex
     mutex_unlock(&monitor->mutex);
+    release_lock(monitor);
+
+cleanup:
+    return err;
+}
+
+err_t monitor_pulse(void* object) {
+    err_t err = NO_ERROR;
+
+    // get the monitor object
+    monitor_t* monitor = get_monitor(get_monitor_root(object), object);
+    CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
+
+    // make sure the locked thread also frees this
+    CHECK_ERROR(monitor->locker == get_current_thread(), ERROR_SYNCHRONIZATION_LOCK);
+
+    // pulse it
+    conditional_signal(&monitor->cond);
+
+cleanup:
+    return err;
+}
+
+err_t monitor_pulse_all(void* object) {
+    err_t err = NO_ERROR;
+
+    // get the monitor object
+    monitor_t* monitor = get_monitor(get_monitor_root(object), object);
+    CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
+
+    // make sure the locked thread also frees this
+    CHECK_ERROR(monitor->locker == get_current_thread(), ERROR_SYNCHRONIZATION_LOCK);
+
+    // pulse all
+    conditional_broadcast(&monitor->cond);
+
+cleanup:
+    return err;
+}
+
+err_t monitor_wait(void* object) {
+    err_t err = NO_ERROR;
+
+    // get the monitor object
+    monitor_t* monitor = get_monitor(get_monitor_root(object), object);
+    CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
+
+    // make sure the locked thread also frees this
+    CHECK_ERROR(monitor->locker == get_current_thread(), ERROR_SYNCHRONIZATION_LOCK);
+
+    // we are going to unlock, so remove our ownership
+    release_lock(monitor);
+
+    // wait for it
+    conditional_wait(&monitor->cond, &monitor->mutex);
+
+    // we are again the owners of the lock
+    take_lock(monitor);
 
 cleanup:
     return err;

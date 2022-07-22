@@ -79,6 +79,21 @@ static method_result_t System_Threading_Monitor_ExitInternal(System_Object obj) 
     return (method_result_t) { .exception = NULL, .value = err };
 }
 
+static method_result_t System_Threading_Monitor_PulseInternal(System_Object obj) {
+    err_t err = monitor_pulse(obj);
+    return (method_result_t) { .exception = NULL, .value = err };
+}
+
+static method_result_t System_Threading_Monitor_PulseAllInternal(System_Object obj) {
+    err_t err = monitor_pulse_all(obj);
+    return (method_result_t) { .exception = NULL, .value = err };
+}
+
+static method_result_t System_Threading_Monitor_WaitInternal(System_Object obj) {
+    err_t err = monitor_wait(obj);
+    return (method_result_t) { .exception = NULL, .value = err };
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // System.Threading.WaitHandle
 //----------------------------------------------------------------------------------------------------------------------
@@ -378,6 +393,9 @@ internal_call_t g_internal_calls[] = {
 
     { "[Corelib-v1]System.Threading.Monitor::EnterInternal(object,[Corelib-v1]System.Boolean&)", System_Threading_Monitor_EnterInternal },
     { "[Corelib-v1]System.Threading.Monitor::ExitInternal(object)", System_Threading_Monitor_ExitInternal },
+    { "[Corelib-v1]System.Threading.Monitor::PulseInternal(object)", System_Threading_Monitor_PulseInternal },
+    { "[Corelib-v1]System.Threading.Monitor::PulseAllInternal(object)", System_Threading_Monitor_PulseAllInternal },
+    { "[Corelib-v1]System.Threading.Monitor::WaitInternal(object)", System_Threading_Monitor_WaitInternal },
 
     { "[Corelib-v1]System.Runtime.Intrinsics.X86.X86Base::Pause()", System_Runtime_Intrinsics_X86_X86Base_Pause },
 
