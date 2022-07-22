@@ -318,11 +318,11 @@ static System_Exception System_Array_CopyInternal(System_Array sourceArray, int6
             for (dst_offset += copy_size, src_data += copy_size; length--; ) {
                 src_data -= elementSize;
                 dst_offset -= elementSize;
-                gc_update((System_Object)destinationArray, dst_offset, src_data);
+                gc_update((System_Object)destinationArray, dst_offset, *(void**)src_data);
             }
         } else {
             while (length--) {
-                gc_update((System_Object)destinationArray, dst_offset, src_data);
+                gc_update((System_Object)destinationArray, dst_offset, *(void**)src_data);
                 src_data += elementSize;
                 dst_offset += elementSize;
             }
