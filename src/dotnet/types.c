@@ -1803,7 +1803,7 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
 
     // only expand if the type is setup properly, otherwise we are going
     // to expand it in a later stage once it is actually initialized
-    if (type->IsSetup) {
+    if (type->IsSetupFinished) {
         CHECK_AND_RETHROW(type_expand_generic(instance));
     }
 

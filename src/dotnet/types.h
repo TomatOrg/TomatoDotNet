@@ -560,6 +560,7 @@ struct System_Type {
     // internal stuff related to offsets, vtables and so on
     int* ManagedPointersOffsets;
     bool IsSetup;
+    bool IsSetupFinished;
     bool IsFilled;
     bool IsValueType;
     System_Reflection_MethodInfo Finalize;

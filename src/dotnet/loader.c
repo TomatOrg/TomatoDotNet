@@ -512,6 +512,9 @@ err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type)
         CHECK_AND_RETHROW(parse_method_def_sig(method_def->signature, methodInfo, file, metadata));
     }
 
+    // now we finished the type setup
+    type->IsSetupFinished = true;
+
     // expand all the type instances that
     // were already created from this type
     for (System_Type instance = type->NextGenericInstance; instance != NULL; instance = instance->NextGenericInstance) {
