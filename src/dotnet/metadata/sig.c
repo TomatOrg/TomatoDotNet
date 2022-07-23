@@ -78,8 +78,6 @@ static err_t parse_custom_mod(blob_entry_t* sig, System_Reflection_Assembly asse
 
         // resolve the token
         CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, token, NULL, NULL, out_type));
-
-        TRACE("Got modifier %U - %s", (*out_type)->Name, required ? "required" : "optional");
     } else {
         *out_type = NULL;
     }
@@ -339,8 +337,14 @@ err_t parse_field_sig(blob_entry_t _sig, System_Reflection_FieldInfo field, pe_f
             break;
         }
 
-        // TODO: wth
-        CHECK(!required);
+        // handle modifiers
+        if (mod == tSystem_Runtime_CompilerServices_IsVolatile) {
+            // TODO: we want to mark this as volatile so the JIT
+            //       will know
+        } else {
+            CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+            WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        }
     }
 
     // parse the actual field

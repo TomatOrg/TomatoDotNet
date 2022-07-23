@@ -1727,6 +1727,7 @@ static type_init_t m_type_init[] = {
     VALUE_TYPE_INIT("System", "Nullable`1", System_Nullable, STACK_TYPE_VALUE_TYPE),
 
     TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", tSystem_Runtime_CompilerServices_Unsafe),
+    TYPE_LOOKUP("System.Runtime.CompilerServices", "IsVolatile", tSystem_Runtime_CompilerServices_IsVolatile),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {

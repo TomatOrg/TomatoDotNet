@@ -65,6 +65,7 @@ System_Type tTinyDotNet_Reflection_MethodImpl = NULL;
 System_Type tTinyDotNet_Reflection_MethodSpec = NULL;
 
 System_Type tSystem_Runtime_CompilerServices_Unsafe = NULL;
+System_Type tSystem_Runtime_CompilerServices_IsVolatile = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
