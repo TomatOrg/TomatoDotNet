@@ -758,6 +758,13 @@ System_Type get_this_type(System_Reflection_MethodInfo signature);
 err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Type* out_type);
 
 /**
+ * Expand the given instance of a generic type
+ *
+ * requires the definition to be initialized
+ */
+err_t type_expand_generic(System_Type type);
+
+/**
  * Updates the interface impl to the given one, this is needed because interface impls are created
  * during a later stage than the inital type loading, which could cause a generic type to be created
  * before an interface impl was done, but it still depends on interface impls, so we just udpate it

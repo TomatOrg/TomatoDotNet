@@ -1638,6 +1638,48 @@ cleanup:
     return err;
 }
 
+err_t type_expand_generic(System_Type instance) {
+    err_t err = NO_ERROR;
+    System_Type type = instance->GenericTypeDefinition;
+    System_Type_Array arguments = instance->GenericArguments;
+
+    CHECK(instance->GenericTypeDefinition->IsSetup);
+
+    // base type
+    System_Type baseType;
+    CHECK_AND_RETHROW(expand_type(type->BaseType, arguments, NULL, &baseType));
+    GC_UPDATE(instance, BaseType, baseType);
+
+    // fields
+    GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
+    for (int i = 0; i < instance->Fields->Length; i++) {
+        System_Reflection_FieldInfo field;
+        CHECK_AND_RETHROW(expand_field(instance, type->Fields->Data[i], arguments, &field));
+        GC_UPDATE_ARRAY(instance->Fields, i, field);
+    }
+
+    // methods
+    GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
+    for (int i = 0; i < instance->Methods->Length; i++) {
+        System_Reflection_MethodInfo method;
+        CHECK_AND_RETHROW(expand_method(instance, type->Methods->Data[i], arguments, false, &method));
+        GC_UPDATE_ARRAY(instance->Methods, i, method);
+    }
+
+    // interfaces
+    if (type->InterfaceImpls != NULL) {
+        CHECK_AND_RETHROW(type_expand_interface_impls(instance, type->InterfaceImpls));
+    }
+
+    // method impls
+    if (type->MethodImpls != NULL) {
+        CHECK_AND_RETHROW(type_expand_method_impls(instance, type->MethodImpls));
+    }
+
+cleanup:
+    return err;
+}
+
 err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Type* out_type) {
     err_t err = NO_ERROR;
     bool locked = false;
@@ -1758,35 +1800,10 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
         monitor_exit(type);
     }
 
-    // base type
-    System_Type baseType;
-    CHECK_AND_RETHROW(expand_type(type->BaseType, arguments, NULL, &baseType));
-    GC_UPDATE(instance, BaseType, baseType);
-
-    // fields
-    GC_UPDATE(instance, Fields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, type->Fields->Length));
-    for (int i = 0; i < instance->Fields->Length; i++) {
-        System_Reflection_FieldInfo field;
-        CHECK_AND_RETHROW(expand_field(instance, type->Fields->Data[i], arguments, &field));
-        GC_UPDATE_ARRAY(instance->Fields, i, field);
-    }
-
-    // methods
-    GC_UPDATE(instance, Methods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, type->Methods->Length));
-    for (int i = 0; i < instance->Methods->Length; i++) {
-        System_Reflection_MethodInfo method;
-        CHECK_AND_RETHROW(expand_method(instance, type->Methods->Data[i], arguments, false, &method));
-        GC_UPDATE_ARRAY(instance->Methods, i, method);
-    }
-
-    // interfaces
-    if (type->InterfaceImpls != NULL) {
-        CHECK_AND_RETHROW(type_expand_interface_impls(instance, type->InterfaceImpls));
-    }
-
-    // method impls
-    if (type->MethodImpls != NULL) {
-        CHECK_AND_RETHROW(type_expand_method_impls(instance, type->MethodImpls));
+    // only expand if the type is setup properly, otherwise we are going
+    // to expand it in a later stage once it is actually initialized
+    if (type->IsSetup) {
+        CHECK_AND_RETHROW(type_expand_generic(instance));
     }
 
     *out_type = instance;
