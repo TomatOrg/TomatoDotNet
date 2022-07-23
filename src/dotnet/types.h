@@ -320,6 +320,12 @@ typedef struct System_Reflection_ParameterInfo {
 
 DEFINE_ARRAY(System_Reflection_ParameterInfo);
 
+static inline bool parameter_is_in(System_Reflection_ParameterInfo param) { return param->Attributes & 0x0001; }
+static inline bool parameter_is_out(System_Reflection_ParameterInfo param) { return param->Attributes & 0x0002; }
+static inline bool parameter_is_optional(System_Reflection_ParameterInfo param) { return param->Attributes & 0x0010; }
+static inline bool parameter_has_default(System_Reflection_ParameterInfo param) { return param->Attributes & 0x1000; }
+static inline bool parameter_has_field_marshal(System_Reflection_ParameterInfo param) { return param->Attributes & 0x2000; }
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct System_Reflection_LocalVariableInfo {

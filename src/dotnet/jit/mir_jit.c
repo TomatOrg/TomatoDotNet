@@ -408,8 +408,21 @@ static MIR_type_t get_mir_type(System_Type type) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct stack_entry {
+    /**
+     * The type on the stack
+     */
     System_Type type;
+
+    /**
+     * Is this a non local reference, meaning it comes from
+     * an external source
+     */
     bool non_local_ref;
+
+    /**
+     * Is this a readonly reference, meaning it can't be set
+     */
+    bool readonly_ref;
 } stack_entry_t;
 
 typedef struct stack {
@@ -636,10 +649,15 @@ cleanup:
 }
 
 /**
+ * Quick macro to get the top of the stack, so we can modify the entry easily
+ */
+#define STACK_TOP ctx->stack.entries[arrlen(ctx->stack.entries) - 1]
+
+/**
  * Pop an item from the stack, returning its type and register location, will fail
  * if there are not enough items on the stack
  */
-static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, bool* non_local_ref) {
+static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, stack_entry_t* ste) {
     err_t err = NO_ERROR;
 
     // pop the entry
@@ -647,7 +665,7 @@ static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg
     stack_entry_t entry = arrpop(ctx->stack.entries);
     System_Type type = entry.type;
     if (out_type != NULL) *out_type = type;
-    if (non_local_ref != NULL) *non_local_ref = entry.non_local_ref;
+    if (ste != NULL) *ste = entry;
 
     // get the reg stack
     stack_keeping_t* stack = NULL;
@@ -685,6 +703,7 @@ static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg
 cleanup:
     return err;
 }
+
 /**
  * Take a snapshot of the stack, used for verification
  */
@@ -3417,15 +3436,17 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_STOBJ: goto cee_stind;
             cee_stind: {
                 // pop all the values from the stack
+                stack_entry_t addr_entry;
                 MIR_reg_t value_reg;
                 MIR_reg_t addr_reg;
                 System_Type value_type;
                 System_Type addr_type;
                 CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, &addr_entry));
 
                 // this must be an array
                 CHECK(addr_type->IsByRef);
+                CHECK(!addr_entry.readonly_ref);
 
                 // for stind.ref the operand type is the same as the
                 // byref itself
@@ -3968,6 +3989,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_LDARG: {
                 char arg_name_buf[64];
                 const char* arg_name = NULL;
+                bool readonly_ref = false;
 
                 // resolve the type
                 System_Type arg_type = NULL;
@@ -3991,7 +4013,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 if (arg_type == NULL) {
                     CHECK(operand_i32 < method->Parameters->Length);
-                    arg_type = method->Parameters->Data[operand_i32]->ParameterType;
+                    System_Reflection_ParameterInfo parameter = method->Parameters->Data[operand_i32];
+                    arg_type = parameter->ParameterType;
+                    readonly_ref = parameter_is_in(parameter);
                 }
 
                 // the register containing the value
@@ -4034,7 +4058,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     case STACK_TYPE_REF:
                         // mark that this is a non-local ref type, as it comes from the outside
-                        ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = true;
+                        // and depending on `in` it might be a readonly ref
+                        STACK_TOP.non_local_ref = true;
+                        STACK_TOP.readonly_ref = readonly_ref;
                         goto ldarg_primitive_type;
                 }
             } break;
@@ -4312,7 +4338,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // if this is an init-only field then make sure that
                 // only rtspecialname can access it (.ctor and .cctor)
                 if (field_is_init_only(operand_field)) {
-                    CHECK(method_is_rt_special_name(method));
+                    CHECK(
+                        method->DeclaringType == operand_field->DeclaringType &&
+                        method_is_rt_special_name(method) &&
+                        string_equals_cstr(method->Name, ".cctor")
+                    );
                 }
 
                 // validate the assignability
@@ -4451,7 +4481,8 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // push it
                 MIR_reg_t value_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
-                ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = true; // static field, not local
+                STACK_TOP.non_local_ref = true; // static field, not local
+                STACK_TOP.readonly_ref = field_is_init_only(operand_field);
 
                 // very simple, just move the reference to the value field
                 MIR_append_insn(mir_ctx, mir_func,
@@ -4462,12 +4493,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
             case CEE_STFLD: {
                 // get the values
+                stack_entry_t obj_entry;
                 MIR_reg_t obj_reg;
                 MIR_reg_t value_reg;
                 System_Type obj_type;
                 System_Type value_type;
                 CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, &obj_entry));
 
                 // validate that the object type is a valid one for stfld
                 if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
@@ -4475,6 +4507,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     // note that we can't know if the value type is part of another class
                     // or not so we have to use gc_update_ref
                     CHECK(obj_type->BaseType->IsValueType);
+
+                    // must be a non-readonly reference
+                    CHECK(!obj_entry.readonly_ref);
                 } else {
                     CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O);
                 }
@@ -4497,7 +4532,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // if this is an init-only field then make sure that
                 // only rtspecialname can access it (.ctor and .cctor)
                 if (field_is_init_only(operand_field)) {
-                    CHECK(method_is_rt_special_name(method));
+                    CHECK(
+                        method->DeclaringType == operand_field->DeclaringType &&
+                        method_is_rt_special_name(method) &&
+                        string_equals_cstr(method->Name, ".ctor")
+                    );
                 }
 
                 // check the object is not null
@@ -4729,10 +4768,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
             case CEE_LDFLDA: {
                 // get the object instance
-                bool obj_non_local_ref;
+                stack_entry_t obj_entry;
                 System_Type obj_type;
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, &obj_non_local_ref));
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, &obj_entry));
 
                 // validate that the object type is a valid one for ldfld
                 CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O || type_get_stack_type(obj_type) == STACK_TYPE_REF);
@@ -4757,15 +4796,18 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // check if this comes as an outside reference
                 bool non_stack_local = false;
+                bool readonly = field_is_init_only(operand_field);
                 if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
                     // heap object
                     non_stack_local = true;
                 } else if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
                     // check if the reference is a non-value type
                     CHECK(type_is_value_type(obj_type->BaseType));
-                    non_stack_local = obj_non_local_ref;
+                    non_stack_local = obj_entry.non_local_ref;
+                    readonly = readonly || obj_entry.readonly_ref;
                 }
-                ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = non_stack_local;
+                STACK_TOP.non_local_ref = non_stack_local;
+                STACK_TOP.readonly_ref = readonly;
 
                 // check the object is not null
                 if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
@@ -4852,13 +4894,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // pop all the arguments from the stack
                 int i;
                 for (i = arg_count + other_args - 1; i >= other_args; i--) {
-                    System_Type signature_type = operand_method->Parameters->Data[i - other_args]->ParameterType;
+                    System_Reflection_ParameterInfo parameter_info = operand_method->Parameters->Data[i - other_args];
+                    System_Type signature_type = parameter_info->ParameterType;
 
                     // get the argument value
-                    bool arg_non_local_ref;
+                    stack_entry_t arg_entry;
                     MIR_reg_t arg_reg;
                     System_Type arg_type;
-                    CHECK_AND_RETHROW(stack_pop(ctx, &arg_type, &arg_reg, &arg_non_local_ref));
+                    CHECK_AND_RETHROW(stack_pop(ctx, &arg_type, &arg_reg, &arg_entry));
 
                     // do implicit conversion as needed
                     bool mem_op = false;
@@ -4951,10 +4994,16 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         } break;
 
                         case STACK_TYPE_REF: {
+                            // if this is a readonly reference, then we are only allowed
+                            // to pass it to parameters marked as in
+                            if (arg_entry.readonly_ref) {
+                                CHECK(parameter_is_in(parameter_info));
+                            }
+
                             // if this is a reference that might be returned from the method we are calling
                             // to, and the argument is a local reference on its own, then we need to mark
                             // that the  reference type can't be trusted
-                            if (!arg_non_local_ref && type_is_verifier_assignable_to(arg_type, method->ReturnType)) {
+                            if (!arg_entry.non_local_ref && type_is_verifier_assignable_to(arg_type, method->ReturnType)) {
                                 ret_is_non_local_ref = false;
                             }
                         } break;
@@ -5262,7 +5311,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     if (type_get_stack_type(operand_method->ReturnType) == STACK_TYPE_REF) {
                         // we did not pass any local references to this, so we know for sure it can't be a local address
                         // being returned from the method
-                        ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = ret_is_non_local_ref;
+                        STACK_TOP.non_local_ref = ret_is_non_local_ref;
                     }
 
                     // this should just work, because if the value is a struct it is going to be allocated properly
@@ -5403,8 +5452,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         } break;
 
                         case STACK_TYPE_REF:
-                            // first make sure that the return value is a non-local reference
-                            CHECK(ctx->stack.entries[arrlen(ctx->stack.entries)].non_local_ref);
+                            stack_entry_t entry = ctx->stack.entries[arrlen(ctx->stack.entries)];
+
+                            // make sure that the return value is a non-local reference
+                            CHECK(entry.non_local_ref);
+
+                            // TODO: methods that do allow to return readonly refs
+                            // make sure that the return value is a non-readonly reference
+                            CHECK(!entry.readonly_ref);
 
                             // it is, then return it like we return any other primitive
                             goto ret_primitive_type;
@@ -5811,7 +5866,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // push to the stack
                 CHECK_AND_RETHROW(stack_push(ctx, get_by_ref_type(type_get_intermediate_type(operand_type)), &value_reg));
-                ctx->stack.entries[arrlen(ctx->stack.entries) - 1].non_local_ref = true;
+                STACK_TOP.non_local_ref = true;
 
                 // calculate the element reference offset
                 MIR_append_insn(mir_ctx, mir_func,
