@@ -1239,8 +1239,12 @@ err_t loader_fill_type(System_Type type) {
 
         // now we know the exact amount of virtual methods that we have for this type
         GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtual_count));
-        type->VTable = malloc(sizeof(void*) * virtual_count);
-        CHECK_ERROR(type->VTable != NULL, ERROR_OUT_OF_MEMORY);
+        if (virtual_count != 0) {
+            type->VTable = malloc(sizeof(void*) * virtual_count);
+            CHECK_ERROR(type->VTable != NULL, ERROR_OUT_OF_MEMORY);
+        } else {
+            type->VTable = NULL;
+        }
 
         // copy the parent's vtable
         if (type->BaseType != NULL) {

@@ -2,7 +2,6 @@
 #include "dotnet/monitor.h"
 #include "thread/scheduler.h"
 #include "internal_calls.h"
-#include "kernel.h"
 
 #include <dotnet/opcodes.h>
 #include <dotnet/types.h>
@@ -247,6 +246,7 @@ static void jit_generate_delegate_ctor() {
     m_delegate_ctor_func = func;
 }
 
+int get_cpu_count();
 err_t init_jit() {
     err_t err = NO_ERROR;
 
@@ -6186,7 +6186,7 @@ err_t jit_type(System_Type type) {
     MIR_load_module(m_mir_context, module);
 
     // link it
-    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
+    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
 
     // now that everything is linked prepare all the types we have created
     for (int i = 0; i < arrlen(ctx.created_types); i++) {
