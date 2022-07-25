@@ -97,6 +97,8 @@ void gc_get_memory_info(System_GCMemoryInfo* memoryInfo);
  */
 void gc_update(void* o, size_t offset, void* new);
 
+void gc_compare_exchange_ref(_Atomic  System_Object* ptr, System_Object new, System_Object comparand);
+
 /**
  * Update a pointer that is possibly on the heap
  *

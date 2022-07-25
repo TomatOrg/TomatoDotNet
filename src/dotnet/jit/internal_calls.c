@@ -245,6 +245,11 @@ static method_result_t interlocked_compare_exchange_u64(_Atomic(uint64_t)* locat
     return (method_result_t) { .value = value, .exception = NULL };
 }
 
+static method_result_t interlocked_compare_exchange_object(_Atomic(System_Object)* location1, System_Object value, System_Object comparand) {
+    gc_compare_exchange_ref(location1, value, comparand);
+    return (method_result_t) { .value = (uintptr_t)value, .exception = NULL };
+}
+
 static method_result_t interlocked_dec_i32(_Atomic(int32_t)* location1)     { return (method_result_t) { .value = atomic_fetch_sub(location1, 1) - 1, .exception = NULL }; }
 static method_result_t interlocked_dec_u32(_Atomic(uint32_t)* location1)    { return (method_result_t) { .value = atomic_fetch_sub(location1, 1) - 1, .exception = NULL }; }
 static method_result_t interlocked_dec_i64(_Atomic(int64_t)* location1)     { return (method_result_t) { .value = atomic_fetch_sub(location1, 1) - 1, .exception = NULL }; }
