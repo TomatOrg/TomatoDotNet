@@ -21,6 +21,15 @@ void unlock_all_threads() {
     mutex_unlock(&m_all_threads_lock);
 }
 
+
+thread_t* put_thread(thread_t* thread) {
+    return thread;
+}
+
+void release_thread(thread_t* thread) {
+    
+}
+
 // cursed thread pausing hack;
 // sending SIGUSR1 is going to pause the thread and any
 // other signal (for example SIGUSR2 which is defined to be empty)
@@ -138,3 +147,9 @@ thread_t* create_thread(thread_entry_t entry, void* ctx, const char* fmt, ...) {
 
     return thread;
 }
+
+
+thread_status_t get_thread_status(thread_t* thread) {
+    return THREAD_STATUS_RUNNING;
+}
+

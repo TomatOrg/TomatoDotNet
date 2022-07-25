@@ -6,7 +6,7 @@
 
 typedef pthread_mutex_t spinlock_t;
 
-#define INIT_SPINLOCK() PTHREAD_MUTEX_INITIALIZER
+#define INIT_SPINLOCK() (spinlock_t)PTHREAD_MUTEX_INITIALIZER
 
 void spinlock_lock(spinlock_t* spinlock);
 

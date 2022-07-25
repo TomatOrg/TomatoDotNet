@@ -64,3 +64,9 @@ bool scheduler_is_preemption(void);
  * Get the currently running thread on the current CPU
  */
 thread_t* get_current_thread();
+
+/**
+ * Request the scheduler to yield from our thread, passing our time-slice to the caller,
+ * putting us at the CPU's local run-queue
+ */
+void scheduler_yield();

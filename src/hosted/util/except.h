@@ -116,3 +116,12 @@ typedef enum err {
     } while(0)
 
 #define CHECK_AND_RETHROW(error) CHECK_AND_RETHROW_LABEL(error, cleanup)
+
+#define PANIC_ON(err) \
+    do { \
+        err_t ___err = err; \
+        if (IS_ERROR(___err)) { \
+           ERROR("Panic with error `%R` failed at %s (%s:%d)", ___err, __FUNCTION__, __FILE__, __LINE__); \
+           while (1) __asm__("cli; hlt"); \
+        } \
+    } while(0)

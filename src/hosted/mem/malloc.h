@@ -1,6 +1,6 @@
 #include <stdlib.h>
 
-#define FREE(ptr) \
+#define SAFE_FREE(ptr) \
     do { \
         if (ptr != NULL) { \
             free(ptr); \

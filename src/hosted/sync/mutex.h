@@ -8,7 +8,7 @@
 
 typedef pthread_mutex_t mutex_t;
 
-#define INIT_MUTEX() PTHREAD_MUTEX_INITIALIZER
+#define INIT_MUTEX() (mutex_t)PTHREAD_MUTEX_INITIALIZER
 
 void mutex_lock(mutex_t* mutex);
 

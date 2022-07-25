@@ -136,6 +136,8 @@ typedef struct thread_control_block {
 
     // The per-thread data for the gc
     gc_thread_data_t gc_data;
+
+    void *managed_thread;
 } thread_control_block_t;
 
 
@@ -170,6 +172,25 @@ typedef struct thread {
     wait_group_t wg;
 } thread_t;
 
+typedef struct waiting_thread waiting_thread_t;
+struct waiting_thread {
+    thread_t* thread;
+
+    // only used in the cache
+    waiting_thread_t* next;
+    waiting_thread_t* prev;
+
+    uint32_t ticket;
+
+    waiting_thread_t* wait_link;
+    waiting_thread_t* wait_tail;
+
+    bool is_select;
+    bool success;
+    struct waitable* waitable;
+};
+
+
 /**
  * For thread-locals
  */
@@ -198,3 +219,17 @@ extern thread_t** g_all_threads;
 void lock_all_threads();
 
 void unlock_all_threads();
+
+/**
+ * Increases the ref count of a thread
+ */
+thread_t* put_thread(thread_t* thread);
+
+/**
+ * Free a thread
+ *
+ * Must be called from a context with no preemption
+ */
+void release_thread(thread_t* thread);
+
+thread_status_t get_thread_status(thread_t* thread);

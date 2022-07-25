@@ -12,6 +12,7 @@
 void scheduler_preempt_disable() {}
 void scheduler_preempt_enable() {}
 void scheduler_ready_thread() {} // TODO: repurpose the same waitgroup here
+void scheduler_yield() {}
 
 suspend_state_t scheduler_suspend_thread(thread_t* thread) {
     if (thread->dead) {

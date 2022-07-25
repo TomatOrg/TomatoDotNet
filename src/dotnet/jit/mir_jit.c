@@ -330,7 +330,12 @@ err_t init_jit() {
     }
 
     // init the code gen
-    int count = get_cpu_count();
+    // FIXME: BUG IN MIR?
+    // lazy jit on multiple threads hits some race condition when two threads are jitting at once
+    // even on hosted TDN
+    // TODO: run valgrind helgrind+drd and fix everythign
+
+    int count = 1;
     MIR_gen_init(m_mir_context, count);
     for (int i = 0; i < count; i++) {
         MIR_gen_set_optimize_level(m_mir_context, i, 3);
@@ -6186,7 +6191,7 @@ err_t jit_type(System_Type type) {
     MIR_load_module(m_mir_context, module);
 
     // link it
-    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
+    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
 
     // now that everything is linked prepare all the types we have created
     for (int i = 0; i < arrlen(ctx.created_types); i++) {

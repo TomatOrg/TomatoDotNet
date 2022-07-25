@@ -81,10 +81,18 @@ typedef uintptr_t System_UIntPtr;
 /**
  * Represents a dotnet object
  */
+
+// Store only the lower 48 bits of a pointer
+// if this is hosted usermode TDN, the remaning bits will be zero (only without LA57, TODO:)
+// if this is Pentagon, all allocations are in the higher half kernel heap
+#ifdef PENTAGON_HOSTED
+#define OBJECT_TYPE(obj) ((System_Type)((obj)->type))
+#else
+#define OBJECT_TYPE(obj) ((System_Type)((obj)->type | 0xFFFF000000000000))
+#endif
 struct System_Object {
     // the vtable of the object
     void** vtable;
-#define OBJECT_TYPE(obj) ((System_Type)((obj)->type | 0xFFFF000000000000))
 
     // the type of the object
     uint64_t type : 48;

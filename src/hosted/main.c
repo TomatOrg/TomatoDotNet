@@ -5,10 +5,12 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#include "time/timer.h"
+#include "time/tsc.h"
 
 void *corelib_file, *kernel_file;
 size_t corelib_file_size, kernel_file_size;
+
+int get_cpu_count() { return 8; }
 
 void load_file(const char* name, void** file, uint64_t* size) {
     struct stat s;
@@ -21,7 +23,7 @@ void load_file(const char* name, void** file, uint64_t* size) {
 int main() {
     load_file("Pentagon/Corelib/bin/Release/net6.0/Corelib.dll", &corelib_file, &corelib_file_size);
     load_file("Pentagon/Pentagon/bin/Release/net6.0/Pentagon.dll", &kernel_file, &kernel_file_size);
-    init_gc();
+    //init_gc();
     init_jit();
 
     // load the corelib
@@ -38,6 +40,5 @@ int main() {
     method_result_t result = entry_point();
     //CHECK(result.exception == NULL, "Got exception: \"%U\"", result.exception->Message);
     printf("Kernel output: %d\n", result.value);
-    gc_wait();
 }
 

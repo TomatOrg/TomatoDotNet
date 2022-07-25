@@ -7,3 +7,13 @@
  * always grow upward in microseconds
  */
 uint64_t microtime();
+
+/**
+ * Gets the TSC frequency
+ */
+uint64_t get_tsc_freq();
+
+/**
+ * Get the current TSC
+ */
+uint64_t get_tsc();

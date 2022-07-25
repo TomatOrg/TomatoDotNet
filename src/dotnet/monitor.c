@@ -134,6 +134,12 @@ static monitor_t* get_monitor(monitor_root_t* root, void* addr) {
         spinlock_unlock(&root->lock);
         return NULL;
     }
+    monitor->cond = INIT_CONDITIONAL();
+    monitor->locker = NULL;
+    monitor->mutex = INIT_MUTEX();
+    monitor->next = NULL;
+    monitor->prev = NULL;
+    
     monitor->ticket = fastrand() | 1;
     monitor->object = addr;
     monitor->parent = last;

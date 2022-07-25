@@ -6,7 +6,7 @@
 
 typedef pthread_cond_t conditional_t;
 
-#define INIT_CONDITIONAL() PTHREAD_COND_INITIALIZER
+#define INIT_CONDITIONAL() (conditional_t)PTHREAD_COND_INITIALIZER
 
 void conditional_wait(conditional_t* conditional, mutex_t* mutex);
 
