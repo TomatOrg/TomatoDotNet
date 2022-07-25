@@ -455,7 +455,7 @@ typedef struct stack_keeping {
 typedef struct exception_handling {
     System_Reflection_ExceptionHandlingClause key;
     MIR_label_t value;
-    MIR_label_t endfinally;
+    MIR_label_t next_clause;
     bool last_in_chain;
 } exception_handling_t;
 
@@ -1702,7 +1702,7 @@ static err_t jit_throw(jit_method_context_t* ctx, System_Type type) {
     // find the exception handler to use
     System_Reflection_ExceptionHandlingClause_Array exceptions = ctx->method->MethodBody->ExceptionHandlingClauses;
     System_Reflection_ExceptionHandlingClause my_clause = NULL;
-    for (int i = 0; i < exceptions->Length; i++) {
+    for (int i = exceptions->Length - 1; i >= 0; i--) {
         System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
 
         // check that this instruction is in the try range
@@ -2534,7 +2534,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
 #ifdef JIT_TRACE
             if (clause->TryOffset == ctx->il_offset) {
-                TRACE("%*s.try", jit_trace_indent, "");
+                TRACE("%*s.try %d", jit_trace_indent, "", i);
                 TRACE("%*s{", jit_trace_indent, "");
                 jit_trace_indent += 4;
             } else if (clause->TryOffset + clause->TryLength == ctx->il_offset) {
@@ -3727,7 +3727,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                     // the current finally clause is going to jump into the target label
                     // (unless it is nested in someone else)
-                    ctx->clause_to_label[clausei].endfinally = target_label;
+                    ctx->clause_to_label[clausei].next_clause = target_label;
                     ctx->clause_to_label[clausei].last_in_chain = true;
 
                     if (last_clausi == -1) {
@@ -3737,7 +3737,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                      MIR_new_label_op(mir_ctx, finally_label)));
                     } else {
                         // the last clause is going to actually jump to us
-                        ctx->clause_to_label[last_clausi].endfinally = finally_label;
+                        ctx->clause_to_label[last_clausi].next_clause = finally_label;
                         ctx->clause_to_label[last_clausi].last_in_chain = false;
                     }
 
@@ -3761,7 +3761,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // find the finally block we are in
                 bool found = false;
                 System_Reflection_ExceptionHandlingClause_Array exceptions = body->ExceptionHandlingClauses;
-                for (int i = 0; i < exceptions->Length; i++) {
+                for (int i = exceptions->Length - 1; i >= 0; i--) {
                     System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
 
                     // make sure we are in this try
@@ -3774,18 +3774,23 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     // lets get the clause label and offset
                     int clausei = hmgeti(ctx->clause_to_label, clause);
                     CHECK(clausei != -1);
-                    MIR_label_t endfinally_label = ctx->clause_to_label[clausei].endfinally;
-                    CHECK(endfinally_label != NULL);
+                    MIR_label_t next_clause = ctx->clause_to_label[clausei].next_clause;
+                    CHECK(next_clause != NULL);
+
+                    // next_clause will either continue to the next finally if there was an exception, or it will
+                    // continue to the next instruction if there was no exception
+                    MIR_label_t skip = MIR_new_label(mir_ctx);
+
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_BF,
+                                                 MIR_new_label_op(mir_ctx, skip),
+                                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
 
                     if (ctx->clause_to_label[clausei].last_in_chain) {
-                        MIR_label_t skip = MIR_new_label(mir_ctx);
-
-                        // add a check if we need to "rethrow" the error instead
-                        // check the result, if it was false then skip the jump to the exception handler
-                        MIR_append_insn(mir_ctx, mir_func,
-                                        MIR_new_insn(mir_ctx, MIR_BF,
-                                                     MIR_new_label_op(mir_ctx, skip),
-                                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+                        //
+                        // This is the last finally in the function and in the chain, so we can return
+                        // right away from this function with the error.
+                        //
 
                         // figure how many we need
                         size_t nres = 1;
@@ -3796,21 +3801,20 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             }
                         }
 
-                        // we did not have a handler in the current function, just
-                        // return our own instruction
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_ret_insn(mir_ctx, nres,
                                                          MIR_new_reg_op(mir_ctx, ctx->exception_reg),
                                                          MIR_new_int_op(mir_ctx, 0)));
 
-                        // insert the skip label
-                        MIR_append_insn(mir_ctx, mir_func, skip);
+                    } else {
+                        // The function has another clause in the
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_JMP,
+                                                     MIR_new_label_op(mir_ctx, next_clause)));
                     }
 
-                    // jump to the first finally we see
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_JMP,
-                                                 MIR_new_label_op(mir_ctx, endfinally_label)));
+                    // insert the skip label
+                    MIR_append_insn(mir_ctx, mir_func, skip);
 
                     found = true;
                     break;
