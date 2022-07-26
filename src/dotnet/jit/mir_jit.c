@@ -74,8 +74,9 @@ static MIR_item_t m_memcpy_func = NULL;
 static MIR_item_t m_memset_proto = NULL;
 static MIR_item_t m_memset_func = NULL;
 
-static MIR_item_t m_delegate_ctor_proto = NULL;
 static MIR_item_t m_delegate_ctor_func = NULL;
+
+static MIR_item_t m_unsafe_as_func = NULL;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // runtime functions
@@ -246,7 +247,23 @@ static void jit_generate_delegate_ctor() {
     m_delegate_ctor_func = func;
 }
 
-int get_cpu_count();
+static void jit_generate_unsafe_as() {
+    const char* fname = "unsafe_as";
+    MIR_type_t res[] = {
+        MIR_T_P,
+        MIR_T_P,
+    };
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "arg");
+    MIR_reg_t arg = MIR_reg(m_mir_context, "arg", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 2,
+                                     MIR_new_int_op(m_mir_context, 0),
+                                     MIR_new_reg_op(m_mir_context, arg)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+    m_unsafe_as_func = func;
+}
+
 err_t init_jit() {
     err_t err = NO_ERROR;
 
@@ -293,8 +310,6 @@ err_t init_jit() {
     m_is_instance_proto = MIR_new_proto(m_mir_context, "isinstance$proto", 1, &res_type, 2, MIR_T_P, "object", MIR_T_P, "type");
     m_is_instance_func = MIR_new_import(m_mir_context, "isinstance");
 
-    m_delegate_ctor_proto = MIR_new_proto(m_mir_context, "delegate_ctor$proto", 0, NULL, 3, MIR_T_P, "this", MIR_T_P, "object", MIR_T_P, "method");
-
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
     jit_generate_System_String_GetCharInternal();
@@ -302,6 +317,7 @@ err_t init_jit() {
     jit_generate_System_String_GetDataPtr();
     jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
+    jit_generate_unsafe_as();
 
     MIR_finish_module(m_mir_context);
 
@@ -1357,19 +1373,24 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             // Unsafe has special generic functions we want to generate
             //
             } else if (method->DeclaringType == tSystem_Runtime_CompilerServices_Unsafe) {
-
-                // create the function
-                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
-
-                // Span has special stuff
-                if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
-                    jit_generate_Unsafe_SizeOf(ctx, method, method->MirFunc);
+                // The Unsafe.As functions are super simple, so we are going
+                // to have them point to the same method, and hope that it will get inlined
+                if (string_equals_cstr(method->GenericMethodDefinition->Name, "As")) {
+                    method->MirFunc = m_unsafe_as_func;
                 } else {
-                    CHECK_FAIL();
-                }
+                    // create the function
+                    method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
 
-                MIR_finish_func(ctx->ctx);
-                MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+                    // Span has special stuff
+                    if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
+                        jit_generate_Unsafe_SizeOf(ctx, method, method->MirFunc);
+                    } else {
+                        CHECK_FAIL("%U", method->GenericMethodDefinition->Name);
+                    }
+
+                    MIR_finish_func(ctx->ctx);
+                    MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+                }
             } else {
                 bool found = false;
                 for (int i = 0; i < arrlen(m_generic_extern_hooks); i++) {
