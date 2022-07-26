@@ -8,6 +8,7 @@
 #include "thread/waitable.h"
 #include "converter.h"
 #include "dotnet/monitor.h"
+#include "dotnet/loader.h"
 
 #include <thread/scheduler.h>
 
@@ -276,6 +277,63 @@ static method_result_t interlocked_read_i64(_Atomic(int64_t)* location1)    { re
 static method_result_t interlocked_read_u64(_Atomic(uint64_t)* location1)   { return (method_result_t) { .value = atomic_load(location1), .exception = NULL }; }
 
 //----------------------------------------------------------------------------------------------------------------------
+// System.Reflection.Assembly
+//----------------------------------------------------------------------------------------------------------------------
+
+static method_result_t System_Reflection_Assembly_LoadInternal_raw(System_Byte_Array rawAssembly, System_Boolean reflection) {
+    err_t err = NO_ERROR;
+    System_Exception exception = NULL;
+
+    System_Reflection_Assembly assembly = NULL;
+    CHECK_AND_RETHROW(loader_load_assembly(rawAssembly->Data, rawAssembly->Length, &assembly));
+
+    if (!reflection) {
+        // TODO: instead we probably want to jit specifically the entry point
+        //       and not the whole type, just to have less to see
+        // TODO: time this
+        CHECK_AND_RETHROW(jit_type(assembly->EntryPoint->DeclaringType));
+        CHECK(assembly->EntryPoint->Parameters->Length == 0);
+        CHECK(assembly->EntryPoint->ReturnType == NULL);
+        exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
+        CHECK(exception == NULL);
+    }
+
+cleanup:
+    if (IS_ERROR(err)) {
+        assembly = NULL;
+    }
+
+    return (method_result_t) { .exception = exception, .value = (uintptr_t)assembly };
+}
+
+static method_result_t System_Reflection_Assembly_LoadInternal_string(System_Byte_Array rawAssembly, System_Boolean reflection) {
+    err_t err = NO_ERROR;
+    System_Exception exception = NULL;
+
+    System_Reflection_Assembly assembly = NULL;
+    // TODO: load by-name, will either
+    CHECK_FAIL();
+
+    if (!reflection) {
+        // TODO: instead we probably want to jit specifically the entry point
+        //       and not the whole type, just to have less to see
+        // TODO: time this
+        CHECK_AND_RETHROW(jit_type(assembly->EntryPoint->DeclaringType));
+        CHECK(assembly->EntryPoint->Parameters->Length == 0);
+        CHECK(assembly->EntryPoint->ReturnType == NULL);
+        exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
+        CHECK(exception == NULL);
+    }
+
+cleanup:
+    if (IS_ERROR(err)) {
+        assembly = NULL;
+    }
+
+    return (method_result_t) { .exception = exception, .value = (uintptr_t)assembly };
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // System.Array
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -389,6 +447,9 @@ static System_Exception System_GC_KeepAlive(void* obj) {
 
 internal_call_t g_internal_calls[] = {
     { "object::GetType()", object_GetType },
+
+    { "[Corelib-v1]System.Reflection.Assembly::LoadInternal([Corelib-v1]System.Byte[],bool)", System_Reflection_Assembly_LoadInternal_raw },
+    { "[Corelib-v1]System.Reflection.Assembly::LoadInternal(string,bool)", System_Reflection_Assembly_LoadInternal_string },
 
     { "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)", System_Array_ClearInternal },
     { "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)", System_Array_CopyInternal },

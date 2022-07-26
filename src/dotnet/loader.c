@@ -1919,8 +1919,8 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     // Start by loading the PE file for the corelib
     pe_file_t file = {
-            .file = buffer,
-            .file_size = buffer_size
+        .file = buffer,
+        .file_size = buffer_size
     };
     CHECK_AND_RETHROW(pe_parse(&file));
 
@@ -1960,9 +1960,6 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     System_Reflection_MethodInfo entryPoint = NULL;
     CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
     GC_UPDATE(assembly, EntryPoint, entryPoint);
-
-    // jit the type of the entrypoint
-    CHECK_AND_RETHROW(jit_type(entryPoint->DeclaringType));
 
     // give out the assembly
     *out_assembly = assembly;
