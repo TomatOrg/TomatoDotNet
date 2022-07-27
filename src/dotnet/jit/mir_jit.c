@@ -3130,6 +3130,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                              MIR_new_reg_op(mir_ctx, reg)));
             } break;
 
+            // TODO: if at jit time we know it is true/false then
+            //       we can remove the check, useful especially for
+            //       generic instances
             case CEE_ISINST:
             case CEE_CASTCLASS:
             case CEE_UNBOX_ANY: {
@@ -3139,6 +3142,15 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // the object type must always be a ref type for unboxing
                 CHECK(obj_type->StackType == STACK_TYPE_O);
+
+                System_Type check_type = operand_type;
+                if (opcode != CEE_UNBOX_ANY) {
+                    // figure the result type, not needed for unbox
+                    if (operand_type->IsValueType) {
+                        // get it as a boxed type
+                        operand_type = get_boxed_type(operand_type);
+                    }
+                }
 
                 // push it, but now as the new type
                 MIR_reg_t obj2_reg;
@@ -3159,7 +3171,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 }
 
                 // call the isinstance method to dynamically check the cast is valid
-                if (type_is_interface(operand_type)) {
+                if (type_is_interface(check_type)) {
                     // casting to an interface, use the dynamic_cast_obj_to_interface to do the cast
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_call_insn(mir_ctx, 6,
@@ -3168,7 +3180,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                       MIR_new_reg_op(mir_ctx, cast_result_reg),
                                                       MIR_new_reg_op(mir_ctx, obj2_reg),
                                                       MIR_new_reg_op(mir_ctx, obj_reg),
-                                                      MIR_new_ref_op(mir_ctx, operand_type->MirType)));
+                                                      MIR_new_ref_op(mir_ctx, check_type->MirType)));
                 } else {
                     // casting to an object, so everything is fine
                     MIR_append_insn(mir_ctx, mir_func,
@@ -3177,7 +3189,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                       MIR_new_ref_op(mir_ctx, m_is_instance_func),
                                                       MIR_new_reg_op(mir_ctx, cast_result_reg),
                                                       MIR_new_reg_op(mir_ctx, obj_reg),
-                                                      MIR_new_ref_op(mir_ctx, operand_type->MirType)));
+                                                      MIR_new_ref_op(mir_ctx, check_type->MirType)));
                 }
 
                 // check that it was a success
