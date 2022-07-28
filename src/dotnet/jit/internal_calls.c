@@ -531,6 +531,7 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Threading.Interlocked::CompareExchange([Corelib-v1]System.UInt32&,uint32,uint32)", interlocked_compare_exchange_u32 },
     { "[Corelib-v1]System.Threading.Interlocked::CompareExchange([Corelib-v1]System.Int64&,int64,int64)", interlocked_compare_exchange_i64 },
     { "[Corelib-v1]System.Threading.Interlocked::CompareExchange([Corelib-v1]System.UInt64&,uint64,uint64)", interlocked_compare_exchange_u64 },
+    { "[Corelib-v1]System.Threading.Interlocked::CompareExchange([Corelib-v1]System.Object&,object,object)", interlocked_compare_exchange_object },
 
     { "[Corelib-v1]System.Threading.Interlocked::MemoryBarrier()", interlocked_memory_barrier },
 

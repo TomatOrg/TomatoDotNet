@@ -1977,28 +1977,52 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
 ) {
     err_t err = NO_ERROR;
 
-    TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(from_type, to_type);
-    CHECK(interface != NULL);
+    MIR_op_t vtable_op;
+    if (from_type != NULL) {
+        TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(from_type, to_type);
+        CHECK(interface != NULL);
 
-    // &object->vtable[vtable_offset]
-    MIR_reg_t vtable_reg = new_temp_reg(ctx, tSystem_IntPtr);
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                 MIR_new_reg_op(mir_ctx, vtable_reg),
-                                 MIR_new_mem_op(mir_ctx, MIR_T_P,
-                                                offsetof(struct System_Object, vtable),
-                                                from_reg, 0, 1)));
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_ADD,
-                                 MIR_new_reg_op(mir_ctx, vtable_reg),
-                                 MIR_new_reg_op(mir_ctx, vtable_reg),
-                                 MIR_new_int_op(mir_ctx, interface->VTableOffset * sizeof(void*))));
 
-    // set the vtable
+        MIR_insn_t skip_vtable = MIR_new_label(mir_ctx);
+
+        // start with a null vtalbe
+        MIR_reg_t vtable_reg = new_temp_reg(ctx, tSystem_IntPtr);
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                     MIR_new_reg_op(mir_ctx, vtable_reg),
+                                     MIR_new_int_op(mir_ctx, 0)));
+
+        // if the object is null, then skip the vtable and leave it as null
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_insn(mir_ctx, MIR_BF,
+                                     MIR_new_label_op(mir_ctx, skip_vtable),
+                                     MIR_new_reg_op(mir_ctx, from_reg)));
+
+        // &object->vtable[vtable_offset]
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                     MIR_new_reg_op(mir_ctx, vtable_reg),
+                                     MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                    offsetof(struct System_Object, vtable),
+                                                    from_reg, 0, 1)));
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_insn(mir_ctx, MIR_ADD,
+                                     MIR_new_reg_op(mir_ctx, vtable_reg),
+                                     MIR_new_reg_op(mir_ctx, vtable_reg),
+                                     MIR_new_int_op(mir_ctx, interface->VTableOffset * sizeof(void *))));
+
+        MIR_append_insn(mir_ctx, mir_func, skip_vtable);
+
+        vtable_op = MIR_new_reg_op(mir_ctx, vtable_reg);
+    } else {
+        // cast a known null, just emit it nicely
+        vtable_op = MIR_new_int_op(mir_ctx, 0);
+    }
+
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_insn(mir_ctx, MIR_MOV,
                                  MIR_new_mem_op(mir_ctx, MIR_T_P, 0, result_reg, 0, 1),
-                                 MIR_new_reg_op(mir_ctx, vtable_reg)));
+                                 vtable_op));
 
     // set the type
     if (this_reg != 0) {
