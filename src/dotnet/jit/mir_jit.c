@@ -196,11 +196,18 @@ static void jit_generate_System_String_GetDataPtr() {
 
 static void jit_generate_System_Type_GetTypeFromHandle() {
     const char* fname = "[Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
+    MIR_var_t args[] = {
+        {
+            .name = "handle",
+            .type = MIR_T_BLK,
+            .size = sizeof(System_RuntimeTypeHandle)
+        }
+    };
     MIR_type_t res[] = {
         MIR_T_P,
         MIR_T_P
     };
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "handle");
+    MIR_item_t func = MIR_new_func_arr(m_mir_context, fname, 2, res, 1, args);
     MIR_reg_t handle = MIR_reg(m_mir_context, "handle", func->u.func);
     MIR_append_insn(m_mir_context, func,
                     MIR_new_ret_insn(m_mir_context, 2,
@@ -6199,6 +6206,10 @@ err_t jit_type(System_Type type) {
         .ctx = MIR_init(),
     };
 
+    if (type->MirType != NULL) {
+        goto cleanup;
+    }
+
     // prepare the module
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "m%d", m_mir_module_gen++);
@@ -6244,6 +6255,7 @@ err_t jit_type(System_Type type) {
                 } else {
                     created_type->VTable[vi] = method->MirFunc->addr;
                 }
+                ASSERT(created_type->VTable[vi] != NULL);
             }
         }
 

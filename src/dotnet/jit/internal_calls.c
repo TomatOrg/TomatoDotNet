@@ -9,6 +9,7 @@
 #include "converter.h"
 #include "dotnet/monitor.h"
 #include "dotnet/loader.h"
+#include "dotnet/activator.h"
 
 #include <thread/scheduler.h>
 
@@ -334,6 +335,20 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// System.Activator
+//----------------------------------------------------------------------------------------------------------------------
+
+static method_result_t System_Activator_CreateInstance(System_Type type, System_Object_Array args) {
+    System_Object obj = NULL;
+    switch (activator_create_instance(type, args->Data, args->Length, &obj)) {
+        case NO_ERROR: return (method_result_t){ .exception = NULL, .value = (uintptr_t)obj };
+        case ERROR_OUT_OF_MEMORY: return (method_result_t){ .exception = activator_create_exception(tSystem_OutOfMemoryException), .value = 0 };
+        // TODO: handle nicely
+        default: return (method_result_t){ .exception = activator_create_exception(tSystem_Exception), .value = 0 };
+    }
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // System.Array
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -450,6 +465,8 @@ internal_call_t g_internal_calls[] = {
 
     { "[Corelib-v1]System.Reflection.Assembly::LoadInternal([Corelib-v1]System.Byte[],bool)", System_Reflection_Assembly_LoadInternal_raw },
     { "[Corelib-v1]System.Reflection.Assembly::LoadInternal(string,bool)", System_Reflection_Assembly_LoadInternal_string },
+
+    { "[Corelib-v1]System.Activator::CreateInstance([Corelib-v1]System.Type,[Corelib-v1]System.Object[])", System_Activator_CreateInstance },
 
     { "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)", System_Array_ClearInternal },
     { "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)", System_Array_CopyInternal },

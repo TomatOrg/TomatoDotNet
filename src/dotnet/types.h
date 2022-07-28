@@ -145,6 +145,7 @@ typedef struct System_Array {
 DEFINE_ARRAY(System_Type);
 DEFINE_ARRAY(System_Reflection_MethodInfo);
 DEFINE_ARRAY(System_Byte);
+DEFINE_ARRAY(System_Object);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 

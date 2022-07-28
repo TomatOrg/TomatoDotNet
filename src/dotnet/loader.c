@@ -1432,7 +1432,7 @@ err_t loader_fill_type(System_Type type) {
                     CHECK(methodInfo->Parameters->Length == 0);
                     CHECK(methodInfo->ReturnType == NULL);
                     CHECK(type->StaticCtor == NULL);
-                    type->StaticCtor = methodInfo;
+                    GC_UPDATE(type, StaticCtor, methodInfo);
                 } else if (string_equals_cstr(methodInfo->Name, ".ctor")) {
                     CHECK(!method_is_static(methodInfo));
                     CHECK(methodInfo->ReturnType == NULL);
