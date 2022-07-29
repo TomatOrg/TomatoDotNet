@@ -53,4 +53,8 @@ typedef enum element_type {
     ELEMENT_TYPE_MODIFIER = 0x40,
     ELEMENT_TYPE_SENTINEL = 0x41,
     ELEMENT_TYPE_PINNED = 0x45,
+    // ...
+    ELEMENT_TYPE_FIELD = 0x53,
+    ELEMENT_TYPE_PROPERTY = 0x54,
+    ELEMENT_TYPE_ENUM = 0x55
 } element_type_t;

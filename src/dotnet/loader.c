@@ -1602,6 +1602,63 @@ cleanup:
     return err;
 }
 
+static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_custom_attribute_t* attribs = metadata->tables[METADATA_CUSTOM_ATTRIBUTE].table;
+    int attribs_count = metadata->tables[METADATA_CUSTOM_ATTRIBUTE].rows;
+
+    for (int i = 0; i < attribs_count; i++) {
+        metadata_custom_attribute_t* attrib = &attribs[i];
+
+        // get the type ctor
+        System_Reflection_MethodInfo methodInfo = NULL;
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, attrib->type, NULL, NULL, &methodInfo));
+        CHECK(methodInfo->ReturnType == NULL);
+        CHECK(!method_is_static(methodInfo));
+        CHECK(method_is_rt_special_name(methodInfo));
+        CHECK(string_equals_cstr(methodInfo->Name, ".ctor"));
+
+        // now actually parse the custom attributes
+        System_Object value = NULL;
+        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, methodInfo, &value));
+
+        // now parse the parent
+        switch (attrib->parent.table) {
+            case METADATA_TYPE_DEF: {
+                System_Type parent;
+                CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+            } break;
+
+            case METADATA_FIELD: {
+                System_Reflection_FieldInfo parent;
+                CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+            } break;
+
+            case METADATA_METHOD_DEF: {
+                System_Reflection_MethodInfo parent;
+                CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+            } break;
+
+            case METADATA_ASSEMBLY: {
+                // on the assembly itself
+            } break;
+
+            // TODO: support for these
+            case METADATA_PROPERTY:
+            case METADATA_PARAM:
+            case METADATA_GENERIC_PARAM: {
+            } break;
+
+            default:
+                WARN("TODO: attribute on %02x", attrib->parent.table);
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 static err_t connect_nested_types(System_Reflection_Assembly assembly, metadata_t* metadata) {
     err_t err = NO_ERROR;
 
@@ -1889,6 +1946,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
+    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // save this
     g_corelib = assembly;
@@ -1955,6 +2013,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
+    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // get the entry point
     System_Reflection_MethodInfo entryPoint = NULL;

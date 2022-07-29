@@ -18,6 +18,24 @@
         b; \
     })
 
+#define CONSUME_U16() \
+    ({ \
+        CHECK(sig->size >= 2); \
+        uint16_t b = *(uint16_t*)(sig->data); \
+        sig->data += 2; \
+        sig->size -= 2; \
+        b; \
+    })
+
+#define CONSUME_I32() \
+    ({ \
+        CHECK(sig->size >= 4); \
+        int32_t b = *(int32_t*)(sig->data); \
+        sig->data += 4; \
+        sig->size -= 4; \
+        b; \
+    })
+
 #define EXPECT_BYTE(value) \
     do { \
         CHECK(sig->size > 0); \
@@ -33,8 +51,10 @@ err_t parse_method_def_sig(blob_entry_t sig, System_Reflection_MethodInfo method
 
 err_t parse_method_ref_sig(blob_entry_t sig, System_Reflection_Assembly assembly, System_Reflection_MethodInfo* out_method, System_Type_Array typeArgs);
 
-err_t parse_method_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, System_Reflection_MethodInfo* out_method, System_Type_Array typeArgs, System_Type_Array methodArgs);
+err_t parse_method_spec(blob_entry_t sig, System_Reflection_Assembly assembly, System_Reflection_MethodInfo* out_method, System_Type_Array typeArgs, System_Type_Array methodArgs);
 
 err_t parse_type_spec(blob_entry_t sig, System_Reflection_Assembly assembly, System_Type* out_type, System_Type_Array typeArgs, System_Type_Array methodArgs);
 
-err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata);
+err_t parse_local_var_sig(blob_entry_t sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata);
+
+err_t parse_custom_attrib(blob_entry_t sig, System_Reflection_MethodInfo ctor, System_Object* out);

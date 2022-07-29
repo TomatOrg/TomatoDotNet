@@ -3,6 +3,8 @@
 #include "../gc/gc.h"
 #include "sig_spec.h"
 #include "dotnet/loader.h"
+#include "dotnet/jit/jit.h"
+#include "dotnet/encoding.h"
 
 static int m_idx_to_table[] = {
     [0] = METADATA_TYPE_DEF,
@@ -586,6 +588,222 @@ err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method
         }
     }
 
+
+cleanup:
+    return err;
+}
+
+static err_t parse_ser_string(blob_entry_t* sig, System_String* string) {
+    err_t err = NO_ERROR;
+
+    CHECK(sig->size >= 1);
+    if (sig->data[0] == 0xFF) {
+        NEXT_BYTE;
+        *string = NULL;
+    } else {
+        // get the string length
+        uint32_t len;
+        CHECK_AND_RETHROW(parse_compressed_integer(sig, &len));
+        CHECK(sig->size >= len);
+        *string = new_string_from_utf8((char*)sig->data, len);
+        sig->size -= len;
+        sig->data += len;
+    }
+
+cleanup:
+    return err;
+}
+
+static err_t parse_elem(blob_entry_t* sig, System_Type paramType, MIR_val_t* val) {
+    err_t err = NO_ERROR;
+
+    if (type_is_integer(paramType) || type_is_enum(paramType)) {
+        val->u = 0;
+        CHECK(sig->size >= paramType->StackSize);
+        memcpy(&val->u, sig->data, paramType->StackSize);
+
+        // next
+        sig->size -= paramType->StackSize;
+        sig->data += paramType->StackSize;
+
+        // TODO: sign extend
+
+    } else if (paramType == tSystem_Single) {
+        CHECK(sig->size >= paramType->StackSize);
+        val->f = *(float*)sig->data;
+        sig->size -= paramType->StackSize;
+        sig->data += paramType->StackSize;
+
+    } else if (paramType == tSystem_Double) {
+        CHECK(sig->size >= paramType->StackSize);
+        val->d = *(double*)sig->data;
+        sig->size -= paramType->StackSize;
+        sig->data += paramType->StackSize;
+
+    } else if (paramType == tSystem_String) {
+        CHECK_AND_RETHROW(parse_ser_string(sig, (System_String*)&val->a));
+
+    } else if (paramType == tSystem_Type) {
+        CHECK_FAIL("TODO: custom attribute type argument");
+
+    } else if (paramType == tSystem_Object) {
+        CHECK_FAIL("TODO: custom attribute argument FieldOrPropType");
+
+    } else {
+        TRACE_HEX(sig->data, sig->size);
+        CHECK_FAIL("Unsupported custom attribute parameter %U", paramType->Name);
+    }
+
+cleanup:
+    return err;
+}
+
+static err_t parse_fixed_arg(blob_entry_t* sig, System_Type paramType, MIR_val_t* val) {
+    err_t err = NO_ERROR;
+
+    if (paramType->IsArray) {
+        // handle array
+        paramType = paramType->ElementType;
+
+        int16_t count = CONSUME_I32();
+        if (count == -1) {
+            val->a = NULL;
+        } else {
+            CHECK(count >= 0);
+            val->a = GC_NEW_ARRAY(paramType, count);
+            for (int i = 0; i < count; i++) {
+                MIR_val_t cur_val = { .u = 0 };
+                CHECK_AND_RETHROW(parse_elem(sig, paramType, &cur_val));
+                // TODO: ref type
+                memcpy(val->a + tSystem_Array->ManagedSize + paramType->StackSize * i, &cur_val, paramType->StackSize);
+            }
+        }
+    } else {
+        // single item
+        CHECK_AND_RETHROW(parse_elem(sig, paramType, val));
+    }
+
+
+cleanup:
+    return err;
+}
+
+static err_t parse_field_or_prop_type(blob_entry_t* sig, System_Type* type) {
+    err_t err = NO_ERROR;
+
+    element_type_t elem_type = CONSUME_BYTE();
+    switch (elem_type) {
+        case ELEMENT_TYPE_BOOLEAN: *type = tSystem_Boolean; break;
+        case ELEMENT_TYPE_CHAR: *type = tSystem_Char; break;
+        case ELEMENT_TYPE_I1: *type = tSystem_SByte; break;
+        case ELEMENT_TYPE_U1: *type = tSystem_Byte; break;
+        case ELEMENT_TYPE_I2: *type = tSystem_Int16; break;
+        case ELEMENT_TYPE_U2: *type = tSystem_UInt16; break;
+        case ELEMENT_TYPE_I4: *type = tSystem_Int32; break;
+        case ELEMENT_TYPE_U4: *type = tSystem_UInt32; break;
+        case ELEMENT_TYPE_I8: *type = tSystem_Int64; break;
+        case ELEMENT_TYPE_U8: *type = tSystem_UInt64; break;
+        case ELEMENT_TYPE_R4: *type = tSystem_Single; break;
+        case ELEMENT_TYPE_R8: *type = tSystem_Double; break;
+        case ELEMENT_TYPE_STRING: *type = tSystem_String; break;
+        case ELEMENT_TYPE_SZARRAY: {
+            CHECK_FAIL("TODO: szarray named arg");
+        } break;
+        case ELEMENT_TYPE_ENUM: {
+            CHECK_FAIL("TODO: enum named arg");
+        } break;
+        default: CHECK_FAIL();
+    }
+
+cleanup:
+    return err;
+}
+
+err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, System_Object* out) {
+    err_t err = NO_ERROR;
+    blob_entry_t* sig = &_sig;
+    MIR_val_t fixed_args[ctor->Parameters->Length + 1];
+
+    // make sure the type is jitted nicely
+    CHECK_AND_RETHROW(jit_type(ctor->DeclaringType));
+
+    //
+    // Prolog
+    //
+
+    uint16_t prolog = CONSUME_U16();
+    CHECK(prolog == 0x0001);
+
+    //
+    // Fixed arguments
+    //
+
+    // parse the fixed parameters
+    for (int i = 0; i < ctor->Parameters->Length; i++) {
+        CHECK_AND_RETHROW(parse_fixed_arg(sig,
+                                          ctor->Parameters->Data[i]->ParameterType,
+                                          &fixed_args[i + 1]));
+    }
+
+    // create the object
+    System_Object obj = GC_NEW(ctor->DeclaringType);
+    fixed_args[0].a = obj;
+
+    // call the ctor
+    MIR_context_t ctx = jit_get_mir_context();
+    MIR_val_t result = { .a = NULL };
+    MIR_interp_arr(ctx, ctor->MirFunc, fixed_args, ctor->Parameters->Length + 1, &result);
+    jit_release_mir_context();
+
+    // check the exception
+    if (result.a != NULL) {
+        System_Exception exception = result.a;
+        CHECK_FAIL_ERROR(ERROR_TARGET_INVOCATION, "Got exception `%U` (of type `%U.%U`)", exception->Message,
+                                            OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name);
+    }
+
+    //
+    // named arguments
+    //
+    uint16_t namedArgs = CONSUME_U16();
+
+    for (int i = 0; i < namedArgs; i++) {
+        uint8_t type = CONSUME_BYTE();
+        CHECK(type == ELEMENT_TYPE_FIELD || type == ELEMENT_TYPE_PROPERTY);
+
+        // get the field or prop type
+        System_Type arg_type = NULL;
+        CHECK_AND_RETHROW(parse_field_or_prop_type(sig, &arg_type));
+
+        // get the field or prop name
+        System_String name;
+        CHECK_AND_RETHROW(parse_ser_string(sig, &name));
+
+        // get the fixed argument
+        MIR_val_t val;
+        CHECK_AND_RETHROW(parse_fixed_arg(sig, arg_type, &val));
+
+        if (type == ELEMENT_TYPE_FIELD) {
+            // get the field
+            System_Reflection_FieldInfo field = type_get_field(ctor->DeclaringType, name);
+            CHECK(field != NULL);
+            CHECK(!field_is_static(field));
+            CHECK(field->FieldType == arg_type);
+
+            // copy to the field
+            if (type_get_stack_type(arg_type) == STACK_TYPE_O) {
+                gc_update(obj, field->MemoryOffset, val.a);
+            } else {
+                memcpy((void*)obj + field->MemoryOffset, &val, arg_type->StackSize);
+            }
+        } else {
+            WARN("TODO: `%U.%U::%U`",
+                    ctor->DeclaringType->Namespace, ctor->DeclaringType->Name, name);
+        }
+    }
+
+    // output it
+    *out = obj;
 
 cleanup:
     return err;
