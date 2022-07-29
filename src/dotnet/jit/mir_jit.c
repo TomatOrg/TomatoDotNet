@@ -1972,8 +1972,7 @@ cleanup:
  */
 static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
                                        MIR_reg_t result_reg, MIR_reg_t from_reg,
-                                       System_Type from_type, System_Type to_type,
-                                       MIR_reg_t this_reg
+                                       System_Type from_type, System_Type to_type
 ) {
     err_t err = NO_ERROR;
 
@@ -2000,15 +1999,11 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
 
         // &object->vtable[vtable_offset]
         MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_MOV,
+                        MIR_new_insn(mir_ctx, MIR_ADD,
                                      MIR_new_reg_op(mir_ctx, vtable_reg),
                                      MIR_new_mem_op(mir_ctx, MIR_T_P,
                                                     offsetof(struct System_Object, vtable),
-                                                    from_reg, 0, 1)));
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_ADD,
-                                     MIR_new_reg_op(mir_ctx, vtable_reg),
-                                     MIR_new_reg_op(mir_ctx, vtable_reg),
+                                                    from_reg, 0, 1),
                                      MIR_new_int_op(mir_ctx, interface->VTableOffset * sizeof(void *))));
 
         MIR_append_insn(mir_ctx, mir_func, skip_vtable);
@@ -2024,23 +2019,20 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
                                  MIR_new_mem_op(mir_ctx, MIR_T_P, 0, result_reg, 0, 1),
                                  vtable_op));
 
-    // set the type
-    if (this_reg != 0) {
-        // we need a write barrier
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 5,
-                                          MIR_new_ref_op(mir_ctx, m_gc_update_proto),
-                                          MIR_new_ref_op(mir_ctx, m_gc_update_func),
-                                          MIR_new_reg_op(mir_ctx, this_reg),
-                                          MIR_new_int_op(mir_ctx, sizeof(void*)),
-                                          MIR_new_reg_op(mir_ctx, from_reg)));
-    } else {
-        // we don't need a write barrier
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_MOV,
-                                     MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), result_reg, 0, 1),
-                                     MIR_new_reg_op(mir_ctx, from_reg)));
-    }
+    // TODO: figure a way to optimize this better, update the object reference
+    //       using a gc_update_ref call, this would be better if we can know from
+    //       the caller if this is needed or not
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_insn(mir_ctx, MIR_ADD,
+                                 MIR_new_reg_op(mir_ctx, result_reg),
+                                 MIR_new_reg_op(mir_ctx, result_reg),
+                                 MIR_new_int_op(mir_ctx, sizeof(void*))));
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_call_insn(mir_ctx, 4,
+                                      MIR_new_ref_op(mir_ctx, m_gc_update_ref_proto),
+                                      MIR_new_ref_op(mir_ctx, m_gc_update_ref_func),
+                                      MIR_new_reg_op(mir_ctx, result_reg),
+                                      MIR_new_reg_op(mir_ctx, from_reg)));
 
 cleanup:
     return err;
@@ -3538,8 +3530,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 // from an object, cast required, need a write barrier
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
                                                                             addr_reg, value_reg,
-                                                                            value_type, operand_type,
-                                                                            0));
+                                                                            value_type, operand_type));
                             }
                         } else {
                             // check if we need to cast to an object from an interface
@@ -3921,7 +3912,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 CHECK(locals[operand_i32].mode == MIR_OP_REG);
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
                                                                             locals[operand_i32].u.reg, value_reg,
-                                                                            value_type, variable_type, 0));
+                                                                            value_type, variable_type));
                             }
                         } else {
                             if (type_is_interface(value_type)) {
@@ -4439,7 +4430,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 // object -> interface
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
                                                                             field_reg, value_reg,
-                                                                            value_type, field_type, 0));
+                                                                            value_type, field_type));
                             }
                         } else {
                             if (type_is_interface(value_type)) {
@@ -4644,8 +4635,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 // emit the cast
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
                                                                             field_addr_reg, value_reg,
-                                                                            value_type, field_type,
-                                                                            obj_reg));
+                                                                            value_type, field_type));
                             }
                         } else {
                             // storing to an object from an object, use a write-barrier
@@ -4994,7 +4984,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 if (!type_is_interface(arg_type)) {
                                     // object --> interface
                                     MIR_reg_t int_reg = new_temp_reg(ctx, signature_type);
-                                    CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx, int_reg, arg_reg, arg_type, signature_type, 0));
+                                    CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx, int_reg, arg_reg, arg_type, signature_type));
 
                                     // we now have that class
                                     arg_reg = int_reg;
@@ -5486,8 +5476,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                     // object -> interface
                                     CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
                                                                                 return_block_reg, ret_arg,
-                                                                                ret_type, method_ret_type,
-                                                                                0));
+                                                                                ret_type, method_ret_type));
 
                                     // return no exception
                                     MIR_append_insn(mir_ctx, mir_func,
@@ -5699,8 +5688,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 // from an object, cast required, need a write barrier
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
                                                                             index_reg, value_reg,
-                                                                            value_type, operand_type,
-                                                                            array_reg));
+                                                                            value_type, operand_type));
                             }
                         } else {
                             // check if we need to cast to an object from an interface
