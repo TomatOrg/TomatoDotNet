@@ -4632,8 +4632,18 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 goto stfld_value_type;
                             } else {
                                 // object -> interface
+
+                                // get the result, which is the object base plus the offset
+                                MIR_reg_t field_addr_reg = new_temp_reg(ctx, tSystem_UIntPtr);
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_ADD,
+                                                             MIR_new_reg_op(mir_ctx, field_addr_reg),
+                                                             MIR_new_reg_op(mir_ctx, obj_reg),
+                                                             MIR_new_int_op(mir_ctx, (int)operand_field->MemoryOffset)));
+
+                                // emit the cast
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
-                                                                            obj_reg, value_reg,
+                                                                            field_addr_reg, value_reg,
                                                                             value_type, field_type,
                                                                             obj_reg));
                             }
