@@ -2127,6 +2127,7 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
                                     MIR_new_insn(mir_ctx, MIR_F2D,
                                                  MIR_new_reg_op(mir_ctx, value1_double_reg),
                                                  MIR_new_reg_op(mir_ctx, value1_reg)));
+                    value1_reg = value1_double_reg;
                 }
             } else if (value1_type == tSystem_Double) {
                 // always double math
@@ -2139,6 +2140,7 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
                                     MIR_new_insn(mir_ctx, MIR_F2D,
                                                  MIR_new_reg_op(mir_ctx, value2_double_reg),
                                                  MIR_new_reg_op(mir_ctx, value2_reg)));
+                    value2_reg = value2_double_reg;
                 }
             }
         } break;
@@ -2152,9 +2154,24 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
                 code == MIR_BNE
             );
 
-            // TODO: handle interface comparison
-            if (type_is_interface(value1_type)) CHECK_FAIL();
-            if (type_is_interface(value2_type)) CHECK_FAIL();
+            // for interfaces convert them to the object pointer
+            if (type_is_interface(value1_type)) {
+                MIR_reg_t value1_ptr_reg = new_temp_reg(ctx, tSystem_Object);
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, value1_ptr_reg),
+                                             MIR_new_mem_op(mir_ctx, MIR_T_P, 8, value1_reg, 0, 1)));
+                value1_reg = value1_ptr_reg;
+            }
+
+            if (type_is_interface(value2_type)) {
+                MIR_reg_t value2_ptr_reg = new_temp_reg(ctx, tSystem_Object);
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, value2_ptr_reg),
+                                             MIR_new_mem_op(mir_ctx, MIR_T_P, 8, value2_reg, 0, 1)));
+                value2_reg = value2_ptr_reg;
+            }
         } break;
 
         case STACK_TYPE_REF: {
@@ -4055,7 +4072,94 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             // Arguments
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            // TODO: STARG
+            case CEE_STARG_S:
+            case CEE_STARG: {
+                // get the top value
+                MIR_reg_t value_reg;
+                System_Type value_type;
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+
+                // get the argument
+                char arg_name_buf[64];
+                const char* arg_name = NULL;
+
+                // resolve the type
+                System_Type arg_type = NULL;
+                if (!method_is_static(method)) {
+                    if (operand_i32 == 0) {
+                        arg_name = "this";
+                        arg_type = method->DeclaringType;
+                        if (arg_type->IsValueType) {
+                            // value types turn into a by-ref when using this
+                            arg_type = get_by_ref_type(arg_type);
+                        }
+                    }
+                    operand_i32--;
+                }
+
+                // if this is not `this` then get the name
+                if (arg_name == NULL) {
+                    snprintf(arg_name_buf, sizeof(arg_name_buf), "arg%d", operand_i32);
+                    arg_name = arg_name_buf;
+                }
+
+                if (arg_type == NULL) {
+                    CHECK(operand_i32 < method->Parameters->Length);
+                    System_Reflection_ParameterInfo parameter = method->Parameters->Data[operand_i32];
+                    arg_type = parameter->ParameterType;
+                }
+
+                // the register containing the value
+                MIR_reg_t arg_reg = MIR_reg(mir_ctx, arg_name, mir_func->u.func);
+
+                // check the type is valid
+                CHECK(type_is_verifier_assignable_to(value_type, arg_type));
+
+                switch (type_get_stack_type(value_type)) {
+                    case STACK_TYPE_O: {
+                        if (type_is_interface(arg_type)) {
+                            if (type_is_interface(value_type)) {
+                                // interface -> interface
+                                goto starg_value_type;
+                            } else {
+                                // object -> interface
+                                CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
+                                                                            arg_reg, value_reg,
+                                                                            value_type, arg_type));
+                            }
+                        } else {
+                            if (type_is_interface(value_type)) {
+                                // interface -> object
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                                             MIR_new_reg_op(mir_ctx, arg_reg),
+                                                             MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), value_reg, 0, 1)));
+                            } else {
+                                // object -> object
+                                goto starg_primitive_type;
+                            }
+                        }
+                    } break;
+
+                    starg_primitive_type:
+                    case STACK_TYPE_INT32:
+                    case STACK_TYPE_INT64:
+                    case STACK_TYPE_INTPTR:
+                    case STACK_TYPE_FLOAT:
+                    case STACK_TYPE_REF: {
+                        MIR_insn_code_t code = jit_number_cast_inscode(value_type, arg_type);
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, code,
+                                                     MIR_new_reg_op(mir_ctx, arg_reg),
+                                                     MIR_new_reg_op(mir_ctx, value_reg)));
+                    } break;
+
+                    starg_value_type:
+                    case STACK_TYPE_VALUE_TYPE: {
+                        jit_emit_memcpy(ctx, arg_reg, value_reg, value_type->StackSize);
+                    } break;
+                }
+            } break;
 
             case CEE_LDARG_0:
             case CEE_LDARG_1:
