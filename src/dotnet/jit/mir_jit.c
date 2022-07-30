@@ -38,7 +38,16 @@
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-//#define JIT_TRACE_MIR
+#if 0
+#define MIR_append_insn(__ctx, __func, ...) \
+    do { \
+        MIR_insn_t _insn = __VA_ARGS__; \
+        MIR_context_t _ctx = __ctx;         \
+        MIR_item_t _func = __func; \
+        MIR_output_insn(_ctx, stdout, _insn, _func->u.func, true); \
+        MIR_append_insn(_ctx, _func, _insn); \
+    } while (0);
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
@@ -1976,16 +1985,17 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
 ) {
     err_t err = NO_ERROR;
 
+    // temp register to use for stuff
+    MIR_reg_t vtable_reg = new_temp_reg(ctx, tSystem_IntPtr);
+
     MIR_op_t vtable_op;
     if (from_type != NULL) {
         TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(from_type, to_type);
         CHECK(interface != NULL);
 
-
         MIR_insn_t skip_vtable = MIR_new_label(mir_ctx);
 
         // start with a null vtalbe
-        MIR_reg_t vtable_reg = new_temp_reg(ctx, tSystem_IntPtr);
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_MOV,
                                      MIR_new_reg_op(mir_ctx, vtable_reg),
@@ -2022,16 +2032,18 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
     // TODO: figure a way to optimize this better, update the object reference
     //       using a gc_update_ref call, this would be better if we can know from
     //       the caller if this is needed or not
+    // we are going to store the result in the vtable_reg so we won't override the result
+    // register, as it may still be used by the caller to do stuff
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_insn(mir_ctx, MIR_ADD,
-                                 MIR_new_reg_op(mir_ctx, result_reg),
+                                 MIR_new_reg_op(mir_ctx, vtable_reg),
                                  MIR_new_reg_op(mir_ctx, result_reg),
                                  MIR_new_int_op(mir_ctx, sizeof(void*))));
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_call_insn(mir_ctx, 4,
                                       MIR_new_ref_op(mir_ctx, m_gc_update_ref_proto),
                                       MIR_new_ref_op(mir_ctx, m_gc_update_ref_func),
-                                      MIR_new_reg_op(mir_ctx, result_reg),
+                                      MIR_new_reg_op(mir_ctx, vtable_reg),
                                       MIR_new_reg_op(mir_ctx, from_reg)));
 
 cleanup:
@@ -6035,10 +6047,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 #ifdef JIT_TRACE
     TRACE("}");
     TRACE();
-#endif
-
-#ifdef JIT_TRACE_MIR
-    MIR_output_item(mir_ctx, stdout, mir_func);
 #endif
 
 cleanup:

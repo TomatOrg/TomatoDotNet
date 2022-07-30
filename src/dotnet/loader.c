@@ -1946,7 +1946,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+//    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // save this
     g_corelib = assembly;
@@ -2013,7 +2013,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+//    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // get the entry point
     System_Reflection_MethodInfo entryPoint = NULL;
