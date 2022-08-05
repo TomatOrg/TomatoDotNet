@@ -134,7 +134,7 @@ void gc_update(void* o, size_t offset, void* new) {
     scheduler_preempt_enable();
 }
 
-void gc_compare_exchange_ref(_Atomic System_Object* ptr, System_Object new, System_Object comparand) {
+System_Object gc_compare_exchange_ref(_Atomic(System_Object)* ptr, System_Object new, System_Object comparand) {
     System_Object object = heap_find_fast(ptr);
     if (object != NULL) {
         scheduler_preempt_disable();
@@ -153,10 +153,39 @@ void gc_compare_exchange_ref(_Atomic System_Object* ptr, System_Object new, Syst
 
         // set it
         atomic_compare_exchange_strong(ptr, &comparand, new);
-
         scheduler_preempt_enable();
+        return comparand;
     } else {
         atomic_compare_exchange_strong(ptr, &comparand, new);
+        return comparand;
+    }
+}
+
+System_Object gc_exchange_ref(_Atomic(System_Object)* ptr, System_Object new) {
+    System_Object object = heap_find_fast(ptr);
+    if (object != NULL) {
+        scheduler_preempt_disable();
+
+        if (GTD->status != THREAD_STATUS_ASYNC) {
+            gc_mark_gray(object);
+            gc_mark_gray(new);
+        } else if (m_gc_tracing) {
+            gc_mark_gray(object);
+            // Mark card, done implicitly because we
+            // are going to change the object
+        } else {
+            // Mark card, done implicitly because we
+            // are going to change the object
+        }
+
+        // set it
+        System_Object res = atomic_exchange(ptr, new);
+
+        scheduler_preempt_enable();
+
+        return res;
+    } else {
+        return atomic_exchange(ptr, new);
     }
 }
 

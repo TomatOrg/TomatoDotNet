@@ -248,8 +248,7 @@ static method_result_t interlocked_compare_exchange_u64(_Atomic(uint64_t)* locat
 }
 
 static method_result_t interlocked_compare_exchange_object(_Atomic(System_Object)* location1, System_Object value, System_Object comparand) {
-    gc_compare_exchange_ref(location1, value, comparand);
-    return (method_result_t) { .value = (uintptr_t)value, .exception = NULL };
+    return (method_result_t) { .value = (uintptr_t)gc_compare_exchange_ref(location1, value, comparand), .exception = NULL };
 }
 
 static method_result_t interlocked_dec_i32(_Atomic(int32_t)* location1)     { return (method_result_t) { .value = atomic_fetch_sub(location1, 1) - 1, .exception = NULL }; }
@@ -261,6 +260,9 @@ static method_result_t interlocked_exchange_i32(_Atomic(int32_t)* location1, int
 static method_result_t interlocked_exchange_u32(_Atomic(uint32_t)* location1, uint32_t value) { return (method_result_t)    { .value = atomic_exchange(location1, value), .exception = NULL }; }
 static method_result_t interlocked_exchange_i64(_Atomic(int64_t)* location1, int64_t value) { return (method_result_t)      { .value = atomic_exchange(location1, value), .exception = NULL }; }
 static method_result_t interlocked_exchange_u64(_Atomic(uint64_t)* location1, uint64_t value) { return (method_result_t)    { .value = atomic_exchange(location1, value), .exception = NULL }; }
+static method_result_t interlocked_exchange_object(_Atomic(System_Object)* location1, System_Object value) {
+    return (method_result_t) { .value = (uintptr_t)gc_exchange_ref(location1, value), .exception = NULL };
+}
 
 static method_result_t interlocked_inc_i32(_Atomic(int32_t)* location1)     { return (method_result_t) { .value = atomic_fetch_add(location1, 1) + 1, .exception = NULL }; }
 static method_result_t interlocked_inc_u32(_Atomic(uint32_t)* location1)    { return (method_result_t) { .value = atomic_fetch_add(location1, 1) + 1, .exception = NULL }; }
@@ -521,6 +523,7 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Threading.Interlocked::Exchange([Corelib-v1]System.UInt32&,uint32)", interlocked_exchange_u32 },
     { "[Corelib-v1]System.Threading.Interlocked::Exchange([Corelib-v1]System.Int64&,int64)", interlocked_exchange_i64 },
     { "[Corelib-v1]System.Threading.Interlocked::Exchange([Corelib-v1]System.UInt64&,uint64)", interlocked_exchange_u64 },
+    { "[Corelib-v1]System.Threading.Interlocked::Exchange([Corelib-v1]System.Object&,object)", interlocked_exchange_object },
 
     { "[Corelib-v1]System.Threading.Interlocked::Increment([Corelib-v1]System.Int32&)", interlocked_inc_i32 },
     { "[Corelib-v1]System.Threading.Interlocked::Increment([Corelib-v1]System.UInt32&)", interlocked_inc_u32 },
