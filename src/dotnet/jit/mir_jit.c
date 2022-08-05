@@ -2151,7 +2151,8 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
             CHECK(
                 code == MIR_EQ ||
                 code == MIR_BEQ ||
-                code == MIR_BNE
+                code == MIR_BNE || 
+                code == MIR_UGT
             );
 
             // for interfaces convert them to the object pointer
