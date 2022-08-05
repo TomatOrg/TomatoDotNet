@@ -162,6 +162,12 @@ typedef struct metadata_property {
 
 #define METADATA_METHOD_SEMANTICS 0x18
 typedef struct metadata_method_semantics {
+#define METHOD_SEMANTICS_SETTER     0x01
+#define METHOD_SEMANTICS_GETTER     0x02
+#define METHOD_SEMANTICS_OTHER      0x04
+#define METHOD_SEMANTICS_ADD_ON     0x08
+#define METHOD_SEMANTICS_REMOVE_ON  0x10
+#define METHOD_SEMANTICS_FIRE       0x20
     uint16_t semantics;
     token_t method;
     token_t association;

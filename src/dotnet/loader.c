@@ -1625,7 +1625,7 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
 
         // now actually parse the custom attributes
         System_Object value = NULL;
-        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, methodInfo, &value));
+        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, metadata, methodInfo, &value));
 
         // now parse the parent
         switch (attrib->parent.table) {
@@ -1953,7 +1953,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-//    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // save this
     g_corelib = assembly;
@@ -2020,7 +2020,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-//    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // get the entry point
     System_Reflection_MethodInfo entryPoint = NULL;

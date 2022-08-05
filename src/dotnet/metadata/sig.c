@@ -724,7 +724,66 @@ cleanup:
     return err;
 }
 
-err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, System_Object* out) {
+typedef System_Exception (*property_set_func_i_t)(void* obj, uintptr_t value);
+typedef System_Exception (*property_set_func_f_t)(void* obj, float value);
+typedef System_Exception (*property_set_func_d_t)(void* obj, double value);
+
+static err_t get_property_setter_by_name(System_Type parent, metadata_t* metadata, System_String name, System_Reflection_MethodInfo* setter) {
+    err_t err = NO_ERROR;
+
+    TRACE("Wanting %U on %U", name, parent->Name);
+
+    metadata_method_semantics_t* method_semantics = metadata->tables[METADATA_METHOD_SEMANTICS].table;
+    int method_semantics_count = metadata->tables[METADATA_METHOD_SEMANTICS].rows;
+
+    for (int i = 0; i < method_semantics_count; i++) {
+        metadata_method_semantics_t* method_semantic = &method_semantics[i];
+
+        // only properties
+        if (method_semantic->association.table != METADATA_PROPERTY) {
+            continue;
+        }
+
+        // only get setters
+        if (method_semantic->semantics != METHOD_SEMANTICS_SETTER) {
+            continue;
+        }
+
+        // get the property entry
+        metadata_property_t* property = metadata_get_property(metadata, method_semantic->association.index - 1);
+
+        // get it
+        System_Reflection_MethodInfo method;
+        CHECK_AND_RETHROW(assembly_get_method_by_token(parent->Assembly, method_semantic->method, NULL, NULL, &method));
+
+        // check the parent is the same
+        if (method->DeclaringType != parent) {
+            continue;
+        }
+
+        // verify the method is valid for setter
+        CHECK(method->ReturnType == NULL);
+        CHECK(method->Parameters->Length == 1);
+
+        // check the name
+        if (!string_equals_cstr(name, property->name)) {
+            TRACE("\tFound %s (%U)", property->name, method->Name);
+            continue;
+        }
+
+        // found it!
+        *setter = method;
+        goto cleanup;
+    }
+
+    // not found
+    CHECK_FAIL();
+
+cleanup:
+    return err;
+}
+
+err_t parse_custom_attrib(blob_entry_t _sig, metadata_t* metadata, System_Reflection_MethodInfo ctor, System_Object* out) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
     MIR_val_t fixed_args[ctor->Parameters->Length + 1];
@@ -802,8 +861,45 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
                 memcpy((void*)obj + field->MemoryOffset, &val, arg_type->StackSize);
             }
         } else {
-            WARN("TODO: `%U.%U::%U`",
-                    ctor->DeclaringType->Namespace, ctor->DeclaringType->Name, name);
+            // get the setter
+            System_Reflection_MethodInfo setter;
+            CHECK_AND_RETHROW(get_property_setter_by_name(ctor->DeclaringType, metadata, name, &setter));
+
+            // make sure the method is valid
+            CHECK(!method_is_static(setter));
+            CHECK(setter->Parameters->Data[0]->ParameterType == arg_type);
+
+            // call it
+            System_Exception exception = NULL;
+            switch (type_get_stack_type(arg_type)) {
+                case STACK_TYPE_O:
+                case STACK_TYPE_INT32:
+                case STACK_TYPE_INTPTR:
+                case STACK_TYPE_INT64: {
+                    property_set_func_i_t set_func = setter->MirFunc->addr;
+                    exception = set_func(obj, val.u);
+                } break;
+
+                case STACK_TYPE_FLOAT: {
+                    if (arg_type == tSystem_Single) {
+                        property_set_func_f_t set_func = setter->MirFunc->addr;
+                        exception = set_func(obj, val.f);
+                    } else {
+                        CHECK(arg_type == tSystem_Double);
+                        property_set_func_d_t set_func = setter->MirFunc->addr;
+                        exception = set_func(obj, val.d);
+                    }
+                } break;
+
+                case STACK_TYPE_VALUE_TYPE:
+                case STACK_TYPE_REF:
+                    CHECK_FAIL();
+            }
+
+            if (exception != NULL) {
+                CHECK_FAIL_ERROR(ERROR_TARGET_INVOCATION, "Got exception `%U` (of type `%U.%U`)", exception->Message,
+                                 OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name);
+            }
         }
     }
 
