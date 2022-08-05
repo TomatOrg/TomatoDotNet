@@ -971,36 +971,6 @@ void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Jit span functions
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-static void jit_generate_System_Span_GetItemInternal(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func) {
-    System_Type type = method->DeclaringType->GenericArguments->Data[0];
-
-    MIR_reg_t this_reg = MIR_reg(ctx->ctx, "this", func->u.func);
-    MIR_reg_t arg0_reg = MIR_reg(ctx->ctx, "arg0", func->u.func);
-
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_insn(ctx->ctx, MIR_MUL,
-                                 MIR_new_reg_op(ctx->ctx, arg0_reg),
-                                 MIR_new_reg_op(ctx->ctx, arg0_reg),
-                                 MIR_new_int_op(ctx->ctx, type->StackSize)));
-
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_insn(m_mir_context, MIR_ADD,
-                                 MIR_new_reg_op(ctx->ctx, this_reg),
-                                 MIR_new_mem_op(ctx->ctx, MIR_T_P,
-                                                offsetof(System_Span, Ptr),
-                                                this_reg, 0, 1),
-                                 MIR_new_reg_op(ctx->ctx, arg0_reg)));
-
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_ret_insn(ctx->ctx, 2,
-                                     MIR_new_int_op(ctx->ctx, 0),
-                                     MIR_new_reg_op(ctx->ctx, this_reg)));
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit the delegate wrappers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1384,23 +1354,6 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
                 } else {
                     CHECK_FAIL();
                 }
-
-            //
-            // Span<T> has special generic functions we want to generate
-            //
-            } else if (method->DeclaringType->GenericTypeDefinition == tSystem_Span) {
-                // create the function
-                method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
-
-                // Span has special stuff
-                if (string_equals_cstr(method->Name, "GetItemInternal")) {
-                    jit_generate_System_Span_GetItemInternal(ctx, method, method->MirFunc);
-                } else {
-                    CHECK_FAIL();
-                }
-
-                MIR_finish_func(ctx->ctx);
-                MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
 
             //
             // Unsafe has special generic functions we want to generate
