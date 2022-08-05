@@ -65,6 +65,7 @@ System_Type tTinyDotNet_Reflection_MethodImpl = NULL;
 System_Type tTinyDotNet_Reflection_MethodSpec = NULL;
 
 System_Type tSystem_Runtime_CompilerServices_Unsafe = NULL;
+System_Type tSystem_Runtime_CompilerServices_RuntimeHelpers = NULL;
 System_Type tSystem_Runtime_CompilerServices_IsVolatile = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
@@ -1665,6 +1666,11 @@ err_t type_expand_generic(System_Type instance) {
         System_Reflection_MethodInfo method;
         CHECK_AND_RETHROW(expand_method(instance, type->Methods->Data[i], arguments, false, &method));
         GC_UPDATE_ARRAY(instance->Methods, i, method);
+
+        // setup the static ctor if needed
+//        if (instance->GenericTypeDefinition->StaticCtor == type->Methods->Data[i]) {
+//            GC_UPDATE(instance, StaticCtor, method);
+//        }
     }
 
     // interfaces

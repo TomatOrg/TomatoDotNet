@@ -88,6 +88,15 @@ static MIR_item_t m_delegate_ctor_func = NULL;
 static MIR_item_t m_unsafe_as_func = NULL;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// methods that are used as intrinsics
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define INVALID_IMPORT ((void*)-1)
+
+static System_Reflection_MethodInfo m_Unsafe_SizeOf;
+static System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsReferences;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // runtime functions
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -992,18 +1001,6 @@ static void jit_generate_System_Span_GetItemInternal(jit_context_t* ctx, System_
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Jit the Unsafe builtins
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-static void jit_generate_Unsafe_SizeOf(jit_context_t* ctx, System_Reflection_MethodInfo method, MIR_item_t func) {
-    System_Type type = method->GenericArguments->Data[0];
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_ret_insn(ctx->ctx, 2,
-                                     MIR_new_int_op(ctx->ctx, 0),
-                                     MIR_new_int_op(ctx->ctx, type->StackSize)));
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit the delegate wrappers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1312,53 +1309,26 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
     // we don't have such code
     CHECK(!method_is_unmanaged(method));
 
+    //
+    // If runtime:
+    //      If InternalCall:
+    //          means this is a dynamically generated method that the host
+    //          generates once upon initialization of the jit, so it has to
+    //          be imported, used mostly by non-generic internal methods
+    //      else:
+    //          means this is a dynamically generated method, that we are
+    //          going to generate right in here, used mostly for generic
+    //          internal methods
+    // If native:
+    //      create an import, used to expose native functions to the runtime
+    // If Il:
+    //      must have a body
+    //
+
     // check how to generate the method itself
     if (method_get_code_type(method) == METHOD_RUNTIME) {
-        // right now only delegate types are supported
-        CHECK(method->DeclaringType->BaseType == tSystem_MulticastDelegate);
-
-        // for the ctor
-        if (string_equals_cstr(method->Name, ".ctor")) {
-            CHECK(method->ReturnType == NULL);
-            CHECK(method->Parameters->Length == 2);
-            CHECK(method->Parameters->Data[0]->ParameterType == tSystem_Object);
-            CHECK(method->Parameters->Data[1]->ParameterType == tSystem_IntPtr);
-            CHECK(method_is_special_name(method));
-            CHECK(method_is_rt_special_name(method));
-            CHECK(!method_is_static(method));
-            method->MirFunc = m_delegate_ctor_func;
-
-        } else if (string_equals_cstr(method->Name, "Invoke")) {
-            CHECK(!method_is_static(method));
-            CHECK(method->DeclaringType->DelegateSignature == NULL);
-            method->DeclaringType->DelegateSignature = method;
-
-            // create the function
-            method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
-
-            // remove the this so we can have a static prototype
-            arrdel(vars, this_index);
-
-            // prepare the signature for the non-
-            proto_static_name = strbuilder_new();
-            method_print_full_name(method, &proto_static_name);
-            strbuilder_cstr(&proto_static_name, "$proto_static");
-            MIR_item_t static_invoke_proto = MIR_new_proto_arr(ctx->ctx, strbuilder_get(&proto_static_name), nres, res_type, arrlen(vars), vars);
-
-            // generate the dispatcher
-            CHECK_AND_RETHROW(jit_multicast_delegate_invoke(ctx, method, method->MirFunc, static_invoke_proto));
-            MIR_finish_func(ctx->ctx);
-            MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
-
-        } else {
-            CHECK_FAIL();
-        }
-    } else if (method_get_code_type(method) == METHOD_IL) {
         if (method_is_internal_call(method)) {
-            // internal methods have no body
-            CHECK(method->MethodBody == NULL);
-
-            // only the corelib is allowed to have internal methods
+            // only the corelib is allowed to have native methods
             bool found = false;
             for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
                 if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
@@ -1368,10 +1338,57 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             }
             CHECK(found, "Assembly `%U` is not allowed to have internal calls", method->Module->Name);
 
+            // import it
+            method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
+
+        } else {
+            //
+            // Delegates have special stuff
+            //
+            if (method->DeclaringType->BaseType == tSystem_MulticastDelegate) {
+                // for the ctor
+                if (string_equals_cstr(method->Name, ".ctor")) {
+                    CHECK(method->ReturnType == NULL);
+                    CHECK(method->Parameters->Length == 2);
+                    CHECK(method->Parameters->Data[0]->ParameterType == tSystem_Object);
+                    CHECK(method->Parameters->Data[1]->ParameterType == tSystem_IntPtr);
+                    CHECK(method_is_special_name(method));
+                    CHECK(method_is_rt_special_name(method));
+                    CHECK(!method_is_static(method));
+                    method->MirFunc = m_delegate_ctor_func;
+
+                } else if (string_equals_cstr(method->Name, "Invoke")) {
+                    CHECK(!method_is_static(method));
+                    CHECK(method->DeclaringType->DelegateSignature == NULL);
+                    method->DeclaringType->DelegateSignature = method;
+
+                    // create the function
+                    method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars),
+                                                       vars);
+
+                    // remove the this so we can have a static prototype
+                            arrdel(vars, this_index);
+
+                    // prepare the signature for the non-
+                    proto_static_name = strbuilder_new();
+                    method_print_full_name(method, &proto_static_name);
+                    strbuilder_cstr(&proto_static_name, "$proto_static");
+                    MIR_item_t static_invoke_proto = MIR_new_proto_arr(ctx->ctx, strbuilder_get(&proto_static_name), nres,
+                                                                       res_type, arrlen(vars), vars);
+
+                    // generate the dispatcher
+                    CHECK_AND_RETHROW(jit_multicast_delegate_invoke(ctx, method, method->MirFunc, static_invoke_proto));
+                    MIR_finish_func(ctx->ctx);
+                    MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+
+                } else {
+                    CHECK_FAIL();
+                }
+
             //
             // Span<T> has special generic functions we want to generate
             //
-            if (method->DeclaringType->GenericTypeDefinition == tSystem_Span) {
+            } else if (method->DeclaringType->GenericTypeDefinition == tSystem_Span) {
                 // create the function
                 method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
 
@@ -1393,20 +1410,27 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
                 // to have them point to the same method, and hope that it will get inlined
                 if (string_equals_cstr(method->GenericMethodDefinition->Name, "As")) {
                     method->MirFunc = m_unsafe_as_func;
+                } else if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
+                    method->MirFunc = INVALID_IMPORT;
+                    m_Unsafe_SizeOf = method->GenericMethodDefinition;
                 } else {
-                    // create the function
-                    method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
-
-                    // Span has special stuff
-                    if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
-                        jit_generate_Unsafe_SizeOf(ctx, method, method->MirFunc);
-                    } else {
-                        CHECK_FAIL("%U", method->GenericMethodDefinition->Name);
-                    }
-
-                    MIR_finish_func(ctx->ctx);
-                    MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
+                    CHECK_FAIL();
                 }
+
+            //
+            // RuntimeHelpers has special generic functions we want to generate
+            //
+            } else if (method->DeclaringType == tSystem_Runtime_CompilerServices_RuntimeHelpers) {
+                if (string_equals_cstr(method->GenericMethodDefinition->Name, "IsReferenceOrContainsReferences")) {
+                    method->MirFunc = INVALID_IMPORT;
+                    m_RuntimeHelpers_IsReferenceOrContainsReferences = method->GenericMethodDefinition;
+                } else {
+                    CHECK_FAIL();
+                }
+
+            //
+            // Handle extensions from the host
+            //
             } else {
                 bool found = false;
                 for (int i = 0; i < arrlen(m_generic_extern_hooks); i++) {
@@ -1423,19 +1447,44 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
                     }
                 }
 
-                // create the import for it
-                if (!found) {
-                    method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
-                }
+                // make sure someone handled this
+                CHECK(found);
             }
-        } else {
-            // create a function, we will finish it right away and append to it in the future
-            method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
-            MIR_finish_func(ctx->ctx);
-
-            // queue for jit
-            arrpush(ctx->methods_to_jit, method);
         }
+
+    //
+    // Handle native methods, these are just an import
+    //
+    } else if (method_get_code_type(method) == METHOD_NATIVE) {
+
+        // only the corelib is allowed to have native methods
+        bool found = false;
+        for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
+            if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
+                found = true;
+                break;
+            }
+        }
+        CHECK(found, "Assembly `%U` is not allowed to have internal calls", method->Module->Name);
+
+        method->MirFunc = MIR_new_import(ctx->ctx, strbuilder_get(&func_name));
+
+    //
+    // Handle normal methods
+    //
+    } else if (method_get_code_type(method) == METHOD_IL) {
+        // don't allow, as we may use this in a later stage
+        CHECK(!method_is_internal_call(method));
+
+        // TODO: support for synchronized methods
+        CHECK(!method_is_synchronized(method));
+
+        // create a function, we will finish it right away and append to it in the future
+        method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+        MIR_finish_func(ctx->ctx);
+
+        // queue for jit
+        arrpush(ctx->methods_to_jit, method);
     } else {
         CHECK_FAIL();
     }
@@ -5411,7 +5460,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         }
 
                         // make sure that the object is not null, only if not a byref
-                        if (!this_type->IsByRef) {
+                        if (this_type == NULL || !this_type->IsByRef) {
                             CHECK_AND_RETHROW(jit_null_check(ctx, this_reg, this_type));
                         }
                     }
@@ -5493,59 +5542,95 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get it to the exception register
                 arg_ops[2] = MIR_new_reg_op(mir_ctx, ctx->exception_reg);
 
-                // emit the IR
-                if (operand_method->ReturnType != NULL) {
-                    MIR_reg_t ret_reg;
-                    CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_method->ReturnType), &ret_reg));
+                #define IS_INTRINSIC(name) \
+                    ((name) != NULL && operand_method->GenericMethodDefinition == (name))
 
-                    if (type_get_stack_type(operand_method->ReturnType) == STACK_TYPE_REF) {
-                        // we did not pass any local references to this, so we know for sure it can't be a local address
-                        // being returned from the method
-                        STACK_TOP.non_local_ref = ret_is_non_local_ref;
+                //
+                // Unsafe.SizeOf, inline it as a number
+                //
+                if (IS_INTRINSIC(m_Unsafe_SizeOf)) {
+                    System_Type T = operand_method->GenericArguments->Data[0];
+
+                    MIR_reg_t ret_reg;
+                    CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(tSystem_Int32), &ret_reg));
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, ret_reg),
+                                                 MIR_new_int_op(mir_ctx, T->StackSize)));
+
+                //
+                // RuntimeHelpers.IsReferenceOrContainsReferences, inline it as a 1 or 0
+                //
+                } else if (IS_INTRINSIC(m_RuntimeHelpers_IsReferenceOrContainsReferences)) {
+                    System_Type T = operand_method->GenericArguments->Data[0];
+
+                    bool is_reference = type_is_object_ref(T);
+                    bool has_references = arrlen(T->ManagedPointersOffsets) != 0;
+
+                    MIR_reg_t ret_reg;
+                    CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(tSystem_Boolean), &ret_reg));
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, ret_reg),
+                                                 MIR_new_int_op(mir_ctx, is_reference || has_references)));
+
+                //
+                // default handling, normal function call
+                //
+                } else {
+                    if (operand_method->ReturnType != NULL) {
+                        MIR_reg_t ret_reg;
+                        CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_method->ReturnType), &ret_reg));
+
+                        if (type_get_stack_type(operand_method->ReturnType) == STACK_TYPE_REF) {
+                            // we did not pass any local references to this, so we know for sure it can't be a local address
+                            // being returned from the method
+                            STACK_TOP.non_local_ref = ret_is_non_local_ref;
+                        }
+
+                        // this should just work, because if the value is a struct it is going to be allocated properly
+                        // in the stack push, and it is going to be passed by a pointer that we give, and everything will
+                        // just work out because of how we have the order of everything :)
+                        arg_ops[3] = MIR_new_reg_op(mir_ctx, ret_reg);
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn_arr(mir_ctx, aggressive_inlining ? MIR_INLINE : MIR_CALL,
+                                                         other_args + arg_count,
+                                                         arg_ops));
+                    } else {
+                        // Does not have a return argument, no need to handle
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn_arr(mir_ctx, aggressive_inlining ? MIR_INLINE : MIR_CALL,
+                                                         other_args + arg_count,
+                                                         arg_ops));
                     }
 
-                    // this should just work, because if the value is a struct it is going to be allocated properly
-                    // in the stack push, and it is going to be passed by a pointer that we give, and everything will
-                    // just work out because of how we have the order of everything :)
-                    arg_ops[3] = MIR_new_reg_op(mir_ctx, ret_reg);
+                    // handle any exception which might have been thrown
+                    MIR_insn_t label = MIR_new_label(mir_ctx);
+
+                    // if we have a zero value skip the return
                     MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn_arr(mir_ctx, aggressive_inlining ? MIR_INLINE : MIR_CALL,
-                                                     other_args + arg_count,
-                                                     arg_ops));
-                } else {
-                    // Does not have a return argument, no need to handle
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn_arr(mir_ctx, aggressive_inlining ? MIR_INLINE : MIR_CALL,
-                                                     other_args + arg_count,
-                                                     arg_ops));
-                }
+                                    MIR_new_insn(mir_ctx, MIR_BF,
+                                                 MIR_new_label_op(mir_ctx, label),
+                                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
 
-                // handle any exception which might have been thrown
-                MIR_insn_t label = MIR_new_label(mir_ctx);
+                    // throw the error, it has an unknown type
+                    CHECK_AND_RETHROW(jit_throw(ctx, NULL));
 
-                // if we have a zero value skip the return
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_BF,
-                                             MIR_new_label_op(mir_ctx, label),
-                                             MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+                    // insert the skip label
+                    MIR_append_insn(mir_ctx, mir_func, label);
 
-                // throw the error, it has an unknown type
-                CHECK_AND_RETHROW(jit_throw(ctx, NULL));
-
-                // insert the skip label
-                MIR_append_insn(mir_ctx, mir_func, label);
-
-                // check if we need to copy the left out value from the stack
-                // to the eval stack
-                if (
-                    opcode == CEE_NEWOBJ &&
-                    operand_method->DeclaringType->IsValueType &&
-                    type_get_stack_type(operand_method->DeclaringType) != STACK_TYPE_VALUE_TYPE
-                ) {
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, jit_number_inscode(operand_method->DeclaringType),
-                                                 MIR_new_reg_op(mir_ctx, number_reg),
-                                                 MIR_new_mem_op(mir_ctx, get_mir_type(operand_method->DeclaringType), 0, this_reg, 0, 1)));
+                    // check if we need to copy the left out value from the stack
+                    // to the eval stack
+                    if (
+                        opcode == CEE_NEWOBJ &&
+                        operand_method->DeclaringType->IsValueType &&
+                        type_get_stack_type(operand_method->DeclaringType) != STACK_TYPE_VALUE_TYPE
+                    ) {
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, jit_number_inscode(operand_method->DeclaringType),
+                                                     MIR_new_reg_op(mir_ctx, number_reg),
+                                                     MIR_new_mem_op(mir_ctx, get_mir_type(operand_method->DeclaringType), 0, this_reg, 0, 1)));
+                    }
                 }
             } break;
 
@@ -6433,6 +6518,7 @@ err_t jit_type(System_Type type) {
 
         // call the ctor
         if (created_type->StaticCtor != NULL) {
+            ASSERT(created_type->StaticCtor->DeclaringType == created_type);
             System_Exception(*cctor)() = created_type->StaticCtor->MirFunc->addr;
             System_Exception exception = cctor();
             CHECK(exception == NULL, "Type initializer for %U: `%U`",

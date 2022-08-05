@@ -747,6 +747,7 @@ extern System_Type tTinyDotNet_Reflection_MethodImpl;
 extern System_Type tTinyDotNet_Reflection_MethodSpec;
 
 extern System_Type tSystem_Runtime_CompilerServices_Unsafe;
+extern System_Type tSystem_Runtime_CompilerServices_RuntimeHelpers;
 extern System_Type tSystem_Runtime_CompilerServices_IsVolatile;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
