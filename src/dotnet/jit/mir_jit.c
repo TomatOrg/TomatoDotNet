@@ -1408,7 +1408,11 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             } else if (method->DeclaringType == tSystem_Runtime_CompilerServices_Unsafe) {
                 // The Unsafe.As functions are super simple, so we are going
                 // to have them point to the same method, and hope that it will get inlined
-                if (string_equals_cstr(method->GenericMethodDefinition->Name, "As")) {
+                if (
+                    string_equals_cstr(method->GenericMethodDefinition->Name, "As") ||
+                    string_equals_cstr(method->GenericMethodDefinition->Name, "AsPointer") ||
+                    string_equals_cstr(method->GenericMethodDefinition->Name, "AsRef")
+                ) {
                     method->MirFunc = m_unsafe_as_func;
                 } else if (string_equals_cstr(method->GenericMethodDefinition->Name, "SizeOf")) {
                     method->MirFunc = INVALID_IMPORT;

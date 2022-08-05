@@ -438,9 +438,7 @@ System_Type get_by_ref_type(System_Type type) {
 
     // allocate the new ref type
     System_Type ByRefType = UNSAFE_GC_NEW(tSystem_Type);
-    if (ByRefType == NULL) {
-        return NULL;
-    }
+    ASSERT(ByRefType != NULL);
 
     // this is an array
     ByRefType->IsByRef = true;
