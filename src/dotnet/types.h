@@ -228,12 +228,13 @@ struct System_Reflection_Assembly {
 
     // we have two entries, one for GC tracking (the array)
     // and one for internally looking up the string entries
-    // TODO: turn into a Dictionary for easy management
     System_String_Array UserStrings;
     struct {
         int key;
         System_String value;
     }* UserStringsTable;
+
+    // for quickly searching attributes
 };
 
 /**
@@ -466,6 +467,18 @@ void method_print_full_name(System_Reflection_MethodInfo method, strbuilder_t* b
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_Reflection_PropertyInfo {
+    struct System_Reflection_MemberInfo;
+    uint16_t Attributes;
+    System_Reflection_MethodInfo SetMethod;
+    System_Reflection_MethodInfo GetMethod;
+    System_Type PropertyType;
+} *System_Reflection_PropertyInfo;
+
+DEFINE_ARRAY(System_Reflection_PropertyInfo);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef struct System_Exception *System_Exception;
 
 struct System_Exception {
@@ -543,6 +556,7 @@ struct System_Type {
     System_String Namespace;
     System_Reflection_FieldInfo_Array Fields;
     System_Reflection_MethodInfo_Array Methods;
+    System_Reflection_PropertyInfo_Array Properties;
     System_Type ElementType;
     uint32_t Attributes;
     token_t MetadataToken;
@@ -700,6 +714,14 @@ TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetTy
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Implements the finalization on the System.Reflection.Assembly type, which is needed because of how
+ * we have unmanaged structures
+ */
+System_Exception assembly_finalizer(System_Reflection_Assembly assembly);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 extern System_Type tSystem_Void;
 extern System_Type tSystem_Enum;
 extern System_Type tSystem_Exception;
@@ -729,6 +751,7 @@ extern System_Type tSystem_Reflection_Assembly;
 extern System_Type tSystem_Reflection_FieldInfo;
 extern System_Type tSystem_Reflection_MemberInfo;
 extern System_Type tSystem_Reflection_ParameterInfo;
+extern System_Type tSystem_Reflection_PropertyInfo;
 extern System_Type tSystem_Reflection_LocalVariableInfo;
 extern System_Type tSystem_Reflection_ExceptionHandlingClause;
 extern System_Type tSystem_Reflection_MethodBase;

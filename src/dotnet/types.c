@@ -43,6 +43,7 @@ System_Type tSystem_Reflection_Assembly = NULL;
 System_Type tSystem_Reflection_FieldInfo = NULL;
 System_Type tSystem_Reflection_MemberInfo = NULL;
 System_Type tSystem_Reflection_ParameterInfo = NULL;
+System_Type tSystem_Reflection_PropertyInfo = NULL;
 System_Type tSystem_Reflection_LocalVariableInfo = NULL;
 System_Type tSystem_Reflection_ExceptionHandlingClause = NULL;
 System_Type tSystem_Reflection_MethodBase = NULL;
@@ -1032,6 +1033,11 @@ TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetTy
         targetType = targetType->BaseType;
     }
 
+    return NULL;
+}
+
+System_Exception assembly_finalizer(System_Reflection_Assembly assembly) {
+    hmfree(assembly->UserStringsTable);
     return NULL;
 }
 

@@ -708,11 +708,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         if (parami == -1) {
             CHECK(generic_param->number == 0);
             System_Type* arr = NULL;
-                    arrpush(arr, typeParam);
+            arrpush(arr, typeParam);
             hmput(owner_generic_params, owner, arr);
         } else {
             CHECK(generic_param->number == arrlen(owner_generic_params[parami].value));
-                    arrpush(owner_generic_params[parami].value, typeParam);
+            arrpush(owner_generic_params[parami].value, typeParam);
         }
     }
 
@@ -889,6 +889,122 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         while (genericChild != NULL) {
             type_expand_method_impls(genericChild, type->MethodImpls);
             genericChild = genericChild->NextGenericInstance;
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Take care of the properties
+    //------------------------------------------------------------------------------------------------------------------
+
+    metadata_property_map_t* properties_map = metadata->tables[METADATA_PROPERTY_MAP].table;
+    int properties_map_count = metadata->tables[METADATA_PROPERTY_MAP].rows;
+
+    metadata_method_semantics_t* method_semantics = metadata->tables[METADATA_METHOD_SEMANTICS].table;
+    int method_semantics_count = metadata->tables[METADATA_METHOD_SEMANTICS].rows;
+
+    int properties_count = metadata->tables[METADATA_PROPERTY].rows;
+
+    for (int i = 0; i < properties_map_count; i++) {
+        metadata_property_map_t* property_map = &properties_map[i];
+
+        // get the parent
+        System_Type parent;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, property_map->parent, NULL, NULL, &parent));
+        CHECK(parent->Properties == NULL);
+
+        // get the properties list size
+        int last_idx = (i + 1 == properties_map_count) ?
+                       properties_count :
+                       property_map[1].property_list.index - 1;
+        CHECK(last_idx <= properties_count);
+
+        // iterate the properties of this type
+        parent->Properties = GC_NEW_ARRAY(tSystem_Reflection_PropertyInfo, last_idx - property_map->property_list.index + 1);
+        for (int pi = 0; pi < parent->Properties->Length; pi++) {
+            int index = property_map->property_list.index + pi - 1;
+            metadata_property_t* property = metadata_get_property(metadata, index);
+
+            System_Reflection_PropertyInfo propertyInfo = GC_NEW(tSystem_Reflection_PropertyInfo);
+            GC_UPDATE_ARRAY(parent->Properties, pi, propertyInfo);
+
+            // set the member info
+            GC_UPDATE(propertyInfo, DeclaringType, parent);
+            GC_UPDATE(propertyInfo, Module, parent->Module);
+            GC_UPDATE(propertyInfo, Name, new_string_from_cstr(property->name));
+
+            propertyInfo->Attributes = property->flags;
+
+            // TODO: parse the property type nicely instead of assuming it
+
+            // TODO: is there a better and smarter way to do this?
+            //       probably if we have a global list of all the properties we
+            //       can quickly apply these stuff but I am too lazy for now
+            for (int msi = 0; msi < method_semantics_count; msi++) {
+
+                // skip non-property semantics
+                metadata_method_semantics_t* method_semantic = &method_semantics[msi];
+                if (method_semantic->association.table != METADATA_PROPERTY) continue;
+                if (method_semantic->association.index != index + 1) continue;
+
+                // get the method
+                System_Reflection_MethodInfo method;
+                CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, method_semantic->method, NULL, NULL, &method));
+                CHECK(method->DeclaringType == parent);
+                CHECK(method_is_special_name(method));
+
+                // check if getter or setter
+                if (method_semantic->semantics == METHOD_SEMANTICS_SETTER) {
+                    CHECK(propertyInfo->SetMethod == NULL);
+
+                    // check the signature is valid
+                    CHECK(method->ReturnType == NULL);
+
+                    // the last parameter is the important one
+                    System_Reflection_ParameterInfo lastParameter = method->Parameters->Data[method->Parameters->Length - 1];
+
+                    // set the type if not set already
+                    if (propertyInfo->PropertyType == NULL) {
+                        GC_UPDATE(propertyInfo, PropertyType, lastParameter->ParameterType);
+                    }
+
+                    // check the parameter matches
+                    CHECK(lastParameter->ParameterType == propertyInfo->PropertyType);
+
+                    // set the setter
+                    GC_UPDATE(propertyInfo, SetMethod, method);
+
+                } else if (method_semantic->semantics == METHOD_SEMANTICS_GETTER) {
+                    CHECK(propertyInfo->GetMethod == NULL);
+
+                    // check the signature is valid
+                    CHECK(method->ReturnType != NULL);
+
+                    // set the type if not set already
+                    if (propertyInfo->PropertyType == NULL) {
+                        GC_UPDATE(propertyInfo, PropertyType, method->ReturnType);
+                    }
+
+                    // check the return type matches
+                    CHECK(method->ReturnType == propertyInfo->PropertyType);
+
+                    // set the getter
+                    GC_UPDATE(propertyInfo, GetMethod, method);
+                } else {
+                    CHECK_FAIL();
+                }
+            }
+
+            // validate the property is set properly
+            CHECK(propertyInfo->PropertyType != NULL);
+            if (propertyInfo->GetMethod != NULL && propertyInfo->SetMethod != NULL) {
+                // check for indexed properties
+                if (propertyInfo->GetMethod->Parameters->Length != 0) {
+                    CHECK(propertyInfo->GetMethod->Parameters->Length == propertyInfo->SetMethod->Parameters->Length - 1);
+                    for (int mi = 0; mi < propertyInfo->GetMethod->Parameters->Length; mi++) {
+                        CHECK(propertyInfo->GetMethod->Parameters->Data[mi]->ParameterType == propertyInfo->SetMethod->Parameters->Data[mi]->ParameterType);
+                    }
+                }
+            }
         }
     }
 
@@ -1625,7 +1741,7 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
 
         // now actually parse the custom attributes
         System_Object value = NULL;
-        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, metadata, methodInfo, &value));
+        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, methodInfo, &value));
 
         // now parse the parent
         switch (attrib->parent.table) {
@@ -1773,6 +1889,7 @@ static type_init_t m_type_init[] = {
     TYPE_INIT("System.Reflection", "FieldInfo", System_Reflection_FieldInfo),
     TYPE_INIT("System.Reflection", "MemberInfo", System_Reflection_MemberInfo),
     TYPE_INIT("System.Reflection", "ParameterInfo", System_Reflection_ParameterInfo),
+    TYPE_INIT("System.Reflection", "PropertyInfo", System_Reflection_PropertyInfo),
     TYPE_INIT("System.Reflection", "LocalVariableInfo", System_Reflection_LocalVariableInfo),
     TYPE_INIT("System.Reflection", "ExceptionHandlingClause", System_Reflection_ExceptionHandlingClause),
     TYPE_INIT("System.Reflection", "MethodBase", System_Reflection_MethodBase),

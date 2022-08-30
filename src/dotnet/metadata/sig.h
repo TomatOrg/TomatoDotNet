@@ -57,4 +57,4 @@ err_t parse_type_spec(blob_entry_t sig, System_Reflection_Assembly assembly, Sys
 
 err_t parse_local_var_sig(blob_entry_t sig, System_Reflection_MethodInfo method, pe_file_t* file, metadata_t* metadata);
 
-err_t parse_custom_attrib(blob_entry_t _sig, metadata_t* metadata, System_Reflection_MethodInfo ctor, System_Object* out);
+err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, System_Object *out);
