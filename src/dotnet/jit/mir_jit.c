@@ -5297,7 +5297,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                     MIR_append_insn(mir_ctx, mir_func,
                                                     MIR_new_insn(mir_ctx, MIR_MOV,
                                                                  MIR_new_reg_op(mir_ctx, size_reg),
-                                                                 arg_ops[other_args + 3]));
+                                                                 arg_ops[other_args + 2]));
 
                                 } else {
                                     ASSERT(operand_method->Parameters->Length == 1);
