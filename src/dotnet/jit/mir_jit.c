@@ -150,25 +150,6 @@ static void managed_ref_memcpy(void* base, System_Type struct_type, void* from) 
  */
 static MIR_context_t m_mir_context;
 
-static void jit_generate_System_String_GetCharInternal() {
-    const char* fname = "string::GetCharInternal(int32)";
-    MIR_type_t res[] = {
-        MIR_T_P,
-        MIR_T_U16
-    };
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 2, MIR_T_P, "this", MIR_T_I32, "index");
-    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
-    MIR_reg_t index = MIR_reg(m_mir_context, "index", func->u.func);
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 2,
-                                     MIR_new_int_op(m_mir_context, 0),
-                                     MIR_new_mem_op(m_mir_context, MIR_T_I16,
-                                                    offsetof(struct System_String, Chars),
-                                                    this, index, 2)));
-    MIR_finish_func(m_mir_context);
-    MIR_new_export(m_mir_context, fname);
-}
-
 static void jit_generate_System_Array_GetDataPtr() {
     const char* fname = "[Corelib-v1]System.Array::GetDataPtr()";
     MIR_type_t res[] = {
@@ -189,28 +170,6 @@ static void jit_generate_System_Array_GetDataPtr() {
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
 }
-
-static void jit_generate_System_String_GetDataPtr() {
-    const char* fname = "string::GetDataPtr()";
-    MIR_type_t res[] = {
-        MIR_T_P,
-        MIR_T_P
-    };
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "this");
-    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_insn(m_mir_context, MIR_ADD,
-                                 MIR_new_reg_op(m_mir_context, this),
-                                 MIR_new_reg_op(m_mir_context, this),
-                                 MIR_new_int_op(m_mir_context, offsetof(struct System_String, Chars))));
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 2,
-                                     MIR_new_int_op(m_mir_context, 0),
-                                     MIR_new_reg_op(m_mir_context, this)));
-    MIR_finish_func(m_mir_context);
-    MIR_new_export(m_mir_context, fname);
-}
-
 
 static void jit_generate_System_Type_GetTypeFromHandle() {
     const char* fname = "[Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
@@ -337,9 +296,7 @@ err_t init_jit() {
 
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
-    jit_generate_System_String_GetCharInternal();
     jit_generate_System_Array_GetDataPtr();
-    jit_generate_System_String_GetDataPtr();
     jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
     jit_generate_unsafe_as();
