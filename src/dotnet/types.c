@@ -1037,7 +1037,15 @@ TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetTy
 }
 
 System_Exception assembly_finalizer(System_Reflection_Assembly assembly) {
+    // Free the string table
     hmfree(assembly->UserStringsTable);
+
+    // free the custom attributes arrays
+    for (int i = 0; i < arrlen(assembly->CustomAttributeMap); i++) {
+        arrfree(assembly->CustomAttributeMap[i].value);
+    }
+    hmfree(assembly->CustomAttributeMap);
+
     return NULL;
 }
 

@@ -13,6 +13,8 @@
 #include "opcodes.h"
 #include "monitor.h"
 #include "thread/scheduler.h"
+#include "dotnet/gc/heap.h"
+#include "mem/mem.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -1688,8 +1690,6 @@ static err_t parse_user_strings(System_Reflection_Assembly assembly, pe_file_t* 
         us.data += string_size;
     }
 
-    assembly->UserStrings = GC_NEW_ARRAY(tSystem_String, string_count);
-
     // now create all the strings
     string_count = 0;
     us.data = file->us;
@@ -1707,7 +1707,6 @@ static err_t parse_user_strings(System_Reflection_Assembly assembly, pe_file_t* 
         memcpy(string->Chars, us.data, (string_size / 2) * 2);
 
         // set the entries in the table and array
-        GC_UPDATE_ARRAY(assembly->UserStrings, string_count, string);
         hmput(assembly->UserStringsTable, offset, string);
 
         // we got another string
@@ -1744,34 +1743,49 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
         CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, methodInfo, &value));
 
         // now parse the parent
+        System_Object key = NULL;
         switch (attrib->parent.table) {
             case METADATA_TYPE_DEF: {
                 System_Type parent;
                 CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+                key = (System_Object)parent;
             } break;
 
             case METADATA_FIELD: {
                 System_Reflection_FieldInfo parent;
                 CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+                key = (System_Object)parent;
             } break;
 
             case METADATA_METHOD_DEF: {
                 System_Reflection_MethodInfo parent;
                 CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+                key = (System_Object)parent;
             } break;
 
             case METADATA_ASSEMBLY: {
                 // on the assembly itself
+                key = (System_Object)assembly;
             } break;
 
             // TODO: support for these
-            case METADATA_PROPERTY:
-            case METADATA_PARAM:
-            case METADATA_GENERIC_PARAM: {
-            } break;
+            case METADATA_PROPERTY: WARN("TODO: attribute on property"); break;
+            case METADATA_PARAM: WARN("TODO: attribute on param"); break;
+            case METADATA_GENERIC_PARAM: WARN("TODO: attribute on generic parameter"); break;
 
             default:
                 WARN("TODO: attribute on %02x", attrib->parent.table);
+        }
+
+        if (key != NULL) {
+            // insert the entry properly
+            int idx = hmgeti(assembly->CustomAttributeMap, key);
+            if (idx == -1) {
+                hmput(assembly->CustomAttributeMap, key, NULL);
+                idx = hmgeti(assembly->CustomAttributeMap, key);
+                CHECK(idx != -1);
+            }
+            arrpush(assembly->CustomAttributeMap[idx].value, value);
         }
     }
 
@@ -1985,12 +1999,52 @@ cleanup:
 // corelib is a bit different so load it as needed
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define RESET_TYPE(instance, __type) \
+#define RESET_TYPE(instance, _type) \
     do { \
-        instance->type = (uintptr_t)__type; \
-        instance->vtable = __type->VTable; \
+        instance->type = (uintptr_t)_type; \
     } while (0);
 
+static int calc_object_size(uintptr_t obj) {
+    size_t poolidx = (obj - OBJECT_HEAP_START) / SIZE_512GB;
+    return 2 << (3 + poolidx);
+}
+
+static void assign_array_types_vtables(System_Object object) {
+    if (object->color == COLOR_BLUE) return;
+
+    if (OBJECT_TYPE(object) == tSystem_Type) {
+        System_Type type = (System_Type)object;
+
+        if (type->VTable == NULL) {
+            if (!type->IsArray) {
+                // if this is not an array, and the VirtualMethods is empty, then we don't care,
+                // since some types can actually have no virtual methods :shrug:
+                if (type->VirtualMethods == NULL || type->VirtualMethods->Length == 0)
+                    return;
+
+                ASSERT(!"Type with no VTable found");
+            }
+
+            ASSERT(type->IsArray);
+            GC_UPDATE(type, VirtualMethods, tSystem_Array->VirtualMethods);
+            type->VTableSize = tSystem_Array->VTableSize;
+            type->VTable = tSystem_Array->VTable;
+        }
+    } else if (object->type == 0) {
+        ASSERT(object->type != 0);
+    }
+}
+
+static void fix_array_vtables(System_Object object) {
+    if (object->color == COLOR_BLUE) return;
+
+    if (object->vtable == NULL) {
+        object->vtable = OBJECT_TYPE(object)->VTable;
+        if (object->vtable == NULL) {
+            ASSERT(object->vtable != NULL);
+        }
+    }
+}
 
 err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
@@ -2065,8 +2119,17 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     RESET_TYPE(assembly->DefinedMethods, get_array_type(tSystem_Reflection_MethodInfo));
     RESET_TYPE(assembly->DefinedFields, get_array_type(tSystem_Reflection_FieldInfo));
     for (int i = 0; i < types_count; i++) {
-        RESET_TYPE(assembly->DefinedTypes->Data[i], tSystem_Type);
+        System_Type type = assembly->DefinedTypes->Data[i];
+        RESET_TYPE(type, tSystem_Type);
+        type->vtable = tSystem_Type->VTable;
     }
+
+    // we have a little meme where array vtables are actually created quite late in the process
+    // so we need to make sure and fix any array that was created with a NULL vtable at this point,
+    // this is made in two passes, first make sure every array type has a vtable, and the next is
+    // that every array actually has a vtable assigned to it
+    heap_iterate_objects(assign_array_types_vtables);
+    heap_iterate_objects(fix_array_vtables);
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));

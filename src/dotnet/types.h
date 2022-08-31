@@ -228,13 +228,19 @@ struct System_Reflection_Assembly {
 
     // we have two entries, one for GC tracking (the array)
     // and one for internally looking up the string entries
-    System_String_Array UserStrings;
     struct {
         int key;
         System_String value;
     }* UserStringsTable;
 
     // for quickly searching attributes
+    struct {
+        // where to search the attribute on
+        System_Object key;
+
+        // the instances of attributes on this object
+        System_Object* value;
+    }* CustomAttributeMap;
 };
 
 /**

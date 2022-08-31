@@ -399,6 +399,27 @@ static void gc_mark_black(System_Object object) {
             }
         }
     } else {
+        // special case for the assembly which has a bunch of
+        // un-managed structs holding managed info
+        // TODO: this is not ideal
+        if (type == tSystem_Reflection_Assembly) {
+            System_Reflection_Assembly assembly = (System_Reflection_Assembly)object;
+
+            // string table
+            for (int i = 0; i < hmlen(assembly->UserStringsTable); i++) {
+                gc_mark_gray((System_Object)assembly->UserStringsTable[i].value);
+            }
+
+            // custom attributes
+            for (int i = 0; i < hmlen(assembly->CustomAttributeMap); i++) {
+                gc_mark_gray(assembly->CustomAttributeMap[i].key);
+                System_Object* objects = assembly->CustomAttributeMap[i].value;
+                for (int j = 0; j < arrlen(objects); j++) {
+                    gc_mark_gray(objects[j]);
+                }
+            }
+        }
+
         // for normal objects iterate the managed pointer offsets, which
         // essentially contains all the offsets for all the pointers in
         // the object
