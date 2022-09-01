@@ -3683,10 +3683,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // setup the not taken label
                 MIR_label_t not_taken = MIR_new_label(mir_ctx);
 
-                // if the value is invalid then don't take the route and
-                // go to the default case
+                // if the value is invalid then don't take the route and go to the default case
+                // case 1: it's past the end
+                // case 2: it's before the start (which is 0)
+                // as operand_switch_n is positive signed, when treated as unsigned it is less than all negative signed numbers
+                // hence you can use a single branch to handle both cases 
                 MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_BGE,
+                                MIR_new_insn(mir_ctx, MIR_UBGE,
                                              MIR_new_label_op(mir_ctx, not_taken),
                                              MIR_new_reg_op(mir_ctx, value_reg),
                                              MIR_new_int_op(mir_ctx, operand_switch_n)));
