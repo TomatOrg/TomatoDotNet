@@ -163,8 +163,6 @@ static err_t parse_type(
         case ELEMENT_TYPE_OBJECT: *out_type = tSystem_Object; break;
 
         case ELEMENT_TYPE_PTR: {
-            *out_type = tSystem_UIntPtr;
-
             // TODO: CustomMod*
 
             // TODO: pointer types that store their actual type?
@@ -172,10 +170,13 @@ static err_t parse_type(
             System_Type elementType;
             if (sig->data[0] == ELEMENT_TYPE_VOID) {
                 NEXT_BYTE;
-                elementType = NULL;
+                elementType = tSystem_Void;
             } else {
                 CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs, file, metadata));
             }
+
+            *out_type = tSystem_UIntPtr;
+//            *out_type = get_pointer_type(elementType);
         } break;
 
         case ELEMENT_TYPE_STRING: *out_type = tSystem_String; break;
@@ -227,8 +228,12 @@ static err_t parse_ret_type(
             break;
         }
 
-        // TODO: wth
-        CHECK(!required);
+        if (mod == tSystem_Runtime_InteropServices_InAttribute) {
+//            WARN("parse_ret_type: TODO: mark return value as readonly");
+        } else {
+            CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+            WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        }
     }
 
     // actually get the type
@@ -287,8 +292,8 @@ static err_t parse_param(
             break;
         }
 
-        // TODO: wth
-        CHECK(!required);
+        CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+        WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
     }
 
     // actually get the type

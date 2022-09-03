@@ -151,7 +151,7 @@ static void managed_ref_memcpy(void* base, System_Type struct_type, void* from) 
 static MIR_context_t m_mir_context;
 
 static void jit_generate_System_Array_GetDataPtr() {
-    const char* fname = "[Corelib-v1]System.Array::GetDataPtr()";
+    const char* fname = "nuint [Corelib-v1]System.Array::GetDataPtr()";
     MIR_type_t res[] = {
         MIR_T_P,
         MIR_T_P
@@ -172,7 +172,7 @@ static void jit_generate_System_Array_GetDataPtr() {
 }
 
 static void jit_generate_System_Type_GetTypeFromHandle() {
-    const char* fname = "[Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
+    const char* fname = "[Corelib-v1]System.Type [Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
     MIR_var_t args[] = {
         {
             .name = "handle",
@@ -401,7 +401,7 @@ static MIR_type_t get_mir_type(System_Type type) {
     } else if (type->IsValueType || type_is_interface(type)) {
         return MIR_T_BLK;
     } else {
-        ASSERT(type == NULL || type_is_object_ref(type) || type->IsByRef);
+        ASSERT(type == NULL || type_is_object_ref(type) || type->IsByRef || type->IsPointer);
         return MIR_T_P;
     }
 }

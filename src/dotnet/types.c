@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+System_Type tSystem_Void = NULL;
 System_Type tSystem_Enum = NULL;
 System_Type tSystem_Exception = NULL;
 System_Type tSystem_ValueType = NULL;
@@ -67,6 +68,7 @@ System_Type tTinyDotNet_Reflection_MethodSpec = NULL;
 System_Type tSystem_Runtime_CompilerServices_Unsafe = NULL;
 System_Type tSystem_Runtime_CompilerServices_RuntimeHelpers = NULL;
 System_Type tSystem_Runtime_CompilerServices_IsVolatile = NULL;
+System_Type tSystem_Runtime_InteropServices_InAttribute = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
@@ -466,6 +468,49 @@ System_Type get_by_ref_type(System_Type type) {
     return type->ByRefType;
 }
 
+System_Type get_pointer_type(System_Type type) {
+    if (type->PointerType != NULL) {
+        return type->PointerType;
+    }
+
+    PANIC_ON(monitor_enter(type));
+
+    if (type->PointerType != NULL) {
+        PANIC_ON(monitor_exit(type));
+        return type->PointerType;
+    }
+
+    // must not be a byref
+    ASSERT(!type->IsByRef);
+
+    // allocate the new ref type
+    System_Type PointerType = UNSAFE_GC_NEW(tSystem_Type);
+    if (PointerType == NULL) {
+        return PointerType;
+    }
+
+    GC_UPDATE(PointerType, Module, type->Module);
+    GC_UPDATE(PointerType, Name, string_append_cstr(type->Name, "*"));
+    GC_UPDATE(PointerType, Assembly, type->Assembly);
+    GC_UPDATE(PointerType, BaseType, tSystem_UIntPtr->BaseType);
+    GC_UPDATE(PointerType, Namespace, type->Namespace);
+    PointerType->ManagedSize = tSystem_UIntPtr->ManagedSize;
+    PointerType->ManagedAlignment = tSystem_UIntPtr->ManagedAlignment;
+    PointerType->StackSize = tSystem_UIntPtr->StackSize;
+    PointerType->StackAlignment = tSystem_UIntPtr->StackAlignment;
+    PointerType->StackType = STACK_TYPE_INTPTR;
+    PointerType->GenericParameterPosition = -1;
+    PointerType->IsFilled = true;
+    PointerType->IsPointer = true;
+    GC_UPDATE(PointerType, ElementType, type);
+
+    // Set the array type
+    GC_UPDATE(type, PointerType, PointerType);
+    PANIC_ON(monitor_exit(type));
+
+    return type->PointerType;
+}
+
 System_Type get_boxed_type(System_Type type) {
     if (type->BoxedType != NULL) {
         return type->BoxedType;
@@ -482,7 +527,7 @@ System_Type get_boxed_type(System_Type type) {
     ASSERT(!type->IsByRef);
 
     // TODO: error handling?
-    loader_fill_type(type);
+    PANIC_ON(loader_fill_type(type));
 
     // allocate the new ref type
     System_Type BoxedType = UNSAFE_GC_NEW(tSystem_Type);
@@ -504,6 +549,7 @@ System_Type get_boxed_type(System_Type type) {
     BoxedType->StackSize = tSystem_Object->StackSize;
     BoxedType->StackAlignment = tSystem_Object->StackAlignment;
     BoxedType->StackType = STACK_TYPE_O;
+    BoxedType->GenericParameterPosition = -1;
     BoxedType->IsFilled = true;
     BoxedType->IsBoxed = true;
     GC_UPDATE(BoxedType, InterfaceImpls, type->InterfaceImpls);
@@ -567,6 +613,8 @@ System_Type type_get_underlying_type(System_Type T) {
     if (type_is_enum(T)) {
         ASSERT(T->ElementType != NULL);
         return T->ElementType;
+    } else if (T != NULL && T->IsPointer) {
+        return tSystem_UIntPtr;
     } else {
         return T;
     }
@@ -859,12 +907,12 @@ static const char* handle_builtin(System_Type type) {
     else if (type == tSystem_Object) return "object";
     else if (type == tSystem_Char) return "char";
     else if (type == tSystem_Boolean) return "bool";
-    else if (type == tSystem_IntPtr) return "native int";
-    else if (type == tSystem_UIntPtr) return "native uint";
+    else if (type == tSystem_IntPtr) return "nint";
+    else if (type == tSystem_UIntPtr) return "nuint";
     else if (type == tSystem_String) return "string";
     else if (type == tSystem_Single) return "float32";
     else if (type == tSystem_Double) return "float64";
-    else if (type == NULL) return "void";
+    else if (type == NULL || type == tSystem_Void) return "void";
     else return NULL;
 }
 
@@ -921,6 +969,10 @@ void method_print_name(System_Reflection_MethodInfo method, strbuilder_t* builde
 }
 
 void method_print_full_name(System_Reflection_MethodInfo method, strbuilder_t* builder) {
+    if (method->ReturnType != NULL) {
+        type_print_full_name(method->ReturnType, builder);
+        strbuilder_char(builder, ' ');
+    }
     type_print_full_name(method->DeclaringType, builder);
     strbuilder_char(builder, ':');
     strbuilder_char(builder, ':');

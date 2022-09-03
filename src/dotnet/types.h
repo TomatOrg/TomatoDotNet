@@ -549,6 +549,7 @@ struct System_Type {
     bool IsArray;
     bool IsByRef;
     bool IsBoxed;
+    bool IsPointer;
 
     // for type parameter (not instantiated)
     System_Type GenericTypeDefinition;
@@ -592,6 +593,7 @@ struct System_Type {
     System_Type ArrayType;
     System_Type ByRefType;
     System_Type BoxedType;
+    System_Type PointerType;
     System_Type UnboxedType;
     System_Type NextGenericInstance;
 
@@ -656,6 +658,8 @@ System_Type get_by_ref_type(System_Type type);
 
 System_Type get_boxed_type(System_Type type);
 
+System_Type get_pointer_type(System_Type type);
+
 /**
  * Print the type name as <namespace>.<class>[+<nested>]
  */
@@ -696,6 +700,7 @@ TinyDotNet_Reflection_InterfaceImpl type_get_interface_impl(System_Type targetTy
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+extern System_Type tSystem_Void;
 extern System_Type tSystem_Enum;
 extern System_Type tSystem_Exception;
 extern System_Type tSystem_ValueType;
@@ -749,6 +754,7 @@ extern System_Type tTinyDotNet_Reflection_MethodSpec;
 extern System_Type tSystem_Runtime_CompilerServices_Unsafe;
 extern System_Type tSystem_Runtime_CompilerServices_RuntimeHelpers;
 extern System_Type tSystem_Runtime_CompilerServices_IsVolatile;
+extern System_Type tSystem_Runtime_InteropServices_InAttribute;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || type_get_stack_type(type) == STACK_TYPE_O; }
