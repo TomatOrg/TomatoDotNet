@@ -24,11 +24,31 @@
 // TODO: we need a mir try-catch so we can recover from mir errors
 
 /**
+ * Can be used to filter which method to trace for nicer output
+ */
+UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
+    if (method->DeclaringType->GenericTypeDefinition == NULL)
+        return false;
+
+    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "List`1"))
+        return false;
+
+    if (!string_equals_cstr(method->Name, "Add"))
+        return false;
+
+    return true;
+}
+
+/**
  * Uncomment to remove null-checks, out of memory checks, oob checks and more
  * to make the JITed code a bit more readable
  */
 //#define READABLE_JIT
 
+/**
+ * Will make the JIT generate functions to trace when an exception is thrown/rethrown
+ */
+#define THROW_TRACE
 
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
@@ -38,16 +58,7 @@
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-#if 0
-#define MIR_append_insn(__ctx, __func, ...) \
-    do { \
-        MIR_insn_t _insn = __VA_ARGS__; \
-        MIR_context_t _ctx = __ctx;         \
-        MIR_item_t _func = __func; \
-        MIR_output_insn(_ctx, stdout, _insn, _func->u.func, true); \
-        MIR_append_insn(_ctx, _func, _insn); \
-    } while (0);
-#endif
+//#define JIT_TRACE_MIR
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
@@ -82,6 +93,12 @@ static MIR_item_t m_memcpy_func = NULL;
 
 static MIR_item_t m_memset_proto = NULL;
 static MIR_item_t m_memset_func = NULL;
+
+static MIR_item_t m_on_throw_proto = NULL;
+static MIR_item_t m_on_throw_func = NULL;
+
+static MIR_item_t m_on_rethrow_proto = NULL;
+static MIR_item_t m_on_rethrow_func = NULL;
 
 static MIR_item_t m_delegate_ctor_func = NULL;
 
@@ -139,6 +156,20 @@ static void managed_ref_memcpy(void* base, System_Type struct_type, void* from) 
         // not on the heap, do simple memcpy
         memcpy(base, from, struct_type->StackSize);
     }
+}
+
+static void on_throw(System_Exception exception, System_Reflection_MethodInfo methodInfo) {
+#ifdef THROW_TRACE
+    ERROR("Exception `%U` (of type %U.%U) thrown at %U.%U::%U",
+          exception->Message, OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name,
+          methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name);
+#endif
+}
+
+static void on_rethrow(System_Reflection_MethodInfo methodInfo) {
+#ifdef THROW_TRACE
+    ERROR("\trethrown at %U.%U::%U", methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -286,6 +317,12 @@ err_t init_jit() {
     m_memset_proto = MIR_new_proto(m_mir_context, "memset$proto", 0, NULL, 3, MIR_T_P, "dest", MIR_T_I32, "c", MIR_T_U64, "count");
     m_memset_func = MIR_new_import(m_mir_context, "memset");
 
+    m_on_throw_proto = MIR_new_proto(m_mir_context, "on_throw$proto", 0, NULL, 2, MIR_T_P, "exception", MIR_T_P, "method_info");
+    m_on_throw_func = MIR_new_import(m_mir_context, "on_throw");
+
+    m_on_rethrow_proto = MIR_new_proto(m_mir_context, "on_rethrow$proto", 0, NULL, 1, MIR_T_P, "method_info");
+    m_on_rethrow_func = MIR_new_import(m_mir_context, "on_rethrow");
+
     res_type = MIR_T_I8;
 
     m_dynamic_cast_obj_to_interface_proto = MIR_new_proto(m_mir_context, "dynamic_cast_obj_to_interface$proto", 1, &res_type, 3, MIR_T_P, "dest", MIR_T_P, "source", MIR_T_P, "targetInterface");
@@ -321,6 +358,8 @@ err_t init_jit() {
     MIR_load_external(m_mir_context, "memset", memset_wrapper);
     MIR_load_external(m_mir_context, "managed_memcpy", managed_memcpy);
     MIR_load_external(m_mir_context, "managed_ref_memcpy", managed_ref_memcpy);
+    MIR_load_external(m_mir_context, "on_throw", on_throw);
+    MIR_load_external(m_mir_context, "on_rethrow", on_rethrow);
 
     // load internal functions
     for (int i = 0; i < g_internal_calls_count; i++) {
@@ -453,7 +492,11 @@ typedef struct stack_keeping {
 typedef struct exception_handling {
     System_Reflection_ExceptionHandlingClause key;
     MIR_label_t value;
+
+    // the next finally after this one
     MIR_label_t next_clause;
+
+    // is this the last finally we have
     bool last_in_chain;
 } exception_handling_t;
 
@@ -1487,6 +1530,23 @@ cleanup:
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Tracing mir generation along side of the IL
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef JIT_TRACE_MIR
+#define MIR_append_insn(__ctx, __func, ...) \
+    do { \
+        MIR_insn_t _insn = __VA_ARGS__; \
+        MIR_context_t ___ctx = __ctx; \
+        MIR_item_t _func = __func; \
+        if (trace_filter(ctx->method)) { \
+            MIR_output_insn(___ctx, stdout, _insn, _func->u.func, true); \
+        } \
+        MIR_append_insn(___ctx, _func, _insn); \
+    } while (0)
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Branching helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1691,11 +1751,29 @@ cleanup:
  *
  * Assumes that the ctx->exception_reg contains the exception isntance
  */
-static err_t jit_throw(jit_method_context_t* ctx, System_Type type) {
+static err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow) {
     err_t err = NO_ERROR;
 
     // verify it is a valid object
     CHECK(type_is_object_ref(type));
+
+#ifdef THROW_TRACE
+    if (rethrow) {
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_call_insn(mir_ctx, 3,
+                                          MIR_new_ref_op(mir_ctx, m_on_rethrow_proto),
+                                          MIR_new_ref_op(mir_ctx, m_on_rethrow_func),
+                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method)));
+    } else {
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_call_insn(mir_ctx, 4,
+                                          MIR_new_ref_op(mir_ctx, m_on_throw_proto),
+                                          MIR_new_ref_op(mir_ctx, m_on_throw_func),
+                                          MIR_new_reg_op(mir_ctx, ctx->exception_reg),
+                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method)));
+
+    }
+#endif
 
     MIR_reg_t temp_reg = 0;
 
@@ -1841,7 +1919,7 @@ static err_t jit_throw_new(jit_method_context_t* ctx, System_Type type) {
                                  MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
 
     // throw an unknown exception
-    CHECK_AND_RETHROW(jit_throw(ctx, NULL));
+    CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
 
     // put the label to skip the ctor exception handling
     MIR_append_insn(mir_ctx, mir_func, no_exception);
@@ -1853,7 +1931,7 @@ static err_t jit_throw_new(jit_method_context_t* ctx, System_Type type) {
                                  MIR_new_reg_op(mir_ctx, exception_obj)));
 
     // throw it nicely
-    CHECK_AND_RETHROW(jit_throw(ctx, type));
+    CHECK_AND_RETHROW(jit_throw(ctx, type, false));
 
 cleanup:
     return err;
@@ -2114,7 +2192,7 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
             CHECK(
                 code == MIR_EQ ||
                 code == MIR_BEQ ||
-                code == MIR_BNE || 
+                code == MIR_BNE ||
                 code == MIR_UGT
             );
 
@@ -2324,6 +2402,18 @@ cleanup:
 // Main jitter code
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+#ifdef JIT_TRACE
+    #undef JIT_TRACE
+    #define JIT_TRACE(...) \
+        do { \
+            if (trace_filter(method)) { \
+                __VA_ARGS__; \
+            } \
+        } while (0)
+#else
+    #define JIT_TRACE(...)
+#endif
+
 /**
  * This is the main jitting function, it takes a method and jits it completely
  */
@@ -2343,20 +2433,20 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     strbuilder_t method_name = strbuilder_new();
     method_print_full_name(method, &method_name);
 
-#ifdef JIT_TRACE
-    strbuilder_t ret_type_name = strbuilder_new();
-    type_print_full_name(method->ReturnType, &ret_type_name);
+    JIT_TRACE(
+        strbuilder_t ret_type_name = strbuilder_new();
+        type_print_full_name(method->ReturnType, &ret_type_name);
 
-    TRACE(".method %s %s %s %s",
-          method_access_str(method_get_access(method)),
-          method_is_static(method) ? "static" : "instance",
-          strbuilder_get(&ret_type_name),
-          strbuilder_get(&method_name));
-    strbuilder_free(&ret_type_name);
+        TRACE(".method %s %s %s %s",
+              method_access_str(method_get_access(method)),
+              method_is_static(method) ? "static" : "instance",
+              strbuilder_get(&ret_type_name),
+              strbuilder_get(&method_name));
+        strbuilder_free(&ret_type_name);
 
-    TRACE("{");
-    TRACE("\t.maxstack %d", body->MaxStackSize);
-#endif
+        TRACE("{");
+        TRACE("\t.maxstack %d", body->MaxStackSize);
+    );
 
     // variables
     MIR_op_t* locals = NULL;
@@ -2373,23 +2463,23 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         return_block_reg = MIR_reg(mir_ctx, "return_block", mir_func->u.func);
     }
 
-#ifdef JIT_TRACE
-    if (body->LocalVariables->Length > 0) {
-        TRACE("\t.locals %s(", body->InitLocals ? "init " : "");
-    }
-#endif
+    JIT_TRACE(
+        if (body->LocalVariables->Length > 0) {
+            TRACE("\t.locals %s(", body->InitLocals ? "init " : "");
+        }
+    );
 
     // actually create locals
     for (int i = 0; i < body->LocalVariables->Length; i++) {
         System_Reflection_LocalVariableInfo variable = body->LocalVariables->Data[i];
         CHECK(variable->LocalIndex == i);
 
-#ifdef JIT_TRACE
-        strbuilder_t local_type_name = strbuilder_new();
-        type_print_full_name(variable->LocalType, &local_type_name);
-        TRACE("\t\t[%d] %s%s", i, strbuilder_get(&local_type_name), i == body->LocalVariables->Length - 1 ? "" : ",");
-        strbuilder_free(&local_type_name);
-#endif
+        JIT_TRACE(
+            strbuilder_t local_type_name = strbuilder_new();
+            type_print_full_name(variable->LocalType, &local_type_name);
+            TRACE("\t\t[%d] %s%s", i, strbuilder_get(&local_type_name), i == body->LocalVariables->Length - 1 ? "" : ",");
+            strbuilder_free(&local_type_name);
+        );
 
         // prepare the variable type
         CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, variable->LocalType));
@@ -2446,11 +2536,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         }
     }
 
-#ifdef JIT_TRACE
-    if (body->LocalVariables->Length > 0) {
-        TRACE("\t)");
-    }
-#endif
+    JIT_TRACE(
+        if (body->LocalVariables->Length > 0) {
+            TRACE("\t)");
+        }
+    );
 
     // TODO: we need to validate that all branch targets and that all the
     //       try and handler offsets are actually in valid instructions and
@@ -2496,9 +2586,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         hmput(ctx->clause_to_label, clause, label);
     }
 
-#ifdef JIT_TRACE
-    int jit_trace_indent = 4;
-#endif
+    UNUSED int jit_trace_indent = 4;
 
     //
     // The main loop for decoding and jitting opcodes
@@ -2569,33 +2657,33 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
-#ifdef JIT_TRACE
-            if (clause->TryOffset == ctx->il_offset) {
-                TRACE("%*s.try %d", jit_trace_indent, "", i);
-                TRACE("%*s{", jit_trace_indent, "");
-                jit_trace_indent += 4;
-            } else if (clause->TryOffset + clause->TryLength == ctx->il_offset) {
-                jit_trace_indent -= 4;
-                TRACE("%*s} // end .try", jit_trace_indent, "");
-            }
-
-            if (clause->HandlerOffset == ctx->il_offset) {
-                if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-                    TRACE("%*scatch %U.%U", jit_trace_indent, "", clause->CatchType->Namespace, clause->CatchType->Name);
-                } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-                    TRACE("%*sfinally", jit_trace_indent, "");
-                } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
-                    TRACE("%*sfault", jit_trace_indent, "");
-                } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
-                    TRACE("%*sfilter", jit_trace_indent, "");
+            JIT_TRACE(
+                if (clause->TryOffset == ctx->il_offset) {
+                    TRACE("%*s.try %d", jit_trace_indent, "", i);
+                    TRACE("%*s{", jit_trace_indent, "");
+                    jit_trace_indent += 4;
+                } else if (clause->TryOffset + clause->TryLength == ctx->il_offset) {
+                    jit_trace_indent -= 4;
+                    TRACE("%*s} // end .try", jit_trace_indent, "");
                 }
-                TRACE("%*s{", jit_trace_indent, "");
-                jit_trace_indent += 4;
-            } else if (clause->HandlerOffset + clause->HandlerLength == ctx->il_offset) {
-                jit_trace_indent -= 4;
-                TRACE("%*s} // end handler", jit_trace_indent, "");
-            }
-#endif
+
+                if (clause->HandlerOffset == ctx->il_offset) {
+                    if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                        TRACE("%*scatch %U.%U", jit_trace_indent, "", clause->CatchType->Namespace, clause->CatchType->Name);
+                    } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+                        TRACE("%*sfinally", jit_trace_indent, "");
+                    } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
+                        TRACE("%*sfault", jit_trace_indent, "");
+                    } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
+                        TRACE("%*sfilter", jit_trace_indent, "");
+                    }
+                    TRACE("%*s{", jit_trace_indent, "");
+                    jit_trace_indent += 4;
+                } else if (clause->HandlerOffset + clause->HandlerLength == ctx->il_offset) {
+                    jit_trace_indent -= 4;
+                    TRACE("%*s} // end handler", jit_trace_indent, "");
+                }
+            );
 
             if (
                 clause->HandlerOffset == ctx->il_offset ||
@@ -2646,9 +2734,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         // get the opcode info
         opcode_info_t* opcode_info = &g_dotnet_opcodes[opcode];
 
-#ifdef JIT_TRACE
-        printf("[*] %*sIL_%04x: %s ", jit_trace_indent, "", ctx->il_offset, opcode_info->name);
-#endif
+        JIT_TRACE(
+            printf("[*] %*sIL_%04x: %s ", jit_trace_indent, "", ctx->il_offset, opcode_info->name);
+        );
 
         // set the last control flow to this one
         last_cf = opcode_info->control_flow;
@@ -2675,9 +2763,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 il_ptr += sizeof(int32_t);
                 operand_i32 += il_ptr;
 
-#ifdef JIT_TRACE
-                printf("IL_%04x", operand_i32);
-#endif
+                JIT_TRACE(
+                    printf("IL_%04x", operand_i32)
+                );
             } break;
 
             case OPCODE_OPERAND_InlineField: {
@@ -2690,12 +2778,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                               method->GenericArguments, &operand_field));
                 CHECK(operand_field != NULL);
 
-#ifdef JIT_TRACE
-                strbuilder_t type_name = strbuilder_new();
-                type_print_full_name(operand_field->DeclaringType, &type_name);
-                printf("%s::%U", strbuilder_get(&type_name), operand_field->Name);
-                strbuilder_free(&type_name);
-#endif
+                JIT_TRACE(
+                    strbuilder_t type_name = strbuilder_new();
+                    type_print_full_name(operand_field->DeclaringType, &type_name);
+                    printf("%s::%U", strbuilder_get(&type_name), operand_field->Name);
+                    strbuilder_free(&type_name);
+                );
 
                 // check we can access it
                 CHECK(check_field_accessibility(method, operand_field));
@@ -2708,18 +2796,18 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_i32 = *(int32_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int32_t);
 
-#ifdef JIT_TRACE
-                printf("%d", operand_i32);
-#endif
+                JIT_TRACE(
+                    printf("%d", operand_i32);
+                );
             } break;
 
             case OPCODE_OPERAND_InlineI8: {
                 operand_i64 = *(int64_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int64_t);
 
-#ifdef JIT_TRACE
-                printf("%ld", operand_i64);
-#endif
+                JIT_TRACE(
+                    printf("%ld", operand_i64);
+                );
             } break;
 
             case OPCODE_OPERAND_InlineMethod: {
@@ -2732,12 +2820,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                                method->GenericArguments, &operand_method));
                 CHECK(operand_method != NULL);
 
-#ifdef JIT_TRACE
-                strbuilder_t type_name = strbuilder_new();
-                method_print_full_name(operand_method, &type_name);
-                printf("%s", strbuilder_get(&type_name));
-                strbuilder_free(&type_name);
-#endif
+                JIT_TRACE(
+                    strbuilder_t type_name = strbuilder_new();
+                    method_print_full_name(operand_method, &type_name);
+                    printf("%s", strbuilder_get(&type_name));
+                    strbuilder_free(&type_name);
+                );
 
                 // check we can access it
                 CHECK(check_method_accessibility(method, operand_method),
@@ -2756,9 +2844,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_f64 = *(double*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(double);
 
-#ifdef JIT_TRACE
-                printf("<InlineR>");
-#endif
+                JIT_TRACE(
+                    printf("<InlineR>");
+                );
             } break;
 
             case OPCODE_OPERAND_InlineSig: CHECK_FAIL("TODO: sig support"); break;
@@ -2769,9 +2857,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_string = assembly_get_string_by_token(assembly, value);
                 CHECK(operand_string != NULL);
 
-#ifdef JIT_TRACE
-                printf("\"%U\"", operand_string);
-#endif
+                JIT_TRACE(
+                    printf("\"%U\"", operand_string);
+                );
             } break;
 
             case OPCODE_OPERAND_InlineSwitch: {
@@ -2780,9 +2868,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_switch_dests = (int32_t*)&body->Il->Data[il_ptr];
                 il_ptr += operand_switch_n * 4;
 
-#ifdef JIT_TRACE
-                printf("<InlineSwitch>");
-#endif
+                JIT_TRACE(
+                    printf("<InlineSwitch>");
+                );
             } break;
 
             case OPCODE_OPERAND_InlineTok: {
@@ -2790,9 +2878,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_token = *(token_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(token_t);
 
-#ifdef JIT_TRACE
-                printf("<InlineTok>");
-#endif
+                JIT_TRACE(
+                    printf("<InlineTok>");
+                );
             } break;
 
             case OPCODE_OPERAND_InlineType: {
@@ -2805,12 +2893,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         , method->GenericArguments, &operand_type));
                 CHECK(operand_type != NULL);
 
-#ifdef JIT_TRACE
-                strbuilder_t type_name = strbuilder_new();
-                type_print_full_name(operand_type, &type_name);
-                printf("%s", strbuilder_get(&type_name));
-                strbuilder_free(&type_name);
-#endif
+                JIT_TRACE(
+                    strbuilder_t type_name = strbuilder_new();
+                    type_print_full_name(operand_type, &type_name);
+                    printf("%s", strbuilder_get(&type_name));
+                    strbuilder_free(&type_name);
+                );
 
                 // check it is visible
                 CHECK(check_type_visibility(method, operand_type));
@@ -2823,9 +2911,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 operand_i32 = *(uint16_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(uint16_t);
 
-#ifdef JIT_TRACE
-                printf("%d", operand_i32);
-#endif
+                JIT_TRACE(
+                    printf("%d", operand_i32);
+                );
             } break;
 
             case OPCODE_OPERAND_ShortInlineBrTarget: {
@@ -2833,36 +2921,36 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 il_ptr += sizeof(int8_t);
                 operand_i32 += il_ptr;
 
-#ifdef JIT_TRACE
-                printf("IL_%04x", operand_i32);
-#endif
+                JIT_TRACE(
+                    printf("IL_%04x", operand_i32);
+                );
             } break;
 
             case OPCODE_OPERAND_ShortInlineI: {
                 operand_i32 = *(int8_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(int8_t);
 
-#ifdef JIT_TRACE
-                printf("%d", operand_i32);
-#endif
+                JIT_TRACE(
+                    printf("%d", operand_i32);
+                );
             } break;
 
             case OPCODE_OPERAND_ShortInlineR: {
                 operand_f32 = *(float*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(float);
 
-#ifdef JIT_TRACE
-                printf("<ShortInlineR>");
-#endif
+                JIT_TRACE(
+                    printf("<ShortInlineR>");
+                );
             } break;
 
             case OPCODE_OPERAND_ShortInlineVar: {
                 operand_i32 = *(uint8_t*)&body->Il->Data[il_ptr];
                 il_ptr += sizeof(uint8_t);
 
-#ifdef JIT_TRACE
-                printf("%d", operand_i32);
-#endif
+                JIT_TRACE(
+                        printf("%d", operand_i32);
+                );
             } break;
 
             case OPCODE_OPERAND_InlineNone:
@@ -2872,9 +2960,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_FAIL();
         }
 
-#ifdef JIT_TRACE
-        printf("\r\n");
-#endif
+        JIT_TRACE(
+            printf("\r\n");
+        );
 
         //--------------------------------------------------------------------------------------------------------------
         // Handle the opcode
@@ -3687,7 +3775,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // case 1: it's past the end
                 // case 2: it's before the start (which is 0)
                 // as operand_switch_n is positive signed, when treated as unsigned it is less than all negative signed numbers
-                // hence you can use a single branch to handle both cases 
+                // hence you can use a single branch to handle both cases
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_UBGE,
                                              MIR_new_label_op(mir_ctx, not_taken),
@@ -3728,7 +3816,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                              MIR_new_reg_op(mir_ctx, obj_reg)));
 
                 // throw it
-                CHECK_AND_RETHROW(jit_throw(ctx, obj_type));
+                CHECK_AND_RETHROW(jit_throw(ctx, obj_type, true));
             } break;
 
             case CEE_LEAVE:
@@ -3826,10 +3914,33 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     int clausei = hmgeti(ctx->clause_to_label, clause);
                     CHECK(clausei != -1);
                     MIR_label_t next_clause = ctx->clause_to_label[clausei].next_clause;
-                    CHECK(next_clause != NULL);
+
+                    size_t nres = 1;
+                    if (ctx->method->ReturnType != NULL) {
+                        MIR_type_t mtype = get_mir_type(ctx->method->ReturnType);
+                        if (mtype != MIR_T_BLK) {
+                            nres = 2;
+                        }
+                    }
+
+                    //
+                    // clause will be null if the try related to this finally does not actually have
+                    // any leave instruction, the flow can happen when an exception is thrown
+                    // unconditionally from a try-clause. in this case we are going to just
+                    // assume that we need to always return the exception
+                    //
+                    if (next_clause == NULL) {
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_ret_insn(mir_ctx, nres,
+                                                         MIR_new_reg_op(mir_ctx, ctx->exception_reg),
+                                                         MIR_new_int_op(mir_ctx, 0)));
+
+                        found = true;
+                        break;
+                    }
 
                     // next_clause will either continue to the next finally if there was an exception, or it will
-                    // continue to the next instruction if there was no exception
+                    // continue to the next instruction if there was no exception.
                     MIR_label_t skip = MIR_new_label(mir_ctx);
 
                     MIR_append_insn(mir_ctx, mir_func,
@@ -3842,16 +3953,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         // This is the last finally in the function and in the chain, so we can return
                         // right away from this function with the error.
                         //
-
-                        // figure how many we need
-                        size_t nres = 1;
-                        if (ctx->method->ReturnType != NULL) {
-                            MIR_type_t mtype = get_mir_type(ctx->method->ReturnType);
-                            if (mtype != MIR_T_BLK) {
-                                nres = 2;
-                            }
-                        }
-
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_ret_insn(mir_ctx, nres,
                                                          MIR_new_reg_op(mir_ctx, ctx->exception_reg),
@@ -5456,8 +5557,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     arg_ops[1] = MIR_new_ref_op(mir_ctx, operand_method->MirFunc);
                 }
 
-                // get it to the exception register
-                arg_ops[2] = MIR_new_reg_op(mir_ctx, ctx->exception_reg);
+                // get it to a temp register
+                MIR_reg_t exception_reg = new_temp_reg(ctx, tSystem_Exception);
+                arg_ops[2] = MIR_new_reg_op(mir_ctx, exception_reg);
 
                 #define IS_INTRINSIC(name) \
                     ((name) != NULL && operand_method->GenericMethodDefinition == (name))
@@ -5528,10 +5630,16 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_insn(mir_ctx, MIR_BF,
                                                  MIR_new_label_op(mir_ctx, label),
-                                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+                                                 MIR_new_reg_op(mir_ctx, exception_reg)));
+
+                    // set the exception register to have the new exception
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg),
+                                                 MIR_new_reg_op(mir_ctx, exception_reg)));
 
                     // throw the error, it has an unknown type
-                    CHECK_AND_RETHROW(jit_throw(ctx, NULL));
+                    CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
 
                     // insert the skip label
                     MIR_append_insn(mir_ctx, mir_func, label);
@@ -6151,10 +6259,10 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         last_cf == OPCODE_CONTROL_FLOW_RETURN
     );
 
-#ifdef JIT_TRACE
-    TRACE("}");
-    TRACE();
-#endif
+    JIT_TRACE(
+        TRACE("}");
+        TRACE();
+    );
 
 cleanup:
     if (IS_ERROR(err)) {
@@ -6180,6 +6288,8 @@ cleanup:
 
     return err;
 }
+
+#undef MIR_append_insn
 
 //
 // TODO: this can be much cheaper if we just have a
