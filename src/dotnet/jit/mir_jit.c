@@ -3873,7 +3873,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     ctx->clause_to_label[clausei].last_in_chain = true;
 
                     if (last_clausi == -1) {
-                        // jump to the first finally we see
+                        // jump to the first finally we see, don't forget to zero out the
+                        // exception register before doing so (given we have not thrown an exception)
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg),
+                                                     MIR_new_int_op(mir_ctx, 0)));
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_JMP,
                                                      MIR_new_label_op(mir_ctx, finally_label)));
