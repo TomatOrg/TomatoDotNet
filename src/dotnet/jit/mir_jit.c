@@ -1765,7 +1765,7 @@ static err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow
                                           MIR_new_ref_op(mir_ctx, m_on_rethrow_proto),
                                           MIR_new_ref_op(mir_ctx, m_on_rethrow_func),
                                           MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
-                                          ctx->il_offset));
+                                          MIR_new_int_op(mir_ctx, ctx->il_offset)));
     } else {
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_call_insn(mir_ctx, 5,
@@ -1773,7 +1773,7 @@ static err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow
                                           MIR_new_ref_op(mir_ctx, m_on_throw_func),
                                           MIR_new_reg_op(mir_ctx, ctx->exception_reg),
                                           MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
-                                          ctx->il_offset));
+                                          MIR_new_int_op(mir_ctx, ctx->il_offset)));
 
     }
 #endif
