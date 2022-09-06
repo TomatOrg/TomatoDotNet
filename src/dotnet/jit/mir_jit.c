@@ -158,17 +158,18 @@ static void managed_ref_memcpy(void* base, System_Type struct_type, void* from) 
     }
 }
 
-static void on_throw(System_Exception exception, System_Reflection_MethodInfo methodInfo) {
+static void on_throw(System_Exception exception, System_Reflection_MethodInfo methodInfo, int il_offset) {
 #ifdef THROW_TRACE
-    ERROR("Exception `%U` (of type %U.%U) thrown at %U.%U::%U",
+    ERROR("Exception `%U` (of type %U.%U) thrown at %U.%U::%U -- IL_%04x",
           exception->Message, OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name,
-          methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name);
+          methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name, il_offset);
 #endif
 }
 
-static void on_rethrow(System_Reflection_MethodInfo methodInfo) {
+static void on_rethrow(System_Reflection_MethodInfo methodInfo, int il_offset) {
 #ifdef THROW_TRACE
-    ERROR("\trethrown at %U.%U::%U", methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name);
+    ERROR("\trethrown at %U.%U::%U -- IL_%04x",
+          methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name, il_offset);
 #endif
 }
 
@@ -317,10 +318,10 @@ err_t init_jit() {
     m_memset_proto = MIR_new_proto(m_mir_context, "memset$proto", 0, NULL, 3, MIR_T_P, "dest", MIR_T_I32, "c", MIR_T_U64, "count");
     m_memset_func = MIR_new_import(m_mir_context, "memset");
 
-    m_on_throw_proto = MIR_new_proto(m_mir_context, "on_throw$proto", 0, NULL, 2, MIR_T_P, "exception", MIR_T_P, "method_info");
+    m_on_throw_proto = MIR_new_proto(m_mir_context, "on_throw$proto", 0, NULL, 3, MIR_T_P, "exception", MIR_T_P, "method_info", MIR_T_I32, "il_offset");
     m_on_throw_func = MIR_new_import(m_mir_context, "on_throw");
 
-    m_on_rethrow_proto = MIR_new_proto(m_mir_context, "on_rethrow$proto", 0, NULL, 1, MIR_T_P, "method_info");
+    m_on_rethrow_proto = MIR_new_proto(m_mir_context, "on_rethrow$proto", 0, NULL, 2, MIR_T_P, "method_info", MIR_T_I32, "il_offset");
     m_on_rethrow_func = MIR_new_import(m_mir_context, "on_rethrow");
 
     res_type = MIR_T_I8;
@@ -1760,17 +1761,19 @@ static err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow
 #ifdef THROW_TRACE
     if (rethrow) {
         MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 3,
+                        MIR_new_call_insn(mir_ctx, 4,
                                           MIR_new_ref_op(mir_ctx, m_on_rethrow_proto),
                                           MIR_new_ref_op(mir_ctx, m_on_rethrow_func),
-                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method)));
+                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
+                                          ctx->il_offset));
     } else {
         MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 4,
+                        MIR_new_call_insn(mir_ctx, 5,
                                           MIR_new_ref_op(mir_ctx, m_on_throw_proto),
                                           MIR_new_ref_op(mir_ctx, m_on_throw_func),
                                           MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method)));
+                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
+                                          ctx->il_offset));
 
     }
 #endif
