@@ -179,6 +179,12 @@ typedef struct metadata_type_spec {
     blob_entry_t signature;
 } PACKED metadata_type_spec_t;
 
+#define METADATA_FIELD_RVA 0x1d
+typedef struct metadata_field_rva {
+    uint32_t rva;
+    token_t field;
+} PACKED metadata_field_rva_t;
+
 #define METADATA_ASSEMBLY 0x20
 typedef struct metadata_assembly {
     uint32_t hash_alg_id;

@@ -217,10 +217,10 @@ static method_result_t object_GetType(System_Object this) {
 // System.Threading.Interlocked
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t interlocked_add_i32(_Atomic(int32_t)* location1, int32_t value)      { return (method_result_t) { .value = atomic_fetch_add(location1, value), .exception = NULL }; }
-static method_result_t interlocked_add_u32(_Atomic(uint32_t)* location1, uint32_t value)    { return (method_result_t) { .value = atomic_fetch_add(location1, value), .exception = NULL }; }
-static method_result_t interlocked_add_i64(_Atomic(int64_t)* location1, int64_t value)      { return (method_result_t) { .value = atomic_fetch_add(location1, value), .exception = NULL }; }
-static method_result_t interlocked_add_u64(_Atomic(uint64_t)* location1, uint64_t value)    { return (method_result_t) { .value = atomic_fetch_add(location1, value), .exception = NULL }; }
+static method_result_t interlocked_add_i32(_Atomic(int32_t)* location1, int32_t value)      { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
+static method_result_t interlocked_add_u32(_Atomic(uint32_t)* location1, uint32_t value)    { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
+static method_result_t interlocked_add_i64(_Atomic(int64_t)* location1, int64_t value)      { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
+static method_result_t interlocked_add_u64(_Atomic(uint64_t)* location1, uint64_t value)    { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
 
 static method_result_t interlocked_and_i32(_Atomic(int32_t)* location1, int32_t value)      { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }
 static method_result_t interlocked_and_u32(_Atomic(uint32_t)* location1, uint32_t value)    { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }

@@ -336,7 +336,7 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
 
         // can only have packing size on seq layout
         if (class_layout->packing_size != 0) {
-            CHECK(layout == TYPE_SEQUENTIAL_LAYOUT);
+            CHECK(layout == TYPE_SEQUENTIAL_LAYOUT, "invalid layout %d", layout);
             type->PackingSize = class_layout->packing_size;
 
             // make sure it is valid
