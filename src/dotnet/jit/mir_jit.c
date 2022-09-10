@@ -151,8 +151,13 @@ static int add_thread_local(System_Type type) {
 static void* get_thread_local_ptr(int local_index) {
     // this local was not accessed ever, allocate it
     if (arrlen(m_thread_locals) <= local_index) {
-        int first = 0;
         arrsetlen(m_thread_locals, local_index + 1);
+    }
+
+    void* ptr = m_thread_locals[local_index];
+
+    if (ptr == NULL) {
+        int first = 0;
 
         // get the stack size
         rwmutex_rlock(&m_thread_local_mutex);
@@ -171,7 +176,7 @@ static void* get_thread_local_ptr(int local_index) {
 
         // allocate the entry in memory to hold this local,
         // and add it as a gc root
-        void* ptr = malloc(size);
+        ptr = malloc(size);
         memset(ptr, 0, size);
 
         // add managed offsets to the gc
@@ -183,7 +188,7 @@ static void* get_thread_local_ptr(int local_index) {
     }
 
     // return the pointer to it
-    return m_thread_locals[local_index];
+    return ptr;
 }
 
 void jit_free_thread_locals() {
@@ -191,6 +196,9 @@ void jit_free_thread_locals() {
     for (int local_index = 0; local_index < arrlen(m_thread_locals); local_index++) {
         void* ptr = m_thread_locals[local_index];
         int first = 0;
+
+        if (ptr == NULL)
+            continue;
 
         // get the managed offsets to remove them
         rwmutex_rlock(&m_thread_local_mutex);
