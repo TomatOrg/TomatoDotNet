@@ -36,6 +36,8 @@ Right now the main work is on the runtime itself, the main features of the runti
   - Missing some corelib methods to make them fully work
 - Most common CIL instructions implemented
 - Visibility and Accessibility checking
+- Full attribute support
+- Support for ThreadStatic attribute 
 
 Note that the runtime is still not stable and even tho the features are implemented bugs are likely to be found, we try to fix anything we find.
 
@@ -47,14 +49,14 @@ Note that the runtime is still not stable and even tho the features are implemen
   - The base classes are defined, no actual methods or attributes 
 - Basic collections 
   - Enumerators
-  - Basic generic List implementation 
+  - Generic List implementation 
 - Mostly implemented threading library
   - Interlocked class (missing some signatures)
   - WaitHandle with WaitEvent, Mutex, Semaphore 
   - Thread class
   - Monitor support
     - no support for timeout
-- Support for Span
+- Support for Span and ReadOnlySpan
   - Only from array types, as void* is not valid
 
 ### Main missing features
