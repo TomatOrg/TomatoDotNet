@@ -86,11 +86,11 @@ static MIR_item_t m_managed_memcpy_func = NULL;
 static MIR_item_t m_managed_ref_memcpy_proto = NULL;
 static MIR_item_t m_managed_ref_memcpy_func = NULL;
 
-static MIR_item_t m_get_array_type_proto = NULL;
-static MIR_item_t m_get_array_type_func = NULL;
-
 static MIR_item_t m_memcpy_proto = NULL;
 static MIR_item_t m_memcpy_func = NULL;
+
+static MIR_item_t m_memmove_proto = NULL;
+static MIR_item_t m_memmove_func = NULL;
 
 static MIR_item_t m_memset_proto = NULL;
 static MIR_item_t m_memset_func = NULL;
@@ -242,6 +242,12 @@ static void memcpy_wrapper(void* dest, void* src, size_t count) {
     memcpy(dest, src, count);
 }
 
+__attribute__((flatten))
+static void memmove_wrapper(void* dest, void* src, size_t count) {
+    memmove(dest, src, count);
+}
+
+
 // TODO: generate this instead?
 static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, System_Type targetInterface) {
     // should only be called after the type checking
@@ -392,6 +398,47 @@ static void jit_generate_unsafe_as() {
     m_unsafe_as_func = func;
 }
 
+static void jit_generate_memmove() {
+    const char* fname = "[Corelib-v1]System.Buffer::Memmove([Corelib-v1]System.Byte&,[Corelib-v1]System.Byte&,nuint)";
+    MIR_type_t res = MIR_T_P;
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 3, MIR_T_P, "dst", MIR_T_P, "src", MIR_T_U64, "len");
+    MIR_reg_t dst_reg = MIR_reg(m_mir_context, "dst", func->u.func);
+    MIR_reg_t src_reg = MIR_reg(m_mir_context, "src", func->u.func);
+    MIR_reg_t len_reg = MIR_reg(m_mir_context, "len", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_call_insn(m_mir_context, 5,
+                                      MIR_new_ref_op(m_mir_context, m_memmove_proto),
+                                      MIR_new_ref_op(m_mir_context, m_memmove_func),
+                                      MIR_new_reg_op(m_mir_context, dst_reg),
+                                      MIR_new_reg_op(m_mir_context, src_reg),
+                                      MIR_new_reg_op(m_mir_context, len_reg)));
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 1,
+                                      MIR_new_int_op(m_mir_context, 0)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
+static void jit_generate_zeromem() {
+    const char* fname = "[Corelib-v1]System.Buffer::_ZeroMemory([Corelib-v1]System.Byte&,nuint)";
+    MIR_type_t res = MIR_T_P;
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 2, MIR_T_P, "b", MIR_T_U64, "len");
+    MIR_reg_t b_reg = MIR_reg(m_mir_context, "b", func->u.func);
+    MIR_reg_t len_reg = MIR_reg(m_mir_context, "len", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_call_insn(m_mir_context, 5,
+                                      MIR_new_ref_op(m_mir_context, m_memset_proto),
+                                      MIR_new_ref_op(m_mir_context, m_memset_func),
+                                      MIR_new_reg_op(m_mir_context, b_reg),
+                                      MIR_new_int_op(m_mir_context, 0),
+                                      MIR_new_reg_op(m_mir_context, len_reg)));
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 1,
+                                     MIR_new_int_op(m_mir_context, 0)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
 err_t init_jit() {
     err_t err = NO_ERROR;
 
@@ -409,9 +456,6 @@ err_t init_jit() {
     m_gc_new_proto = MIR_new_proto(m_mir_context, "gc_new$proto", 1, &res_type, 2, MIR_T_P, "type", MIR_T_U64, "size");
     m_gc_new_func = MIR_new_import(m_mir_context, "gc_new");
 
-    m_get_array_type_proto = MIR_new_proto(m_mir_context, "get_array_type$proto", 1, &res_type, 1, MIR_T_P, "type");
-    m_get_array_type_func = MIR_new_import(m_mir_context, "get_array_type");
-
     m_gc_update_proto = MIR_new_proto(m_mir_context, "gc_update$proto", 0, NULL, 3, MIR_T_P, "o", MIR_T_U64, "idx", MIR_T_P, "new");
     m_gc_update_func = MIR_new_import(m_mir_context, "gc_update");
 
@@ -426,6 +470,9 @@ err_t init_jit() {
 
     m_memcpy_proto = MIR_new_proto(m_mir_context, "memcpy$proto", 0, NULL, 3, MIR_T_P, "dest", MIR_T_P, "src", MIR_T_U64, "count");
     m_memcpy_func = MIR_new_import(m_mir_context, "memcpy");
+
+    m_memmove_proto = MIR_new_proto(m_mir_context, "memmove$proto", 0, NULL, 3, MIR_T_P, "dest", MIR_T_P, "src", MIR_T_U64, "count");
+    m_memmove_func = MIR_new_import(m_mir_context, "memmove");
 
     m_memset_proto = MIR_new_proto(m_mir_context, "memset$proto", 0, NULL, 3, MIR_T_P, "dest", MIR_T_I32, "c", MIR_T_U64, "count");
     m_memset_func = MIR_new_import(m_mir_context, "memset");
@@ -453,6 +500,8 @@ err_t init_jit() {
     jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
     jit_generate_unsafe_as();
+    jit_generate_memmove();
+    jit_generate_zeromem();
 
     MIR_finish_module(m_mir_context);
 
@@ -471,6 +520,7 @@ err_t init_jit() {
     MIR_load_external(m_mir_context, "gc_update_ref", gc_update_ref);
     MIR_load_external(m_mir_context, "get_array_type", get_array_type);
     MIR_load_external(m_mir_context, "memcpy", memcpy_wrapper);
+    MIR_load_external(m_mir_context, "memmove", memmove_wrapper);
     MIR_load_external(m_mir_context, "memset", memset_wrapper);
     MIR_load_external(m_mir_context, "managed_memcpy", managed_memcpy);
     MIR_load_external(m_mir_context, "managed_ref_memcpy", managed_ref_memcpy);
