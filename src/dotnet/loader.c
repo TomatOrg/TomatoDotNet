@@ -1981,6 +1981,7 @@ static type_init_t m_type_init[] = {
     TYPE_LOOKUP("System.Runtime.CompilerServices", "RuntimeHelpers", tSystem_Runtime_CompilerServices_RuntimeHelpers),
     TYPE_LOOKUP("System.Runtime.CompilerServices", "IsVolatile", tSystem_Runtime_CompilerServices_IsVolatile),
     TYPE_LOOKUP("System.Runtime.InteropServices", "InAttribute", tSystem_Runtime_InteropServices_InAttribute),
+    TYPE_LOOKUP("System", "ThreadStaticAttribute", tSystem_ThreadStaticAttribute),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {

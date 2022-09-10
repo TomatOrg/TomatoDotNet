@@ -193,8 +193,18 @@ static err_t parse_type(
         case ELEMENT_TYPE_STRING: *out_type = tSystem_String; break;
 
         case ELEMENT_TYPE_SZARRAY: {
+            // Handle custom mode
+            System_Type mod = NULL;
+            bool required = false;
+            while (true) {
+                CHECK_AND_RETHROW(parse_custom_mod(sig, assembly, &mod, &required));
+                if (mod == NULL) {
+                    break;
+                }
 
-            // TODO: CustomMod*
+                CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+                WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+            }
 
             System_Type elementType = NULL;
             CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs, file, metadata));

@@ -2,6 +2,7 @@
 #include "dotnet/monitor.h"
 #include "thread/scheduler.h"
 #include "internal_calls.h"
+#include "sync/rwmutex.h"
 
 #include <dotnet/opcodes.h>
 #include <dotnet/types.h>
@@ -100,6 +101,9 @@ static MIR_item_t m_on_throw_func = NULL;
 static MIR_item_t m_on_rethrow_proto = NULL;
 static MIR_item_t m_on_rethrow_func = NULL;
 
+static MIR_item_t m_get_thread_local_ptr_proto = NULL;
+static MIR_item_t m_get_thread_local_ptr_func = NULL;
+
 static MIR_item_t m_delegate_ctor_func = NULL;
 
 static MIR_item_t m_unsafe_as_func = NULL;
@@ -112,6 +116,106 @@ static MIR_item_t m_unsafe_as_func = NULL;
 
 static System_Reflection_MethodInfo m_Unsafe_SizeOf;
 static System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsReferences;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// thread statics
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Arrays of locals for this thread
+ */
+static THREAD_LOCAL void** m_thread_locals = NULL;
+
+/**
+ * Used to generate thread local ids
+ */
+static System_Type* m_thread_local_types = 0;
+
+static rwmutex_t m_thread_local_mutex = { 0 };
+
+/**
+ * Adds a new thread local
+ */
+static int add_thread_local(System_Type type) {
+    rwmutex_lock(&m_thread_local_mutex);
+    int index = arrlen(m_thread_local_types);
+    arrpush(m_thread_local_types, type);
+    rwmutex_unlock(&m_thread_local_mutex);
+    return index;
+}
+
+/**
+ * Get a pointer to a thread local by its ID, initializes
+ * it if not initialized yet
+ */
+static void* get_thread_local_ptr(int local_index) {
+    // this local was not accessed ever, allocate it
+    if (arrlen(m_thread_locals) <= local_index) {
+        int first = 0;
+        arrsetlen(m_thread_locals, local_index + 1);
+
+        // get the stack size
+        rwmutex_rlock(&m_thread_local_mutex);
+        System_Type type = m_thread_local_types[local_index];
+        size_t size = type->StackSize;
+        int* managedOffsets = NULL;
+        int managedOffsetsCount = 0;
+        if (type->IsValueType) {
+            managedOffsets = type->ManagedPointersOffsets;
+            managedOffsetsCount = arrlen(managedOffsets);
+        } else {
+            managedOffsets = &first;
+            managedOffsetsCount = 1;
+        }
+        rwmutex_runlock(&m_thread_local_mutex);
+
+        // allocate the entry in memory to hold this local,
+        // and add it as a gc root
+        void* ptr = malloc(size);
+        memset(ptr, 0, size);
+
+        // add managed offsets to the gc
+        for (int i = 0; i < managedOffsetsCount; i++) {
+            gc_add_root(ptr + managedOffsets[i]);
+        }
+
+        m_thread_locals[local_index] = ptr;
+    }
+
+    // return the pointer to it
+    return m_thread_locals[local_index];
+}
+
+void jit_free_thread_locals() {
+    // free the entries
+    for (int local_index = 0; local_index < arrlen(m_thread_locals); local_index++) {
+        void* ptr = m_thread_locals[local_index];
+        int first = 0;
+
+        // get the managed offsets to remove them
+        rwmutex_rlock(&m_thread_local_mutex);
+        System_Type type = m_thread_local_types[local_index];
+        int* managedOffsets = NULL;
+        int managedOffsetsCount = 0;
+        if (type->IsValueType) {
+            managedOffsets = type->ManagedPointersOffsets;
+            managedOffsetsCount = arrlen(managedOffsets);
+        } else {
+            managedOffsets = &first;
+            managedOffsetsCount = 1;
+        }
+        rwmutex_runlock(&m_thread_local_mutex);
+
+        // remove it from the gc
+        for (int i = 0; i < managedOffsetsCount; i++) {
+            gc_remove_root(ptr + managedOffsets[i]);
+        }
+
+        // free it
+        free(ptr);
+    }
+    arrfree(m_thread_locals);
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // runtime functions
@@ -324,6 +428,9 @@ err_t init_jit() {
     m_on_rethrow_proto = MIR_new_proto(m_mir_context, "on_rethrow$proto", 0, NULL, 2, MIR_T_P, "method_info", MIR_T_I32, "il_offset");
     m_on_rethrow_func = MIR_new_import(m_mir_context, "on_rethrow");
 
+    m_get_thread_local_ptr_proto = MIR_new_proto(m_mir_context, "get_thread_local_ptr$proto", 1, &res_type, 1, MIR_T_I32, "local_index");
+    m_get_thread_local_ptr_func = MIR_new_import(m_mir_context, "get_thread_local_ptr");
+
     res_type = MIR_T_I8;
 
     m_dynamic_cast_obj_to_interface_proto = MIR_new_proto(m_mir_context, "dynamic_cast_obj_to_interface$proto", 1, &res_type, 3, MIR_T_P, "dest", MIR_T_P, "source", MIR_T_P, "targetInterface");
@@ -361,6 +468,7 @@ err_t init_jit() {
     MIR_load_external(m_mir_context, "managed_ref_memcpy", managed_ref_memcpy);
     MIR_load_external(m_mir_context, "on_throw", on_throw);
     MIR_load_external(m_mir_context, "on_rethrow", on_rethrow);
+    MIR_load_external(m_mir_context, "get_thread_local_ptr", get_thread_local_ptr);
 
     // load internal functions
     for (int i = 0; i < g_internal_calls_count; i++) {
@@ -1498,12 +1606,18 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
 
             // for static fields declare the bss
             if (field_is_static(fieldInfo)) {
-                strbuilder_t field_name = strbuilder_new();
-                type_print_full_name(fieldInfo->DeclaringType, &field_name);
-                strbuilder_cstr(&field_name, "::");
-                strbuilder_utf16(&field_name, fieldInfo->Name->Chars, fieldInfo->Name->Length);
-                fieldInfo->MirField = MIR_new_bss(ctx->ctx, strbuilder_get(&field_name), fieldInfo->FieldType->StackSize);
-                strbuilder_free(&field_name);
+                if (field_is_thread_static(fieldInfo)) {
+                    // thread local
+                    fieldInfo->ThreadStaticIndex = add_thread_local(fieldInfo->FieldType);
+                } else {
+                    // normal field
+                    strbuilder_t field_name = strbuilder_new();
+                    type_print_full_name(fieldInfo->DeclaringType, &field_name);
+                    strbuilder_cstr(&field_name, "::");
+                    strbuilder_utf16(&field_name, fieldInfo->Name->Chars, fieldInfo->Name->Length);
+                    fieldInfo->MirField = MIR_new_bss(ctx->ctx, strbuilder_get(&field_name), fieldInfo->FieldType->StackSize);
+                    strbuilder_free(&field_name);
+                }
             }
         }
     }
@@ -4606,10 +4720,21 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // have the reference in a register for easy access
                 MIR_reg_t field_reg = new_temp_reg(ctx, tSystem_IntPtr);
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_MOV,
-                                             MIR_new_reg_op(mir_ctx, field_reg),
-                                             MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                if (field_is_thread_static(operand_field)) {
+                    // thread local field
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_call_insn(mir_ctx, 4,
+                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_proto),
+                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_func),
+                                                      MIR_new_reg_op(mir_ctx, field_reg),
+                                                      MIR_new_uint_op(mir_ctx, operand_field->ThreadStaticIndex)));
+                } else {
+                    // normal static field
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, field_reg),
+                                                 MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                }
                 MIR_op_t field_op = MIR_new_mem_op(mir_ctx, get_mir_type(field_type), 0, field_reg, 0, 1);
 
                 switch (type_get_stack_type(value_type)) {
@@ -4672,10 +4797,21 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                 // have the reference in a register for easy access
                 MIR_reg_t field_reg = new_temp_reg(ctx, tSystem_IntPtr);
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_MOV,
-                                             MIR_new_reg_op(mir_ctx, field_reg),
-                                             MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                if (field_is_thread_static(operand_field)) {
+                    // thread local field
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_call_insn(mir_ctx, 4,
+                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_proto),
+                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_func),
+                                                      MIR_new_reg_op(mir_ctx, field_reg),
+                                                      MIR_new_uint_op(mir_ctx, operand_field->ThreadStaticIndex)));
+                } else {
+                    // normal static field
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, field_reg),
+                                                 MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                }
                 MIR_op_t field_op = MIR_new_mem_op(mir_ctx, get_mir_type(field_type), 0, field_reg, 0, 1);
 
                 switch (type_get_stack_type(field_type)) {
@@ -4740,11 +4876,21 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 STACK_TOP.non_local_ref = true; // static field, not local
                 STACK_TOP.readonly_ref = field_is_init_only(operand_field);
 
-                // very simple, just move the reference to the value field
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_MOV,
-                                             MIR_new_reg_op(mir_ctx, value_reg),
-                                             MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                if (field_is_thread_static(operand_field)) {
+                    // thread local field, return the pointer directly
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_call_insn(mir_ctx, 4,
+                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_proto),
+                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_func),
+                                                      MIR_new_reg_op(mir_ctx, value_reg),
+                                                      MIR_new_uint_op(mir_ctx, operand_field->ThreadStaticIndex)));
+                } else {
+                    // very simple, just move the reference to the value field
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, value_reg),
+                                                 MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                }
             } break;
 
             case CEE_STFLD: {
@@ -6518,6 +6664,7 @@ err_t jit_type(System_Type type) {
             for (int fi = 0; fi < created_type->Fields->Length; fi++) {
                 System_Reflection_FieldInfo fieldInfo = created_type->Fields->Data[fi];
                 if (!field_is_static(fieldInfo)) continue;
+                if (field_is_thread_static(fieldInfo)) continue;
                 if (fieldInfo->MirField->item_type != MIR_bss_item) continue;
 
                 switch (type_get_stack_type(fieldInfo->FieldType)) {
@@ -6601,8 +6748,7 @@ cleanup:
     // unlock the mutex
     mutex_unlock(&m_jit_mutex);
 
-
-        // free all the arrays we need
+    // free all the arrays we need
     arrfree(ctx.created_types);
 
     return err;

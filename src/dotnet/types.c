@@ -70,6 +70,7 @@ System_Type tSystem_Runtime_CompilerServices_Unsafe = NULL;
 System_Type tSystem_Runtime_CompilerServices_RuntimeHelpers = NULL;
 System_Type tSystem_Runtime_CompilerServices_IsVolatile = NULL;
 System_Type tSystem_Runtime_InteropServices_InAttribute = NULL;
+System_Type tSystem_ThreadStaticAttribute = NULL;
 
 bool string_equals_cstr(System_String a, const char* b) {
     if (a->Length != strlen(b)) {
@@ -602,6 +603,24 @@ const char* type_visibility_str(type_visibility_t visibility) {
     };
     return strs[visibility];
 }
+
+bool field_is_thread_static(System_Reflection_FieldInfo field) {
+    // TODO: maybe have this as a better thing
+    System_Reflection_Assembly assembly = field->Module->Assembly;
+
+    int idx = hmgeti(assembly->CustomAttributeMap, (System_Object)field);
+    if (idx >= 0) {
+        System_Object* attributes = assembly->CustomAttributeMap[idx].value;
+        for (int index = 0; index < arrlen(attributes); index++) {
+            if (OBJECT_TYPE(attributes[index]) == tSystem_ThreadStaticAttribute) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 
 
 static bool type_is_integer(System_Type type) {

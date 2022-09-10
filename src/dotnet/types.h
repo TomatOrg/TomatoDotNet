@@ -211,6 +211,9 @@ struct System_Reflection_FieldInfo {
 
         // for static fields
         MIR_item_t MirField;
+
+        // for thread statics
+        uintptr_t ThreadStaticIndex;
     };
     uint16_t Attributes;
 };
@@ -229,6 +232,8 @@ static inline field_access_t field_access(System_Reflection_FieldInfo field) { r
 static inline bool field_is_static(System_Reflection_FieldInfo field) { return field->Attributes & 0x0010; }
 static inline bool field_is_init_only(System_Reflection_FieldInfo field) { return field->Attributes & 0x0020; }
 static inline bool field_is_literal(System_Reflection_FieldInfo field) { return field->Attributes & 0x0040; }
+
+bool field_is_thread_static(System_Reflection_FieldInfo field);
 
 const char* field_access_str(field_access_t access);
 
@@ -784,6 +789,7 @@ extern System_Type tSystem_Runtime_CompilerServices_Unsafe;
 extern System_Type tSystem_Runtime_CompilerServices_RuntimeHelpers;
 extern System_Type tSystem_Runtime_CompilerServices_IsVolatile;
 extern System_Type tSystem_Runtime_InteropServices_InAttribute;
+extern System_Type tSystem_ThreadStaticAttribute;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || type_get_stack_type(type) == STACK_TYPE_O; }

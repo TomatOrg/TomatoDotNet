@@ -73,6 +73,23 @@ void gc_add_root(void* object) {
     spinlock_unlock(&m_global_roots_lock);
 }
 
+void gc_remove_root(void* object) {
+    spinlock_lock(&m_global_roots_lock);
+
+    int index = -1;
+    for (int i = 0; i < arrlen(m_global_roots); i++) {
+        if (m_global_roots[i] == object) {
+            index = -1;
+            break;
+        }
+    }
+    ASSERT(index != -1);
+
+    stbds_arrdelswap(m_global_roots, index);
+
+    spinlock_unlock(&m_global_roots_lock);
+}
+
 void* gc_new(System_Type type, size_t size) {
     scheduler_preempt_disable();
 

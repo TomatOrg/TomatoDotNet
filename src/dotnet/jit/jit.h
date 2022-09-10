@@ -41,6 +41,12 @@ MIR_context_t jit_get_mir_context();
 void jit_release_mir_context();
 
 /**
+ * Must be called when a thread is destroyed to remove all the thread
+ * locals created by the thread
+ */
+void jit_free_thread_locals();
+
+/**
  * Dump the MIR of a specific method
  */
 void jit_dump_method(System_Reflection_MethodInfo method);
