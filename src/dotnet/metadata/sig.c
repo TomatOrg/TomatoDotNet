@@ -163,7 +163,18 @@ static err_t parse_type(
         case ELEMENT_TYPE_OBJECT: *out_type = tSystem_Object; break;
 
         case ELEMENT_TYPE_PTR: {
-            // TODO: CustomMod*
+            // Handle custom mode
+            System_Type mod = NULL;
+            bool required = false;
+            while (true) {
+                CHECK_AND_RETHROW(parse_custom_mod(sig, assembly, &mod, &required));
+                if (mod == NULL) {
+                    break;
+                }
+
+                CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+                WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+            }
 
             // TODO: pointer types that store their actual type?
             CHECK(sig->size >= 1);
@@ -218,7 +229,6 @@ static err_t parse_ret_type(
 )  {
     err_t err = NO_ERROR;
 
-
     // Handle custom mod
     System_Type mod = NULL;
     bool required = false;
@@ -229,7 +239,7 @@ static err_t parse_ret_type(
         }
 
         if (mod == tSystem_Runtime_InteropServices_InAttribute) {
-//            WARN("parse_ret_type: TODO: mark return value as readonly");
+            // TODO: InAttribute
         } else {
             CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
             WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
@@ -292,8 +302,12 @@ static err_t parse_param(
             break;
         }
 
-        CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
-        WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        if (mod == tSystem_Runtime_InteropServices_InAttribute) {
+            continue;
+        } else {
+            CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+            WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        }
     }
 
     // actually get the type
@@ -562,8 +576,18 @@ err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method
             continue;
         }
 
-        // handle custom mod
-        // TODO:
+        // Handle custom mod
+        System_Type mod = NULL;
+        bool required = false;
+        while (true) {
+            CHECK_AND_RETHROW(parse_custom_mod(sig, method->Module->Assembly, &mod, &required));
+            if (mod == NULL) {
+                break;
+            }
+
+            CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+            WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        }
 
         // handle constraint
         // TODO:
@@ -761,7 +785,7 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
     // call the ctor
     MIR_context_t ctx = jit_get_mir_context();
     MIR_val_t result = { .a = NULL };
-    MIR_interp_arr(ctx, ctor->MirFunc, fixed_args, ctor->Parameters->Length + 1, &result);
+    MIR_interp_arr(ctx, ctor->MirFunc, &result, ctor->Parameters->Length + 1, fixed_args);
     jit_release_mir_context();
 
     // check the exception

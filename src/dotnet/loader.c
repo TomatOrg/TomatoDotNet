@@ -906,6 +906,8 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
 
     int properties_count = metadata->tables[METADATA_PROPERTY].rows;
 
+    GC_UPDATE(assembly, DefinedProperties, GC_NEW_ARRAY(tSystem_Reflection_PropertyInfo, properties_count));
+
     for (int i = 0; i < properties_map_count; i++) {
         metadata_property_map_t* property_map = &properties_map[i];
 
@@ -928,6 +930,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
 
             System_Reflection_PropertyInfo propertyInfo = GC_NEW(tSystem_Reflection_PropertyInfo);
             GC_UPDATE_ARRAY(parent->Properties, pi, propertyInfo);
+            GC_UPDATE_ARRAY(assembly->DefinedProperties, index, propertyInfo);
 
             // set the member info
             GC_UPDATE(propertyInfo, DeclaringType, parent);
@@ -1727,6 +1730,9 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
     metadata_custom_attribute_t* attribs = metadata->tables[METADATA_CUSTOM_ATTRIBUTE].table;
     int attribs_count = metadata->tables[METADATA_CUSTOM_ATTRIBUTE].rows;
 
+    metadata_generic_param_t* generic_params = metadata->tables[METADATA_GENERIC_PARAM].table;
+    int generic_params_count = metadata->tables[METADATA_GENERIC_PARAM].rows;
+
     for (int i = 0; i < attribs_count; i++) {
         metadata_custom_attribute_t* attrib = &attribs[i];
 
@@ -1763,15 +1769,60 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
                 key = (System_Object)parent;
             } break;
 
+            case METADATA_PROPERTY: {
+                CHECK(attrib->parent.index <= assembly->DefinedProperties->Length);
+                int index = attrib->parent.index - 1;
+                key = (System_Object)assembly->DefinedProperties->Data[index];
+            } break;
+
             case METADATA_ASSEMBLY: {
                 // on the assembly itself
                 key = (System_Object)assembly;
             } break;
 
-            // TODO: support for these
-            case METADATA_PROPERTY: WARN("TODO: attribute on property"); break;
-            case METADATA_PARAM: WARN("TODO: attribute on param"); break;
-            case METADATA_GENERIC_PARAM: WARN("TODO: attribute on generic parameter"); break;
+            case METADATA_PARAM: {
+                // find the parameter we need
+                // TODO: maybe just store an array of all parameters
+                System_Reflection_ParameterInfo parameterInfo = NULL;
+                int param_count = 0;
+                int param_index = 0;
+                int param_we_want = attrib->parent.index - 1;
+                for (
+                    int mi = 0;
+                    mi < assembly->DefinedMethods->Length;
+                    param_index += param_count, mi++
+                ) {
+                    param_count = assembly->DefinedMethods->Data[mi]->Parameters->Length;
+                    if (param_index <= param_we_want && param_we_want < param_index + param_count) {
+                        // found it!
+                        int index = param_we_want - param_index;
+                        parameterInfo = assembly->DefinedMethods->Data[mi]->Parameters->Data[index];
+                        break;
+                    }
+                }
+                CHECK(parameterInfo != NULL);
+
+                // add it
+                key = (System_Object)parameterInfo;
+            } break;
+
+            case METADATA_GENERIC_PARAM: {
+                CHECK(attrib->parent.index <= generic_params_count);
+                int index = attrib->parent.index - 1;
+                metadata_generic_param_t* generic_param = &generic_params[index];
+
+                if (generic_param->owner.table == METADATA_TYPE_DEF) {
+                    System_Type type;
+                    CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, generic_param->owner, NULL, NULL, &type));
+                    key = (System_Object)type->GenericArguments->Data[generic_param->number];
+                } else if (generic_param->owner.table == METADATA_METHOD_DEF) {
+                    System_Reflection_MethodInfo method;
+                    CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, generic_param->owner, NULL, NULL, &method));
+                    key = (System_Object)method->GenericArguments->Data[generic_param->number];
+                } else {
+                    CHECK_FAIL();
+                }
+            } break;
 
             default:
                 WARN("TODO: attribute on %02x", attrib->parent.table);

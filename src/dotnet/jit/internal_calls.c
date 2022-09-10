@@ -583,7 +583,7 @@ internal_call_t g_internal_calls[] = {
 
     { "[Corelib-v1]System.Reflection.Assembly::Finalize()", assembly_finalizer },
 
-    { "[Corelib-v1]System.Attribute::GetCustomAttributeNative(object,[Corelib-v1]System.Type,[Corelib-v1]System.Int32&)", System_Attribute_GetCustomAttributeNative },
+    { "[Corelib-v1]System.Attribute [Corelib-v1]System.Attribute::GetCustomAttributeNative(object,[Corelib-v1]System.Type,[Corelib-v1]System.Int32&)", System_Attribute_GetCustomAttributeNative },
 
 };
 

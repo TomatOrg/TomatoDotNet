@@ -183,99 +183,6 @@ DEFINE_ARRAY(System_Reflection_MemberInfo);
 DEFINE_ARRAY(System_Int32);
 DEFINE_ARRAY(System_Byte_Array);
 
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-typedef struct TinyDotNet_Reflection_MemberReference {
-    struct System_Object;
-    System_String Name;
-    token_t Class;
-    System_Byte_Array Signature;
-} *TinyDotNet_Reflection_MemberReference;
-DEFINE_ARRAY(TinyDotNet_Reflection_MemberReference);
-
-typedef struct TinyDotNet_Reflection_MethodSpec {
-    struct System_Object;
-    System_Reflection_MethodInfo Method;
-    System_Byte_Array Instantiation;
-} *TinyDotNet_Reflection_MethodSpec;
-DEFINE_ARRAY(TinyDotNet_Reflection_MethodSpec);
-
-struct System_Reflection_Assembly {
-    struct System_Object;
-
-    // Information about the assembly
-    System_String Name;
-    uint16_t MajorVersion;
-    uint16_t MinorVersion;
-    uint16_t BuildNumber;
-    uint16_t RevisionNumber;
-
-    // the module and entry point of this assembly
-    System_Reflection_Module Module;
-    System_Reflection_MethodInfo EntryPoint;
-
-    // types defined inside the binary
-    System_Type_Array DefinedTypes;
-    System_Reflection_MethodInfo_Array DefinedMethods;
-    System_Reflection_FieldInfo_Array DefinedFields;
-    System_Byte_Array_Array DefinedTypeSpecs;
-    TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
-    TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;
-
-    // types imported from other assemblies, for easy lookup whenever needed
-    System_Type_Array ImportedTypes;
-
-    // we have two entries, one for GC tracking (the array)
-    // and one for internally looking up the string entries
-    struct {
-        int key;
-        System_String value;
-    }* UserStringsTable;
-
-    // for quickly searching attributes
-    struct {
-        // where to search the attribute on
-        System_Object key;
-
-        // the instances of attributes on this object
-        System_Object* value;
-    }* CustomAttributeMap;
-};
-
-/**
- * Get a type by its token
- *
- * @remark
- * Could fail if type requires type/method parameters
- */
-err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Type* out_type);
-
-/**
- * Get a method by a token
- */
-err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method);
-
-/**
- * Get a field by a token
- */
-err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_FieldInfo* out_field);
-
-/**
- * Get a type by its name and namespace
- */
-System_Type assembly_get_type_by_name(System_Reflection_Assembly assembly, const char* name, const char* namespace);
-
-/**
- * Get a string by a token
- */
-System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, token_t token);
-
-/**
- * Dump the assembly to the kernel output
- */
-void assembly_dump(System_Reflection_Assembly assembly);
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 struct System_Reflection_Module {
@@ -534,6 +441,99 @@ struct System_MulticastDelegate {
     struct System_Delegate;
     System_MulticastDelegate Next;
 };
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef struct TinyDotNet_Reflection_MemberReference {
+    struct System_Object;
+    System_String Name;
+    token_t Class;
+    System_Byte_Array Signature;
+} *TinyDotNet_Reflection_MemberReference;
+DEFINE_ARRAY(TinyDotNet_Reflection_MemberReference);
+
+typedef struct TinyDotNet_Reflection_MethodSpec {
+    struct System_Object;
+    System_Reflection_MethodInfo Method;
+    System_Byte_Array Instantiation;
+} *TinyDotNet_Reflection_MethodSpec;
+DEFINE_ARRAY(TinyDotNet_Reflection_MethodSpec);
+
+struct System_Reflection_Assembly {
+    struct System_Object;
+
+    // Information about the assembly
+    System_String Name;
+    uint16_t MajorVersion;
+    uint16_t MinorVersion;
+    uint16_t BuildNumber;
+    uint16_t RevisionNumber;
+
+    // the module and entry point of this assembly
+    System_Reflection_Module Module;
+    System_Reflection_MethodInfo EntryPoint;
+
+    // types defined inside the binary
+    System_Type_Array DefinedTypes;
+    System_Reflection_MethodInfo_Array DefinedMethods;
+    System_Reflection_FieldInfo_Array DefinedFields;
+    System_Reflection_PropertyInfo_Array DefinedProperties;
+    System_Byte_Array_Array DefinedTypeSpecs;
+    TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
+    TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;
+
+    // types imported from other assemblies, for easy lookup whenever needed
+    System_Type_Array ImportedTypes;
+
+    // we have two entries, one for GC tracking (the array)
+    // and one for internally looking up the string entries
+    struct {
+        int key;
+        System_String value;
+    }* UserStringsTable;
+
+    // for quickly searching attributes
+    struct {
+        // where to search the attribute on
+        System_Object key;
+
+        // the instances of attributes on this object
+        System_Object* value;
+    }* CustomAttributeMap;
+};
+
+/**
+ * Get a type by its token
+ *
+ * @remark
+ * Could fail if type requires type/method parameters
+ */
+err_t assembly_get_type_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Type* out_type);
+
+/**
+ * Get a method by a token
+ */
+err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method);
+
+/**
+ * Get a field by a token
+ */
+err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_FieldInfo* out_field);
+
+/**
+ * Get a type by its name and namespace
+ */
+System_Type assembly_get_type_by_name(System_Reflection_Assembly assembly, const char* name, const char* namespace);
+
+/**
+ * Get a string by a token
+ */
+System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, token_t token);
+
+/**
+ * Dump the assembly to the kernel output
+ */
+void assembly_dump(System_Reflection_Assembly assembly);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
