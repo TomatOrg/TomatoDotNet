@@ -1142,6 +1142,10 @@ err_t loader_fill_type(System_Type type) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
 
             if (method_is_virtual(methodInfo)) {
+                // we don't support generic virtual methods for now, mostly because it is
+                // a fucking mess in terms of vtables
+                CHECK(methodInfo->GenericArguments == NULL);
+
                 if (method_is_new_slot(methodInfo)) {
                     // this is a newslot, always allocate a new slot
                     methodInfo->VTableOffset = -1;
