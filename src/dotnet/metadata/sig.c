@@ -163,7 +163,18 @@ static err_t parse_type(
         case ELEMENT_TYPE_OBJECT: *out_type = tSystem_Object; break;
 
         case ELEMENT_TYPE_PTR: {
-            // TODO: CustomMod*
+            // Handle custom mode
+            System_Type mod = NULL;
+            bool required = false;
+            while (true) {
+                CHECK_AND_RETHROW(parse_custom_mod(sig, assembly, &mod, &required));
+                if (mod == NULL) {
+                    break;
+                }
+
+                CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+                WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+            }
 
             // TODO: pointer types that store their actual type?
             CHECK(sig->size >= 1);
@@ -218,7 +229,6 @@ static err_t parse_ret_type(
 )  {
     err_t err = NO_ERROR;
 
-
     // Handle custom mod
     System_Type mod = NULL;
     bool required = false;
@@ -229,7 +239,7 @@ static err_t parse_ret_type(
         }
 
         if (mod == tSystem_Runtime_InteropServices_InAttribute) {
-//            WARN("parse_ret_type: TODO: mark return value as readonly");
+            // TODO: InAttribute
         } else {
             CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
             WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
@@ -292,8 +302,12 @@ static err_t parse_param(
             break;
         }
 
-        CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
-        WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        if (mod == tSystem_Runtime_InteropServices_InAttribute) {
+            continue;
+        } else {
+            CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+            WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        }
     }
 
     // actually get the type
@@ -562,8 +576,18 @@ err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method
             continue;
         }
 
-        // handle custom mod
-        // TODO:
+        // Handle custom mod
+        System_Type mod = NULL;
+        bool required = false;
+        while (true) {
+            CHECK_AND_RETHROW(parse_custom_mod(sig, method->Module->Assembly, &mod, &required));
+            if (mod == NULL) {
+                break;
+            }
+
+            CHECK(!required, "Got unknown required modifier `%U.%U`", mod->Namespace, mod->Name);
+            WARN("Got unknown optional modifier `%U.%U`, ignoring", mod->Namespace, mod->Name);
+        }
 
         // handle constraint
         // TODO:
@@ -724,7 +748,11 @@ cleanup:
     return err;
 }
 
-err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, System_Object* out) {
+typedef System_Exception (*property_set_func_i_t)(void* obj, uintptr_t value);
+typedef System_Exception (*property_set_func_f_t)(void* obj, float value);
+typedef System_Exception (*property_set_func_d_t)(void* obj, double value);
+
+err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, System_Object *out) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
     MIR_val_t fixed_args[ctor->Parameters->Length + 1];
@@ -757,7 +785,7 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
     // call the ctor
     MIR_context_t ctx = jit_get_mir_context();
     MIR_val_t result = { .a = NULL };
-    MIR_interp_arr(ctx, ctor->MirFunc, fixed_args, ctor->Parameters->Length + 1, &result);
+    MIR_interp_arr(ctx, ctor->MirFunc, &result, ctor->Parameters->Length + 1, fixed_args);
     jit_release_mir_context();
 
     // check the exception
@@ -802,8 +830,57 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
                 memcpy((void*)obj + field->MemoryOffset, &val, arg_type->StackSize);
             }
         } else {
-            WARN("TODO: `%U.%U::%U`",
-                    ctor->DeclaringType->Namespace, ctor->DeclaringType->Name, name);
+            // get the property
+            System_Reflection_PropertyInfo_Array properties = ctor->DeclaringType->Properties;
+            System_Reflection_PropertyInfo info = NULL;
+            for (int pi = 0; pi < properties->Length; pi++) {
+                if (string_equals(properties->Data[pi]->Name, name)) {
+                    info = properties->Data[pi];
+                    break;
+                }
+            }
+            CHECK(info != NULL);
+
+            // make sure it has a setter
+            CHECK(info->PropertyType == arg_type);
+            CHECK(info->SetMethod != NULL);
+            System_Reflection_MethodInfo setter = info->SetMethod;
+
+            // make sure the method is valid
+            CHECK(!method_is_static(setter));
+            CHECK(setter->Parameters->Data[0]->ParameterType == arg_type);
+
+            // call it
+            System_Exception exception = NULL;
+            switch (type_get_stack_type(arg_type)) {
+                case STACK_TYPE_O:
+                case STACK_TYPE_INT32:
+                case STACK_TYPE_INTPTR:
+                case STACK_TYPE_INT64: {
+                    property_set_func_i_t set_func = setter->MirFunc->addr;
+                    exception = set_func(obj, val.u);
+                } break;
+
+                case STACK_TYPE_FLOAT: {
+                    if (arg_type == tSystem_Single) {
+                        property_set_func_f_t set_func = setter->MirFunc->addr;
+                        exception = set_func(obj, val.f);
+                    } else {
+                        CHECK(arg_type == tSystem_Double);
+                        property_set_func_d_t set_func = setter->MirFunc->addr;
+                        exception = set_func(obj, val.d);
+                    }
+                } break;
+
+                case STACK_TYPE_VALUE_TYPE:
+                case STACK_TYPE_REF:
+                    CHECK_FAIL();
+            }
+
+            if (exception != NULL) {
+                CHECK_FAIL_ERROR(ERROR_TARGET_INVOCATION, "Got exception `%U` (of type `%U.%U`)", exception->Message,
+                                 OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name);
+            }
         }
     }
 

@@ -461,6 +461,38 @@ static System_Exception System_GC_KeepAlive(void* obj) {
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Attribute
+//----------------------------------------------------------------------------------------------------------------------
+
+method_result_t System_Attribute_GetCustomAttributeNative(System_Object element, System_Type attributeType, int* index) {
+    // TODO: pass from the caller?
+    System_Reflection_Assembly assembly = NULL;
+    if (isinstance(element, tSystem_Reflection_MemberInfo)) {
+        assembly = ((System_Reflection_MemberInfo) element)->Module->Assembly;
+    } else if (isinstance(element, tSystem_Reflection_Assembly)) {
+        assembly = (System_Reflection_Assembly)element;
+    } else if (isinstance(element, tSystem_Reflection_Module)) {
+        assembly = ((System_Reflection_Module) element)->Assembly;
+    }
+
+    if (assembly == NULL) {
+        ASSERT(!"assembly should not be null at this point!");
+    }
+
+    int idx = hmgeti(assembly->CustomAttributeMap, element);
+    if (idx >= 0) {
+        System_Object* attributes = assembly->CustomAttributeMap[idx].value;
+        for (; *index < arrlen(attributes); (*index)++) {
+            if (OBJECT_TYPE(attributes[*index]) == attributeType) {
+                return (method_result_t){ .value = (uintptr_t) attributes[*index], .exception = NULL };
+            }
+        }
+    }
+
+    return (method_result_t){ .value = 0, .exception = NULL };
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // everything
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -547,6 +579,11 @@ internal_call_t g_internal_calls[] = {
 
     { "int64 [Corelib-v1]System.Threading.Interlocked::Read([Corelib-v1]System.Int64&)", interlocked_read_i64 },
     { "uint64 [Corelib-v1]System.Threading.Interlocked::Read([Corelib-v1]System.UInt64&)", interlocked_read_u64 },
+
+
+    { "[Corelib-v1]System.Reflection.Assembly::Finalize()", assembly_finalizer },
+
+    { "[Corelib-v1]System.Attribute [Corelib-v1]System.Attribute::GetCustomAttributeNative(object,[Corelib-v1]System.Type,[Corelib-v1]System.Int32&)", System_Attribute_GetCustomAttributeNative },
 
 };
 

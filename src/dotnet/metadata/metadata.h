@@ -30,6 +30,10 @@ static inline metadata_field_t* metadata_get_field(metadata_t* metadata, int ind
     return &((metadata_field_t*)metadata->tables[METADATA_FIELD].table)[index];
 }
 
+static inline metadata_property_t* metadata_get_property(metadata_t* metadata, int index) {
+    ASSERT(index < metadata->tables[METADATA_PROPERTY].rows);
+    return &((metadata_property_t*)metadata->tables[METADATA_PROPERTY].table)[index];
+}
 /**
  * Parse all the metadata stream into the metadata structure organized in nice addressable tables
  *

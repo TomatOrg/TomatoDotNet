@@ -13,6 +13,8 @@
 #include "opcodes.h"
 #include "monitor.h"
 #include "thread/scheduler.h"
+#include "dotnet/gc/heap.h"
+#include "mem/mem.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -708,11 +710,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         if (parami == -1) {
             CHECK(generic_param->number == 0);
             System_Type* arr = NULL;
-                    arrpush(arr, typeParam);
+            arrpush(arr, typeParam);
             hmput(owner_generic_params, owner, arr);
         } else {
             CHECK(generic_param->number == arrlen(owner_generic_params[parami].value));
-                    arrpush(owner_generic_params[parami].value, typeParam);
+            arrpush(owner_generic_params[parami].value, typeParam);
         }
     }
 
@@ -889,6 +891,125 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         while (genericChild != NULL) {
             type_expand_method_impls(genericChild, type->MethodImpls);
             genericChild = genericChild->NextGenericInstance;
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Take care of the properties
+    //------------------------------------------------------------------------------------------------------------------
+
+    metadata_property_map_t* properties_map = metadata->tables[METADATA_PROPERTY_MAP].table;
+    int properties_map_count = metadata->tables[METADATA_PROPERTY_MAP].rows;
+
+    metadata_method_semantics_t* method_semantics = metadata->tables[METADATA_METHOD_SEMANTICS].table;
+    int method_semantics_count = metadata->tables[METADATA_METHOD_SEMANTICS].rows;
+
+    int properties_count = metadata->tables[METADATA_PROPERTY].rows;
+
+    GC_UPDATE(assembly, DefinedProperties, GC_NEW_ARRAY(tSystem_Reflection_PropertyInfo, properties_count));
+
+    for (int i = 0; i < properties_map_count; i++) {
+        metadata_property_map_t* property_map = &properties_map[i];
+
+        // get the parent
+        System_Type parent;
+        CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, property_map->parent, NULL, NULL, &parent));
+        CHECK(parent->Properties == NULL);
+
+        // get the properties list size
+        int last_idx = (i + 1 == properties_map_count) ?
+                       properties_count :
+                       property_map[1].property_list.index - 1;
+        CHECK(last_idx <= properties_count);
+
+        // iterate the properties of this type
+        parent->Properties = GC_NEW_ARRAY(tSystem_Reflection_PropertyInfo, last_idx - property_map->property_list.index + 1);
+        for (int pi = 0; pi < parent->Properties->Length; pi++) {
+            int index = property_map->property_list.index + pi - 1;
+            metadata_property_t* property = metadata_get_property(metadata, index);
+
+            System_Reflection_PropertyInfo propertyInfo = GC_NEW(tSystem_Reflection_PropertyInfo);
+            GC_UPDATE_ARRAY(parent->Properties, pi, propertyInfo);
+            GC_UPDATE_ARRAY(assembly->DefinedProperties, index, propertyInfo);
+
+            // set the member info
+            GC_UPDATE(propertyInfo, DeclaringType, parent);
+            GC_UPDATE(propertyInfo, Module, parent->Module);
+            GC_UPDATE(propertyInfo, Name, new_string_from_cstr(property->name));
+
+            propertyInfo->Attributes = property->flags;
+
+            // TODO: parse the property type nicely instead of assuming it
+
+            // TODO: is there a better and smarter way to do this?
+            //       probably if we have a global list of all the properties we
+            //       can quickly apply these stuff but I am too lazy for now
+            for (int msi = 0; msi < method_semantics_count; msi++) {
+
+                // skip non-property semantics
+                metadata_method_semantics_t* method_semantic = &method_semantics[msi];
+                if (method_semantic->association.table != METADATA_PROPERTY) continue;
+                if (method_semantic->association.index != index + 1) continue;
+
+                // get the method
+                System_Reflection_MethodInfo method;
+                CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, method_semantic->method, NULL, NULL, &method));
+                CHECK(method->DeclaringType == parent);
+                CHECK(method_is_special_name(method));
+
+                // check if getter or setter
+                if (method_semantic->semantics == METHOD_SEMANTICS_SETTER) {
+                    CHECK(propertyInfo->SetMethod == NULL);
+
+                    // check the signature is valid
+                    CHECK(method->ReturnType == NULL);
+
+                    // the last parameter is the important one
+                    System_Reflection_ParameterInfo lastParameter = method->Parameters->Data[method->Parameters->Length - 1];
+
+                    // set the type if not set already
+                    if (propertyInfo->PropertyType == NULL) {
+                        GC_UPDATE(propertyInfo, PropertyType, lastParameter->ParameterType);
+                    }
+
+                    // check the parameter matches
+                    CHECK(lastParameter->ParameterType == propertyInfo->PropertyType);
+
+                    // set the setter
+                    GC_UPDATE(propertyInfo, SetMethod, method);
+
+                } else if (method_semantic->semantics == METHOD_SEMANTICS_GETTER) {
+                    CHECK(propertyInfo->GetMethod == NULL);
+
+                    // check the signature is valid
+                    CHECK(method->ReturnType != NULL);
+
+                    // set the type if not set already
+                    if (propertyInfo->PropertyType == NULL) {
+                        GC_UPDATE(propertyInfo, PropertyType, method->ReturnType);
+                    }
+
+                    // check the return type matches
+                    CHECK(method->ReturnType == propertyInfo->PropertyType);
+
+                    // set the getter
+                    GC_UPDATE(propertyInfo, GetMethod, method);
+                } else {
+                    CHECK_FAIL();
+                }
+            }
+
+            // validate the property is set properly
+            CHECK(propertyInfo->PropertyType != NULL);
+            if (propertyInfo->GetMethod != NULL && propertyInfo->SetMethod != NULL) {
+                // check for indexed properties
+                if (propertyInfo->GetMethod->Parameters->Length != 0) {
+                    CHECK(propertyInfo->GetMethod->Parameters->Length == propertyInfo->SetMethod->Parameters->Length - 1);
+                    for (int mi = 0; mi < propertyInfo->GetMethod->Parameters->Length; mi++) {
+                        CHECK(propertyInfo->GetMethod->Parameters->Data[mi]->ParameterType == propertyInfo->SetMethod->Parameters->Data[mi]->ParameterType);
+                    }
+                }
+            }
         }
     }
 
@@ -1572,8 +1693,6 @@ static err_t parse_user_strings(System_Reflection_Assembly assembly, pe_file_t* 
         us.data += string_size;
     }
 
-    assembly->UserStrings = GC_NEW_ARRAY(tSystem_String, string_count);
-
     // now create all the strings
     string_count = 0;
     us.data = file->us;
@@ -1591,7 +1710,6 @@ static err_t parse_user_strings(System_Reflection_Assembly assembly, pe_file_t* 
         memcpy(string->Chars, us.data, (string_size / 2) * 2);
 
         // set the entries in the table and array
-        GC_UPDATE_ARRAY(assembly->UserStrings, string_count, string);
         hmput(assembly->UserStringsTable, offset, string);
 
         // we got another string
@@ -1612,6 +1730,9 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
     metadata_custom_attribute_t* attribs = metadata->tables[METADATA_CUSTOM_ATTRIBUTE].table;
     int attribs_count = metadata->tables[METADATA_CUSTOM_ATTRIBUTE].rows;
 
+    metadata_generic_param_t* generic_params = metadata->tables[METADATA_GENERIC_PARAM].table;
+    int generic_params_count = metadata->tables[METADATA_GENERIC_PARAM].rows;
+
     for (int i = 0; i < attribs_count; i++) {
         metadata_custom_attribute_t* attrib = &attribs[i];
 
@@ -1628,34 +1749,94 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
         CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, methodInfo, &value));
 
         // now parse the parent
+        System_Object key = NULL;
         switch (attrib->parent.table) {
             case METADATA_TYPE_DEF: {
                 System_Type parent;
                 CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+                key = (System_Object)parent;
             } break;
 
             case METADATA_FIELD: {
                 System_Reflection_FieldInfo parent;
                 CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+                key = (System_Object)parent;
             } break;
 
             case METADATA_METHOD_DEF: {
                 System_Reflection_MethodInfo parent;
                 CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, attrib->parent, NULL, NULL, &parent));
+                key = (System_Object)parent;
+            } break;
+
+            case METADATA_PROPERTY: {
+                CHECK(attrib->parent.index <= assembly->DefinedProperties->Length);
+                int index = attrib->parent.index - 1;
+                key = (System_Object)assembly->DefinedProperties->Data[index];
             } break;
 
             case METADATA_ASSEMBLY: {
                 // on the assembly itself
+                key = (System_Object)assembly;
             } break;
 
-            // TODO: support for these
-            case METADATA_PROPERTY:
-            case METADATA_PARAM:
+            case METADATA_PARAM: {
+                // find the parameter we need
+                // TODO: maybe just store an array of all parameters
+                System_Reflection_ParameterInfo parameterInfo = NULL;
+                int param_count = 0;
+                int param_index = 0;
+                int param_we_want = attrib->parent.index - 1;
+                for (
+                    int mi = 0;
+                    mi < assembly->DefinedMethods->Length;
+                    param_index += param_count, mi++
+                ) {
+                    param_count = assembly->DefinedMethods->Data[mi]->Parameters->Length;
+                    if (param_index <= param_we_want && param_we_want < param_index + param_count) {
+                        // found it!
+                        int index = param_we_want - param_index;
+                        parameterInfo = assembly->DefinedMethods->Data[mi]->Parameters->Data[index];
+                        break;
+                    }
+                }
+                CHECK(parameterInfo != NULL);
+
+                // add it
+                key = (System_Object)parameterInfo;
+            } break;
+
             case METADATA_GENERIC_PARAM: {
+                CHECK(attrib->parent.index <= generic_params_count);
+                int index = attrib->parent.index - 1;
+                metadata_generic_param_t* generic_param = &generic_params[index];
+
+                if (generic_param->owner.table == METADATA_TYPE_DEF) {
+                    System_Type type;
+                    CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, generic_param->owner, NULL, NULL, &type));
+                    key = (System_Object)type->GenericArguments->Data[generic_param->number];
+                } else if (generic_param->owner.table == METADATA_METHOD_DEF) {
+                    System_Reflection_MethodInfo method;
+                    CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, generic_param->owner, NULL, NULL, &method));
+                    key = (System_Object)method->GenericArguments->Data[generic_param->number];
+                } else {
+                    CHECK_FAIL();
+                }
             } break;
 
             default:
                 WARN("TODO: attribute on %02x", attrib->parent.table);
+        }
+
+        if (key != NULL) {
+            // insert the entry properly
+            int idx = hmgeti(assembly->CustomAttributeMap, key);
+            if (idx == -1) {
+                hmput(assembly->CustomAttributeMap, key, NULL);
+                idx = hmgeti(assembly->CustomAttributeMap, key);
+                CHECK(idx != -1);
+            }
+            arrpush(assembly->CustomAttributeMap[idx].value, value);
         }
     }
 
@@ -1773,6 +1954,7 @@ static type_init_t m_type_init[] = {
     TYPE_INIT("System.Reflection", "FieldInfo", System_Reflection_FieldInfo),
     TYPE_INIT("System.Reflection", "MemberInfo", System_Reflection_MemberInfo),
     TYPE_INIT("System.Reflection", "ParameterInfo", System_Reflection_ParameterInfo),
+    TYPE_INIT("System.Reflection", "PropertyInfo", System_Reflection_PropertyInfo),
     TYPE_INIT("System.Reflection", "LocalVariableInfo", System_Reflection_LocalVariableInfo),
     TYPE_INIT("System.Reflection", "ExceptionHandlingClause", System_Reflection_ExceptionHandlingClause),
     TYPE_INIT("System.Reflection", "MethodBase", System_Reflection_MethodBase),
@@ -1868,12 +2050,52 @@ cleanup:
 // corelib is a bit different so load it as needed
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define RESET_TYPE(instance, __type) \
+#define RESET_TYPE(instance, _type) \
     do { \
-        instance->type = (uintptr_t)__type; \
-        instance->vtable = __type->VTable; \
+        instance->type = (uintptr_t)_type; \
     } while (0);
 
+static int calc_object_size(uintptr_t obj) {
+    size_t poolidx = (obj - OBJECT_HEAP_START) / SIZE_512GB;
+    return 2 << (3 + poolidx);
+}
+
+static void assign_array_types_vtables(System_Object object) {
+    if (object->color == COLOR_BLUE) return;
+
+    if (OBJECT_TYPE(object) == tSystem_Type) {
+        System_Type type = (System_Type)object;
+
+        if (type->VTable == NULL) {
+            if (!type->IsArray) {
+                // if this is not an array, and the VirtualMethods is empty, then we don't care,
+                // since some types can actually have no virtual methods :shrug:
+                if (type->VirtualMethods == NULL || type->VirtualMethods->Length == 0)
+                    return;
+
+                ASSERT(!"Type with no VTable found");
+            }
+
+            ASSERT(type->IsArray);
+            GC_UPDATE(type, VirtualMethods, tSystem_Array->VirtualMethods);
+            type->VTableSize = tSystem_Array->VTableSize;
+            type->VTable = tSystem_Array->VTable;
+        }
+    } else if (object->type == 0) {
+        ASSERT(object->type != 0);
+    }
+}
+
+static void fix_array_vtables(System_Object object) {
+    if (object->color == COLOR_BLUE) return;
+
+    if (object->vtable == NULL) {
+        object->vtable = OBJECT_TYPE(object)->VTable;
+        if (object->vtable == NULL) {
+            ASSERT(object->vtable != NULL);
+        }
+    }
+}
 
 err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
@@ -1948,12 +2170,21 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     RESET_TYPE(assembly->DefinedMethods, get_array_type(tSystem_Reflection_MethodInfo));
     RESET_TYPE(assembly->DefinedFields, get_array_type(tSystem_Reflection_FieldInfo));
     for (int i = 0; i < types_count; i++) {
-        RESET_TYPE(assembly->DefinedTypes->Data[i], tSystem_Type);
+        System_Type type = assembly->DefinedTypes->Data[i];
+        RESET_TYPE(type, tSystem_Type);
+        type->vtable = tSystem_Type->VTable;
     }
+
+    // we have a little meme where array vtables are actually created quite late in the process
+    // so we need to make sure and fix any array that was created with a NULL vtable at this point,
+    // this is made in two passes, first make sure every array type has a vtable, and the next is
+    // that every array actually has a vtable assigned to it
+    heap_iterate_objects(assign_array_types_vtables);
+    heap_iterate_objects(fix_array_vtables);
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-//    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // save this
     g_corelib = assembly;
@@ -2020,7 +2251,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
-//    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+    CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // get the entry point
     System_Reflection_MethodInfo entryPoint = NULL;

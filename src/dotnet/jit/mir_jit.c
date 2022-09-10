@@ -6225,7 +6225,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     // resolve it
                     CHECK(method_is_virtual(operand_method));
                     operand_method = object_type->VirtualMethods->Data[operand_method->VTableOffset];
-                    CHECK(method_is_final(operand_method));
                 }
 
                 // push the reference to the function
