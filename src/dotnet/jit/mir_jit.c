@@ -771,6 +771,19 @@ static MIR_type_t get_mir_stack_type(System_Type type) {
     return mir_type;
 }
 
+#ifdef JIT_TRACE_MIR
+#define MIR_append_insn(__ctx, __func, ...) \
+    do { \
+        MIR_insn_t _insn = __VA_ARGS__; \
+        MIR_context_t ___ctx = __ctx; \
+        MIR_item_t _func = __func; \
+        if (trace_filter(ctx->method)) { \
+            MIR_output_insn(___ctx, stdout, _insn, _func->u.func, true); \
+        } \
+        MIR_append_insn(___ctx, _func, _insn); \
+    } while (0)
+#endif
+
 static MIR_reg_t push_new_reg(jit_method_context_t* ctx, System_Type type, bool temp) {
     char prefix = temp ? 't' : 's';
 
@@ -975,6 +988,8 @@ static err_t stack_merge(jit_method_context_t* ctx, stack_t* stack, bool allow_c
 cleanup:
     return err;
 }
+
+#undef MIR_append_insn
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Codegen helpers
@@ -2211,19 +2226,19 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
 
         MIR_insn_t skip_vtable = MIR_new_label(mir_ctx);
 
-        // start with a null vtalbe
+        // vtable_reg = 0
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_MOV,
                                      MIR_new_reg_op(mir_ctx, vtable_reg),
                                      MIR_new_int_op(mir_ctx, 0)));
 
-        // if the object is null, then skip the vtable and leave it as null
+        // if (from_reg == 0) goto skip_vtable;
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_BF,
                                      MIR_new_label_op(mir_ctx, skip_vtable),
                                      MIR_new_reg_op(mir_ctx, from_reg)));
 
-        // &object->vtable[vtable_offset]
+        // vtable_reg = &object->vtable[vtable_offset];
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_ADD,
                                      MIR_new_reg_op(mir_ctx, vtable_reg),
@@ -2232,6 +2247,7 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
                                                     from_reg, 0, 1),
                                      MIR_new_int_op(mir_ctx, interface->VTableOffset * sizeof(void *))));
 
+        // skip_vtable:
         MIR_append_insn(mir_ctx, mir_func, skip_vtable);
 
         vtable_op = MIR_new_reg_op(mir_ctx, vtable_reg);
@@ -2240,6 +2256,7 @@ static err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
         vtable_op = MIR_new_int_op(mir_ctx, 0);
     }
 
+    // result_reg[0] = vtable_reg;
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_insn(mir_ctx, MIR_MOV,
                                  MIR_new_mem_op(mir_ctx, MIR_T_P, 0, result_reg, 0, 1),
@@ -3991,7 +4008,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                              MIR_new_reg_op(mir_ctx, obj_reg)));
 
                 // throw it
-                CHECK_AND_RETHROW(jit_throw(ctx, obj_type, true));
+                CHECK_AND_RETHROW(jit_throw(ctx, obj_type, false));
             } break;
 
             case CEE_LEAVE:
@@ -6111,7 +6128,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             } else {
                                 // object -> interface
 
-                                // calculate the offset as `index_reg * sizeof(operand_type) + sizeof(System.Array)`
+                                // calculate the base as `array_reg + index_reg * sizeof(operand_type) + sizeof(System.Array)`
                                 MIR_append_insn(mir_ctx, mir_func,
                                                 MIR_new_insn(mir_ctx, MIR_MUL,
                                                              MIR_new_reg_op(mir_ctx, index_reg),
@@ -6122,6 +6139,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                              MIR_new_reg_op(mir_ctx, index_reg),
                                                              MIR_new_reg_op(mir_ctx, index_reg),
                                                              MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_ADD,
+                                                             MIR_new_reg_op(mir_ctx, index_reg),
+                                                             MIR_new_reg_op(mir_ctx, index_reg),
+                                                             MIR_new_reg_op(mir_ctx, array_reg)));
 
 
                                 // from an object, cast required, need a write barrier
