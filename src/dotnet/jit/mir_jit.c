@@ -3301,9 +3301,18 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                              MIR_new_int_op(mir_ctx, -1)));
             } break;
 
-            // TODO: shift operations
-
             // TODO: checked arithmetic
+
+            case CEE_SIZEOF: {
+                MIR_reg_t result_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, tSystem_UInt32, &result_reg));
+
+                // just push the size
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, result_reg),
+                                             MIR_new_int_op(mir_ctx, operand_type->StackSize)));
+            } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Casting and boxing
