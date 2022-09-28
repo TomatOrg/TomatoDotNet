@@ -1857,9 +1857,14 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     GC_UPDATE(instance, GenericArguments, arguments);
     GC_UPDATE(instance, GenericTypeDefinition, type);
     GC_UPDATE(instance, Namespace, type->Namespace);
-    instance->StackType = type->StackType;
     instance->Attributes = type->Attributes;
     instance->GenericParameterPosition = -1;
+
+    // handle the value type memes in here
+    if (type->BaseType == tSystem_ValueType) {
+        instance->IsValueType = true;
+        instance->StackType = STACK_TYPE_VALUE_TYPE;
+    }
 
     // create the unique name
     strbuilder_t builder = strbuilder_new();

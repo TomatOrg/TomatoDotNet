@@ -3,6 +3,7 @@
 #include "thread/scheduler.h"
 #include "internal_calls.h"
 #include "sync/rwmutex.h"
+#include "debug/debug.h"
 
 #include <dotnet/opcodes.h>
 #include <dotnet/types.h>
@@ -1658,6 +1659,12 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
     type->MirType = MIR_new_import(ctx->ctx, strbuilder_get(&type_name));
     MIR_load_external(m_mir_context, strbuilder_get(&type_name), type);
     strbuilder_free(&type_name);
+
+    // if this is a generic type we can't actually expand it, but do
+    // create the generic type ref
+    if (type_is_generic_parameter(type)) {
+        goto cleanup;
+    }
 
     // setup the base type
     if (type->BaseType != NULL) {
@@ -6745,6 +6752,18 @@ err_t jit_type(System_Type type) {
                     created_type->VTable[vi] = method->MirFunc->addr;
                 }
                 ASSERT(created_type->VTable[vi] != NULL);
+            }
+        }
+
+        if (created_type->Methods != NULL) {
+            for (int vi = 0; vi < created_type->Methods->Length; vi++) {
+                // if this has an unboxer use the unboxer instead of the actual method
+                System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
+                if (trace_filter(method)) {
+                    MIR_gen(m_mir_context, 0, method->MirFunc);
+                    debug_disasm_at(method->MirFunc->u.func->machine_code, 20);
+//                    MIR_output_item(m_mir_context, stdout, );
+                }
             }
         }
 
