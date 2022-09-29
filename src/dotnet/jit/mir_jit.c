@@ -2631,6 +2631,44 @@ cleanup:
     #define JIT_TRACE(...)
 #endif
 
+static err_t jit_replace_reg_with_op(MIR_func_t func, MIR_reg_t reg, MIR_op_t op) {
+    err_t err = NO_ERROR;
+
+    MIR_insn_t next_insn = NULL;
+    for (
+        MIR_insn_t insn = DLIST_HEAD (MIR_insn_t, func->insns);
+        insn != NULL;
+        insn = next_insn
+    ) {
+        next_insn = DLIST_NEXT (MIR_insn_t, insn);
+        for (int i = 0; i < insn->nops; i++) {
+            switch (insn->ops[i].mode) {
+                // reg, check if the one we wanna replace and
+                // if so replace it
+                case MIR_OP_REG: {
+                    if (insn->ops[i].u.reg == reg) {
+                        insn->ops[i] = op;
+                    }
+                } break;
+
+                // for memory check that the base and index are not the one we want
+                // TODO: lets hope we won't need to ever spill something like that...
+                case MIR_OP_MEM: {
+                    CHECK(insn->ops[i].u.mem.base != reg);
+                    CHECK(insn->ops[i].u.mem.index != reg);
+                } break;
+
+                // The rest don't hold any registers
+                default:
+                    break;
+            }
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 /**
  * This is the main jitting function, it takes a method and jits it completely
  */
@@ -2667,6 +2705,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
     // variables
     MIR_op_t* locals = NULL;
+    MIR_op_t* arguments = NULL;
 
     // jump table dynamic array
     MIR_op_t *switch_ops = NULL;
@@ -2686,7 +2725,21 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         }
     );
 
+    // init the arguments
+    // check if has this
+    if (!method_is_static(method)) {
+        arrpush(arguments, MIR_new_reg_op(mir_ctx, MIR_reg(mir_ctx, "this", mir_func->u.func)));
+    }
+
+    // now handle arguments
+    for (int i = 0; i < method->Parameters->Length; i++) {
+        char arg_name_buf[64];
+        snprintf(arg_name_buf, sizeof(arg_name_buf), "arg%d", i);
+        arrpush(arguments, MIR_new_reg_op(mir_ctx, MIR_reg(mir_ctx, arg_name_buf, mir_func->u.func)));
+    }
+
     // actually create locals
+    // TODO: now that we have spilling code we could maybe optimize this
     for (int i = 0; i < body->LocalVariables->Length; i++) {
         System_Reflection_LocalVariableInfo variable = body->LocalVariables->Data[i];
         CHECK(variable->LocalIndex == i);
@@ -3375,6 +3428,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     case CEE_CONV_U: result_type = tSystem_IntPtr; break;
                     case CEE_CONV_R4: result_type = tSystem_Single; break;
                     case CEE_CONV_R8: result_type = tSystem_Double; break;
+                    case CEE_CONV_R_UN: result_type = tSystem_Double; break;
                     default: CHECK_FAIL();
                 }
                 CHECK_AND_RETHROW(stack_push(ctx, result_type, &result_reg));
@@ -3395,6 +3449,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             case CEE_CONV_U: code = MIR_UEXT32; break;
                             case CEE_CONV_R4: code = MIR_I2F; break;
                             case CEE_CONV_R8: code = MIR_I2D; break;
+                            case CEE_CONV_R_UN: code = MIR_UI2D; break;
                             default: CHECK_FAIL();
                         }
                     } break;
@@ -3414,6 +3469,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             case CEE_CONV_U: code = MIR_MOV; break;
                             case CEE_CONV_R4: code = MIR_I2F; break;
                             case CEE_CONV_R8: code = MIR_I2D; break;
+                            case CEE_CONV_R_UN: code = MIR_UI2D; break;
                             default: CHECK_FAIL();
                         }
                     } break;
@@ -4378,17 +4434,18 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 System_Type value_type;
                 CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
 
-                // get the argument
-                char arg_name_buf[64];
-                const char* arg_name = NULL;
+                // check the length is fine
+                CHECK(operand_i32 < arrlen(arguments));
 
                 // resolve the type
+                MIR_op_t arg_op = arguments[operand_i32];
                 System_Type arg_type = NULL;
                 if (!method_is_static(method)) {
                     if (operand_i32 == 0) {
-                        arg_name = "this";
                         arg_type = method->DeclaringType;
                         if (arg_type->IsValueType) {
+                            // TODO: readonly this
+
                             // value types turn into a by-ref when using this
                             arg_type = get_by_ref_type(arg_type);
                         }
@@ -4396,20 +4453,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     operand_i32--;
                 }
 
-                // if this is not `this` then get the name
-                if (arg_name == NULL) {
-                    snprintf(arg_name_buf, sizeof(arg_name_buf), "arg%d", operand_i32);
-                    arg_name = arg_name_buf;
-                }
-
                 if (arg_type == NULL) {
                     CHECK(operand_i32 < method->Parameters->Length);
                     System_Reflection_ParameterInfo parameter = method->Parameters->Data[operand_i32];
                     arg_type = parameter->ParameterType;
+                    CHECK(!parameter_is_in(parameter));
                 }
-
-                // the register containing the value
-                MIR_reg_t arg_reg = MIR_reg(mir_ctx, arg_name, mir_func->u.func);
 
                 // check the type is valid
                 CHECK(type_is_verifier_assignable_to(value_type, arg_type));
@@ -4422,8 +4471,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 goto starg_value_type;
                             } else {
                                 // object -> interface
+                                CHECK(arg_op.mode == MIR_OP_REG);
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
-                                                                            arg_reg, value_reg,
+                                                                            arg_op.u.reg, value_reg,
                                                                             value_type, arg_type));
                             }
                         } else {
@@ -4431,7 +4481,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                 // interface -> object
                                 MIR_append_insn(mir_ctx, mir_func,
                                                 MIR_new_insn(mir_ctx, MIR_MOV,
-                                                             MIR_new_reg_op(mir_ctx, arg_reg),
+                                                             arg_op,
                                                              MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), value_reg, 0, 1)));
                             } else {
                                 // object -> object
@@ -4449,13 +4499,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         MIR_insn_code_t code = jit_number_cast_inscode(value_type, arg_type);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
-                                                     MIR_new_reg_op(mir_ctx, arg_reg),
+                                                     arg_op,
                                                      MIR_new_reg_op(mir_ctx, value_reg)));
                     } break;
 
                     starg_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        jit_emit_memcpy(ctx, arg_reg, value_reg, value_type->StackSize);
+                        CHECK(arg_op.mode == MIR_OP_REG);
+                        jit_emit_memcpy(ctx, arg_op.u.reg, value_reg, value_type->StackSize);
                     } break;
                 }
             } break;
@@ -4466,17 +4517,20 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_LDARG_3: operand_i32 = opcode - CEE_LDARG_0;
             case CEE_LDARG_S:
             case CEE_LDARG: {
-                char arg_name_buf[64];
-                const char* arg_name = NULL;
                 bool readonly_ref = false;
 
+                // check the length is fine
+                CHECK(operand_i32 < arrlen(arguments));
+
                 // resolve the type
+                MIR_op_t arg_op = arguments[operand_i32];
                 System_Type arg_type = NULL;
                 if (!method_is_static(method)) {
                     if (operand_i32 == 0) {
-                        arg_name = "this";
                         arg_type = method->DeclaringType;
                         if (arg_type->IsValueType) {
+                            // TODO: readonly this
+
                             // value types turn into a by-ref when using this
                             arg_type = get_by_ref_type(arg_type);
                         }
@@ -4484,21 +4538,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     operand_i32--;
                 }
 
-                // if this is not `this` then get the name
-                if (arg_name == NULL) {
-                    snprintf(arg_name_buf, sizeof(arg_name_buf), "arg%d", operand_i32);
-                    arg_name = arg_name_buf;
-                }
-
                 if (arg_type == NULL) {
-                    CHECK(operand_i32 < method->Parameters->Length);
                     System_Reflection_ParameterInfo parameter = method->Parameters->Data[operand_i32];
                     arg_type = parameter->ParameterType;
                     readonly_ref = parameter_is_in(parameter);
                 }
-
-                // the register containing the value
-                MIR_reg_t arg_reg = MIR_reg(mir_ctx, arg_name, mir_func->u.func);
 
                 // Get the stack type of the arg
                 System_Type arg_stack_type = type_get_intermediate_type(arg_type);
@@ -4527,12 +4571,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
-                                                     MIR_new_reg_op(mir_ctx, arg_reg)));
+                                                     arg_op));
                     } break;
 
                     ldarg_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        jit_emit_memcpy(ctx, value_reg, arg_reg, arg_stack_type->StackSize);
+                        CHECK(arg_op.mode == MIR_OP_REG);
+                        jit_emit_memcpy(ctx, value_reg, arg_op.u.reg, arg_stack_type->StackSize);
                     } break;
 
                     case STACK_TYPE_REF:
@@ -4546,14 +4591,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
             case CEE_LDARGA:
             case CEE_LDARGA_S: {
-                char arg_name_buf[64];
-                const char* arg_name = NULL;
+                // check the length is fine
+                CHECK(operand_i32 < arrlen(arguments));
 
                 // resolve the type
+                MIR_op_t arg_op = arguments[operand_i32];
                 System_Type arg_type = NULL;
                 if (!method_is_static(method)) {
                     if (operand_i32 == 0) {
-                        arg_name = "this";
                         arg_type = method->DeclaringType;
                         if (arg_type->IsValueType) {
                             // value types turn into a by-ref when using this
@@ -4563,19 +4608,11 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     operand_i32--;
                 }
 
-                // if this is not `this` then get the name
-                if (arg_name == NULL) {
-                    snprintf(arg_name_buf, sizeof(arg_name_buf), "arg%d", operand_i32);
-                    arg_name = arg_name_buf;
-                }
 
                 if (arg_type == NULL) {
                     CHECK(operand_i32 < method->Parameters->Length);
                     arg_type = method->Parameters->Data[operand_i32]->ParameterType;
                 }
-
-                // the register containing the value
-                MIR_reg_t arg_reg = MIR_reg(mir_ctx, arg_name, mir_func->u.func);
 
                 // Get the value type
                 System_Type value_type = get_by_ref_type(type_get_verification_type(arg_type));
@@ -4599,18 +4636,51 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     case STACK_TYPE_INT32:
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
-                    case STACK_TYPE_FLOAT:
-                    case STACK_TYPE_REF: {
-                        CHECK_FAIL("TODO: spill arguments from registers");
+                    case STACK_TYPE_FLOAT: {
+                        // check if we need to spill the reg or if its already spilled
+                        if (arg_op.mode == MIR_OP_REG) {
+                            // allocate space for the argument to be stored
+                            char spill_arg_name[64];
+                            snprintf(spill_arg_name, sizeof(spill_arg_name), "sarg%d", operand_i32);
+
+                            MIR_reg_t arg_reg = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, spill_arg_name);
+                            MIR_prepend_insn(mir_ctx, mir_func,
+                                             MIR_new_insn(mir_ctx, MIR_ALLOCA,
+                                                          MIR_new_reg_op(mir_ctx, arg_reg),
+                                                          MIR_new_int_op(mir_ctx, arg_type->StackSize)));
+
+                            // setup the new op
+                            MIR_reg_t old_arg_reg = arg_op.u.reg;
+                            arg_op = MIR_new_mem_op(mir_ctx, get_mir_type(arg_type), 0, arg_reg, 0, 1);
+
+                            // replace the old register access with the new operand
+                            CHECK_AND_RETHROW(jit_replace_reg_with_op(mir_func->u.func, old_arg_reg, arg_op));
+
+                            // set the new op for future uses
+                            arguments[operand_i32] = arg_op;
+                        }
+
+                        // already spilled, just move the pointer in the memory reference
+                        CHECK(arg_op.mode == MIR_OP_MEM);
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                     MIR_new_reg_op(mir_ctx, value_reg),
+                                                     MIR_new_reg_op(mir_ctx, arg_op.u.mem.base)));
                     } break;
 
                     ldarga_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
+                        // just move the pointer in the register
+                        CHECK(arg_op.mode == MIR_OP_REG);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
-                                                     MIR_new_reg_op(mir_ctx, arg_reg)));
+                                                     MIR_new_reg_op(mir_ctx, arg_op.u.reg)));
                     } break;
+
+                    // can't do a ref by ref
+                    case STACK_TYPE_REF:
+                        CHECK_FAIL();
                 }
             } break;
 
@@ -6431,7 +6501,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_AND_RETHROW(jit_oob_check(ctx, array_reg, index_reg));
 
                 // push to the stack
-                CHECK_AND_RETHROW(stack_push(ctx, get_by_ref_type(type_get_intermediate_type(operand_type)), &value_reg));
+                CHECK_AND_RETHROW(stack_push(ctx, get_by_ref_type(type_get_verification_type(operand_type)), &value_reg));
                 STACK_TOP.non_local_ref = true;
 
                 // calculate the element reference offset
@@ -6539,6 +6609,7 @@ cleanup:
     // free all the memory used for jitting the method
     SAFE_FREE(switch_ops);
     strbuilder_free(&method_name);
+    arrfree(arguments);
     arrfree(locals);
     for (int i = 0; i < hmlen(ctx->pc_to_stack_snapshot); i++) {
         arrfree(ctx->pc_to_stack_snapshot[i].stack.entries);
@@ -6858,34 +6929,8 @@ cleanup:
     // we no longer need the old module
     MIR_finish(ctx.ctx);
 
-    if (IS_ERROR(err)) {
-        // we failed to load it, so first make sure to remove any
-        // reference to the mir types
-        for (int i = 0; i < arrlen(ctx.created_types); i++) {
-            System_Type created_type = ctx.created_types[i];
-
-            // remove the type setup
-            created_type->MirType = NULL;
-
-            // TODO: if this is a generic type, then make sure to remove it if we are not using it
-            // TODO: I am not sure how we will do it but whatever.
-
-            // remove all methods setup
-            for (int vi = 0; vi < created_type->Methods->Length; vi++) {
-                if (created_type->Methods->Data[i] == NULL) continue;
-                created_type->Methods->Data[i]->MirFunc = NULL;
-                created_type->Methods->Data[i]->MirProto = NULL;
-            }
-
-            // remove the field setup
-            for (int vi = 0; vi < created_type->Fields->Length; vi++) {
-                if (created_type->Fields->Data[i] == NULL) continue;
-                if (field_is_static(created_type->Fields->Data[i])) {
-                    created_type->Fields->Data[i]->MirField = NULL;
-                }
-            }
-        }
-    }
+    // TODO: don't leak memory from here
+    ASSERT(!IS_ERROR(err));
 
     // unlock the mutex
     mutex_unlock(&m_jit_mutex);
