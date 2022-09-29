@@ -29,13 +29,7 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-    if (method->DeclaringType->GenericTypeDefinition == NULL)
-        return false;
-
-    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "List`1"))
-        return false;
-
-    if (!string_equals_cstr(method->Name, "Add"))
+    if (!string_equals_cstr(method->Name, "Mix"))
         return false;
 
     return true;
@@ -61,6 +55,12 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
  * Uncomment to make the jit trace the MIR generated from the IL
  */
 //#define JIT_TRACE_MIR
+
+/**
+ * Uncomment if you want debug symbols, note that this forces
+ * the parallel generator instead of the lazy one!
+ */
+//#define JIT_DEBUG_SYMBOLS
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
@@ -2481,18 +2481,21 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
         if (code == MIR_DIV || code == MIR_UDIV || code == MIR_MOD || code == MIR_UMOD) {
             MIR_insn_t label = MIR_new_label(mir_ctx);
 
-            // these need to check that value2 is not zero
-            // if we have a non-zero value then skip the throw
-            MIR_append_insn(mir_ctx, mir_func,
-                            MIR_new_insn(mir_ctx, MIR_BT,
-                                         MIR_new_label_op(mir_ctx, label),
-                                         MIR_new_reg_op(mir_ctx, value2_reg)));
+            // do floats have div by zero
+            if (value1_type->StackType != STACK_TYPE_FLOAT) {
+                // these need to check that value2 is not zero
+                // if we have a non-zero value then skip the throw
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_BT,
+                                             MIR_new_label_op(mir_ctx, label),
+                                             MIR_new_reg_op(mir_ctx, value2_reg)));
 
-            // throw the error, it has an unknown type
-            CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_DivideByZeroException));
+                // throw the error, it has an unknown type
+                CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_DivideByZeroException));
 
-            // insert the skip label
-            MIR_append_insn(mir_ctx, mir_func, label);
+                // insert the skip label
+                MIR_append_insn(mir_ctx, mir_func, label);
+            }
         }
 
         switch (type_get_stack_type(value1_type)) {
@@ -2544,7 +2547,12 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
                     if (value2_type == tSystem_Single) {
                         // float x float -> float
                         CHECK_AND_RETHROW(stack_push(ctx, tSystem_Single, &result_reg));
-                        code += 2;
+                        if (code == MIR_DIV) {
+                            // this is not in offset of 2
+                            code = MIR_FDIV;
+                        } else {
+                            code += 2;
+                        }
                     } else {
                         CHECK(value2_type == tSystem_Double);
 
@@ -2556,14 +2564,24 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
                                                      MIR_new_reg_op(mir_ctx, result_reg),
                                                      MIR_new_reg_op(mir_ctx, value1_reg)));
                         value1_reg = result_reg;
-                        code += 3;
+                        if (code == MIR_DIV) {
+                            // this is not in offset of 3
+                            code = MIR_DDIV;
+                        } else {
+                            code += 3;
+                        }
                     }
                 } else {
                     CHECK(value1_type == tSystem_Double);
 
                     // this always results in a double math
                     CHECK_AND_RETHROW(stack_push(ctx, tSystem_Double, &result_reg));
-                    code += 3;
+                    if (code == MIR_DIV) {
+                        // this is not in offset of 3
+                        code = MIR_DDIV;
+                    } else {
+                        code += 3;
+                    }
 
                     if (value2_type == tSystem_Single) {
                         // double x float
@@ -6735,7 +6753,16 @@ err_t jit_type(System_Type type) {
     MIR_load_module(m_mir_context, module);
 
     // link it
+#ifdef JIT_DEBUG_SYMBOLS
+    uint64_t start = microtime();
+    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
+    size_t took = (microtime() - start) / 1000;
+    if (took >= 50) {
+        TRACE("jitting took %dms", took);
+    }
+#else
     MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
+#endif
 
     // now that everything is linked prepare all the types we have created
     for (int i = 0; i < arrlen(ctx.created_types); i++) {
@@ -6755,17 +6782,24 @@ err_t jit_type(System_Type type) {
             }
         }
 
+#ifdef JIT_DEBUG_SYMBOLS
         if (created_type->Methods != NULL) {
             for (int vi = 0; vi < created_type->Methods->Length; vi++) {
                 // if this has an unboxer use the unboxer instead of the actual method
                 System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
-                if (trace_filter(method)) {
-                    MIR_gen(m_mir_context, 0, method->MirFunc);
-                    debug_disasm_at(method->MirFunc->u.func->machine_code, 20);
-//                    MIR_output_item(m_mir_context, stdout, );
+
+                if (method->MirFunc != NULL && method->MirFunc->item_type == MIR_func_item) {
+                    MIR_func_t func = method->MirFunc->u.func;
+                    debug_create_symbol(func->name, (uintptr_t)func->machine_code, debug_get_code_size(func->machine_code));
+                }
+
+                if (method->MirUnboxerFunc != NULL && method->MirUnboxerFunc->item_type == MIR_func_item) {
+                    MIR_func_t func = method->MirUnboxerFunc->u.func;
+                    debug_create_symbol(func->name, (uintptr_t)func->machine_code, debug_get_code_size(func->machine_code));
                 }
             }
         }
+#endif
 
         // add the gc roots for the types
         if (created_type->Fields != NULL) {
