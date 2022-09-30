@@ -729,6 +729,11 @@ bool type_is_array_element_compatible_with(System_Type T, System_Type U) {
     // U has underlying type W
     System_Type W = type_get_underlying_type(U);
 
+    // T is the null type, and U is a reference type
+    if (T == NULL && type_is_object_ref(U)) {
+        return true;
+    }
+
     // V is compatible-with W
     if (type_is_compatible_with(V, W)) {
         return true;

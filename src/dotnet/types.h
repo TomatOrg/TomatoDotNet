@@ -214,7 +214,11 @@ struct System_Reflection_FieldInfo {
 
         // for thread statics
         uintptr_t ThreadStaticIndex;
+
+        // for fields with static data
+        void* Rva;
     };
+    bool HasRva;
     uint16_t Attributes;
 };
 

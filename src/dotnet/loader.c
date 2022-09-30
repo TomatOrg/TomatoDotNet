@@ -365,9 +365,9 @@ cleanup:
 static err_t set_field_offsets(System_Reflection_Assembly assembly, metadata_t* metadata) {
     err_t err = NO_ERROR;
 
-    metadata_Field_layout_t* field_layouts = metadata->tables[METADATA_FIELD_LAYOUT].table;
+    metadata_field_layout_t* field_layouts = metadata->tables[METADATA_FIELD_LAYOUT].table;
     for (int i = 0; i < metadata->tables[METADATA_FIELD_LAYOUT].rows; i++) {
-        metadata_Field_layout_t* field_layout = &field_layouts[i];
+        metadata_field_layout_t* field_layout = &field_layouts[i];
         System_Reflection_FieldInfo field;
         CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, field_layout->field, NULL, NULL, &field));
         CHECK(field != NULL);
@@ -378,6 +378,33 @@ static err_t set_field_offsets(System_Reflection_Assembly assembly, metadata_t* 
 
         // set it
         field->MemoryOffset = field_layout->offset;
+    }
+
+cleanup:
+    return err;
+}
+
+static err_t set_field_rvas(System_Reflection_Assembly assembly, pe_file_t* file, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_field_rva_t* field_rvas = metadata->tables[METADATA_FIELD_RVA].table;
+    for (int i = 0; i < metadata->tables[METADATA_FIELD_RVA].rows; i++) {
+        metadata_field_rva_t* field_rva = &field_rvas[i];
+        System_Reflection_FieldInfo field;
+        CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, field_rva->field, NULL, NULL, &field));
+        CHECK(field != NULL);
+
+        // fill the type
+        CHECK_AND_RETHROW(loader_fill_type(field->FieldType));
+
+        // get the rva data, allocated
+        pe_directory_t directory = {
+            .size = field->FieldType->StackSize,
+            .rva = field_rva->rva
+        };
+        field->Rva = pe_get_rva_data(file, directory);
+        CHECK(field->Rva != NULL);
+        field->HasRva = true;
     }
 
 cleanup:
@@ -528,7 +555,7 @@ err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type)
             // parse the method info
             CHECK_AND_RETHROW(parse_method_cil(methodInfo, (blob_entry_t){
                 .size = directory.size,
-                .data= rva_base
+                .data = rva_base
             }, file, metadata));
         }
 
@@ -2292,6 +2319,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     heap_iterate_objects(fix_array_vtables);
 
     // get the user strings for the runtime
+    CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
@@ -2359,6 +2387,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
     // get the user strings for the runtime
+    CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 

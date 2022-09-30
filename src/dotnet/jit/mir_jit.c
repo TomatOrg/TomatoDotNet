@@ -29,10 +29,12 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-    if (!string_equals_cstr(method->Name, "get_Log2DeBruijn"))
-        return false;
+//    if (!string_equals_cstr(method->Name, "Rent"))
+//        return false;
 
-    return true;
+//    return true;
+
+    return false;
 }
 
 /**
@@ -1697,7 +1699,7 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
             CHECK_AND_RETHROW(jit_prepare_type(ctx, fieldInfo->FieldType));
 
             // for static fields declare the bss
-            if (field_is_static(fieldInfo)) {
+            if (field_is_static(fieldInfo) && !fieldInfo->HasRva) {
                 if (field_is_thread_static(fieldInfo)) {
                     // thread local
                     fieldInfo->ThreadStaticIndex = add_thread_local(fieldInfo->FieldType);
@@ -2688,13 +2690,13 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
 
     // for some stuff that break what we allow
-    bool is_whitelisted_assembly = false;
-    for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
-        if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
-            is_whitelisted_assembly = true;
-            break;
-        }
-    }
+//    bool is_whitelisted_assembly = false;
+//    for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
+//        if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
+//            is_whitelisted_assembly = true;
+//            break;
+//        }
+//    }
 
     // setup the context for this method
     jit_method_context_t _ctx = {
@@ -4905,6 +4907,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // make sure the field is static
                 CHECK(field_is_static(operand_field));
 
+                // TODO: should this be supported
+                CHECK(!operand_field->HasRva);
+
                 // if this is an init-only field then make sure that
                 // only rtspecialname can access it (.ctor and .cctor)
                 if (field_is_init_only(operand_field)) {
@@ -4987,6 +4992,9 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // only static fields
                 CHECK(field_is_static(operand_field));
 
+                // TODO: should this be supported
+                CHECK(!operand_field->HasRva);
+
                 // Get the field type
                 System_Type field_stack_type = type_get_intermediate_type(operand_field->FieldType);
                 System_Type field_type = type_get_underlying_type(operand_field->FieldType);
@@ -5067,29 +5075,42 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // only static fields
                 CHECK(field_is_static(operand_field));
 
-                // Get the field type
-                System_Type field_stack_type = get_by_ref_type(type_get_verification_type(operand_field->FieldType));
+                if (operand_field->HasRva) {
+                    // this is a special case, we are going to push it as a pointer instead of a
+                    // managed pointer, for simplicity of implementation
 
-                // push it
-                MIR_reg_t value_reg;
-                CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
-                STACK_TOP.non_local_ref = true; // static field, not local
-                STACK_TOP.readonly_ref = field_is_init_only(operand_field);
-
-                if (field_is_thread_static(operand_field)) {
-                    // thread local field, return the pointer directly
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_call_insn(mir_ctx, 4,
-                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_proto),
-                                                      MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_func),
-                                                      MIR_new_reg_op(mir_ctx, value_reg),
-                                                      MIR_new_uint_op(mir_ctx, operand_field->ThreadStaticIndex)));
-                } else {
-                    // very simple, just move the reference to the value field
+                    // push it
+                    MIR_reg_t value_reg;
+                    CHECK_AND_RETHROW(stack_push(ctx, tSystem_UIntPtr, &value_reg));
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_insn(mir_ctx, MIR_MOV,
                                                  MIR_new_reg_op(mir_ctx, value_reg),
-                                                 MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                                                 MIR_new_uint_op(mir_ctx, (uintptr_t)operand_field->Rva)));
+
+                } else {
+                    // Get the field type
+                    System_Type field_stack_type = get_by_ref_type(type_get_verification_type(operand_field->FieldType));
+
+                    // push it
+                    MIR_reg_t value_reg;
+                    CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
+                    STACK_TOP.non_local_ref = true; // static field, not local
+                    STACK_TOP.readonly_ref = field_is_init_only(operand_field);
+                    if (field_is_thread_static(operand_field)) {
+                        // thread local field, return the pointer directly
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_call_insn(mir_ctx, 4,
+                                                          MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_proto),
+                                                          MIR_new_ref_op(mir_ctx, m_get_thread_local_ptr_func),
+                                                          MIR_new_reg_op(mir_ctx, value_reg),
+                                                          MIR_new_uint_op(mir_ctx, operand_field->ThreadStaticIndex)));
+                    } else {
+                        // very simple, just move the reference to the value field
+                        MIR_append_insn(mir_ctx, mir_func,
+                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                     MIR_new_reg_op(mir_ctx, value_reg),
+                                                     MIR_new_ref_op(mir_ctx, operand_field->MirField)));
+                    }
                 }
             } break;
 
@@ -5848,6 +5869,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             // in short, for whatever reason the compiler generates a ctor in System.ValueType
                             // that calls the ctor of System.Object ????
                         } else {
+                            TRACE("%U AND %U", this_type->Name, signature_this_type->Name);
                             CHECK(type_is_verifier_assignable_to(this_type, signature_this_type));
                         }
 
