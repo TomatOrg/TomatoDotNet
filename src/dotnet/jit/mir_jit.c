@@ -29,7 +29,7 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-    if (!string_equals_cstr(method->Name, "Mix"))
+    if (!string_equals_cstr(method->Name, "get_Log2DeBruijn"))
         return false;
 
     return true;
@@ -49,12 +49,12 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-//#define JIT_TRACE
+#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-//#define JIT_TRACE_MIR
+#define JIT_TRACE_MIR
 
 /**
  * Uncomment if you want debug symbols, note that this forces
@@ -633,6 +633,18 @@ typedef struct stack_entry {
      * Is this a readonly reference, meaning it can't be set
      */
     bool readonly_ref;
+
+    /**
+     * The length that this pointer points to, this is required
+     * for localalloc + span to work properly
+     */
+    size_t pointer_length;
+
+    /**
+     * The constant value pushed from LDC, used for verifying
+     * the pointer length
+     */
+    size_t constant_value;
 } stack_entry_t;
 
 typedef struct stack {
@@ -2674,6 +2686,15 @@ cleanup:
  */
 err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
+
+    // for some stuff that break what we allow
+    bool is_whitelisted_assembly = false;
+    for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
+        if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
+            is_whitelisted_assembly = true;
+            break;
+        }
+    }
 
     // setup the context for this method
     jit_method_context_t _ctx = {
@@ -5693,7 +5714,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                                  MIR_new_reg_op(mir_ctx, size_reg),
                                                                  arg_ops[other_args + 2]));
 
-                                } else {
+                                } else if (operand_method->Parameters->Length == 1) {
                                     ASSERT(operand_method->Parameters->Length == 1);
                                     System_Type arg0_type = operand_method->Parameters->Data[0]->ParameterType;
 
@@ -5705,14 +5726,34 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                                      MIR_new_reg_op(mir_ctx, size_reg),
                                                                      MIR_new_mem_op(mir_ctx, MIR_T_I32,
                                                                                     offsetof(struct System_Array, Length),
-                                                                                    arg_ops[other_args].u.reg, 0, 1)));
-                                    } else {
+                                                                arg_ops[other_args].u.reg, 0, 1)));
+                                    } else if (
+                                        arg0_type->GenericTypeDefinition == tSystem_ReadOnlySpan &&
+                                        arg0_type->GenericArguments->Length == 1 &&
+                                        arg0_type->GenericArguments->Data[0] == tSystem_Char
+                                    ) {
+                                        // String(ReadOnlySpan<char> value), the size is the span length
+                                        ASSERT(arg_ops[other_args].mode == MIR_OP_REG);
+                                        MIR_append_insn(mir_ctx, mir_func,
+                                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                                                     MIR_new_reg_op(mir_ctx, size_reg),
+                                                                     MIR_new_mem_op(mir_ctx, MIR_T_I32,
+                                                                                    offsetof(struct System_Span, Length),
+                                                                arg_ops[other_args].u.reg, 0, 1)));
+
+                                    } else if (arg0_type == tSystem_Int32) {
                                         // String(int length), the size is length
                                         MIR_append_insn(mir_ctx, mir_func,
                                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                                      MIR_new_reg_op(mir_ctx, size_reg),
                                                                      arg_ops[other_args]));
+
+                                    } else {
+                                        // invalid string ctor
+                                        CHECK_FAIL();
                                     }
+                                } else {
+                                    CHECK_FAIL();
                                 }
 
                                 // multiply by char size

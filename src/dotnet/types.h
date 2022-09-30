@@ -383,6 +383,12 @@ void method_print_name(System_Reflection_MethodInfo method, strbuilder_t* builde
  */
 void method_print_full_name(System_Reflection_MethodInfo method, strbuilder_t* builder);
 
+/**
+ * Checks that the given method signature (as a MethodInfo) is the same as the method, this includes
+ * name checking and parameter checking
+ */
+bool method_compare_name_and_sig(System_Reflection_MethodInfo method, System_Reflection_MethodInfo signature);
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct System_Reflection_PropertyInfo {
@@ -704,6 +710,11 @@ void type_print_full_name(System_Type Type, strbuilder_t* builder);
 System_Reflection_FieldInfo type_get_field(System_Type type, System_String name);
 
 /**
+ * Searched for a method that is the same as the signature (including name) in the given type
+ */
+System_Reflection_MethodInfo type_find_method_in_type(System_Type type, System_Reflection_MethodInfo signature);
+
+/**
  * Iterate all the methods of the type with the same name, starting at the given index
  */
 System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index);
@@ -778,6 +789,7 @@ extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
 extern System_Type tSystem_RuntimeTypeHandle;
 extern System_Type tSystem_Nullable;
+extern System_Type tSystem_ReadOnlySpan;
 extern System_Type tSystem_Span;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
@@ -840,3 +852,8 @@ err_t type_expand_method_impls(System_Type type, TinyDotNet_Reflection_MethodImp
  * Make a new generic method with the given generic arguments
  */
 err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments, System_Reflection_MethodInfo* out_method);
+
+/**
+ * Expand the given type as a generic type from the arguments, while ignoring generic arguments from the ignore list
+ */
+err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type);

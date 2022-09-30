@@ -338,7 +338,6 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
 
         // can only have packing size on seq layout
         if (class_layout->packing_size != 0) {
-            CHECK(layout == TYPE_SEQUENTIAL_LAYOUT, "invalid layout %d", layout);
             type->PackingSize = class_layout->packing_size;
 
             // make sure it is valid
@@ -357,6 +356,28 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
                     CHECK_FAIL();
             }
         }
+    }
+
+cleanup:
+    return err;
+}
+
+static err_t set_field_offsets(System_Reflection_Assembly assembly, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_Field_layout_t* field_layouts = metadata->tables[METADATA_FIELD_LAYOUT].table;
+    for (int i = 0; i < metadata->tables[METADATA_FIELD_LAYOUT].rows; i++) {
+        metadata_Field_layout_t* field_layout = &field_layouts[i];
+        System_Reflection_FieldInfo field;
+        CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, field_layout->field, NULL, NULL, &field));
+        CHECK(field != NULL);
+
+        // verify it
+        CHECK(type_layout(field->DeclaringType) == TYPE_EXPLICIT_LAYOUT);
+        CHECK(!field_is_static(field));
+
+        // set it
+        field->MemoryOffset = field_layout->offset;
     }
 
 cleanup:
@@ -1015,6 +1036,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
 
     // init class layout
     CHECK_AND_RETHROW(set_class_layout(assembly, metadata));
+    CHECK_AND_RETHROW(set_field_offsets(assembly, metadata));
 
 cleanup:
     for (int i = 0; i < hmlen(interfaces); i++) {
@@ -1166,6 +1188,160 @@ cleanup:
     return err;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Handle type layout
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Explicit type layout, fields can optionally have exact offsets,
+ *
+ * Right now we only support types with no managed pointers, in theory it should
+ * be fairly trivial to allow for explicit layout while checking overlapping types
+ */
+static err_t layout_explicit_type(System_Type type, int* pManagedSize, int* pManagedAlignment) {
+    err_t err = NO_ERROR;
+
+    // before it
+    int managedSize = *pManagedSize;
+    int managedAlignment = *pManagedAlignment;
+
+    // The type must be a value type, aka has no inheritance, otherwise you
+    // could get access to private object fields
+    CHECK(type->IsValueType);
+
+    // the class size must be of this size, make sure
+    // that it doesn't make the class any smaller
+    if (type->ClassSize != 0) {
+        CHECK(type->ClassSize >= managedSize);
+        managedSize = type->ClassSize;
+    }
+
+    // go over the non-static fields and just verify everything looks right
+    for (int i = 0; i < type->Fields->Length; i++) {
+        System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
+        if (field_is_static(fieldInfo)) continue;
+
+        // must only be made from value types that have no managed references
+        CHECK(fieldInfo->FieldType->IsValueType);
+        CHECK(arrlen(fieldInfo->FieldType->ManagedPointersOffsets) == 0);
+
+        // make sure the type is in range of the class size
+        CHECK(fieldInfo->MemoryOffset + fieldInfo->FieldType->StackSize <= managedSize);
+    }
+
+    // output the sizes
+    *pManagedSize = managedSize;
+    *pManagedAlignment = managedAlignment;
+
+cleanup:
+    return err;
+}
+
+/**
+ * The type wants to be packed sequentially
+ */
+static err_t layout_sequential_type(System_Type type, int* pManagedSize, int* pManagedAlignment) {
+    err_t err = NO_ERROR;
+
+    // before it
+    int managedSize = *pManagedSize;
+    int managedAlignment = *pManagedAlignment;
+    int managedSizePrev = managedSize;
+
+    // the default max alignment is 16
+    uint8_t max_alignment = type->PackingSize ?: 16;
+
+    // for non-static we have two steps, first resolve all the stack sizes, for ref types
+    // we are not going to init ourselves yet
+    for (int i = 0; i < type->Fields->Length; i++) {
+        System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
+        if (field_is_static(fieldInfo)) continue;
+
+        // Fill it
+        if (unprimed_is_value_type(fieldInfo->FieldType)) {
+            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
+            CHECK(fieldInfo->FieldType->StackSize != 0);
+        } else {
+            if (type_is_interface(fieldInfo->FieldType)) {
+                fieldInfo->FieldType->StackSize = sizeof(void*) * 2;
+                fieldInfo->FieldType->StackAlignment = alignof(void*);
+            } else {
+                fieldInfo->FieldType->StackSize = sizeof(void*);
+                fieldInfo->FieldType->StackAlignment = alignof(void*);
+            }
+        }
+
+        // only static fields can be literal
+        CHECK(!field_is_literal(fieldInfo));
+
+        // align the size
+        int16_t alignment = MIN(max_alignment, fieldInfo->FieldType->StackAlignment);
+        managedSize = ALIGN_UP(managedSize, alignment);
+        fieldInfo->MemoryOffset = managedSize;
+
+        // now add the size
+        managedSize += fieldInfo->FieldType->StackSize;
+        CHECK(managedSize > managedSizePrev, "Type size overflow! %d -> %d", managedSizePrev, managedSize);
+        managedSizePrev = managedSize;
+
+        // pointer offsets for gc
+        if (!fieldInfo->FieldType->IsValueType) {
+            // this is a normal reference type, just add the offset to us
+            arrpush(type->ManagedPointersOffsets, fieldInfo->MemoryOffset);
+        } else {
+            // for value types we are essentially embedding them in us, so we are
+            // going to just copy all the offsets from them and add their base to
+            // our offsets
+            int* offsets = arraddnptr(type->ManagedPointersOffsets, arrlen(fieldInfo->FieldType->ManagedPointersOffsets));
+            for (int j = 0; j < arrlen(fieldInfo->FieldType->ManagedPointersOffsets); j++, offsets++) {
+                int offset = fieldInfo->FieldType->ManagedPointersOffsets[j];
+                *offsets = (int)fieldInfo->MemoryOffset + offset;
+            }
+        }
+
+        // set new type alignment
+        managedAlignment = MAX(managedAlignment, fieldInfo->FieldType->StackAlignment);
+        managedAlignment = MIN(max_alignment, managedAlignment);
+    }
+
+    // lastly align the whole size to the struct alignment
+    managedSize = ALIGN_UP(managedSize, managedAlignment);
+    CHECK(managedSize >= managedSizePrev, "Type size overflow! %d >= %d", managedSize, managedSizePrev);
+
+    // set the correct class size, must not be smaller than
+    // the size we got
+    if (type->ClassSize != 0) {
+        CHECK(type->ClassSize >= managedSize);
+        managedSize = type->ClassSize;
+    }
+
+    // output now
+    *pManagedSize = managedSize;
+    *pManagedAlignment = managedAlignment;
+
+cleanup:
+    return err;
+}
+
+/**
+ * Automatic layout, we are free to do whatever we want
+ */
+static err_t layout_auto_type(System_Type type, int* managedSize, int* managedAlignment) {
+    err_t err = NO_ERROR;
+
+    // for now we are just going to use sequential layout with default packing,
+    // in the future we can do something better which reorders the fields to be
+    // more packable
+    CHECK_AND_RETHROW(layout_sequential_type(type, managedSize, managedAlignment));
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Fill the type
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 err_t loader_fill_type(System_Type type) {
     err_t err = NO_ERROR;
     static int depth = 0;
@@ -1204,7 +1380,6 @@ err_t loader_fill_type(System_Type type) {
     int virtual_count = 0;
 
     int managedSize = 0;
-    int managedSizePrev = 0;
     int managedAlignment = 1;
 
     // first check the parent
@@ -1242,7 +1417,6 @@ err_t loader_fill_type(System_Type type) {
         // value type which starts without the actual size of the object class
         if (type != tSystem_ValueType) {
             managedSize = type->BaseType->ManagedSize;
-            managedSizePrev = managedSize;
             managedAlignment = type->BaseType->ManagedAlignment;
         }
 
@@ -1415,73 +1589,13 @@ err_t loader_fill_type(System_Type type) {
             }
         }
 
-        // TODO: for auto-layout we can optimize the layout
-        //       to have the best packing possible
-
-        // TODO: handle explicit layout, but check for overlapping
-        //       so no reference type will have overlapping with
-        //       another type
-        CHECK(type_layout(type) != TYPE_EXPLICIT_LAYOUT);
-
-        // the default max alignment is 16
-        uint8_t max_alignment = type->PackingSize ?: 16;
-
-        // for non-static we have two steps, first resolve all the stack sizes, for ref types
-        // we are not going to init ourselves yet
-        for (int i = 0; i < type->Fields->Length; i++) {
-            System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
-            if (field_is_static(fieldInfo)) continue;
-
-            // Fill it
-            if (unprimed_is_value_type(fieldInfo->FieldType)) {
-                CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
-                CHECK(fieldInfo->FieldType->StackSize != 0);
-            } else {
-                if (type_is_interface(fieldInfo->FieldType)) {
-                    fieldInfo->FieldType->StackSize = sizeof(void*) * 2;
-                    fieldInfo->FieldType->StackAlignment = alignof(void*);
-                } else {
-                    fieldInfo->FieldType->StackSize = sizeof(void*);
-                    fieldInfo->FieldType->StackAlignment = alignof(void*);
-                }
-            }
-
-            // only static fields can be literal
-            CHECK(!field_is_literal(fieldInfo));
-
-            // align the size
-            int16_t alignment = MIN(max_alignment, fieldInfo->FieldType->StackAlignment);
-            managedSize = ALIGN_UP(managedSize, alignment);
-            fieldInfo->MemoryOffset = managedSize;
-
-            // now add the size
-            managedSize += fieldInfo->FieldType->StackSize;
-            CHECK(managedSize > managedSizePrev, "Type size overflow! %d -> %d", managedSizePrev, managedSize);
-            managedSizePrev = managedSize;
-
-            // pointer offsets for gc
-            if (!fieldInfo->FieldType->IsValueType) {
-                // this is a normal reference type, just add the offset to us
-                arrpush(type->ManagedPointersOffsets, fieldInfo->MemoryOffset);
-            } else {
-                // for value types we are essentially embedding them in us, so we are
-                // going to just copy all the offsets from them and add their base to
-                // our offsets
-                int* offsets = arraddnptr(type->ManagedPointersOffsets, arrlen(fieldInfo->FieldType->ManagedPointersOffsets));
-                for (int j = 0; j < arrlen(fieldInfo->FieldType->ManagedPointersOffsets); j++, offsets++) {
-                    int offset = fieldInfo->FieldType->ManagedPointersOffsets[j];
-                    *offsets = (int)fieldInfo->MemoryOffset + offset;
-                }
-            }
-
-            // set new type alignment
-            managedAlignment = MAX(managedAlignment, fieldInfo->FieldType->StackAlignment);
-            managedAlignment = MIN(max_alignment, managedAlignment);
+        // layout all the non-static fields in memory
+        switch (type_layout(type)) {
+            case TYPE_AUTO_LAYOUT: CHECK_AND_RETHROW(layout_auto_type(type, &managedSize, &managedAlignment)); break;
+            case TYPE_SEQUENTIAL_LAYOUT: CHECK_AND_RETHROW(layout_sequential_type(type, &managedSize, &managedAlignment)); break;
+            case TYPE_EXPLICIT_LAYOUT: CHECK_AND_RETHROW(layout_explicit_type(type, &managedSize, &managedAlignment)); break;
+            default: CHECK_FAIL();
         }
-
-        // lastly align the whole size to the struct alignment
-        managedSize = ALIGN_UP(managedSize, managedAlignment);
-        CHECK(managedSize >= managedSizePrev, "Type size overflow! %d >= %d", managedSize, managedSizePrev);
 
         if (type->ManagedSize != 0) {
             // only builtin-types should have this, and it means
@@ -1494,13 +1608,6 @@ err_t loader_fill_type(System_Type type) {
                   type->Namespace, type->Name,
                   type->ManagedSize, type->ManagedAlignment,
                   managedSize, managedAlignment);
-        }
-
-        // set the correct class size, must not be smaller than
-        // the size we got
-        if (type->ClassSize != 0) {
-            CHECK(type->ClassSize >= managedSize);
-            managedSize = type->ClassSize;
         }
 
         type->ManagedSize = managedSize;
@@ -1982,6 +2089,7 @@ static type_init_t m_type_init[] = {
     TYPE_LOOKUP("System.Runtime.CompilerServices", "IsVolatile", tSystem_Runtime_CompilerServices_IsVolatile),
     TYPE_LOOKUP("System.Runtime.InteropServices", "InAttribute", tSystem_Runtime_InteropServices_InAttribute),
     TYPE_LOOKUP("System", "ThreadStaticAttribute", tSystem_ThreadStaticAttribute),
+    TYPE_LOOKUP("System", "ReadOnlySpan`1", tSystem_ReadOnlySpan),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
