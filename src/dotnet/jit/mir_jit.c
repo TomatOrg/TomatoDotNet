@@ -1575,9 +1575,15 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
             // RuntimeHelpers has special generic functions we want to generate
             //
             } else if (method->DeclaringType == tSystem_Runtime_CompilerServices_RuntimeHelpers) {
-                if (string_equals_cstr(method->GenericMethodDefinition->Name, "IsReferenceOrContainsReferences")) {
-                    method->MirFunc = INVALID_IMPORT;
-                    m_RuntimeHelpers_IsReferenceOrContainsReferences = method->GenericMethodDefinition;
+                if (method->GenericMethodDefinition != NULL) {
+                    if (string_equals_cstr(method->GenericMethodDefinition->Name, "IsReferenceOrContainsReferences")) {
+                        method->MirFunc = INVALID_IMPORT;
+                        m_RuntimeHelpers_IsReferenceOrContainsReferences = method->GenericMethodDefinition;
+                    } else {
+                        CHECK_FAIL();
+                    }
+                } else if (string_equals_cstr(method->Name, "GetObjectPointer")) {
+                    method->MirFunc = m_unsafe_as_func;
                 } else {
                     CHECK_FAIL();
                 }
@@ -5754,13 +5760,14 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                         arg0_type->GenericArguments->Data[0] == tSystem_Char
                                     ) {
                                         // String(ReadOnlySpan<char> value), the size is the span length
-                                        ASSERT(arg_ops[other_args].mode == MIR_OP_REG);
+                                        ASSERT(arg_ops[other_args].mode == MIR_OP_MEM);
+                                        ASSERT(arg_ops[other_args].u.mem.type == MIR_T_BLK);
                                         MIR_append_insn(mir_ctx, mir_func,
                                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                                      MIR_new_reg_op(mir_ctx, size_reg),
                                                                      MIR_new_mem_op(mir_ctx, MIR_T_I32,
                                                                                     offsetof(struct System_Span, Length),
-                                                                arg_ops[other_args].u.reg, 0, 1)));
+                                                                arg_ops[other_args].u.mem.base, 0, 1)));
 
                                     } else if (arg0_type == tSystem_Int32) {
                                         // String(int length), the size is length
@@ -5817,7 +5824,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
 
                         if (constrainedType != NULL) {
                             CHECK(this_type->IsByRef);
-                            CHECK(this_type->BaseType == constrainedType);
+                            CHECK(type_is_verifier_assignable_to(this_type->BaseType, constrainedType));
 
                             // If this_type is a reference type (as opposed to a value type)
                             if (type_is_object_ref(constrainedType)) {
@@ -5869,7 +5876,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             // in short, for whatever reason the compiler generates a ctor in System.ValueType
                             // that calls the ctor of System.Object ????
                         } else {
-                            TRACE("%U AND %U", this_type->Name, signature_this_type->Name);
                             CHECK(type_is_verifier_assignable_to(this_type, signature_this_type));
                         }
 

@@ -1086,7 +1086,11 @@ cleanup:
     return err;
 }
 
-err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method) {
+typedef struct {
+    System_Type* types_to_fill;
+} fill_queue_t;
+
+static err_t queue_fill_method(fill_queue_t* queue, System_Type type, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
 
     // don't initialize twice
@@ -1097,13 +1101,13 @@ err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method) 
 
     // init return type
     if (method->ReturnType != NULL) {
-        CHECK_AND_RETHROW(loader_fill_type(method->ReturnType));
+        arrpush(queue->types_to_fill, method->ReturnType);
     }
 
     // init all the other parameters
     for (int i = 1; i < method->Parameters->Length; i++) {
         System_Reflection_ParameterInfo parameterInfo = method->Parameters->Data[i];
-        CHECK_AND_RETHROW(loader_fill_type(parameterInfo->ParameterType));
+        arrpush(queue->types_to_fill, parameterInfo->ParameterType);
     }
 
 cleanup:
@@ -1369,7 +1373,7 @@ cleanup:
 // Fill the type
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-err_t loader_fill_type(System_Type type) {
+static err_t fill_type(fill_queue_t* queue, System_Type type) {
     err_t err = NO_ERROR;
     static int depth = 0;
     TRACE_FILL_TYPE("%*s%U.%U", depth * 4, "", type->Namespace, type->Name);
@@ -1418,7 +1422,7 @@ err_t loader_fill_type(System_Type type) {
         }
 
         // fill the type information of the parent
-        CHECK_AND_RETHROW(loader_fill_type(type->BaseType));
+        CHECK_AND_RETHROW(fill_type(queue, type->BaseType));
 
         // validate that we don't inherit from a sealed type
         CHECK(!type_is_sealed(type->BaseType));
@@ -1527,7 +1531,7 @@ err_t loader_fill_type(System_Type type) {
                 TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
                 System_Type interface = impl->InterfaceType;
 
-                CHECK_AND_RETHROW(loader_fill_type(interface));
+                CHECK_AND_RETHROW(fill_type(queue, interface));
                 CHECK(interface->VirtualMethods != NULL);
 
                 // set the offset of this impl and increment our vtable count
@@ -1658,7 +1662,7 @@ err_t loader_fill_type(System_Type type) {
             if (field_is_static(fieldInfo)) continue;
 
             // Fill it
-            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
+            CHECK_AND_RETHROW(fill_type(queue, fieldInfo->FieldType));
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1672,7 +1676,7 @@ err_t loader_fill_type(System_Type type) {
             if (!field_is_static(fieldInfo)) continue;
 
             // Fill it
-            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
+            arrpush(queue->types_to_fill, fieldInfo->FieldType);
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1729,7 +1733,7 @@ err_t loader_fill_type(System_Type type) {
         for (int i = 0; i < type->Methods->Length; i++) {
             System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
             if (methodInfo->GenericArguments != NULL) continue; // no need to fill generic methods
-            CHECK_AND_RETHROW(loader_fill_method(type, methodInfo));
+            CHECK_AND_RETHROW(queue_fill_method(queue, type, methodInfo));
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1778,7 +1782,7 @@ err_t loader_fill_type(System_Type type) {
         // fill all the instances instead
         System_Type instance = type->NextGenericInstance;
         while (instance != NULL) {
-            CHECK_AND_RETHROW(loader_fill_type(instance));
+            arrpush(queue->types_to_fill, instance);
             instance = instance->NextGenericInstance;
         }
     }
@@ -1800,6 +1804,40 @@ cleanup:
 
     depth--;
     TRACE_FILL_TYPE("%*s%U.%U - %d, %d", depth * 4, "", type->Namespace, type->Name, type->ManagedSize, type->StackSize);
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+err_t loader_fill_type(System_Type type) {
+    err_t err = NO_ERROR;
+
+    fill_queue_t queue = { .types_to_fill = NULL };
+    CHECK_AND_RETHROW(fill_type(&queue, type));
+
+    while (arrlen(queue.types_to_fill) != 0) {
+        type = arrpop(queue.types_to_fill);
+        CHECK_AND_RETHROW(fill_type(&queue, type));
+    }
+
+cleanup:
+    arrfree(queue.types_to_fill);
+
+    return err;
+}
+
+err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method) {
+    err_t err = NO_ERROR;
+
+    fill_queue_t queue = { .types_to_fill = NULL };
+    CHECK_AND_RETHROW(queue_fill_method(&queue, type, method));
+
+    while (arrlen(queue.types_to_fill) != 0) {
+        type = arrpop(queue.types_to_fill);
+        CHECK_AND_RETHROW(fill_type(&queue, type));
+    }
+
+cleanup:
     return err;
 }
 
@@ -2110,6 +2148,8 @@ static type_init_t m_type_init[] = {
     VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE),
     VALUE_TYPE_INIT("System", "Nullable`1", System_Nullable, STACK_TYPE_VALUE_TYPE),
 
+    TYPE_INIT("", "GenericArray`1", System_GenericArray),
+
     TYPE_LOOKUP("System", "Void", tSystem_Void),
     TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", tSystem_Runtime_CompilerServices_Unsafe),
     TYPE_LOOKUP("System.Runtime.CompilerServices", "RuntimeHelpers", tSystem_Runtime_CompilerServices_RuntimeHelpers),
@@ -2213,9 +2253,7 @@ static void assign_array_types_vtables(System_Object object) {
             }
 
             ASSERT(type->IsArray);
-            GC_UPDATE(type, VirtualMethods, tSystem_Array->VirtualMethods);
-            type->VTableSize = tSystem_Array->VTableSize;
-            type->VTable = tSystem_Array->VTable;
+            setup_generic_array(type);
         }
     } else if (object->type == 0) {
         ASSERT(object->type != 0);
@@ -2228,6 +2266,7 @@ static void fix_array_vtables(System_Object object) {
     if (object->vtable == NULL) {
         object->vtable = OBJECT_TYPE(object)->VTable;
         if (object->vtable == NULL) {
+            TRACE("VTable was still null after fixups: %U", OBJECT_TYPE(object)->Name);
             ASSERT(object->vtable != NULL);
         }
     }
@@ -2317,6 +2356,9 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // that every array actually has a vtable assigned to it
     heap_iterate_objects(assign_array_types_vtables);
     heap_iterate_objects(fix_array_vtables);
+
+    // now enable generic array creation
+    enable_generic_arrays();
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));

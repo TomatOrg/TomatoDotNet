@@ -62,6 +62,8 @@ System_Type tSystem_Nullable = NULL;
 System_Type tSystem_ReadOnlySpan = NULL;
 System_Type tSystem_Span = NULL;
 
+System_Type tSystem_GenericArray = NULL;
+
 System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
 System_Type tTinyDotNet_Reflection_MemberReference = NULL;
 System_Type tTinyDotNet_Reflection_MethodImpl = NULL;
@@ -386,11 +388,53 @@ System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, 
     return hmget(assembly->UserStringsTable, token.index);
 }
 
-System_Type get_array_type(System_Type type) {
-    if (type->ArrayType != NULL) {
-        return type->ArrayType;
+static bool m_enable_generic_arrays = false;
+
+static bool THREAD_LOCAL m_nesting_setup_generic_array;
+
+void enable_generic_arrays() {
+    m_enable_generic_arrays = true;
+}
+
+void setup_generic_array(System_Type type) {
+    if (m_nesting_setup_generic_array) {
+        return;
     }
 
+    PANIC_ON(monitor_enter(type));
+
+    // already inited by the time we took the lock
+    if (type->VTable != NULL) {
+        return;
+    }
+
+    // don't nest the generic array creation
+    m_nesting_setup_generic_array = true;
+
+    // create the args
+    System_Type_Array args = GC_NEW_ARRAY(tSystem_Type, 1);
+    args->Data[0] = type->ElementType;
+
+    // instantiate
+    System_Type genericArray = NULL;
+    PANIC_ON(type_make_generic(tSystem_GenericArray, args, &genericArray));
+    PANIC_ON(loader_fill_type(genericArray));
+
+    // now set the methods so the array type will have all the needed stuff
+    GC_UPDATE(type, Methods, genericArray->Methods);
+    GC_UPDATE(type, VirtualMethods, genericArray->VirtualMethods);
+    GC_UPDATE(type, VTable, genericArray->VTable);
+    GC_UPDATE(type, InterfaceImpls, genericArray->InterfaceImpls);
+    GC_UPDATE(type, MethodImpls, genericArray->MethodImpls);
+    type->VTableSize = genericArray->VTableSize;
+
+    // we no longer nest,
+    m_nesting_setup_generic_array = false;
+
+    PANIC_ON(monitor_exit(type));
+}
+
+static System_Type create_array_type(System_Type type) {
     // TODO: panic on fail
     PANIC_ON(monitor_enter(type));
 
@@ -427,11 +471,6 @@ System_Type get_array_type(System_Type type) {
     ArrayType->StackAlignment = tSystem_Array->StackAlignment;
     ArrayType->ManagedAlignment = tSystem_Array->ManagedAlignment;
 
-    // allocate the vtable
-    GC_UPDATE(ArrayType, VirtualMethods, tSystem_Array->VirtualMethods);
-    ArrayType->VTableSize = tSystem_Array->VTableSize;
-    ArrayType->VTable = tSystem_Array->VTable;
-
     // There are no managed pointers in here (The gc will handle array
     // stuff on its own)
     ArrayType->ManagedPointersOffsets = NULL;
@@ -444,6 +483,16 @@ System_Type get_array_type(System_Type type) {
     PANIC_ON(monitor_exit(type));
 
     return type->ArrayType;
+}
+
+System_Type get_array_type(System_Type type) {
+    System_Type arrayType = type->ArrayType ?: create_array_type(type);
+
+    if (m_enable_generic_arrays && arrayType->VTable == NULL) {
+        setup_generic_array(arrayType);
+    }
+
+    return arrayType;
 }
 
 System_Type get_by_ref_type(System_Type type) {

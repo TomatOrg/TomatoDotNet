@@ -136,6 +136,10 @@ typedef struct System_Array {
     int Length;
 } *System_Array;
 
+typedef struct System_GenericArray {
+   struct System_Array;
+} *System_GenericArray;
+
 #define DEFINE_ARRAY(type) \
     typedef struct type##_Array { \
         struct System_Array; \
@@ -685,6 +689,18 @@ const char* type_visibility_str(type_visibility_t visibility);
 System_Type get_array_type(System_Type type);
 
 /**
+ * Called once bootstrapping is complete to allow creating
+ * the the generic interfaces implementations for the array
+ * type
+ */
+void enable_generic_arrays();
+
+/**
+ * Setup the generic array for the given type
+ */
+void setup_generic_array(System_Type type);
+
+/**
  * Get the by-ref type for the given type
  *
  * @param type  [IN] The type
@@ -795,6 +811,8 @@ extern System_Type tSystem_RuntimeTypeHandle;
 extern System_Type tSystem_Nullable;
 extern System_Type tSystem_ReadOnlySpan;
 extern System_Type tSystem_Span;
+
+extern System_Type tSystem_GenericArray;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
 extern System_Type tTinyDotNet_Reflection_MemberReference;

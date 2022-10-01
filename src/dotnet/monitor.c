@@ -236,8 +236,8 @@ err_t monitor_enter(void* object) {
     monitor_t* monitor = get_monitor(get_monitor_root(object), object);
     CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
 
-    // lock it
-    mutex_lock(&monitor->mutex);
+//    mutex_lock(&monitor->mutex);
+    ASSERT(mutex_try_lock(&monitor->mutex));
     take_lock(monitor);
 
 cleanup:
