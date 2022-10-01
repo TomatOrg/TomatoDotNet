@@ -560,6 +560,34 @@ err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type)
         }
 
         CHECK_AND_RETHROW(parse_method_def_sig(method_def->signature, methodInfo, file, metadata));
+
+        int last_idx = (index + 1) == assembly->DefinedMethods->Length ?
+                             assembly->DefinedParameters->Length :
+                             method_def[1].param_list.index - 1;
+        CHECK(last_idx <= assembly->DefinedParameters->Length);
+
+        int param_count = last_idx - method_def->param_list.index + 1;
+
+        for (int pi = 0; pi < param_count; pi++) {
+            int param_idx = method_def->param_list.index + pi - 1;
+            metadata_param_t* param = metadata_get_param(metadata, param_idx);
+            CHECK(param->sequence >= 0 && param->sequence <= methodInfo->Parameters->Length);
+
+            System_Reflection_ParameterInfo parameterInfo = NULL;
+            if (param->sequence == 0) {
+                // the return type
+                parameterInfo = GC_NEW(tSystem_Reflection_ParameterInfo);
+                parameterInfo->ParameterType = methodInfo->ReturnType;
+                // TODO: store in the method
+            } else {
+                // normal variable
+                int pidx = param->sequence - 1;
+                parameterInfo = methodInfo->Parameters->Data[pidx];
+            }
+            parameterInfo->Attributes = param->flags;
+            parameterInfo->Name = new_string_from_cstr(param->name);
+            GC_UPDATE_ARRAY(assembly->DefinedParameters, param_idx, parameterInfo);
+        }
     }
 
     // now we finished the type setup
@@ -1954,28 +1982,9 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
 
             case METADATA_PARAM: {
                 // find the parameter we need
-                // TODO: maybe just store an array of all parameters
-                System_Reflection_ParameterInfo parameterInfo = NULL;
-                int param_count = 0;
-                int param_index = 0;
-                int param_we_want = attrib->parent.index - 1;
-                for (
-                    int mi = 0;
-                    mi < assembly->DefinedMethods->Length;
-                    param_index += param_count, mi++
-                ) {
-                    param_count = assembly->DefinedMethods->Data[mi]->Parameters->Length;
-                    if (param_index <= param_we_want && param_we_want < param_index + param_count) {
-                        // found it!
-                        int index = param_we_want - param_index;
-                        parameterInfo = assembly->DefinedMethods->Data[mi]->Parameters->Data[index];
-                        break;
-                    }
-                }
-                CHECK(parameterInfo != NULL);
-
-                // add it
-                key = (System_Object)parameterInfo;
+                CHECK(attrib->parent.index <= assembly->DefinedParameters->Length);
+                int index = attrib->parent.index - 1;
+                key = (System_Object)assembly->DefinedParameters->Data[index];
             } break;
 
             case METADATA_GENERIC_PARAM: {
@@ -1994,6 +2003,10 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
                 } else {
                     CHECK_FAIL();
                 }
+            } break;
+
+            case METADATA_INTERFACE_IMPL: {
+                WARN("TODO: interface impl custom attribute");
             } break;
 
             default:
@@ -2299,6 +2312,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
     int method_count = metadata.tables[METADATA_METHOD_DEF].rows;
     int field_count = metadata.tables[METADATA_FIELD].rows;
+    int param_count = metadata.tables[METADATA_PARAM].rows;
 
     // do first time allocation and init
     assembly->DefinedTypes = gc_new(NULL, sizeof(struct System_Array) + types_count * sizeof(System_Type));
@@ -2320,7 +2334,8 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     assembly->DefinedMethods->Length = method_count;
     assembly->DefinedFields = gc_new(NULL, sizeof(struct System_Array) + field_count * sizeof(System_Reflection_FieldInfo));
     assembly->DefinedFields->Length = field_count;
-
+    assembly->DefinedParameters = gc_new(NULL, sizeof(struct System_Array) + param_count * sizeof(System_Reflection_ParameterInfo));
+    assembly->DefinedParameters->Length = param_count;
     // we need the nested types before we finish up the setup type info
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
 
@@ -2344,6 +2359,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     RESET_TYPE(assembly->DefinedTypes, get_array_type(tSystem_Type));
     RESET_TYPE(assembly->DefinedMethods, get_array_type(tSystem_Reflection_MethodInfo));
     RESET_TYPE(assembly->DefinedFields, get_array_type(tSystem_Reflection_FieldInfo));
+    RESET_TYPE(assembly->DefinedParameters, get_array_type(tSystem_Reflection_ParameterInfo));
     for (int i = 0; i < types_count; i++) {
         System_Type type = assembly->DefinedTypes->Data[i];
         RESET_TYPE(type, tSystem_Type);
@@ -2409,6 +2425,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     int types_count = metadata.tables[METADATA_TYPE_DEF].rows;
     int method_count = metadata.tables[METADATA_METHOD_DEF].rows;
     int field_count = metadata.tables[METADATA_FIELD].rows;
+    int param_count = metadata.tables[METADATA_PARAM].rows;
 
     // create all the types
     GC_UPDATE(assembly, DefinedTypes, GC_NEW_ARRAY(tSystem_Type, types_count));
@@ -2421,6 +2438,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // create all the methods and fields
     GC_UPDATE(assembly, DefinedMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, method_count));
     GC_UPDATE(assembly, DefinedFields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, field_count));
+    GC_UPDATE(assembly, DefinedParameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));
 
     // we need the nested types before we finish up the setup type info
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));

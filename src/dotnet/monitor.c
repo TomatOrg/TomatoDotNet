@@ -229,6 +229,19 @@ static void release_lock(monitor_t* monitor) {
     monitor->locker = NULL;
 }
 
+err_t monitor_is_entered(void* object, bool* is) {
+    err_t err = NO_ERROR;
+
+    // get the monitor object
+    monitor_t* monitor = get_monitor(get_monitor_root(object), object);
+    CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
+
+    *is = monitor->locker == get_current_thread();
+
+cleanup:
+    return err;
+}
+
 err_t monitor_enter(void* object) {
     err_t err = NO_ERROR;
 
@@ -236,8 +249,7 @@ err_t monitor_enter(void* object) {
     monitor_t* monitor = get_monitor(get_monitor_root(object), object);
     CHECK_ERROR(monitor != NULL, ERROR_OUT_OF_MEMORY);
 
-//    mutex_lock(&monitor->mutex);
-    ASSERT(mutex_try_lock(&monitor->mutex));
+    mutex_lock(&monitor->mutex);
     take_lock(monitor);
 
 cleanup:

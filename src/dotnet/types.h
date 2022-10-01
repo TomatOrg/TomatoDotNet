@@ -266,6 +266,7 @@ static inline bool parameter_has_field_marshal(System_Reflection_ParameterInfo p
 
 typedef struct System_Reflection_LocalVariableInfo {
     struct System_Object;
+    bool IsPinned;
     int LocalIndex;
     System_Type LocalType;
 } *System_Reflection_LocalVariableInfo;
@@ -497,6 +498,7 @@ struct System_Reflection_Assembly {
     System_Reflection_MethodInfo_Array DefinedMethods;
     System_Reflection_FieldInfo_Array DefinedFields;
     System_Reflection_PropertyInfo_Array DefinedProperties;
+    System_Reflection_ParameterInfo_Array DefinedParameters;
     System_Byte_Array_Array DefinedTypeSpecs;
     TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
     TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;

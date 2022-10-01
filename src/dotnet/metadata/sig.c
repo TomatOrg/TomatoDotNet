@@ -186,8 +186,7 @@ static err_t parse_type(
                 CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs, file, metadata));
             }
 
-            *out_type = tSystem_UIntPtr;
-//            *out_type = get_pointer_type(elementType);
+            *out_type = get_pointer_type(elementType);
         } break;
 
         case ELEMENT_TYPE_STRING: *out_type = tSystem_String; break;
@@ -600,7 +599,11 @@ err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method
         }
 
         // handle constraint
-        // TODO:
+        CHECK(sig->size > 0);
+        if (sig->data[0] == ELEMENT_TYPE_PINNED) {
+            NEXT_BYTE;
+            variable->IsPinned = true;
+        }
 
         // actually get the type
         bool is_by_ref = false;

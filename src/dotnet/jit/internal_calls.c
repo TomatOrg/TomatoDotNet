@@ -10,6 +10,7 @@
 #include "dotnet/monitor.h"
 #include "dotnet/loader.h"
 #include "dotnet/activator.h"
+#include "kernel.h"
 
 #include <thread/scheduler.h>
 
@@ -67,6 +68,12 @@ static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
 //----------------------------------------------------------------------------------------------------------------------
 
 // TODO: figure how to properly throw errors from native code...
+
+static method_result_t System_Threading_Monitor_IsEntered(System_Object obj) {
+    bool taken = false;
+    err_t err = monitor_is_entered(obj, &taken);
+    return (method_result_t) { .exception = NULL, .value = IS_ERROR(err) ? false : taken };
+}
 
 static method_result_t System_Threading_Monitor_EnterInternal(System_Object obj, bool* lockTaken) {
     err_t err = monitor_enter(obj);
@@ -204,13 +211,8 @@ static System_Exception System_Threading_SetNativeThreadName(thread_t* thread, S
     return NULL;
 }
 
-//----------------------------------------------------------------------------------------------------------------------
-// System.Object
-//----------------------------------------------------------------------------------------------------------------------
-
-// TODO: generate this instead
-static method_result_t object_GetType(System_Object this) {
-    return (method_result_t){ .exception = NULL, .value = (uintptr_t) OBJECT_TYPE(this) };
+static method_result_t System_Threading_Thread_GetCurrentProcessorId() {
+    return (method_result_t){ .value = get_apic_id() };
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -342,9 +344,17 @@ cleanup:
 // System.Activator
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t System_Activator_CreateInstance(System_Type type, System_Object_Array args) {
+static method_result_t System_Activator_InternalCreateInstance(System_Type type, System_Object_Array args) {
     System_Object obj = NULL;
-    switch (activator_create_instance(type, args->Data, args->Length, &obj)) {
+
+    System_Object* argsPtr = NULL;
+    int argsCount = 0;
+    if (args != NULL) {
+        argsPtr = args->Data;
+        argsCount = args->Length;
+    }
+
+    switch (activator_create_instance(type, argsPtr, argsCount, &obj)) {
         case NO_ERROR: return (method_result_t){ .exception = NULL, .value = (uintptr_t)obj };
         case ERROR_OUT_OF_MEMORY: return (method_result_t){ .exception = activator_create_exception(tSystem_OutOfMemoryException), .value = 0 };
         // TODO: handle nicely
@@ -493,16 +503,75 @@ method_result_t System_Attribute_GetCustomAttributeNative(System_Object element,
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// System.Object
+//----------------------------------------------------------------------------------------------------------------------
+
+// TODO: generate this instead
+static method_result_t object_GetType(System_Object this) {
+    return (method_result_t){ .exception = NULL, .value = (uintptr_t) OBJECT_TYPE(this) };
+}
+
+static method_result_t object_MemberwiseClone(System_Object this) {
+    System_Object newObject = NULL;
+
+    System_Type type = OBJECT_TYPE(this);
+    if (type->IsArray) {
+        System_Array inArray = (System_Array)this;
+        System_Array outArray = GC_NEW_ARRAY(type->ElementType, inArray->Length);
+        System_Array_CopyInternal(inArray, 0, outArray, 0, inArray->Length);
+        newObject = (System_Object)outArray;
+    } else if (type == tSystem_String) {
+        System_String inStr = (System_String)this;
+        System_String outStr = GC_NEW_STRING(inStr->Length);
+        memcpy(outStr->Chars, inStr->Chars, sizeof(System_Char) * inStr->Length);
+        newObject = (System_Object)outStr;
+    } else {
+        newObject = UNSAFE_GC_NEW(type);
+        if (newObject == NULL) {
+            return (method_result_t){ .exception = activator_create_exception(tSystem_OutOfMemoryException), .value = 0 };
+        }
+
+        managed_memcpy(newObject, type, 0, this);
+    }
+
+    return (method_result_t){ .exception = NULL, .value = (uintptr_t) newObject };
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// System.Type
+//----------------------------------------------------------------------------------------------------------------------
+
+method_result_t System_Type_InternalMakeGenericType(System_Type type, System_Type_Array arguments) {
+    System_Type new_type = NULL;
+    System_Exception exception = NULL;
+
+    err_t err = type_make_generic(type, arguments, &new_type);
+    if (err != NO_ERROR) {
+        switch (err) {
+            case ERROR_OUT_OF_MEMORY: exception = activator_create_exception(tSystem_OutOfMemoryException); break;
+            default: exception = activator_create_exception(tSystem_Exception); break;
+        }
+    }
+
+    return (method_result_t){ .value = (uintptr_t) new_type, .exception = exception };
+}
+
+method_result_t System_Environment_GetProcessorCount() {
+    return (method_result_t){ .value = get_cpu_count() };
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // everything
 //----------------------------------------------------------------------------------------------------------------------
 
 internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Type object::GetType()", object_GetType },
+    { "object object::MemberwiseClone()", object_MemberwiseClone, },
 
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal([Corelib-v1]System.Byte[],bool)", System_Reflection_Assembly_LoadInternal_raw },
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal(string,bool)", System_Reflection_Assembly_LoadInternal_string },
 
-    { "object [Corelib-v1]System.Activator::CreateInstance([Corelib-v1]System.Type,[Corelib-v1]System.Object[])", System_Activator_CreateInstance },
+    { "object [Corelib-v1]System.Activator::InternalCreateInstance([Corelib-v1]System.Type,[Corelib-v1]System.Object[])", System_Activator_InternalCreateInstance },
 
     { "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)", System_Array_ClearInternal },
     { "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)", System_Array_CopyInternal },
@@ -510,6 +579,7 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)", System_GC_Collect },
     { "[Corelib-v1]System.GC::KeepAlive(object)", System_GC_KeepAlive },
 
+    { "bool [Corelib-v1]System.Threading.Monitor::IsEntered(object)", System_Threading_Monitor_IsEntered },
     { "int32 [Corelib-v1]System.Threading.Monitor::EnterInternal(object,[Corelib-v1]System.Boolean&)", System_Threading_Monitor_EnterInternal },
     { "int32 [Corelib-v1]System.Threading.Monitor::ExitInternal(object)", System_Threading_Monitor_ExitInternal },
     { "int32 [Corelib-v1]System.Threading.Monitor::PulseInternal(object)", System_Threading_Monitor_PulseInternal },
@@ -528,6 +598,7 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Threading.Thread::StartNativeThread(uint64,object)", System_Threading_StartNativeThread },
     { "[Corelib-v1]System.Threading.Thread::ReleaseNativeThread(uint64)", System_Threading_ReleaseNativeThread },
     { "[Corelib-v1]System.Threading.Thread::SetNativeThreadName(uint64,string)", System_Threading_SetNativeThreadName },
+    { "int32 [Corelib-v1]System.Threading.Thread::GetCurrentProcessorId()", System_Threading_Thread_GetCurrentProcessorId },
 
     { "bool [Corelib-v1]System.Threading.WaitHandle::WaitableSend(uint64,bool)",             System_Threading_WaitHandle_WaitableSend },
     { "int32 [Corelib-v1]System.Threading.WaitHandle::WaitableWait(uint64,bool)",             System_Threading_WaitHandle_WaitableWait },
@@ -580,10 +651,13 @@ internal_call_t g_internal_calls[] = {
     { "int64 [Corelib-v1]System.Threading.Interlocked::Read([Corelib-v1]System.Int64&)", interlocked_read_i64 },
     { "uint64 [Corelib-v1]System.Threading.Interlocked::Read([Corelib-v1]System.UInt64&)", interlocked_read_u64 },
 
-
     { "[Corelib-v1]System.Reflection.Assembly::Finalize()", assembly_finalizer },
 
     { "[Corelib-v1]System.Attribute [Corelib-v1]System.Attribute::GetCustomAttributeNative(object,[Corelib-v1]System.Type,[Corelib-v1]System.Int32&)", System_Attribute_GetCustomAttributeNative },
+
+    { "[Corelib-v1]System.Type [Corelib-v1]System.Type::InternalMakeGenericType([Corelib-v1]System.Type[])", System_Type_InternalMakeGenericType },
+
+    { "int32 [Corelib-v1]System.Environment::GetProcessorCount()", System_Environment_GetProcessorCount },
 
 };
 

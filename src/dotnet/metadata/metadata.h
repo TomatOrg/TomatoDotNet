@@ -30,6 +30,11 @@ static inline metadata_field_t* metadata_get_field(metadata_t* metadata, int ind
     return &((metadata_field_t*)metadata->tables[METADATA_FIELD].table)[index];
 }
 
+static inline metadata_param_t* metadata_get_param(metadata_t* metadata, int index) {
+    ASSERT(index < metadata->tables[METADATA_PARAM].rows);
+    return &((metadata_param_t*)metadata->tables[METADATA_PARAM].table)[index];
+}
+
 static inline metadata_property_t* metadata_get_property(metadata_t* metadata, int index) {
     ASSERT(index < metadata->tables[METADATA_PROPERTY].rows);
     return &((metadata_property_t*)metadata->tables[METADATA_PROPERTY].table)[index];

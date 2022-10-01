@@ -29,10 +29,13 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-//    if (!string_equals_cstr(method->Name, "Rent"))
-//        return false;
+    if (!string_equals_cstr(method->DeclaringType->Name, "List`1<[Corelib-v1]System.Attribute>"))
+        return false;
 
-//    return true;
+    if (!string_equals_cstr(method->Name, ".cctor"))
+        return false;
+
+    return true;
 
     return false;
 }
@@ -51,12 +54,12 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-#define JIT_TRACE
+//#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-#define JIT_TRACE_MIR
+//#define JIT_TRACE_MIR
 
 /**
  * Uncomment if you want debug symbols, note that this forces
@@ -304,7 +307,7 @@ static void on_rethrow(System_Reflection_MethodInfo methodInfo, int il_offset) {
 static MIR_context_t m_mir_context;
 
 static void jit_generate_System_Array_GetDataPtr() {
-    const char* fname = "nuint [Corelib-v1]System.Array::GetDataPtr()";
+    const char* fname = "[Corelib-v1]System.Void* [Corelib-v1]System.Array::GetDataPtr()";
     MIR_type_t res[] = {
         MIR_T_P,
         MIR_T_P
@@ -626,27 +629,27 @@ typedef struct stack_entry {
     System_Type type;
 
     /**
-     * Is this a non local reference, meaning it comes from
-     * an external source
+     * A constant value tagged with the entry, for
+     * localloc, this contains the size of the request
      */
-    bool non_local_ref;
+    uint32_t constant;
 
     /**
-     * Is this a readonly reference, meaning it can't be set
+     * This entry has a reference to a non-local object,
+     * we can safely return it from the method
      */
-    bool readonly_ref;
+    uint32_t non_local_ref : 1;
 
     /**
-     * The length that this pointer points to, this is required
-     * for localalloc + span to work properly
+     * The reference is readonly, it should never be
+     * written to
      */
-    size_t pointer_length;
+    uint32_t readonly_ref : 1;
 
     /**
-     * The constant value pushed from LDC, used for verifying
-     * the pointer length
+     * The value is the result of a localloc
      */
-    size_t constant_value;
+    uint32_t localloc : 1;
 } stack_entry_t;
 
 typedef struct stack {
@@ -864,6 +867,8 @@ static MIR_reg_t new_temp_reg(jit_method_context_t* ctx, System_Type type) {
     return push_new_reg(ctx, type, true);
 }
 
+static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
+
 /**
  * Push a new item on the stack, returning the stack slot for it as a register
  *
@@ -874,6 +879,8 @@ static err_t stack_push(jit_method_context_t* ctx, System_Type type, MIR_reg_t* 
 
     if (type != NULL) {
         ASSERT(type->IsFilled);
+
+        CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, type));
     }
 
     // Make sure we don't exceed the stack depth
@@ -1669,6 +1676,11 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
         goto cleanup;
     }
 
+    // don't init these
+    if (type->IsPointer || type->IsBoxed || type->IsByRef) {
+        goto cleanup;
+    }
+
     // make sure the type is filled, can happen with generics
     // that it is not filled yet
     CHECK_AND_RETHROW(loader_fill_type(type));
@@ -1712,7 +1724,7 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
                 } else {
                     // normal field
                     strbuilder_t field_name = strbuilder_new();
-                    type_print_full_name(fieldInfo->DeclaringType, &field_name);
+                    type_print_full_name(type, &field_name);
                     strbuilder_cstr(&field_name, "::");
                     strbuilder_utf16(&field_name, fieldInfo->Name->Chars, fieldInfo->Name->Length);
                     fieldInfo->MirField = MIR_new_bss(ctx->ctx, strbuilder_get(&field_name), fieldInfo->FieldType->StackSize);
@@ -2531,7 +2543,7 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
 
                     // sign extend the int32 to intptr
                     MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_UEXT32,
+                                    MIR_new_insn(mir_ctx, MIR_EXT32,
                                                  MIR_new_reg_op(mir_ctx, value1_reg),
                                                  MIR_new_reg_op(mir_ctx, value1_reg)));
                 }
@@ -2550,7 +2562,7 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
                     // intptr x int32
                     // sign extend
                     MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_UEXT32,
+                                    MIR_new_insn(mir_ctx, MIR_EXT32,
                                                  MIR_new_reg_op(mir_ctx, value2_reg),
                                                  MIR_new_reg_op(mir_ctx, value2_reg)));
                 } else {
@@ -2695,14 +2707,9 @@ cleanup:
 err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
 
-    // for some stuff that break what we allow
-//    bool is_whitelisted_assembly = false;
-//    for (int i = 0; i < arrlen(m_extern_whitelist); i++) {
-//        if (string_equals_cstr(method->Module->Name, m_extern_whitelist[i])) {
-//            is_whitelisted_assembly = true;
-//            break;
-//        }
-//    }
+    // we are going to allow to corelib specifically
+    // to do deref on pointers
+    bool allow_pointers = string_equals_cstr(method->Module->Name, "Corelib.dll");
 
     // setup the context for this method
     jit_method_context_t _ctx = {
@@ -3323,14 +3330,20 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_REM:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_MOD, false)); break;
             case CEE_REM_UN:    CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_UMOD, true)); break;
             case CEE_SUB:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_SUB, false)); break;
+
             // bitwise binary operations
             case CEE_AND:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_AND, true)); break;
             case CEE_OR:        CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_OR, true)); break;
             case CEE_XOR:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_XOR, true)); break;
+
             // bit shifts
             case CEE_SHL:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_LSH, true)); break;
             case CEE_SHR:       CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_RSH, true)); break;
             case CEE_SHR_UN:    CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_URSH, true)); break;
+
+            // overflow binary operations
+            // TODO: just a stub for now
+            case CEE_ADD_OVF:   CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_ADD, false)); break;
 
             // unary operations
             case CEE_NEG: {
@@ -3437,7 +3450,17 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_CONV_U8:
             case CEE_CONV_I:
             case CEE_CONV_U:
-            case CEE_CONV_R_UN: {
+            case CEE_CONV_R_UN:
+            case CEE_CONV_OVF_I1_UN:
+            case CEE_CONV_OVF_I2_UN:
+            case CEE_CONV_OVF_I4_UN:
+            case CEE_CONV_OVF_I8_UN:
+            case CEE_CONV_OVF_U1_UN:
+            case CEE_CONV_OVF_U2_UN:
+            case CEE_CONV_OVF_U4_UN:
+            case CEE_CONV_OVF_U8_UN:
+            case CEE_CONV_OVF_I_UN:
+            case CEE_CONV_OVF_U_UN: {
                 MIR_reg_t reg;
                 System_Type type;
                 CHECK_AND_RETHROW(stack_pop(ctx, &type, &reg, NULL));
@@ -3445,18 +3468,18 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 MIR_reg_t result_reg;
                 System_Type result_type;
                 switch (opcode) {
-                    case CEE_CONV_I1: result_type = tSystem_Int32; break;
-                    case CEE_CONV_U1: result_type = tSystem_Int32; break;
-                    case CEE_CONV_I2: result_type = tSystem_Int32; break;
-                    case CEE_CONV_U2: result_type = tSystem_Int32; break;
-                    case CEE_CONV_I4: result_type = tSystem_Int32; break;
-                    case CEE_CONV_U4: result_type = tSystem_Int32; break;
-                    case CEE_CONV_I8: result_type = tSystem_Int64; break;
-                    case CEE_CONV_U8: result_type = tSystem_Int64; break;
-                    case CEE_CONV_I: result_type = tSystem_IntPtr; break;
-                    case CEE_CONV_U: result_type = tSystem_IntPtr; break;
+                    case CEE_CONV_OVF_I1_UN: case CEE_CONV_I1:
+                    case CEE_CONV_OVF_U1_UN: case CEE_CONV_U1:
+                    case CEE_CONV_OVF_I2_UN: case CEE_CONV_I2:
+                    case CEE_CONV_OVF_U2_UN: case CEE_CONV_U2:
+                    case CEE_CONV_OVF_I4_UN: case CEE_CONV_I4:
+                    case CEE_CONV_OVF_U4_UN: case CEE_CONV_U4: result_type = tSystem_Int32; break;
+                    case CEE_CONV_OVF_I8_UN: case CEE_CONV_I8:
+                    case CEE_CONV_OVF_U8_UN: case CEE_CONV_U8: result_type = tSystem_Int64; break;
+                    case CEE_CONV_OVF_I_UN: case CEE_CONV_I:
+                    case CEE_CONV_OVF_U_UN: case CEE_CONV_U: result_type = tSystem_IntPtr; break;
                     case CEE_CONV_R4: result_type = tSystem_Single; break;
-                    case CEE_CONV_R8: result_type = tSystem_Double; break;
+                    case CEE_CONV_R8:
                     case CEE_CONV_R_UN: result_type = tSystem_Double; break;
                     default: CHECK_FAIL();
                 }
@@ -3483,6 +3506,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         }
                     } break;
 
+                    conv_intptr:
                     case STACK_TYPE_INTPTR:
                     case STACK_TYPE_INT64: {
                         switch (opcode) {
@@ -3499,6 +3523,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                             case CEE_CONV_R4: code = MIR_I2F; break;
                             case CEE_CONV_R8: code = MIR_I2D; break;
                             case CEE_CONV_R_UN: code = MIR_UI2D; break;
+                            case CEE_CONV_OVF_I_UN: code = MIR_MOV; break; // TODO: overflow checking
                             default: CHECK_FAIL();
                         }
                     } break;
@@ -3534,8 +3559,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                     } break;
 
                     case STACK_TYPE_O:
+                    case STACK_TYPE_REF: {
+                        CHECK(allow_pointers, "con.x reference to integer is not allowed");
+                        goto conv_intptr;
+                    } break;
+
                     case STACK_TYPE_VALUE_TYPE:
-                    case STACK_TYPE_REF:
                         CHECK_FAIL();
                 }
 
@@ -3813,20 +3842,25 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 System_Type addr_type;
                 CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, NULL));
 
-                // this must be an array
-                CHECK(addr_type->IsByRef);
-
+                // this must be an reference
                 MIR_reg_t value_reg;
-
-                // for anything which is not ldelem.ref we know the operand_type
-                // from the array
-                if (operand_type != NULL) {
-                    CHECK(type_is_verifier_assignable_to(addr_type->BaseType, operand_type));
-                    CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_type), &value_reg));
+                if (addr_type->IsByRef) {
+                    // for anything which is not ldelem.ref we know the operand_type
+                    // from the reference
+                    if (operand_type != NULL) {
+                        CHECK(type_is_verifier_assignable_to(addr_type->BaseType, operand_type));
+                        CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_type), &value_reg));
+                    } else {
+                        // the type is gotten from the reference
+                        operand_type = addr_type->BaseType;
+                        CHECK_AND_RETHROW(stack_push(ctx, type_get_verification_type(operand_type), &value_reg));
+                    }
                 } else {
-                    // the type is gotten from the array
-                    operand_type = addr_type->BaseType;
-                    CHECK_AND_RETHROW(stack_push(ctx, type_get_verification_type(operand_type), &value_reg));
+                    // make sure we are trying to access via a pointer, note that
+                    // only the corelib can use pointers
+                    CHECK(addr_type == tSystem_IntPtr);
+                    CHECK(allow_pointers, "ldind/ldobj from pointer is not allowed");
+                    CHECK_AND_RETHROW(stack_push(ctx, type_get_intermediate_type(operand_type), &value_reg));
                 }
 
                 switch (type_get_stack_type(operand_type)) {
@@ -3886,6 +3920,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             case CEE_STIND_I8: operand_type = tSystem_Int64; goto cee_stind;
             case CEE_STIND_R4: operand_type = tSystem_Single; goto cee_stind;
             case CEE_STIND_R8: operand_type = tSystem_Double; goto cee_stind;
+            case CEE_STIND_I: operand_type = tSystem_IntPtr; goto cee_stind;
             case CEE_STOBJ: goto cee_stind;
             cee_stind: {
                 // pop all the values from the stack
@@ -3897,18 +3932,22 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
                 CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, &addr_entry));
 
-                // this must be an array
-                CHECK(addr_type->IsByRef);
-                CHECK(!addr_entry.readonly_ref);
+                if (addr_type->IsByRef) {
+                    CHECK(!addr_entry.readonly_ref);
 
-                // for stind.ref the operand type is the same as the
-                // byref itself
-                if (operand_type == NULL) {
-                    operand_type = addr_type->BaseType;
+                    // for stind.ref the operand type is the same as the
+                    // byref itself
+                    if (operand_type == NULL) {
+                        operand_type = addr_type->BaseType;
+                    }
+
+                    // validate all the type stuff
+                    CHECK(type_is_verifier_assignable_to(value_type, operand_type));
+                } else {
+                    CHECK(addr_type == tSystem_IntPtr);
+                    CHECK(allow_pointers, "stind/stobj to pointer is not allowed");
+                    CHECK(operand_type != NULL);
                 }
-
-                // validate all the type stuff
-                CHECK(type_is_verifier_assignable_to(value_type, operand_type));
 
                 switch (type_get_stack_type(value_type)) {
                     case STACK_TYPE_O: {
@@ -4312,7 +4351,12 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 System_Type variable_type = type_get_intermediate_type(variable->LocalType);
 
                 // check the type is valid
-                CHECK(type_is_verifier_assignable_to(value_type, variable_type));
+                if (value_type == tSystem_IntPtr && variable_type->IsByRef) {
+                    // trying to store pointer to a ref field, stop that
+                    CHECK(allow_pointers, "stloc from native int to byref is not allowed");
+                } else {
+                    CHECK(type_is_verifier_assignable_to(value_type, variable_type));
+                }
 
                 switch (type_get_stack_type(value_type)) {
                     case STACK_TYPE_O: {
@@ -5464,6 +5508,54 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
             // Calls and Returns
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            // allocate space on the stack
+            // NOTE: while in theory this is not a verifiable instruction, we are going to allow it
+            //       because without the ability to access pointers it is not that useful
+            case CEE_LOCALLOC: {
+                // first make sure we are not in an exception handler
+
+                // validate we are not actually exiting a protected block with this branch
+                System_Reflection_ExceptionHandlingClause_Array exceptions = ctx->method->MethodBody->ExceptionHandlingClauses;
+                for (int i = 0; i < exceptions->Length; i++) {
+                    System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
+                    CHECK(ctx->il_offset < clause->HandlerOffset || clause->HandlerOffset + clause->HandlerLength <= ctx->il_offset);
+                }
+
+                // pop the size
+                System_Type size_type;
+                MIR_reg_t size_reg;
+                CHECK_AND_RETHROW(stack_pop(ctx, &size_type, &size_reg, NULL));
+
+                // push the address
+                MIR_reg_t addr_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, tSystem_UIntPtr, &addr_reg));
+
+                // only int32 and intptr are allowed
+                if (type_get_stack_type(size_type) == STACK_TYPE_INT32) {
+                    // sign extend to int64
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_EXT32,
+                                                 MIR_new_reg_op(mir_ctx, size_reg),
+                                                 MIR_new_reg_op(mir_ctx, size_reg)));
+                } else {
+                    CHECK(type_get_stack_type(size_type) == STACK_TYPE_INTPTR);
+                }
+
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_ALLOCA,
+                                             MIR_new_reg_op(mir_ctx, addr_reg),
+                                             MIR_new_reg_op(mir_ctx, size_reg)));
+
+                // zero the memory
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_call_insn(mir_ctx, 5,
+                                                  MIR_new_ref_op(mir_ctx, m_memset_proto),
+                                                  MIR_new_ref_op(mir_ctx, m_memset_func),
+                                                  MIR_new_reg_op(mir_ctx, addr_reg),
+                                                  MIR_new_int_op(mir_ctx, 0),
+                                                  MIR_new_reg_op(mir_ctx, size_reg)));
+            } break;
+
             //
             // we are going to do NEWOBJ in here as well, because it is essentially like a call
             // but we create the object right now instead of getting it from the stack, so I
@@ -5891,7 +5983,6 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 // get the MIR signature and address
                 arg_ops[0] = MIR_new_ref_op(mir_ctx, operand_method->MirProto);
 
-                // byref uses static dispatch since we know the exact type always
                 if (
                     opcode == CEE_CALLVIRT &&
                     method_is_virtual(operand_method)
@@ -5937,6 +6028,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                         // method directly since all value types are sealed by default
                         CHECK(type_is_sealed(this_type->BaseType));
                         arg_ops[1] = MIR_new_ref_op(mir_ctx, this_type->BaseType->VirtualMethods->Data[vtable_index]->MirFunc);
+                        CHECK(arg_ops[1].u.ref != NULL);
                     } else if (type_is_sealed(this_type)) {
                         // this is an instance class which is a sealed class, choose the unboxer form if exists and the
                         // normal one otherwise
@@ -6852,6 +6944,10 @@ void jit_release_mir_context() {
 
 err_t jit_type(System_Type type) {
     err_t err = NO_ERROR;
+
+    if (type->MirType != NULL) {
+        return err;
+    }
 
     // TODO: figure if we can move this lock from here or not
     mutex_lock(&m_jit_mutex);
