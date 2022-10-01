@@ -338,7 +338,7 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
         type->ClassSize = class_layout->class_size;
 
         // can only have packing size on seq layout
-        if (class_layout->packing_size != 0) {
+        if (layout == TYPE_SEQUENTIAL_LAYOUT) {
             type->PackingSize = class_layout->packing_size;
 
             // make sure it is valid
@@ -782,6 +782,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE(typeParam, Name, new_string_from_utf8(generic_param->name, strlen(generic_param->name)));
         typeParam->GenericParameterPosition = generic_param->number;
         typeParam->GenericTypeAttributes = generic_param->flags;
+        typeParam->TypeFilled = true;
 
         int parami = hmgeti(owner_generic_params, owner);
         if (parami == -1) {
@@ -1428,12 +1429,16 @@ static void init_type(metadata_type_def_t* type_def, System_Type type) {
             strcmp(type_def->type_namespace, bt->namespace) == 0 &&
             strcmp(type_def->type_name, bt->name) == 0
         ) {
-            if (type->StackSize >= 0) {
+            if (bt->stack_size >= 0) {
                 type->ManagedSize = bt->managed_size;
                 type->StackSize = bt->stack_size;
                 type->ManagedAlignment = bt->managed_alignment;
                 type->StackAlignment = bt->stack_alignment;
                 type->StackType = bt->stack_type;
+                type->IsValueType = bt->stack_type != STACK_TYPE_O;
+                type->StackSizeFilled = true;
+                ASSERT(type->StackAlignment != 0);
+                ASSERT(type->ManagedAlignment != 0);
             }
             *bt->global = type;
             break;
@@ -1497,34 +1502,29 @@ static int calc_object_size(uintptr_t obj) {
     return 2 << (3 + poolidx);
 }
 
-static void fixup_allocated_unfilled_types(System_Object object) {
+static void setup_all_arrays(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
     if (OBJECT_TYPE(object) == tSystem_Type) {
         System_Type type = (System_Type)object;
 
-        // make sure the object is initialized
-        PANIC_ON(filler_fill_type(type));
+        // only care about arrays
+        if (!type->IsArray)
+            return;
 
-        if (type->VTable == NULL) {
-            if (!type->IsArray) {
-                // if this is not an array, and the VirtualMethods is empty, then we don't care,
-                // since some types can actually have no virtual methods :shrug:
-                if (type->VirtualMethods == NULL || type->VirtualMethods->Length == 0)
-                    return;
-
-                ASSERT(!"Type with no VTable found");
-            }
-
-            ASSERT(type->IsArray);
-            setup_generic_array(type);
-        }
+        // finish the setup
+        setup_generic_array(type);
     } else if (object->type == 0) {
         ASSERT(object->type != 0);
     }
 }
 
-static void fix_array_vtables(System_Object object) {
+static void fill_all_types(System_Object object) {
+    if (object->color == COLOR_BLUE) return;
+    PANIC_ON(filler_fill_type(OBJECT_TYPE(object)));
+}
+
+static void fix_all_vtables(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
     if (object->vtable == NULL) {
@@ -1575,6 +1575,11 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
         init_type(type_def, assembly->DefinedTypes->Data[i]);
     }
 
+    // special case for value type, break the chain from object
+    tSystem_ValueType->ManagedSize = tSystem_ValueType->StackSize;
+    tSystem_ValueType->ManagedAlignment = tSystem_ValueType->StackAlignment;
+    tSystem_ValueType->ManagedSizeFilled = true;
+
     // validate we got all the base types we need for a proper runtime
     CHECK_AND_RETHROW(validate_have_init_types());
 
@@ -1607,25 +1612,19 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     for (int i = 0; i < types_count; i++) {
         System_Type type = assembly->DefinedTypes->Data[i];
         RESET_TYPE(type, tSystem_Type);
-        type->vtable = tSystem_Type->VTable;
     }
 
-    // we have a little meme where array vtables are actually created quite late in the process
-    // so we need to make sure and fix any array that was created with a NULL vtable at this point,
-    // this is made in two passes, first make sure every array type has a vtable, and the next is
-    // that every array actually has a vtable assigned to it
-    heap_iterate_objects(fixup_allocated_unfilled_types);
-    heap_iterate_objects(fix_array_vtables);
+    // before we can enable the generic array creation we need to do it manually for all the arrays
+    // otherwise we can get a problem with nested array creation
+    heap_iterate_objects(setup_all_arrays);
 
     // now enable generic array creation
     enable_generic_arrays();
 
-    // initialize all the runtime required types
-    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
-        type_init_t* bt = &m_type_init[i];
-        System_Type type = *bt->global;
-        CHECK_AND_RETHROW(filler_fill_type(type));
-    }
+    // and now we can properly fill all the types that were created and we can
+    // fix all the vtables of these types
+    heap_iterate_objects(fill_all_types);
+    heap_iterate_objects(fix_all_vtables);
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
@@ -1656,7 +1655,8 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // initialize the assembly
     CHECK_AND_RETHROW(loader_load_corelib_assembly(buffer, buffer_size));
 
-    // now jit the core types that are going to be implicitly created by the runtime
+    // all of these can be created implicitly by the jit, so just jit them right now
+    // instead of later
     CHECK_AND_RETHROW(jit_type(tSystem_String));
     CHECK_AND_RETHROW(jit_type(tSystem_Boolean));
     CHECK_AND_RETHROW(jit_type(tSystem_Char));
@@ -1672,13 +1672,6 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     CHECK_AND_RETHROW(jit_type(tSystem_Double));
     CHECK_AND_RETHROW(jit_type(tSystem_IntPtr));
     CHECK_AND_RETHROW(jit_type(tSystem_UIntPtr));
-
-    // and exceptions
-    CHECK_AND_RETHROW(jit_type(tSystem_DivideByZeroException));
-    CHECK_AND_RETHROW(jit_type(tSystem_IndexOutOfRangeException));
-    CHECK_AND_RETHROW(jit_type(tSystem_NullReferenceException));
-    CHECK_AND_RETHROW(jit_type(tSystem_InvalidCastException));
-    CHECK_AND_RETHROW(jit_type(tSystem_OutOfMemoryException));
 
 cleanup:
     return err;

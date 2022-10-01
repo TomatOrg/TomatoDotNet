@@ -475,6 +475,7 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
         for (int i = 0; i < generic_param_count; i++) {
             System_Type typeParam = GC_NEW(tSystem_Type);
             GC_UPDATE(typeParam, Name, get_empty_string());
+            typeParam->TypeFilled = true; // consier it as filled
             typeParam->GenericParameterPosition = i;
             GC_UPDATE_ARRAY(generic_params, i, typeParam);
         }

@@ -1677,7 +1677,10 @@ static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
     // handle type initializer dependencies
-    if (ctx->current_method == ctx->current_method->DeclaringType->TypeInitializer) {
+    if (
+        ctx->current_method != NULL &&
+        ctx->current_method == ctx->current_method->DeclaringType->TypeInitializer
+    ) {
         int idx = hmgeti(ctx->type_init_dependencies, ctx->current_method);
         if (idx >= 0) {
             System_Type* arr = ctx->type_init_dependencies[idx].value;
@@ -1754,7 +1757,9 @@ static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
     }
 
     // prepare the cctor
-    CHECK_AND_RETHROW(jit_prepare_method(ctx, type->TypeInitializer));
+    if (type->TypeInitializer != NULL) {
+        CHECK_AND_RETHROW(jit_prepare_method(ctx, type->TypeInitializer));
+    }
 
     // queue this class to the static types
     arrpush(ctx->static_types, type);
@@ -5608,6 +5613,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 bool aggressive_inlining = method_is_aggressive_inlining(operand_method);
 
                 if (opcode == CEE_NEWOBJ) {
+                    // we are creating a new instance of this class, make sure it is
+                    // properly filled and that we create all its virtual methods
+                    CHECK_AND_RETHROW(jit_prepare_instance_type(ctx->ctx, operand_method->DeclaringType));
+
                     // newobj must call a ctor, we verify that ctors are good
                     // in the loader
                     CHECK(method_is_rt_special_name(operand_method));
@@ -6309,9 +6318,14 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // make sure it has a valid type
                 CHECK(num_elems_type == tSystem_Int32);
 
+                // creating a new array type, make sure that it has all the virtual methods
+                // set up correctly
+                System_Type array_type = get_array_type(operand_type);
+                CHECK_AND_RETHROW(jit_prepare_instance_type(ctx->ctx, array_type));
+
                 // push the array type
                 MIR_reg_t array_reg;
-                CHECK_AND_RETHROW(stack_push(ctx, get_array_type(operand_type), &array_reg));
+                CHECK_AND_RETHROW(stack_push(ctx, array_type, &array_reg));
 
                 // calculate the size we are going to need:
                 //  num_elems * sizeof(value_type) + sizeof(System.Array)
@@ -7001,7 +7015,7 @@ cleanup:
     return err;
 }
 
-static err_t jit_process(jit_context_t* ctx) {
+static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
     err_t err = NO_ERROR;
     jit_method_context_t mctx;
 
@@ -7010,11 +7024,6 @@ static err_t jit_process(jit_context_t* ctx) {
     //------------------------------------------------------------------------------------------------------------------
 
     uint64_t start_cil_to_mir = microtime();
-
-    // prepare the module
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "m%d", m_mir_module_gen++);
-    MIR_module_t module = MIR_new_module(ctx->ctx, buffer);
 
     // while we have methods to go over, go over them
     while (arrlen(ctx->methods_to_jit) != 0) {
@@ -7133,11 +7142,16 @@ err_t jit_type(System_Type type) {
     // setup the mir context
     ctx.ctx = MIR_init();
 
+    // prepare the module
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "m%d", m_mir_module_gen++);
+    MIR_module_t module = MIR_new_module(ctx.ctx, buffer);
+
     // process the type as if it is going to be initialized
     CHECK_AND_RETHROW(jit_prepare_instance_type(&ctx, type));
 
     // process it
-    CHECK_AND_RETHROW(jit_process(&ctx));
+    CHECK_AND_RETHROW(jit_process(&ctx, module));
 
 cleanup:
     MIR_finish(ctx.ctx);
@@ -7163,11 +7177,16 @@ err_t jit_method(System_Reflection_MethodInfo method) {
     // setup the mir context
     ctx.ctx = MIR_init();
 
+    // prepare the module
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "m%d", m_mir_module_gen++);
+    MIR_module_t module = MIR_new_module(ctx.ctx, buffer);
+
     // prepare the method
     CHECK_AND_RETHROW(jit_prepare_method(&ctx, method));
 
     // process it
-    CHECK_AND_RETHROW(jit_process(&ctx));
+    CHECK_AND_RETHROW(jit_process(&ctx, module));
 
 cleanup:
     // clear the context

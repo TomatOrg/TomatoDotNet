@@ -402,6 +402,10 @@ void setup_generic_array(System_Type type) {
         return;
     }
 
+    if (type->IsSetupFinished) {
+        return;
+    }
+
     PANIC_ON(monitor_enter(type));
 
     // already inited by the time we took the lock
@@ -1834,9 +1838,9 @@ err_t type_expand_generic(System_Type instance) {
         GC_UPDATE_ARRAY(instance->Methods, i, method);
 
         // setup the static ctor if needed
-//        if (instance->GenericTypeDefinition->TypeInitializer == type->Methods->Data[i]) {
-//            GC_UPDATE(instance, TypeInitializer, method);
-//        }
+        if (instance->GenericTypeDefinition->TypeInitializer == type->Methods->Data[i]) {
+            GC_UPDATE(instance, TypeInitializer, method);
+        }
     }
 
     // interfaces
@@ -1848,6 +1852,8 @@ err_t type_expand_generic(System_Type instance) {
     if (type->MethodImpls != NULL) {
         CHECK_AND_RETHROW(type_expand_method_impls(instance, type->MethodImpls));
     }
+
+    instance->IsSetupFinished = true;
 
 cleanup:
     return err;
@@ -1942,12 +1948,6 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     GC_UPDATE(instance, Namespace, type->Namespace);
     instance->Attributes = type->Attributes;
     instance->GenericParameterPosition = -1;
-
-    // handle the value type memes in here
-    if (type->BaseType == tSystem_ValueType) {
-        instance->IsValueType = true;
-        instance->StackType = STACK_TYPE_VALUE_TYPE;
-    }
 
     // create the unique name
     strbuilder_t builder = strbuilder_new();

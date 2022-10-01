@@ -10,7 +10,7 @@ static System_Type* m_type_fill = NULL;
 static mutex_t m_type_fill_lock = INIT_MUTEX();
 
 static void queue_type(System_Type type) {
-    if (type->TypeQueued)
+    if (type->TypeQueued || type->TypeFilled)
         return;
 
     // make sure this is a fully setup type...
@@ -43,12 +43,6 @@ static err_t fill_type_stack_size(System_Type type) {
     CHECK(!type->StackSizeBeingFilled);
     type->StackSizeBeingFilled = true;
 
-    // special case, fill the first value type
-    if (type == tSystem_ValueType) {
-        type->IsValueType = true;
-        type->StackType = STACK_TYPE_VALUE_TYPE;
-    }
-
     // first we need the size of the base type
     if (type->BaseType != NULL) {
         CHECK_AND_RETHROW(fill_type_stack_size(type->BaseType));
@@ -56,6 +50,12 @@ static err_t fill_type_stack_size(System_Type type) {
         // copy the value type and stack type
         type->IsValueType = type->BaseType->IsValueType;
         type->StackType = type->BaseType->StackType;
+
+        if (type->IsValueType) {
+            ASSERT(!type_is_object_ref(type));
+        } else {
+            ASSERT(type_is_object_ref(type));
+        }
 
         if (type->IsValueType) {
             // Can not inherit from value types, except for enum which is allowed
@@ -73,9 +73,12 @@ static err_t fill_type_stack_size(System_Type type) {
             type->StackAlignment = alignof(void*);
         }
     } else {
-        if (!type->ManagedSizeFilled) {
-            CHECK_AND_RETHROW(fill_type_managed_size(type));
-        }
+        // this is a value type, we get its size from the
+        // managed size
+        CHECK_AND_RETHROW(fill_type_managed_size(type));
+
+        type->StackSize = type->ManagedSize;
+        type->StackAlignment = type->ManagedAlignment;
     }
 
     // we are done
@@ -94,15 +97,27 @@ static err_t fill_type_managed_size(System_Type type) {
     err_t err = NO_ERROR;
 
     if (type->ManagedSizeFilled) {
-        return err;
+        goto cleanup;
     }
+
+    // if we are not a value type we need to make sure we
+    // init the stack size, this can actually turn us into a
+    // value type because it will initialize the chain, this
+    // may even already do our job in some cases
+    if (!type->IsValueType) {
+        CHECK_AND_RETHROW(fill_type_stack_size(type));
+
+        // if this caused the size to be filled then nothing to do
+        if (type->ManagedSizeFilled) {
+            goto cleanup;
+        }
+    }
+
+    int expected_size = type->ManagedSize;
+    int expected_alignment = type->ManagedAlignment;
 
     CHECK(!type->ManagedSizeBeingFilled);
     type->ManagedSizeBeingFilled = true;
-
-    // make sure that the stack size is set first, so we know
-    // if we are a struct or not
-    CHECK_AND_RETHROW(fill_type_stack_size(type));
 
     int current_size = 0;
     int current_alignment = 1;
@@ -246,13 +261,25 @@ static err_t fill_type_managed_size(System_Type type) {
         }
     }
 
+    // max size of value types is 1mb
+    if (type->IsValueType) {
+        CHECK(current_size <= SIZE_1MB);
+    }
+
+    if (expected_size != 0) {
+        CHECK(expected_size == current_size, "unexpected size for type %U (expected=%d, current=%d)", type->Name, expected_size, current_size);
+        CHECK(expected_alignment == current_alignment, "unexpected alignment for type %U (expected=%d, current=%d)", type->Name, expected_alignment, current_alignment);
+    }
+
     // set the proper alignment requirements
     type->ManagedSize = current_size;
     type->ManagedAlignment = current_alignment;
 
-    // runtime constraint, we can only make sure the alignment is right if the objects
-    // have their size bigger than the alignment wanted
-    CHECK(type->ManagedAlignment <= type->ManagedSize);
+    if (type->ManagedSize != 0) {
+        // runtime constraint, we can only make sure the alignment is right if the objects
+        // have their size bigger than the alignment wanted
+        CHECK(type->ManagedAlignment <= type->ManagedSize);
+    }
 
     // we are done
     type->ManagedSizeFilled = true;
