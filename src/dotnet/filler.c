@@ -13,6 +13,9 @@ static void queue_type(System_Type type) {
     if (type->TypeQueued)
         return;
 
+    // make sure this is a fully setup type...
+    ASSERT(type->IsSetupFinished);
+
     type->TypeQueued = true;
     arrpush(m_type_fill, type);
 }
@@ -37,7 +40,7 @@ static err_t fill_type_stack_size(System_Type type) {
     }
 
     // make sure no recurssion
-    CHECK(type->StackSizeBeingFilled != 0);
+    CHECK(!type->StackSizeBeingFilled);
     type->StackSizeBeingFilled = true;
 
     // special case, fill the first value type
@@ -153,7 +156,7 @@ static err_t fill_type_managed_size(System_Type type) {
             case TYPE_SEQUENTIAL_LAYOUT: {
                 // align the size of the type for the current field
                 int alignment = MIN(max_alignment, fieldInfo->FieldType->StackAlignment);
-                current_size = ALIGN_UP(alignment, current_size);
+                current_size = ALIGN_UP(current_size, alignment);
                 CHECK(current_size >= prev_size);
 
                 fieldInfo->MemoryOffset = current_size;
@@ -212,10 +215,6 @@ static err_t fill_type_managed_size(System_Type type) {
         current_size = type->ClassSize;
     }
 
-    // runtime constraint, we can only make sure the alignment is right if the objects
-    // have their size bigger than the alignment wanted
-    CHECK(type->ManagedAlignment <= type->ManagedSize);
-
     // if this is an interface it has a constant managed size
     if (type_is_interface(type)) {
         // all interfaces have a single managed pointer which
@@ -250,6 +249,10 @@ static err_t fill_type_managed_size(System_Type type) {
     // set the proper alignment requirements
     type->ManagedSize = current_size;
     type->ManagedAlignment = current_alignment;
+
+    // runtime constraint, we can only make sure the alignment is right if the objects
+    // have their size bigger than the alignment wanted
+    CHECK(type->ManagedAlignment <= type->ManagedSize);
 
     // we are done
     type->ManagedSizeFilled = true;
@@ -367,7 +370,7 @@ static err_t fill_methods(System_Type type) {
     // start with the parent, since we need to work with his
     // virtual methods
     if (type->BaseType != NULL) {
-        CHECK_AND_RETHROW(fill_methods(type));
+        CHECK_AND_RETHROW(fill_methods(type->BaseType));
 
         // now check if it has virtual methods
         if (type->BaseType->VirtualMethods != NULL) {
@@ -435,8 +438,8 @@ static err_t fill_methods(System_Type type) {
                 CHECK(method_is_static(methodInfo));
                 CHECK(methodInfo->Parameters->Length == 0);
                 CHECK(methodInfo->ReturnType == NULL);
-                CHECK(type->StaticCtor == NULL);
-                GC_UPDATE(type, StaticCtor, methodInfo);
+                CHECK(type->TypeInitializer == NULL);
+                GC_UPDATE(type, TypeInitializer, methodInfo);
             } else if (string_equals_cstr(methodInfo->Name, ".ctor")) {
                 CHECK(!method_is_static(methodInfo));
                 CHECK(methodInfo->ReturnType == NULL);

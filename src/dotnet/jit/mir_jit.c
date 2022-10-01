@@ -4,6 +4,7 @@
 #include "internal_calls.h"
 #include "sync/rwmutex.h"
 #include "debug/debug.h"
+#include "dotnet/filler.h"
 
 #include <dotnet/opcodes.h>
 #include <dotnet/types.h>
@@ -690,10 +691,23 @@ typedef struct jit_context {
     MIR_context_t ctx;
 
     // types that we need to set a vtable for
-    System_Type* created_types;
+    System_Type* instance_types;
+
+    // types that we need to run a cctor on
+    System_Type* static_types;
 
     // stack of messages that we need to jit
     System_Reflection_MethodInfo* methods_to_jit;
+
+    // tracks dependencies of static initializations
+    struct {
+        System_Reflection_MethodInfo key;
+        System_Type* value;
+    }* type_init_dependencies;
+
+    // points to the current method, used for resolving
+    // static initialization order
+    System_Reflection_MethodInfo current_method;
 } jit_context_t;
 
 typedef struct jit_method_context {
@@ -867,8 +881,6 @@ static MIR_reg_t new_temp_reg(jit_method_context_t* ctx, System_Type type) {
     return push_new_reg(ctx, type, true);
 }
 
-static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
-
 /**
  * Push a new item on the stack, returning the stack slot for it as a register
  *
@@ -876,12 +888,6 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
  */
 static err_t stack_push(jit_method_context_t* ctx, System_Type type, MIR_reg_t* out_reg) {
     err_t err = NO_ERROR;
-
-    if (type != NULL) {
-        ASSERT(type->IsFilled);
-
-        CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, type));
-    }
 
     // Make sure we don't exceed the stack depth
     CHECK(arrlen(ctx->stack.entries) < ctx->method->MethodBody->MaxStackSize);
@@ -1385,8 +1391,9 @@ cleanup:
 // Preparing code gen of a function
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// forward declare
-static err_t jit_prepare_type(jit_context_t* ctx, System_Type type);
+static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type);
+
+static err_t jit_prepare_instance_type(jit_context_t* ctx, System_Type type);
 
 /**
  * Prepare a method signature and MIR item.
@@ -1423,7 +1430,7 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
 
     // handle the return value
     if (method->ReturnType != NULL) {
-        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->ReturnType));
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, method->ReturnType));
 
         res_type[1] = get_mir_type(method->ReturnType);
         if (res_type[1] == MIR_T_BLK) {
@@ -1443,8 +1450,10 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
     int this_index = -1;
     if (!method_is_static(method)) {
         System_Type declaringType = method->DeclaringType;
-        ASSERT(declaringType->IsFilled);
-        if (declaringType->IsValueType) declaringType = get_by_ref_type(declaringType);
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, method->DeclaringType));
+
+        if (declaringType->IsValueType)
+            declaringType = get_by_ref_type(declaringType);
 
         MIR_var_t var = {
             .name = "this",
@@ -1458,7 +1467,7 @@ static err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo
     }
 
     for (int i = 0; i < method->Parameters->Length; i++) {
-        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->Parameters->Data[i]->ParameterType));
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, method->Parameters->Data[i]->ParameterType));
 
         char name[64];
         snprintf(name, sizeof(name), "arg%d", i);
@@ -1664,67 +1673,77 @@ cleanup:
     return err;
 }
 
-/**
- * Prepares a type so it can be used proprely, mostly requires emitting all
- * the virtual functions so they can be put in a vtable
- */
-static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
+static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
+    // handle type initializer dependencies
+    if (ctx->current_method == ctx->current_method->DeclaringType->TypeInitializer) {
+        int idx = hmgeti(ctx->type_init_dependencies, ctx->current_method);
+        if (idx >= 0) {
+            System_Type* arr = ctx->type_init_dependencies[idx].value;
+            bool found = false;
+            for (int i = 0; i < arrlen(arr); i++) {
+                if (arr[i] == type) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                arrpush(arr, type);
+            }
+
+            ctx->type_init_dependencies[idx].value = arr;
+        } else {
+            System_Type* arr = NULL;
+            arrpush(arr, type);
+            hmput(ctx->type_init_dependencies, ctx->current_method, arr);
+        }
+    }
+
     if (type->MirType != NULL) {
-        ASSERT(type->IsFilled);
         goto cleanup;
     }
 
-    // don't init these
-    if (type->IsPointer || type->IsBoxed || type->IsByRef) {
-        goto cleanup;
-    }
+    // make sure the type is fully filled, so we can actually do the static fields stuff
+    // TODO: in theory we can further delay the methods initialization, but I think it is
+    //       good practice to do it in here
+    CHECK_AND_RETHROW(filler_fill_type(type));
 
-    // make sure the type is filled, can happen with generics
-    // that it is not filled yet
-    CHECK_AND_RETHROW(loader_fill_type(type));
-
-    // create the type ref
+    // prepare the type reference
     strbuilder_t type_name = strbuilder_new();
     type_print_full_name(type, &type_name);
     type->MirType = MIR_new_import(ctx->ctx, strbuilder_get(&type_name));
     MIR_load_external(m_mir_context, strbuilder_get(&type_name), type);
     strbuilder_free(&type_name);
 
-    // if this is a generic type we can't actually expand it, but do
-    // create the generic type ref
-    if (type_is_generic_parameter(type)) {
+    // generic definitions are not initialized here
+    if (type_is_generic_definition(type)) {
         goto cleanup;
     }
 
-    // setup the base type
+    // prepare the base type
     if (type->BaseType != NULL) {
-        CHECK_AND_RETHROW(jit_prepare_type(ctx, type->BaseType));
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, type));
     }
 
-    // setup the element type
-    if (type->ElementType != NULL) {
-        CHECK_AND_RETHROW(jit_prepare_type(ctx, type->ElementType));
-    }
-
-    // setup fields
+    // prepare the static fields
     if (type->Fields != NULL) {
         for (int i = 0; i < type->Fields->Length; i++) {
             System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
 
             // prepare the field type
-            CHECK_AND_RETHROW(jit_prepare_type(ctx, fieldInfo->FieldType));
+            CHECK_AND_RETHROW(jit_prepare_static_type(ctx, fieldInfo->FieldType));
 
             // for static fields declare the bss
-            if (field_is_static(fieldInfo) && !fieldInfo->HasRva) {
+            if (field_is_static(fieldInfo)) {
                 if (field_is_thread_static(fieldInfo)) {
                     // thread local
                     fieldInfo->ThreadStaticIndex = add_thread_local(fieldInfo->FieldType);
                 } else {
                     // normal field
                     strbuilder_t field_name = strbuilder_new();
-                    type_print_full_name(type, &field_name);
+                    type_print_full_name(fieldInfo->DeclaringType, &field_name);
                     strbuilder_cstr(&field_name, "::");
                     strbuilder_utf16(&field_name, fieldInfo->Name->Chars, fieldInfo->Name->Length);
                     fieldInfo->MirField = MIR_new_bss(ctx->ctx, strbuilder_get(&field_name), fieldInfo->FieldType->StackSize);
@@ -1734,23 +1753,45 @@ static err_t jit_prepare_type(jit_context_t* ctx, System_Type type) {
         }
     }
 
-    // if the type is not abstract then jit all of its methods
-    if (type->Methods != NULL) {
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo method = type->Methods->Data[i];
+    // prepare the cctor
+    CHECK_AND_RETHROW(jit_prepare_method(ctx, type->TypeInitializer));
 
-            // if this is a generic method then we don't prepare it in here
-            // since it needs to be prepared per-instance
-            if (method->GenericArguments != NULL) continue;
+    // queue this class to the static types
+    arrpush(ctx->static_types, type);
 
-            // now prepare the method itself
-            CHECK_AND_RETHROW(jit_prepare_method(ctx, type->Methods->Data[i]));
-        }
+cleanup:
+    return err;
+}
+
+static err_t jit_prepare_instance_type(jit_context_t* ctx, System_Type type) {
+    err_t err = NO_ERROR;
+
+    // mark that we don't need this again
+    if (type->JittedVirtualMethods) {
+        goto cleanup;
+    }
+    type->JittedVirtualMethods = true;
+
+    // first init the type as a static one
+    CHECK_AND_RETHROW(jit_prepare_static_type(ctx, type));
+
+    // we can't have instance generic definitions
+    ASSERT(!type_is_generic_definition(type));
+
+    // now we want to prepare all the virtual methods that we have methods
+    for (int i = 0; i < type->VirtualMethods->Length; i++) {
+        System_Reflection_MethodInfo method = type->Methods->Data[i];
+
+        // if this is a generic method then we don't prepare it in here
+        // since it needs to be prepared per-instance
+        if (method->GenericArguments != NULL) continue;
+
+        // now prepare the method itself
+        CHECK_AND_RETHROW(jit_prepare_method(ctx, type->Methods->Data[i]));
     }
 
-    // we just jitted this type, so make sure to setup the vtables and
-    // everything else as needed
-    arrpush(ctx->created_types, type);
+    // queue this class to the static types
+    arrpush(ctx->instance_types, type);
 
 cleanup:
     return err;
@@ -1892,7 +1933,7 @@ static err_t jit_new(jit_method_context_t* ctx, MIR_reg_t result, System_Type ty
     // make sure the type is known, we need this specifically in here
     // so all the exceptions that we throw from the runtime will be
     // added properly
-    CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, type));
+    CHECK_AND_RETHROW(jit_prepare_instance_type(ctx->ctx, type));
 
     // allocate the new object
     MIR_append_insn(mir_ctx, mir_func,
@@ -2704,19 +2745,14 @@ cleanup:
 /**
  * This is the main jitting function, it takes a method and jits it completely
  */
-err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
+static err_t jit_method_body(jit_method_context_t* ctx) {
     err_t err = NO_ERROR;
+
+    System_Reflection_MethodInfo method = ctx->method;
 
     // we are going to allow to corelib specifically
     // to do deref on pointers
     bool allow_pointers = string_equals_cstr(method->Module->Name, "Corelib.dll");
-
-    // setup the context for this method
-    jit_method_context_t _ctx = {
-        .ctx = jctx,
-        .method = method
-    };
-    jit_method_context_t* ctx = &_ctx;
 
     System_Reflection_MethodBody body = method->MethodBody;
     System_Reflection_Assembly assembly = method->Module->Assembly;
@@ -2788,7 +2824,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         );
 
         // prepare the variable type
-        CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, variable->LocalType));
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, variable->LocalType));
 
         // we are going to initialize all of the variables
         char name[64] = { 0 };
@@ -2869,7 +2905,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
         };
 
         if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-            CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, clause->CatchType));
+            CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, clause->CatchType));
 
             // this is an exception caluse, we need to have the exception pushed on the stack
             // prepare it
@@ -3095,7 +3131,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK(check_field_accessibility(method, operand_field));
 
                 // make sure we initialized its type
-                CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_field->DeclaringType));
+                CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, operand_field->DeclaringType));
             } break;
 
             case OPCODE_OPERAND_InlineI: {
@@ -3138,7 +3174,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                       "from %U to %U", method->Name, operand_method->Name);
 
                 // prepare the owning type
-                CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_method->DeclaringType));
+                CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, operand_method->DeclaringType));
 
                 // if the method is a generic instance then we need to handle it separately
                 if (operand_method->GenericArguments != NULL) {
@@ -3210,7 +3246,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                 CHECK(check_type_visibility(method, operand_type));
 
                 // init it
-                CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, operand_type));
+                CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, operand_type));
             } break;
 
             case OPCODE_OPERAND_InlineVar: {
@@ -4856,7 +4892,7 @@ err_t jit_method(jit_context_t* jctx, System_Reflection_MethodInfo method) {
                                                                      &type));
 
                         // make sure the type is prepared
-                        CHECK_AND_RETHROW(jit_prepare_type(ctx->ctx, type));
+                        CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, type));
 
                         // push it
                         CHECK_AND_RETHROW(stack_push(ctx, tSystem_RuntimeTypeHandle, &runtime_handle_reg));
@@ -6790,6 +6826,11 @@ cleanup:
 
 #undef MIR_append_insn
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 //
 // TODO: this can be much cheaper if we just have a
 //
@@ -6816,8 +6857,6 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
 
     // handle the return value
     if (method->ReturnType != NULL) {
-        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->ReturnType));
-
         res_type[1] = get_mir_type(method->ReturnType);
         if (res_type[1] == MIR_T_BLK) {
             // value type return
@@ -6841,8 +6880,6 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
     arrpush(vars, var);
 
     for (int i = 0; i < method->Parameters->Length; i++) {
-        CHECK_AND_RETHROW(jit_prepare_type(ctx, method->Parameters->Data[i]->ParameterType));
-
         char name[64];
         snprintf(name, sizeof(name), "arg%d", i);
         MIR_var_t var = {
@@ -6923,6 +6960,10 @@ cleanup:
     return err;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jitter entry points
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Mutex guarding so there won't be multiple jitting at the same time
  */
@@ -6933,6 +6974,221 @@ static mutex_t m_jit_mutex = INIT_MUTEX();
  */
 static int m_mir_module_gen = 0;
 
+static err_t jit_run_initializer(jit_context_t* ctx, System_Type type) {
+    err_t err = NO_ERROR;
+
+    // don't recurse
+    type->RanTypeInitializer = true;
+    if (type->TypeInitializer == NULL)
+        goto cleanup;
+
+    // handle dependencies
+    int idx = hmgeti(ctx->type_init_dependencies, type->TypeInitializer);
+    if (idx >= 0) {
+        System_Type* arr = ctx->type_init_dependencies[idx].value;
+        for (int i = 0; i < arrlen(arr); i++) {
+            CHECK_AND_RETHROW(jit_run_initializer(ctx, arr[i]));
+        }
+    }
+
+    // now we are ready to run our initializer
+    System_Exception(*cctor)() = type->TypeInitializer->MirFunc->addr;
+    System_Exception exception = cctor();
+    CHECK(exception == NULL, "Type initializer for %U: `%U`",
+          type->Name, exception->Message);
+
+cleanup:
+    return err;
+}
+
+static err_t jit_process(jit_context_t* ctx) {
+    err_t err = NO_ERROR;
+    jit_method_context_t mctx;
+
+    //------------------------------------------------------------------------------------------------------------------
+    // Start by going over all the methods we need to jit and convert them to mir
+    //------------------------------------------------------------------------------------------------------------------
+
+    uint64_t start_cil_to_mir = microtime();
+
+    // prepare the module
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "m%d", m_mir_module_gen++);
+    MIR_module_t module = MIR_new_module(ctx->ctx, buffer);
+
+    // while we have methods to go over, go over them
+    while (arrlen(ctx->methods_to_jit) != 0) {
+        System_Reflection_MethodInfo method = arrpop(ctx->methods_to_jit);
+
+        // start by clearing the context
+        memset(&mctx, 0, sizeof(mctx));
+        mctx.ctx = ctx;
+        mctx.method = method;
+        ctx->current_method = method;
+
+        // jit the body of the method
+        CHECK_AND_RETHROW(jit_method_body(&mctx));
+
+        // generate an unboxer if needed
+        if (method_is_virtual(method) && method->DeclaringType->IsValueType) {
+            CHECK_AND_RETHROW(jit_generate_unboxer(ctx, method));
+        }
+    }
+
+    // we are done with the module
+    MIR_finish_module(ctx->ctx);
+
+    size_t end_cil_to_mir = (microtime() - start_cil_to_mir) / 1000;
+    if (end_cil_to_mir >= 50) {
+        TRACE("CIL->MIR took %dms", end_cil_to_mir);
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // we finished emitting MIR code, now we need to link it
+    //------------------------------------------------------------------------------------------------------------------
+
+    // we are now going to link everything nicely
+    // move the module to the main context
+    MIR_change_module_ctx(ctx->ctx, module, m_mir_context);
+
+    // load the module
+    MIR_load_module(m_mir_context, module);
+
+    // set a lazy generation
+    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
+
+    //------------------------------------------------------------------------------------------------------------------
+    // now do the post setup
+    //------------------------------------------------------------------------------------------------------------------
+
+    // generate the vtables
+    for (int i = 0; i < arrlen(ctx->instance_types); i++) {
+        System_Type created_type = ctx->instance_types[i];
+
+        // prepare the vtable for the type
+        for (int vi = 0; vi < created_type->VirtualMethods->Length; vi++) {
+            // if this has an unboxer use the unboxer instead of the actual method
+            System_Reflection_MethodInfo method = created_type->VirtualMethods->Data[vi];
+            if (method->MirUnboxerFunc != NULL) {
+                created_type->VTable[vi] = method->MirUnboxerFunc->addr;
+            } else {
+                created_type->VTable[vi] = method->MirFunc->addr;
+            }
+            ASSERT(created_type->VTable[vi] != NULL);
+        }
+    }
+
+    // add the gc roots
+    for (int i = 0; i < arrlen(ctx->static_types); i++) {
+        System_Type created_type = ctx->static_types[i];
+
+        for (int fi = 0; fi < created_type->Fields->Length; fi++) {
+            System_Reflection_FieldInfo fieldInfo = created_type->Fields->Data[fi];
+            if (!field_is_static(fieldInfo)) continue;
+            if (field_is_thread_static(fieldInfo)) continue;
+            if (fieldInfo->MirField->item_type != MIR_bss_item) continue;
+
+            switch (type_get_stack_type(fieldInfo->FieldType)) {
+                case STACK_TYPE_O: {
+                    gc_add_root(fieldInfo->MirField->addr);
+                } break;
+
+                case STACK_TYPE_VALUE_TYPE: {
+                    for (int j = 0; j < arrlen(fieldInfo->FieldType->ManagedPointersOffsets); j++) {
+                        gc_add_root(fieldInfo->MirField->addr + fieldInfo->FieldType->ManagedPointersOffsets[j]);
+                    }
+                } break;
+
+                    // ignore
+                case STACK_TYPE_INT32:
+                case STACK_TYPE_INTPTR:
+                case STACK_TYPE_REF:
+                case STACK_TYPE_INT64:
+                case STACK_TYPE_FLOAT:
+                    break;
+
+                default:
+                    CHECK_FAIL();
+            }
+        }
+    }
+
+    // now handle initializers
+    for (int i = 0; i < arrlen(ctx->static_types); i++) {
+        System_Type created_type = ctx->static_types[i];
+        CHECK_AND_RETHROW(jit_run_initializer(ctx, created_type));
+    }
+
+cleanup:
+    return err;
+}
+
+err_t jit_type(System_Type type) {
+    err_t err = NO_ERROR;
+
+    jit_context_t ctx = { 0 };
+
+    jit_get_mir_context();
+
+    // setup the mir context
+    ctx.ctx = MIR_init();
+
+    // process the type as if it is going to be initialized
+    CHECK_AND_RETHROW(jit_prepare_instance_type(&ctx, type));
+
+    // process it
+    CHECK_AND_RETHROW(jit_process(&ctx));
+
+cleanup:
+    MIR_finish(ctx.ctx);
+    arrfree(ctx.static_types);
+    arrfree(ctx.instance_types);
+    for (int i = 0; i < hmlen(ctx.type_init_dependencies); i++) {
+        arrfree(ctx.type_init_dependencies[i].value);
+    }
+    arrfree(ctx.type_init_dependencies);
+
+    jit_release_mir_context();
+
+    return err;
+}
+
+err_t jit_method(System_Reflection_MethodInfo method) {
+    err_t err = NO_ERROR;
+
+    jit_context_t ctx = { 0 };
+
+    jit_get_mir_context();
+
+    // setup the mir context
+    ctx.ctx = MIR_init();
+
+    // prepare the method
+    CHECK_AND_RETHROW(jit_prepare_method(&ctx, method));
+
+    // process it
+    CHECK_AND_RETHROW(jit_process(&ctx));
+
+cleanup:
+    // clear the context
+    MIR_finish(ctx.ctx);
+    arrfree(ctx.static_types);
+    arrfree(ctx.instance_types);
+    for (int i = 0; i < hmlen(ctx.type_init_dependencies); i++) {
+        arrfree(ctx.type_init_dependencies[i].value);
+    }
+    arrfree(ctx.type_init_dependencies);
+
+    jit_release_mir_context();
+
+    return err;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jitter API
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 MIR_context_t jit_get_mir_context() {
     mutex_lock(&m_jit_mutex);
     return m_mir_context;
@@ -6940,170 +7196,6 @@ MIR_context_t jit_get_mir_context() {
 
 void jit_release_mir_context() {
     mutex_unlock(&m_jit_mutex);
-}
-
-err_t jit_type(System_Type type) {
-    err_t err = NO_ERROR;
-
-    if (type->MirType != NULL) {
-        return err;
-    }
-
-    // TODO: figure if we can move this lock from here or not
-    mutex_lock(&m_jit_mutex);
-
-    jit_context_t ctx = {
-        .ctx = MIR_init(),
-    };
-
-    if (type->MirType != NULL) {
-        goto cleanup;
-    }
-
-    // prepare the module
-    char buffer[64];
-    snprintf(buffer, sizeof(buffer), "m%d", m_mir_module_gen++);
-    MIR_module_t module = MIR_new_module(ctx.ctx, buffer);
-
-    // start from the type we want
-    CHECK_AND_RETHROW(jit_prepare_type(&ctx, type));
-
-    // now jit all the methods as they come in
-    while (arrlen(ctx.methods_to_jit) != 0) {
-        System_Reflection_MethodInfo method = arrpop(ctx.methods_to_jit);
-        CHECK_AND_RETHROW(jit_method(&ctx, method));
-
-        // generate an unboxer
-        if (method_is_virtual(method) && method->DeclaringType->IsValueType) {
-            CHECK_AND_RETHROW(jit_generate_unboxer(&ctx, method));
-        }
-    }
-
-    // we are done with the module
-    MIR_finish_module(ctx.ctx);
-
-    // move the module to the main context
-    MIR_change_module_ctx(ctx.ctx, module, m_mir_context);
-
-    // load the module
-    MIR_load_module(m_mir_context, module);
-
-    // link it
-#ifdef JIT_DEBUG_SYMBOLS
-    uint64_t start = microtime();
-    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
-    size_t took = (microtime() - start) / 1000;
-    if (took >= 50) {
-        TRACE("jitting took %dms", took);
-    }
-#else
-    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
-#endif
-
-    // now that everything is linked prepare all the types we have created
-    for (int i = 0; i < arrlen(ctx.created_types); i++) {
-        System_Type created_type = ctx.created_types[i];
-
-        // prepare the vtable for the type
-        if (created_type->VirtualMethods != NULL && !type_is_abstract(created_type) && !type_is_interface(created_type)) {
-            for (int vi = 0; vi < created_type->VirtualMethods->Length; vi++) {
-                // if this has an unboxer use the unboxer instead of the actual method
-                System_Reflection_MethodInfo method = created_type->VirtualMethods->Data[vi];
-                if (method->MirUnboxerFunc != NULL) {
-                    created_type->VTable[vi] = method->MirUnboxerFunc->addr;
-                } else {
-                    created_type->VTable[vi] = method->MirFunc->addr;
-                }
-                ASSERT(created_type->VTable[vi] != NULL);
-            }
-        }
-
-#ifdef JIT_DEBUG_SYMBOLS
-        if (created_type->Methods != NULL) {
-            for (int vi = 0; vi < created_type->Methods->Length; vi++) {
-                // if this has an unboxer use the unboxer instead of the actual method
-                System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
-
-                if (method->MirFunc != NULL && method->MirFunc->item_type == MIR_func_item) {
-                    MIR_func_t func = method->MirFunc->u.func;
-                    debug_create_symbol(func->name, (uintptr_t)func->machine_code, debug_get_code_size(func->machine_code));
-                }
-
-                if (method->MirUnboxerFunc != NULL && method->MirUnboxerFunc->item_type == MIR_func_item) {
-                    MIR_func_t func = method->MirUnboxerFunc->u.func;
-                    debug_create_symbol(func->name, (uintptr_t)func->machine_code, debug_get_code_size(func->machine_code));
-                }
-            }
-        }
-#endif
-
-        // add the gc roots for the types
-        if (created_type->Fields != NULL) {
-            for (int fi = 0; fi < created_type->Fields->Length; fi++) {
-                System_Reflection_FieldInfo fieldInfo = created_type->Fields->Data[fi];
-                if (!field_is_static(fieldInfo)) continue;
-                if (field_is_thread_static(fieldInfo)) continue;
-                if (fieldInfo->MirField->item_type != MIR_bss_item) continue;
-
-                switch (type_get_stack_type(fieldInfo->FieldType)) {
-                    case STACK_TYPE_O: {
-                        gc_add_root(fieldInfo->MirField->addr);
-                    } break;
-
-                    case STACK_TYPE_VALUE_TYPE: {
-                        for (int j = 0; j < arrlen(fieldInfo->FieldType->ManagedPointersOffsets); j++) {
-                            gc_add_root(fieldInfo->MirField->addr + fieldInfo->FieldType->ManagedPointersOffsets[j]);
-                        }
-                    } break;
-
-                        // ignore
-                    case STACK_TYPE_INT32:
-                    case STACK_TYPE_INTPTR:
-                    case STACK_TYPE_REF:
-                    case STACK_TYPE_INT64:
-                    case STACK_TYPE_FLOAT:
-                        break;
-
-                    default:
-                        CHECK_FAIL();
-                }
-            }
-        }
-    }
-
-    // and finally, we can run all the ctors that should run from this
-    for (int i = arrlen(ctx.created_types) - 1; i >= 0; i--) {
-        System_Type created_type = ctx.created_types[i];
-
-        // call the ctor
-        if (created_type->StaticCtor != NULL) {
-            ASSERT(created_type->StaticCtor->DeclaringType == created_type);
-            System_Exception(*cctor)() = created_type->StaticCtor->MirFunc->addr;
-            System_Exception exception = cctor();
-            CHECK(exception == NULL, "Type initializer for %U: `%U`",
-                  created_type->Name, exception->Message);
-        }
-    }
-
-cleanup:
-    if (IS_ERROR(err)) {
-        // we need to finish the module just so we can finish the context
-        MIR_finish_module(ctx.ctx);
-    }
-
-    // we no longer need the old module
-    MIR_finish(ctx.ctx);
-
-    // TODO: don't leak memory from here
-    ASSERT(!IS_ERROR(err));
-
-    // unlock the mutex
-    mutex_unlock(&m_jit_mutex);
-
-    // free all the arrays we need
-    arrfree(ctx.created_types);
-
-    return err;
 }
 
 void jit_dump_method(System_Reflection_MethodInfo method) {

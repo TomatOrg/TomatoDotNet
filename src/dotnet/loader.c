@@ -1497,11 +1497,14 @@ static int calc_object_size(uintptr_t obj) {
     return 2 << (3 + poolidx);
 }
 
-static void assign_array_types_vtables(System_Object object) {
+static void fixup_allocated_unfilled_types(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
     if (OBJECT_TYPE(object) == tSystem_Type) {
         System_Type type = (System_Type)object;
+
+        // make sure the object is initialized
+        PANIC_ON(filler_fill_type(type));
 
         if (type->VTable == NULL) {
             if (!type->IsArray) {
@@ -1533,7 +1536,7 @@ static void fix_array_vtables(System_Object object) {
     }
 }
 
-err_t loader_load_corelib(void* buffer, size_t buffer_size) {
+static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
     metadata_t metadata = { 0 };
 
@@ -1590,13 +1593,6 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
-    // initialize all the runtime required types
-    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
-        type_init_t* bt = &m_type_init[i];
-        System_Type type = *bt->global;
-        CHECK_AND_RETHROW(filler_fill_type(type));
-    }
-
     //
     // now set all the page tables, because we are missing them at
     // this point of writing
@@ -1618,11 +1614,18 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // so we need to make sure and fix any array that was created with a NULL vtable at this point,
     // this is made in two passes, first make sure every array type has a vtable, and the next is
     // that every array actually has a vtable assigned to it
-    heap_iterate_objects(assign_array_types_vtables);
+    heap_iterate_objects(fixup_allocated_unfilled_types);
     heap_iterate_objects(fix_array_vtables);
 
     // now enable generic array creation
     enable_generic_arrays();
+
+    // initialize all the runtime required types
+    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
+        type_init_t* bt = &m_type_init[i];
+        System_Type type = *bt->global;
+        CHECK_AND_RETHROW(filler_fill_type(type));
+    }
 
     // get the user strings for the runtime
     CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
@@ -1644,6 +1647,40 @@ cleanup:
               (microtime() - start) / 1000);
     }
 
+    return err;
+}
+
+err_t loader_load_corelib(void* buffer, size_t buffer_size) {
+    err_t err = NO_ERROR;
+
+    // initialize the assembly
+    CHECK_AND_RETHROW(loader_load_corelib_assembly(buffer, buffer_size));
+
+    // now jit the core types that are going to be implicitly created by the runtime
+    CHECK_AND_RETHROW(jit_type(tSystem_String));
+    CHECK_AND_RETHROW(jit_type(tSystem_Boolean));
+    CHECK_AND_RETHROW(jit_type(tSystem_Char));
+    CHECK_AND_RETHROW(jit_type(tSystem_SByte));
+    CHECK_AND_RETHROW(jit_type(tSystem_Byte));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int16));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt16));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int32));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt32));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int64));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt64));
+    CHECK_AND_RETHROW(jit_type(tSystem_Single));
+    CHECK_AND_RETHROW(jit_type(tSystem_Double));
+    CHECK_AND_RETHROW(jit_type(tSystem_IntPtr));
+    CHECK_AND_RETHROW(jit_type(tSystem_UIntPtr));
+
+    // and exceptions
+    CHECK_AND_RETHROW(jit_type(tSystem_DivideByZeroException));
+    CHECK_AND_RETHROW(jit_type(tSystem_IndexOutOfRangeException));
+    CHECK_AND_RETHROW(jit_type(tSystem_NullReferenceException));
+    CHECK_AND_RETHROW(jit_type(tSystem_InvalidCastException));
+    CHECK_AND_RETHROW(jit_type(tSystem_OutOfMemoryException));
+
+cleanup:
     return err;
 }
 

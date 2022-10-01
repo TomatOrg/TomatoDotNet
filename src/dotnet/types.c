@@ -405,7 +405,7 @@ void setup_generic_array(System_Type type) {
     PANIC_ON(monitor_enter(type));
 
     // already inited by the time we took the lock
-    if (type->VTable != NULL) {
+    if (type->IsSetupFinished) {
         return;
     }
 
@@ -428,6 +428,8 @@ void setup_generic_array(System_Type type) {
 
     // we no longer nest,
     m_nesting_setup_generic_array = false;
+
+    type->IsSetupFinished = true;
 
     PANIC_ON(monitor_exit(type));
 }
@@ -488,7 +490,7 @@ static System_Type create_array_type(System_Type type) {
 System_Type get_array_type(System_Type type) {
     System_Type arrayType = type->ArrayType ?: create_array_type(type);
 
-    if (m_enable_generic_arrays && arrayType->VTable == NULL) {
+    if (m_enable_generic_arrays && !arrayType->IsSetupFinished) {
         setup_generic_array(arrayType);
     }
 
@@ -573,6 +575,9 @@ System_Type get_pointer_type(System_Type type) {
     PointerType->StackAlignment = tSystem_UIntPtr->StackAlignment;
     PointerType->StackType = STACK_TYPE_INTPTR;
     PointerType->GenericParameterPosition = -1;
+    PointerType->StackSizeFilled = true;
+    PointerType->ManagedSizeFilled = true;
+    PointerType->MethodsFilled = true;
     PointerType->TypeQueued = true;
     PointerType->TypeFilled = true;
     PointerType->IsPointer = true;
@@ -1829,8 +1834,8 @@ err_t type_expand_generic(System_Type instance) {
         GC_UPDATE_ARRAY(instance->Methods, i, method);
 
         // setup the static ctor if needed
-//        if (instance->GenericTypeDefinition->StaticCtor == type->Methods->Data[i]) {
-//            GC_UPDATE(instance, StaticCtor, method);
+//        if (instance->GenericTypeDefinition->TypeInitializer == type->Methods->Data[i]) {
+//            GC_UPDATE(instance, TypeInitializer, method);
 //        }
     }
 

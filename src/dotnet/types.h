@@ -617,14 +617,14 @@ struct System_Type {
     int StackSize;
     int StackAlignment;
     stack_type_t StackType;
-    System_Reflection_MethodInfo StaticCtor;
+    System_Reflection_MethodInfo TypeInitializer;
 
     // - IsValueType
     // - StackType -- TODO: enums too?
     // - StackSize
     // - StackAlignment
     // - BaseType has their size filled
-    uint8_t StackSizeFilled : 1;
+    uint32_t StackSizeFilled : 1;
 
     // - ManagedSize
     // - ManagedAlignment
@@ -634,7 +634,7 @@ struct System_Type {
     // - ManagedPointerOffsets
     // - Fields have their stack size filled
     // - Fields are queued
-    uint8_t ManagedSizeFilled : 1;
+    uint32_t ManagedSizeFilled : 1;
 
     // All virtual methods have been resolved
     // - Finalize
@@ -644,23 +644,29 @@ struct System_Type {
     // - InterfaceImpls VirtualMethods have been processed and their methods queued
     // - VirtualMethods
     // - VTable
-    uint8_t MethodsFilled : 1;
+    uint32_t MethodsFilled : 1;
 
     // to detect invalid type recursion
-    uint8_t StackSizeBeingFilled : 1;
-    uint8_t ManagedSizeBeingFilled : 1;
-    uint8_t MethodsBeingFilled : 1;
+    uint32_t StackSizeBeingFilled : 1;
+    uint32_t ManagedSizeBeingFilled : 1;
+    uint32_t MethodsBeingFilled : 1;
 
     // - the type has been queued for full filling
-    uint8_t TypeQueued : 1;
+    uint32_t TypeQueued : 1;
 
     // - the type is fully filled
-    uint8_t TypeFilled : 1;
+    uint32_t TypeFilled : 1;
 
     // to mark our phase in setup, important for generic
     // instantiation
-    uint8_t IsSetupStarted : 1;
-    uint8_t IsSetupFinished : 1;
+    uint32_t IsSetupStarted : 1;
+    uint32_t IsSetupFinished : 1;
+
+    // did we jit the virtual methods yet
+    uint32_t JittedVirtualMethods : 1;
+
+    // did we run the type initializer yet
+    uint32_t RanTypeInitializer : 1;
 
     System_Reflection_MethodInfo_Array VirtualMethods;
     void** VTable;

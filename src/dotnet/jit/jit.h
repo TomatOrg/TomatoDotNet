@@ -10,10 +10,18 @@
 err_t init_jit();
 
 /**
- * Fully jit a type, and all the types that reference this type
+ * Jit a type assuming it is going to be instantiated
  */
-err_t jit_type(System_Type method);
+err_t jit_type(System_Type type);
 
+/**
+ * Jit a method assuming it is going to be called
+ */
+err_t jit_method(System_Reflection_MethodInfo method);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit API
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct jit_generic_extern_hook {
     bool(*can_gen)(System_Reflection_MethodInfo method);

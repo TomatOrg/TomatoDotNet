@@ -79,7 +79,7 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
     System_Exception exception = NULL;
     if (argsCount == 0) {
         // small optimization for default ctors
-//        exception = ((System_Exception(*)(System_Object))(ctor->MirFunc->addr))(new);
+        exception = ((System_Exception(*)(System_Object))(ctor->MirFunc->addr))(new);
     } else {
         // build the arguments nicely
         MIR_val_t vals[argsCount];
