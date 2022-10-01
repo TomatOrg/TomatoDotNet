@@ -20,16 +20,6 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size);
 err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_Assembly* assembly);
 
 /**
- * Fill the type information of the given type
- */
-err_t loader_fill_type(System_Type type);
-
-/**
- * Fill the method information of the given method
- */
-err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method);
-
-/**
  * Setup a type, this is done before we fill the type information and
  * only takes care of matching everything
  */

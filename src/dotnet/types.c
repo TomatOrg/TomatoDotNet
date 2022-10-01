@@ -6,6 +6,7 @@
 #include "dotnet/metadata/sig.h"
 #include "encoding.h"
 #include "loader.h"
+#include "filler.h"
 
 #include <util/strbuilder.h>
 #include <util/stb_ds.h>
@@ -418,15 +419,12 @@ void setup_generic_array(System_Type type) {
     // instantiate
     System_Type genericArray = NULL;
     PANIC_ON(type_make_generic(tSystem_GenericArray, args, &genericArray));
-    PANIC_ON(loader_fill_type(genericArray));
 
-    // now set the methods so the array type will have all the needed stuff
+    // set the base info, the rest will need to be handled by
+    // someone else when they want them
     GC_UPDATE(type, Methods, genericArray->Methods);
-    GC_UPDATE(type, VirtualMethods, genericArray->VirtualMethods);
-    GC_UPDATE(type, VTable, genericArray->VTable);
     GC_UPDATE(type, InterfaceImpls, genericArray->InterfaceImpls);
     GC_UPDATE(type, MethodImpls, genericArray->MethodImpls);
-    type->VTableSize = genericArray->VTableSize;
 
     // we no longer nest,
     m_nesting_setup_generic_array = false;
@@ -461,11 +459,13 @@ static System_Type create_array_type(System_Type type) {
 
     // this is an array
     ArrayType->IsArray = true;
-    ArrayType->IsFilled = true;
     ArrayType->GenericParameterPosition = -1;
     ArrayType->StackType = STACK_TYPE_O;
 
-    // set the sizes properly
+    // set the sizes properly, we are going to set the size ourselves
+    // because it makes our life easier
+    ArrayType->StackSizeFilled = true;
+    ArrayType->ManagedSizeFilled = true;
     ArrayType->StackSize = tSystem_Array->StackSize;
     ArrayType->ManagedSize = tSystem_Array->ManagedSize;
     ArrayType->StackAlignment = tSystem_Array->StackAlignment;
@@ -516,7 +516,8 @@ System_Type get_by_ref_type(System_Type type) {
 
     // this is an array
     ByRefType->IsByRef = true;
-    ByRefType->IsFilled = true;
+    ByRefType->TypeQueued = true;
+    ByRefType->TypeFilled = true;
     ByRefType->StackType = STACK_TYPE_REF;
     ByRefType->GenericParameterPosition = -1;
 
@@ -572,7 +573,8 @@ System_Type get_pointer_type(System_Type type) {
     PointerType->StackAlignment = tSystem_UIntPtr->StackAlignment;
     PointerType->StackType = STACK_TYPE_INTPTR;
     PointerType->GenericParameterPosition = -1;
-    PointerType->IsFilled = true;
+    PointerType->TypeQueued = true;
+    PointerType->TypeFilled = true;
     PointerType->IsPointer = true;
     GC_UPDATE(PointerType, ElementType, type);
 
@@ -598,14 +600,18 @@ System_Type get_boxed_type(System_Type type) {
     // must not be a byref
     ASSERT(!type->IsByRef);
 
-    // TODO: error handling?
-    PANIC_ON(loader_fill_type(type));
+    // must be a value type
+    ASSERT(type->IsValueType);
 
     // allocate the new ref type
     System_Type BoxedType = UNSAFE_GC_NEW(tSystem_Type);
     if (BoxedType == NULL) {
         return BoxedType;
     }
+
+    // fill the full type if we want a box of it, this should be fine since
+    // only during runtime we may call this
+    PANIC_ON(filler_fill_type(type));
 
     GC_UPDATE(BoxedType, DeclaringType, type->DeclaringType);
     GC_UPDATE(BoxedType, Module, type->Module);
@@ -616,13 +622,14 @@ System_Type get_boxed_type(System_Type type) {
     GC_UPDATE(BoxedType, Fields, type->Fields);
     GC_UPDATE(BoxedType, Methods, type->Methods);
     GC_UPDATE(BoxedType, UnboxedType, type);
-    BoxedType->ManagedSize = type->ManagedSize;
-    BoxedType->ManagedAlignment = type->ManagedAlignment;
+    BoxedType->ManagedSize = type->StackSize;
+    BoxedType->ManagedAlignment = type->StackAlignment;
     BoxedType->StackSize = tSystem_Object->StackSize;
     BoxedType->StackAlignment = tSystem_Object->StackAlignment;
     BoxedType->StackType = STACK_TYPE_O;
     BoxedType->GenericParameterPosition = -1;
-    BoxedType->IsFilled = true;
+    BoxedType->TypeQueued = true;
+    BoxedType->TypeFilled = true;
     BoxedType->IsBoxed = true;
     GC_UPDATE(BoxedType, InterfaceImpls, type->InterfaceImpls);
     GC_UPDATE(BoxedType, VirtualMethods, type->VirtualMethods);
@@ -1800,8 +1807,6 @@ err_t type_expand_generic(System_Type instance) {
     err_t err = NO_ERROR;
     System_Type type = instance->GenericTypeDefinition;
     System_Type_Array arguments = instance->GenericArguments;
-
-    CHECK(instance->GenericTypeDefinition->IsSetup);
 
     // base type
     System_Type baseType;
