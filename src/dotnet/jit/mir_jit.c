@@ -30,15 +30,15 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-    if (!string_equals_cstr(method->DeclaringType->Name, "List`1<[Corelib-v1]System.Attribute>"))
-        return false;
-
-    if (!string_equals_cstr(method->Name, ".cctor"))
-        return false;
+//    if (!string_equals_cstr(method->DeclaringType->Name, "List`1<[Corelib-v1]System.Attribute>"))
+//        return false;
+//
+//    if (!string_equals_cstr(method->Name, ".cctor"))
+//        return false;
+//
+//    return true;
 
     return true;
-
-    return false;
 }
 
 /**
@@ -1785,14 +1785,14 @@ static err_t jit_prepare_instance_type(jit_context_t* ctx, System_Type type) {
 
     // now we want to prepare all the virtual methods that we have methods
     for (int i = 0; i < type->VirtualMethods->Length; i++) {
-        System_Reflection_MethodInfo method = type->Methods->Data[i];
+        System_Reflection_MethodInfo method = type->VirtualMethods->Data[i];
 
         // if this is a generic method then we don't prepare it in here
         // since it needs to be prepared per-instance
         if (method->GenericArguments != NULL) continue;
 
         // now prepare the method itself
-        CHECK_AND_RETHROW(jit_prepare_method(ctx, type->Methods->Data[i]));
+        CHECK_AND_RETHROW(jit_prepare_method(ctx, type->VirtualMethods->Data[i]));
     }
 
     // queue this class to the static types
@@ -2170,6 +2170,9 @@ static err_t jit_throw_new(jit_method_context_t* ctx, System_Type type) {
         break;
     }
     CHECK(ctor != NULL);
+
+    // prepare the ctor
+    CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, ctor));
 
     // the temp reg for the new obejct
     MIR_reg_t exception_obj = new_temp_reg(ctx, type);
@@ -4152,11 +4155,21 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // branch selector
                 switch_ops[0] = MIR_new_reg_op(mir_ctx, value_reg);
 
+                static int count = 0;
+
                 // all the locations
                 for (int i = 0; i < operand_switch_n; i++) {
                     MIR_label_t label;
                     CHECK_AND_RETHROW(jit_branch_point(ctx, il_ptr + operand_switch_dests[i], &label));
+                    count++;
+                    asm("cli");
                     switch_ops[i + 1] = MIR_new_label_op(mir_ctx, label);
+                    asm("sti");
+                    TRACE("------ %d", count);
+                    TRACE("%x", switch_ops[i + 1].data);
+                    TRACE("%x", switch_ops[i + 1].mode);
+                    TRACE("%x", switch_ops[i + 1].value_mode);
+                    MIR_output_op(mir_ctx, stdout, switch_ops[i + 1], mir_func->u.func);
                 }
 
                 // setup the not taken label
@@ -4173,10 +4186,16 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                              MIR_new_reg_op(mir_ctx, value_reg),
                                              MIR_new_int_op(mir_ctx, operand_switch_n)));
 
+                for (int i = 0; i < operand_switch_n; i++) {
+                    MIR_output_op(mir_ctx, stdout, switch_ops[i + 1], mir_func->u.func);
+                }
+
                 // do the switch itself
+                MIR_insn_t insn = MIR_new_insn_arr(mir_ctx, MIR_SWITCH,
+                                                   operand_switch_n + 1, switch_ops);
+                MIR_output_insn(mir_ctx, stdout, insn, mir_func->u.func, true);
                 MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn_arr(mir_ctx, MIR_SWITCH,
-                                                 operand_switch_n + 1, switch_ops));
+                                insn );
 
                 MIR_append_insn(mir_ctx, mir_func, not_taken);
             } break;
@@ -6026,6 +6045,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 }
 
                 // get the MIR signature and address
+                // TODO: in theory in here we only need the signature, and not a full jit
+                CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, operand_method));
                 arg_ops[0] = MIR_new_ref_op(mir_ctx, operand_method->MirProto);
 
                 if (
@@ -6072,12 +6093,15 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         // we have a ref on the stack, which means it must be a value type, so we can call the actual
                         // method directly since all value types are sealed by default
                         CHECK(type_is_sealed(this_type->BaseType));
-                        arg_ops[1] = MIR_new_ref_op(mir_ctx, this_type->BaseType->VirtualMethods->Data[vtable_index]->MirFunc);
+                        System_Reflection_MethodInfo m = this_type->BaseType->VirtualMethods->Data[vtable_index];
+                        CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, m));
+                        arg_ops[1] = MIR_new_ref_op(mir_ctx, m->MirFunc);
                         CHECK(arg_ops[1].u.ref != NULL);
                     } else if (type_is_sealed(this_type)) {
                         // this is an instance class which is a sealed class, choose the unboxer form if exists and the
                         // normal one otherwise
                         System_Reflection_MethodInfo m = this_type->VirtualMethods->Data[vtable_index];
+                        CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, m));
                         arg_ops[1] = MIR_new_ref_op(mir_ctx, m->MirUnboxerFunc ?: m->MirFunc);
                     } else {
                         // get the address of the function from the vtable
@@ -6093,6 +6117,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     }
                 } else {
                     // static dispatch
+                    CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, operand_method));
                     arg_ops[1] = MIR_new_ref_op(mir_ctx, operand_method->MirFunc);
                 }
 
@@ -6992,7 +7017,11 @@ static err_t jit_run_initializer(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
     // don't recurse
+    if (type->RanTypeInitializer) {
+        goto cleanup;
+    }
     type->RanTypeInitializer = true;
+
     if (type->TypeInitializer == NULL)
         goto cleanup;
 
@@ -7090,6 +7119,9 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
     // add the gc roots
     for (int i = 0; i < arrlen(ctx->static_types); i++) {
         System_Type created_type = ctx->static_types[i];
+
+        if (created_type->Fields == NULL)
+            continue;
 
         for (int fi = 0; fi < created_type->Fields->Length; fi++) {
             System_Reflection_FieldInfo fieldInfo = created_type->Fields->Data[fi];

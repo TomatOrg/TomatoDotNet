@@ -609,9 +609,6 @@ System_Type get_boxed_type(System_Type type) {
     // must not be a byref
     ASSERT(!type->IsByRef);
 
-    // must be a value type
-    ASSERT(type->IsValueType);
-
     // allocate the new ref type
     System_Type BoxedType = UNSAFE_GC_NEW(tSystem_Type);
     if (BoxedType == NULL) {
