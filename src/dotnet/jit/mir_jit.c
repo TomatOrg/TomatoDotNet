@@ -701,7 +701,7 @@ typedef struct jit_context {
 
     // tracks dependencies of static initializations
     struct {
-        System_Reflection_MethodInfo key;
+        System_Type key;
         System_Type* value;
     }* type_init_dependencies;
 
@@ -1676,12 +1676,10 @@ cleanup:
 static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
-    // handle type initializer dependencies
-    if (
-        ctx->current_method != NULL &&
-        ctx->current_method == ctx->current_method->DeclaringType->TypeInitializer
-    ) {
-        int idx = hmgeti(ctx->type_init_dependencies, ctx->current_method);
+    // set type dependencies
+    // TODO: use hash array instead
+    if (ctx->current_method != NULL && method_is_static(ctx->current_method)) {
+        int idx = hmgeti(ctx->type_init_dependencies, ctx->current_method->DeclaringType);
         if (idx >= 0) {
             System_Type* arr = ctx->type_init_dependencies[idx].value;
             bool found = false;
@@ -1700,7 +1698,7 @@ static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
         } else {
             System_Type* arr = NULL;
             arrpush(arr, type);
-            hmput(ctx->type_init_dependencies, ctx->current_method, arr);
+            hmput(ctx->type_init_dependencies, ctx->current_method->DeclaringType, arr);
         }
     }
 
@@ -7010,7 +7008,7 @@ static err_t jit_run_initializer(jit_context_t* ctx, System_Type type) {
         goto cleanup;
 
     // handle dependencies
-    int idx = hmgeti(ctx->type_init_dependencies, type->TypeInitializer);
+    int idx = hmgeti(ctx->type_init_dependencies, type);
     if (idx >= 0) {
         System_Type* arr = ctx->type_init_dependencies[idx].value;
         for (int i = 0; i < arrlen(arr); i++) {
@@ -7036,8 +7034,6 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
     // Start by going over all the methods we need to jit and convert them to mir
     //------------------------------------------------------------------------------------------------------------------
 
-    uint64_t start_cil_to_mir = microtime();
-
     // while we have methods to go over, go over them
     while (arrlen(ctx->methods_to_jit) != 0) {
         System_Reflection_MethodInfo method = arrpop(ctx->methods_to_jit);
@@ -7059,11 +7055,6 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
 
     // we are done with the module
     MIR_finish_module(ctx->ctx);
-
-    size_t end_cil_to_mir = (microtime() - start_cil_to_mir) / 1000;
-    if (end_cil_to_mir >= 50) {
-        TRACE("CIL->MIR took %dms", end_cil_to_mir);
-    }
 
     //------------------------------------------------------------------------------------------------------------------
     // we finished emitting MIR code, now we need to link it
@@ -7176,7 +7167,7 @@ cleanup:
     for (int i = 0; i < hmlen(ctx.type_init_dependencies); i++) {
         arrfree(ctx.type_init_dependencies[i].value);
     }
-    arrfree(ctx.type_init_dependencies);
+    hmfree(ctx.type_init_dependencies);
 
     jit_release_mir_context();
 
@@ -7212,7 +7203,7 @@ cleanup:
     for (int i = 0; i < hmlen(ctx.type_init_dependencies); i++) {
         arrfree(ctx.type_init_dependencies[i].value);
     }
-    arrfree(ctx.type_init_dependencies);
+    hmfree(ctx.type_init_dependencies);
 
     jit_release_mir_context();
 

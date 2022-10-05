@@ -771,8 +771,11 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
     blob_entry_t* sig = &_sig;
     MIR_val_t fixed_args[ctor->Parameters->Length + 1];
 
-    // make sure the type is jitted nicely
+    // we need to jit to type itself, since we are going to create an instance of it
     CHECK_AND_RETHROW(jit_type(ctor->DeclaringType));
+
+    // we also need to jit the actual ctor
+    CHECK_AND_RETHROW(jit_method(ctor));
 
     //
     // Prolog
@@ -859,6 +862,9 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
             CHECK(info->PropertyType == arg_type);
             CHECK(info->SetMethod != NULL);
             System_Reflection_MethodInfo setter = info->SetMethod;
+
+            // we need to jit the setter itself
+            CHECK_AND_RETHROW(jit_method(setter));
 
             // make sure the method is valid
             CHECK(!method_is_static(setter));
