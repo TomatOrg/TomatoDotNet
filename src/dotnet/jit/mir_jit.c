@@ -30,15 +30,15 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-//    if (!string_equals_cstr(method->DeclaringType->Name, "List`1<[Corelib-v1]System.Attribute>"))
+//    if (!string_equals_cstr(method->DeclaringType->Name, "Dictionary`2"))
 //        return false;
-//
-//    if (!string_equals_cstr(method->Name, ".cctor"))
-//        return false;
-//
-//    return true;
+
+    if (!string_equals_cstr(method->Name, "FindValue"))
+        return false;
 
     return true;
+
+    return false;
 }
 
 /**
@@ -55,12 +55,12 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-//#define JIT_TRACE
+#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-//#define JIT_TRACE_MIR
+#define JIT_TRACE_MIR
 
 /**
  * Uncomment if you want debug symbols, note that this forces
@@ -630,12 +630,6 @@ typedef struct stack_entry {
     System_Type type;
 
     /**
-     * A constant value tagged with the entry, for
-     * localloc, this contains the size of the request
-     */
-    uint32_t constant;
-
-    /**
      * This entry has a reference to a non-local object,
      * we can safely return it from the method
      */
@@ -648,9 +642,9 @@ typedef struct stack_entry {
     uint32_t readonly_ref : 1;
 
     /**
-     * The value is the result of a localloc
+     * This entry points to the `this` of the function
      */
-    uint32_t localloc : 1;
+    uint32_t this : 1;
 } stack_entry_t;
 
 typedef struct stack {
@@ -4633,6 +4627,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_LDARG_S:
             case CEE_LDARG: {
                 bool readonly_ref = false;
+                bool is_this = false;
 
                 // check the length is fine
                 CHECK(operand_i32 < arrlen(arguments));
@@ -4642,6 +4637,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 System_Type arg_type = NULL;
                 if (!method_is_static(method)) {
                     if (operand_i32 == 0) {
+                        is_this = true;
                         arg_type = method->DeclaringType;
                         if (arg_type->IsValueType) {
                             // TODO: readonly this
@@ -4665,6 +4661,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // push it
                 MIR_reg_t value_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, arg_stack_type, &value_reg));
+
+                // mark if the value is this
+                STACK_TOP.this = is_this;
 
                 switch (type_get_stack_type(arg_stack_type)) {
                     case STACK_TYPE_O: {
@@ -5187,7 +5186,14 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     MIR_reg_t value_reg;
                     CHECK_AND_RETHROW(stack_push(ctx, field_stack_type, &value_reg));
                     STACK_TOP.non_local_ref = true; // static field, not local
-                    STACK_TOP.readonly_ref = field_is_init_only(operand_field);
+
+                    // only set that this is a readonly ref if this is not the cctor and we are loading a static
+                    // readonly field of the current class
+                    bool is_cctor = method_is_rt_special_name(method) && string_equals_cstr(method->Name, ".cctor");
+                    if (!(is_cctor && operand_field->DeclaringType == method->DeclaringType)) {
+                        STACK_TOP.readonly_ref = field_is_init_only(operand_field);
+                    }
+
                     if (field_is_thread_static(operand_field)) {
                         // thread local field, return the pointer directly
                         MIR_append_insn(mir_ctx, mir_func,
@@ -5248,7 +5254,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // only rtspecialname can access it (.ctor and .cctor)
                 if (field_is_init_only(operand_field)) {
                     CHECK(
-                        method->DeclaringType == operand_field->DeclaringType &&
+                        obj_entry.this &&
                         method_is_rt_special_name(method) &&
                         string_equals_cstr(method->Name, ".ctor")
                     );
@@ -5531,7 +5537,14 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     readonly = readonly || obj_entry.readonly_ref;
                 }
                 STACK_TOP.non_local_ref = non_stack_local;
-                STACK_TOP.readonly_ref = readonly;
+
+                // only set the readonly mark if we are not loading from the
+                // `this` object on the ctor, on any other case we want it to
+                // be read only
+                bool is_ctor = method_is_rt_special_name(method) && string_equals_cstr(method->Name, ".ctor");
+                if (!obj_entry.this || !is_ctor) {
+                    STACK_TOP.readonly_ref = readonly;
+                }
 
                 // check the object is not null
                 if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
@@ -6821,17 +6834,21 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
 cleanup:
     if (IS_ERROR(err)) {
-        MIR_output_item(mir_ctx, stdout, mir_func);
+        ERROR("At method %s", method->MirFunc->u.func->name);
     }
 
     // free all the memory used for jitting the method
     SAFE_FREE(switch_ops);
     strbuilder_free(&method_name);
+
     arrfree(arguments);
     arrfree(locals);
+
     for (int i = 0; i < hmlen(ctx->pc_to_stack_snapshot); i++) {
         arrfree(ctx->pc_to_stack_snapshot[i].stack.entries);
     }
+    hmfree(ctx->pc_to_stack_snapshot);
+
     arrfree(ctx->stack.entries);
     arrfree(ctx->ireg.regs);
     arrfree(ctx->dreg.regs);
@@ -6839,7 +6856,7 @@ cleanup:
     arrfree(ctx->itmp.regs);
     arrfree(ctx->dtmp.regs);
     arrfree(ctx->ftmp.regs);
-    hmfree(ctx->pc_to_stack_snapshot);
+
     hmfree(ctx->clause_to_label);
 
     return err;
