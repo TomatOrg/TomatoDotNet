@@ -4155,21 +4155,11 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // branch selector
                 switch_ops[0] = MIR_new_reg_op(mir_ctx, value_reg);
 
-                static int count = 0;
-
                 // all the locations
                 for (int i = 0; i < operand_switch_n; i++) {
                     MIR_label_t label;
                     CHECK_AND_RETHROW(jit_branch_point(ctx, il_ptr + operand_switch_dests[i], &label));
-                    count++;
-                    asm("cli");
                     switch_ops[i + 1] = MIR_new_label_op(mir_ctx, label);
-                    asm("sti");
-                    TRACE("------ %d", count);
-                    TRACE("%x", switch_ops[i + 1].data);
-                    TRACE("%x", switch_ops[i + 1].mode);
-                    TRACE("%x", switch_ops[i + 1].value_mode);
-                    MIR_output_op(mir_ctx, stdout, switch_ops[i + 1], mir_func->u.func);
                 }
 
                 // setup the not taken label
@@ -4186,16 +4176,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                              MIR_new_reg_op(mir_ctx, value_reg),
                                              MIR_new_int_op(mir_ctx, operand_switch_n)));
 
-                for (int i = 0; i < operand_switch_n; i++) {
-                    MIR_output_op(mir_ctx, stdout, switch_ops[i + 1], mir_func->u.func);
-                }
-
                 // do the switch itself
-                MIR_insn_t insn = MIR_new_insn_arr(mir_ctx, MIR_SWITCH,
-                                                   operand_switch_n + 1, switch_ops);
-                MIR_output_insn(mir_ctx, stdout, insn, mir_func->u.func, true);
                 MIR_append_insn(mir_ctx, mir_func,
-                                insn );
+                                MIR_new_insn_arr(mir_ctx, MIR_SWITCH,
+                                                 operand_switch_n + 1, switch_ops));
 
                 MIR_append_insn(mir_ctx, mir_func, not_taken);
             } break;
