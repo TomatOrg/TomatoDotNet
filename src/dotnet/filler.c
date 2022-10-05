@@ -344,43 +344,6 @@ static System_Reflection_MethodInfo find_virtually_overridden_method(System_Type
     return NULL;
 }
 
-static err_t fill_vtable_for_interface(System_Type root, System_Type interface, int base_offset) {
-    err_t err = NO_ERROR;
-
-    CHECK(type_is_interface(interface));
-    CHECK(base_offset + interface->Methods->Length <= root->VirtualMethods->Length);
-
-    // now go over its interfaces
-    int virtual_offset = 0;
-    if (interface->InterfaceImpls != NULL) {
-        for (int i = 0; i < interface->InterfaceImpls->Length; i++) {
-            TinyDotNet_Reflection_InterfaceImpl impl = interface->InterfaceImpls->Data[i];
-
-            // we are going relative to this vtable, so add our base to the offsets
-            CHECK_AND_RETHROW(fill_vtable_for_interface(root, impl->InterfaceType, base_offset + impl->VTableOffset));
-
-            // count how many interface methods we have to get to our actual offset
-            virtual_offset += impl->InterfaceType->VirtualMethods->Length;
-        }
-    }
-
-    // add the base offset to this, so we start from the base offset
-    base_offset += virtual_offset;
-
-    // fill the vtable for this impl
-    for (int i = 0; i < interface->Methods->Length; i++) {
-        System_Reflection_MethodInfo method = interface->Methods->Data[i];
-        if (!type_is_interface(root)) {
-            method = find_virtually_overridden_method(root, method);
-            CHECK(method != NULL);
-        }
-        GC_UPDATE_ARRAY(root->VirtualMethods, base_offset + i, method);
-    }
-
-cleanup:
-    return err;
-}
-
 static err_t fill_methods(System_Type type) {
     err_t err = NO_ERROR;
 
@@ -511,12 +474,20 @@ static err_t fill_methods(System_Type type) {
     //------------------------------------------------------------------------------------------------------------------
 
     if (type->InterfaceImpls != NULL) {
-        // TODO: validate that we have all the interfaces the parent has
-
         // go over and expand all the interfaces needed
         for (int i = 0; i < type->InterfaceImpls->Length; i++) {
             TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
             System_Type interface = impl->InterfaceType;
+
+            // check all the interface implemented by the parent, so we will reuse these ranges
+            if (type->BaseType != NULL && type->BaseType->InterfaceImpls != NULL) {
+                for (int j = 0; j < type->BaseType->InterfaceImpls->Length; j++) {
+                    TinyDotNet_Reflection_InterfaceImpl base_impl = type->BaseType->InterfaceImpls->Data[j];
+                    if (base_impl->InterfaceType == interface) {
+                        impl->VTableOffset = base_impl->VTableOffset;
+                    }
+                }
+            }
 
             // queue the interface
             queue_type(interface);
@@ -525,23 +496,28 @@ static err_t fill_methods(System_Type type) {
             CHECK_AND_RETHROW(fill_methods(interface));
             CHECK(interface->VirtualMethods != NULL);
 
-            // set the offset of this impl and increment our vtable count
-            impl->VTableOffset = virtual_count;
-            virtual_count += interface->VirtualMethods->Length;
+            // if this is a new interface then set the new
+            // virtual offset for it
+            if (impl->VTableOffset < 0) {
+                impl->VTableOffset = virtual_count;
+                virtual_count += interface->VirtualMethods->Length;
+            }
 
-            // not interface, setup the offsets of all the functions that
-            // implement this interface
-            if (!type_is_interface(type)) {
-                for (int mi = 0; mi < interface->VirtualMethods->Length; mi++) {
-                    System_Reflection_MethodInfo method = interface->VirtualMethods->Data[mi];
-                    System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, method);
+            // setup the offsets of all the functions implementing this interface, of course don't resolve
+            // anything if this is an interface by itself...
+            for (int mi = 0; mi < interface->VirtualMethods->Length; mi++) {
+                System_Reflection_MethodInfo method = interface->VirtualMethods->Data[mi];
+                System_Reflection_MethodInfo implementation = method;
+
+                if (!type_is_interface(type)) {
+                    implementation = find_virtually_overridden_method(type, method);
                     CHECK(implementation != NULL);
+                }
 
-                    if (implementation->VTableOffset == -1) {
-                        // this is a newslot method, set its offset, its offset is the base of this
-                        // interface + the offset in the virtual methods table of the offset
-                        implementation->VTableOffset = impl->VTableOffset + mi;
-                    }
+                if (implementation->VTableOffset == -1) {
+                    // this is a newslot method, set its offset, its offset is the base of this
+                    // interface + the offset in the virtual methods table of the offset
+                    implementation->VTableOffset = impl->VTableOffset + mi;
                 }
             }
         }
@@ -565,38 +541,84 @@ static err_t fill_methods(System_Type type) {
     // now we know the exact amount of virtual methods that we have for this type
     //------------------------------------------------------------------------------------------------------------------
 
+    // every type inherits from object which means it should have at
+    // least 3 virtual methods:
+    //  - GetHashcode
+    //  - ToString
+    //  - Equals
+    if (!type_is_interface(type)) {
+        ASSERT(virtual_count >= 3);
+    }
+
     GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtual_count));
-    if (virtual_count != 0) {
+
+    // no need to allocate a vtable for abstract or interface types
+    if (!type_is_abstract(type) && !type_is_interface(type)) {
         type->VTable = malloc(sizeof(void*) * virtual_count);
         CHECK_ERROR(type->VTable != NULL, ERROR_OUT_OF_MEMORY);
-    } else {
-        type->VTable = NULL;
     }
 
     //------------------------------------------------------------------------------------------------------------------
-    // copy the parent's vtable
+    // actually fill the final vtable
     //------------------------------------------------------------------------------------------------------------------
 
-    if (type->BaseType != NULL) {
-        for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
-            GC_UPDATE_ARRAY(type->VirtualMethods, i, type->BaseType->VirtualMethods->Data[i]);
-        }
-    }
-
-    //------------------------------------------------------------------------------------------------------------------
-    // now place all of our methods in the vtable
-    //------------------------------------------------------------------------------------------------------------------
-
+    // first go over our methods that have offsets and set them
     for (int i = 0; i < type->Methods->Length; i++) {
         System_Reflection_MethodInfo method = type->Methods->Data[i];
         if (!method_is_virtual(method)) continue;
         GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
     }
 
+    // now go and fill in parent offsets, also do resolve for them in case we override them
+    // in one way or another
+    if (type->BaseType != NULL) {
+        for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
+            // already has something, skip
+            if (type->VirtualMethods->Data[i] != NULL) {
+                continue;
+            }
+
+            // resolve it, worst case this will find it in the parent
+            System_Reflection_MethodInfo method = type->BaseType->VirtualMethods->Data[i];
+            System_Reflection_MethodInfo implementation = method;
+            if (!type_is_interface(type)) {
+                implementation = find_virtually_overridden_method(type, method);
+                CHECK(implementation != NULL);
+            }
+
+            // update it
+            GC_UPDATE_ARRAY(type->VirtualMethods, i, implementation);
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------------------------
+    // now fill the vtable with our stuff
+    //------------------------------------------------------------------------------------------------------------------
+
+    // now resolve all the parent stuff
     if (type->InterfaceImpls != NULL) {
         for (int i = 0; i < type->InterfaceImpls->Length; i++) {
             TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
-            CHECK_AND_RETHROW(fill_vtable_for_interface(type, impl->InterfaceType, impl->VTableOffset));
+
+            for (int mi = 0; mi < impl->InterfaceType->VirtualMethods->Length; mi++) {
+                // if already resolved skip
+                if (type->VirtualMethods->Data[impl->VTableOffset + mi] != NULL) {
+                    continue;
+                }
+
+                // resolve the method of the interface, setting it in the vtable with the implementation
+                System_Reflection_MethodInfo interfaceMethod = impl->InterfaceType->VirtualMethods->Data[mi];
+                System_Reflection_MethodInfo implementation = interfaceMethod;
+
+                // if this is not an interface then resolve the method implementation, otherwise
+                // keep the current thing
+                if (!type_is_interface(type)) {
+                    implementation = find_virtually_overridden_method(type, interfaceMethod);
+                    CHECK(implementation != NULL);
+                }
+
+                GC_UPDATE_ARRAY(type->VirtualMethods, impl->VTableOffset + mi, implementation);
+            }
         }
     }
 
@@ -605,7 +627,13 @@ static err_t fill_methods(System_Type type) {
     //------------------------------------------------------------------------------------------------------------------
 
     for (int i = 0; i < type->VirtualMethods->Length; i++) {
-        CHECK(type->VirtualMethods->Data[i] != NULL);
+        System_Reflection_MethodInfo method = type->VirtualMethods->Data[i];
+        CHECK(method != NULL);
+
+        // non-generic types should not have any generic methods left
+        if (!type_is_abstract(type) && !type_is_interface(type)) {
+            CHECK(!method_is_abstract(method));
+        }
     }
 
     // we are done

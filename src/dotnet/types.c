@@ -1384,26 +1384,14 @@ bool check_method_accessibility(System_Reflection_MethodInfo from_method, System
     }
 
     System_Type from_type = from_method->DeclaringType;
-    bool family = is_same_family(from_type, to->DeclaringType);
-    bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
-
-    // make sure all the arguments are known
-    if (to->GenericArguments != NULL && to->GenericMethodDefinition != NULL) {
-        for (int i = 0; i < to->GenericArguments->Length; i++) {
-            if (!check_type_visibility(from_method, to->GenericArguments->Data[i])) {
-                return false;
-            }
-        }
-    }
-
     System_Type to_type = to->DeclaringType;
-    if (to_type->GenericArguments != NULL && !type_is_generic_definition(to_type)) {
-        for (int i = 0; i < to_type->GenericArguments->Length; i++) {
-            if (!check_type_visibility(from_method, to_type->GenericArguments->Data[i])) {
-                return false;
-            }
-        }
-    }
+    bool family = is_same_family(from_type, to_type);
+    bool assembly = from_type->Assembly == to_type->Assembly;
+
+    // TODO: we need to check on generic methods
+    //          if the callsite has no access to the generic argument AND
+    //          it is not coming as a generic argument from the callsite
+    //          then we should fail
 
     switch (method_get_access(to)) {
         case METHOD_COMPILER_CONTROLLED: ASSERT(!"TODO: METHOD_COMPILER_CONTROLLED"); return false;
@@ -1778,6 +1766,7 @@ err_t type_expand_interface_impls(System_Type instance, TinyDotNet_Reflection_In
     for (int i = 0; i < instance->InterfaceImpls->Length; i++) {
         TinyDotNet_Reflection_InterfaceImpl impl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
         System_Type interfaceType;
+        impl->VTableOffset = -1;
         CHECK_AND_RETHROW(expand_type(interfaceImpls->Data[i]->InterfaceType, instance->GenericArguments, NULL, &interfaceType));
         GC_UPDATE(impl, InterfaceType, interfaceType);
         GC_UPDATE_ARRAY(instance->InterfaceImpls, i, impl);

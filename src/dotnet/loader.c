@@ -895,7 +895,8 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         System_Type type = interfaces[i].key;
         GC_UPDATE(type, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, arrlen(interfaces[i].value)));
         for (int j = 0; j < arrlen(interfaces[i].value); j++) {
-            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = UNSAFE_GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+            interfaceImpl->VTableOffset = -1;
             GC_UPDATE(interfaceImpl, InterfaceType, interfaces[i].value[j]);
             GC_UPDATE_ARRAY(type->InterfaceImpls, j, interfaceImpl);
         }

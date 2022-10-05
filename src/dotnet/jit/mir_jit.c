@@ -1781,10 +1781,11 @@ static err_t jit_prepare_instance_type(jit_context_t* ctx, System_Type type) {
 
         // if this is a generic method then we don't prepare it in here
         // since it needs to be prepared per-instance
-        if (method->GenericArguments != NULL) continue;
+        ASSERT(method->GenericArguments == NULL);
 
         // now prepare the method itself
-        CHECK_AND_RETHROW(jit_prepare_method(ctx, type->VirtualMethods->Data[i]));
+        CHECK_AND_RETHROW(jit_prepare_method(ctx, method));
+        ASSERT(method->MirFunc != NULL);
     }
 
     // queue this class to the static types
@@ -2742,6 +2743,17 @@ cleanup:
     return err;
 }
 
+typedef struct local {
+    // the operation to get this entry
+    MIR_op_t op;
+
+    // this is a readonly ref
+    uint32_t readonly_ref : 1;
+
+    // this is a non-local ref
+    uint32_t non_local_ref : 1;
+} local_t;
+
 /**
  * This is the main jitting function, it takes a method and jits it completely
  */
@@ -2776,7 +2788,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
     );
 
     // variables
-    MIR_op_t* locals = NULL;
+    local_t* locals = NULL;
     MIR_op_t* arguments = NULL;
 
     // jump table dynamic array
@@ -2830,7 +2842,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
         char name[64] = { 0 };
         snprintf(name, sizeof(name), "var%d", i);
         MIR_reg_t reg = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, name);
-        arrpush(locals, MIR_new_reg_op(mir_ctx, reg));
+        arrpush(locals, (local_t){ .op = MIR_new_reg_op(mir_ctx, reg) });
 
         // allocate the stack memory
         MIR_append_insn(mir_ctx, mir_func,
@@ -2848,25 +2860,25 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 if (type_is_interface(variable->LocalType)) {
                     goto init_local_value_type;
                 }
-                locals[i] = MIR_new_mem_op(mir_ctx, get_mir_type(variable->LocalType), 0, reg, 0, 1);
+                locals[i].op = MIR_new_mem_op(mir_ctx, get_mir_type(variable->LocalType), 0, reg, 0, 1);
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_MOV,
-                                             locals[i],
+                                             locals[i].op,
                                              MIR_new_int_op(mir_ctx, 0)));
             } break;
 
             case STACK_TYPE_FLOAT: {
-                locals[i] = MIR_new_mem_op(mir_ctx, get_mir_type(variable->LocalType), 0, reg, 0, 1);
+                locals[i].op = MIR_new_mem_op(mir_ctx, get_mir_type(variable->LocalType), 0, reg, 0, 1);
                 if (variable->LocalType == tSystem_Single) {
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_insn(mir_ctx, MIR_FMOV,
-                                                 locals[i],
+                                                 locals[i].op,
                                                  MIR_new_float_op(mir_ctx, 0.0f)));
                 } else {
                     ASSERT(variable->LocalType == tSystem_Double);
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_insn(mir_ctx, MIR_DMOV,
-                                                 locals[i],
+                                                 locals[i].op,
                                                  MIR_new_double_op(mir_ctx, 0.0)));
                 }
             } break;
@@ -3171,7 +3183,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                 // check we can access it
                 CHECK(check_method_accessibility(method, operand_method),
-                      "from %U to %U", method->Name, operand_method->Name);
+                      "from %U.%U to %U.%U",
+                      method->DeclaringType->Name, method->Name,
+                      operand_method->DeclaringType->Name, operand_method->Name);
 
                 // prepare the owning type
                 CHECK_AND_RETHROW(jit_prepare_static_type(ctx->ctx, operand_method->DeclaringType));
@@ -4377,9 +4391,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_STLOC_S:
             case CEE_STLOC: {
                 // get the top value
+                stack_entry_t value_entry;
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, &value_entry));
 
                 // get the variable
                 CHECK(operand_i32 < body->LocalVariables->Length);
@@ -4402,9 +4417,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                 goto stloc_value_type;
                             } else {
                                 // object -> interface
-                                CHECK(locals[operand_i32].mode == MIR_OP_REG);
+                                CHECK(locals[operand_i32].op.mode == MIR_OP_REG);
                                 CHECK_AND_RETHROW(jit_cast_obj_to_interface(ctx,
-                                                                            locals[operand_i32].u.reg, value_reg,
+                                                                            locals[operand_i32].op.u.reg, value_reg,
                                                                             value_type, variable_type));
                             }
                         } else {
@@ -4412,7 +4427,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                 // interface -> object
                                 MIR_append_insn(mir_ctx, mir_func,
                                                 MIR_new_insn(mir_ctx, MIR_MOV,
-                                                             locals[operand_i32],
+                                                             locals[operand_i32].op,
                                                              MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), value_reg, 0, 1)));
                             } else {
                                 // object -> object
@@ -4425,19 +4440,25 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INT32:
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
-                    case STACK_TYPE_FLOAT:
-                    case STACK_TYPE_REF: {
+                    case STACK_TYPE_FLOAT: {
                         MIR_insn_code_t code = jit_number_cast_inscode(value_type, variable_type);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
-                                                     locals[operand_i32],
+                                                     locals[operand_i32].op,
                                                      MIR_new_reg_op(mir_ctx, value_reg)));
                     } break;
 
                     stloc_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        CHECK(locals[operand_i32].mode == MIR_OP_REG);
-                        jit_emit_memcpy(ctx, locals[operand_i32].u.reg, value_reg, value_type->StackSize);
+                        CHECK(locals[operand_i32].op.mode == MIR_OP_REG);
+                        jit_emit_memcpy(ctx, locals[operand_i32].op.u.reg, value_reg, value_type->StackSize);
+                    } break;
+
+                    // continue tracking of references
+                    case STACK_TYPE_REF: {
+                        locals[operand_i32].non_local_ref = value_entry.non_local_ref;
+                        locals[operand_i32].readonly_ref = value_entry.readonly_ref;
+                        goto stloc_primitive_type;
                     } break;
                 }
             } break;
@@ -4472,20 +4493,41 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INT32:
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
-                    case STACK_TYPE_FLOAT:
-                    case STACK_TYPE_REF: {
+                    case STACK_TYPE_FLOAT: {
                         MIR_insn_code_t code = jit_number_inscode(value_type);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
-                                                     locals[operand_i32]));
+                                                     locals[operand_i32].op));
                     } break;
 
                     ldloc_value_type:
                     case STACK_TYPE_VALUE_TYPE: {
-                        CHECK(locals[operand_i32].mode == MIR_OP_REG);
-                        jit_emit_memcpy(ctx, value_reg, locals[operand_i32].u.reg, value_type->StackSize);
+                        CHECK(locals[operand_i32].op.mode == MIR_OP_REG);
+                        jit_emit_memcpy(ctx, value_reg, locals[operand_i32].op.u.reg, value_type->StackSize);
                     } break;
+
+                    // restore tracking of non-local ref and readonly ref
+                    case STACK_TYPE_REF: {
+                        // TODO: I think this is actually not the most correct thing, what if someone does:
+                        //          <push a ref that can be written to>
+                        //          stloc.0
+                        //       label:
+                        //          ldloc.0
+                        //          <write to it>
+                        //          <push reference that can't be written to>
+                        //          stloc.0
+                        //          br label
+                        //      we now wrote to a readonly reference... but idk if there is a simple way to
+                        //      handle this without more restrict stuff, maybe we can enforce so variables that
+                        //      store a readonly ref can't have any other ref, but then what if there is valid
+                        //      CIL generated that does that?
+                        //      we will need to think about this some more but for now this is good enough
+                        STACK_TOP.readonly_ref = locals[operand_i32].readonly_ref;
+                        STACK_TOP.non_local_ref = locals[operand_i32].non_local_ref;
+                        goto ldloc_primitive_type;
+                    } break;
+
                 }
             } break;
 
@@ -4513,13 +4555,12 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INT32:
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
-                    case STACK_TYPE_FLOAT:
-                    case STACK_TYPE_REF: {
-                        CHECK(locals[operand_i32].mode == MIR_OP_MEM);
+                    case STACK_TYPE_FLOAT: {
+                        CHECK(locals[operand_i32].op.mode == MIR_OP_MEM);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
-                                                     MIR_new_reg_op(mir_ctx, locals[operand_i32].u.mem.base)));
+                                                     MIR_new_reg_op(mir_ctx, locals[operand_i32].op.u.mem.base)));
                     } break;
 
                     ldloca_value_type:
@@ -4527,8 +4568,12 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
-                                                     locals[operand_i32]));
+                                                     locals[operand_i32].op));
                     } break;
+
+                    // idk if this is possible tbh
+                    case STACK_TYPE_REF:
+                        CHECK_FAIL();
                 }
             } break;
 
