@@ -295,12 +295,16 @@ static method_result_t System_Reflection_Assembly_LoadInternal_raw(System_Byte_A
     // TODO: don't run custom attributes since this is essentially loading as non-reflection
 
     if (!reflection) {
-        // TODO: instead we probably want to jit specifically the entry point
-        //       and not the whole type, just to have less to see
-        // TODO: time this
-        CHECK_AND_RETHROW(jit_type(assembly->EntryPoint->DeclaringType));
+        // check entry point is valid
         CHECK(assembly->EntryPoint->Parameters->Length == 0);
         CHECK(assembly->EntryPoint->ReturnType == NULL);
+
+        // jit it
+        waitable_t* done = NULL;
+        CHECK_AND_RETHROW(jit_method(assembly->EntryPoint, &done));
+        CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+
+        // run it
         exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
         CHECK(exception == NULL);
     }
@@ -322,12 +326,16 @@ static method_result_t System_Reflection_Assembly_LoadInternal_string(System_Byt
     CHECK_FAIL();
 
     if (!reflection) {
-        // TODO: instead we probably want to jit specifically the entry point
-        //       and not the whole type, just to have less to see
-        // TODO: time this
-        CHECK_AND_RETHROW(jit_type(assembly->EntryPoint->DeclaringType));
+        // check entry point is valid
         CHECK(assembly->EntryPoint->Parameters->Length == 0);
         CHECK(assembly->EntryPoint->ReturnType == NULL);
+
+        // jit it
+        waitable_t* done = NULL;
+        CHECK_AND_RETHROW(jit_method(assembly->EntryPoint, &done));
+        CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+
+        // run it
         exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
         CHECK(exception == NULL);
     }

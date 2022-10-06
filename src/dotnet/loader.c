@@ -1658,21 +1658,23 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
     // all of these can be created implicitly by the jit, so just jit them right now
     // instead of later
-    CHECK_AND_RETHROW(jit_type(tSystem_String));
-    CHECK_AND_RETHROW(jit_type(tSystem_Boolean));
-    CHECK_AND_RETHROW(jit_type(tSystem_Char));
-    CHECK_AND_RETHROW(jit_type(tSystem_SByte));
-    CHECK_AND_RETHROW(jit_type(tSystem_Byte));
-    CHECK_AND_RETHROW(jit_type(tSystem_Int16));
-    CHECK_AND_RETHROW(jit_type(tSystem_UInt16));
-    CHECK_AND_RETHROW(jit_type(tSystem_Int32));
-    CHECK_AND_RETHROW(jit_type(tSystem_UInt32));
-    CHECK_AND_RETHROW(jit_type(tSystem_Int64));
-    CHECK_AND_RETHROW(jit_type(tSystem_UInt64));
-    CHECK_AND_RETHROW(jit_type(tSystem_Single));
-    CHECK_AND_RETHROW(jit_type(tSystem_Double));
-    CHECK_AND_RETHROW(jit_type(tSystem_IntPtr));
-    CHECK_AND_RETHROW(jit_type(tSystem_UIntPtr));
+    waitable_t* done = NULL;
+    CHECK_AND_RETHROW(jit_type(tSystem_String, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Boolean, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Char, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_SByte, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Byte, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int16, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt16, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int32, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt32, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int64, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt64, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Single, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Double, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_IntPtr, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UIntPtr, &done));
+    CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
 
 cleanup:
     return err;

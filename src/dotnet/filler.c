@@ -501,6 +501,10 @@ static err_t fill_methods(System_Type type) {
             if (impl->VTableOffset < 0) {
                 impl->VTableOffset = virtual_count;
                 virtual_count += interface->VirtualMethods->Length;
+            } else {
+                // TODO: this is a workaround for GenericArray and Array actually sharing the InterfaceImpl
+                //       instances. We are going to just adjust this properly
+                virtual_count = MAX(virtual_count, impl->VTableOffset + interface->VirtualMethods->Length);
             }
 
             // setup the offsets of all the functions implementing this interface, of course don't resolve

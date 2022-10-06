@@ -668,6 +668,9 @@ struct System_Type {
     // did we run the type initializer yet
     uint32_t RanTypeInitializer : 1;
 
+    // did we queue the type initializer yet
+    uint32_t RanTypeQueued : 1;
+
     System_Reflection_MethodInfo_Array VirtualMethods;
     void** VTable;
 

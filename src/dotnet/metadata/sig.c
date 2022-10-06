@@ -772,10 +772,12 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
     MIR_val_t fixed_args[ctor->Parameters->Length + 1];
 
     // we need to jit to type itself, since we are going to create an instance of it
-    CHECK_AND_RETHROW(jit_type(ctor->DeclaringType));
+    CHECK_AND_RETHROW(jit_type(ctor->DeclaringType, NULL));
 
     // we also need to jit the actual ctor
-    CHECK_AND_RETHROW(jit_method(ctor));
+    waitable_t* done = NULL;
+    CHECK_AND_RETHROW(jit_method(ctor, &done));
+    CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
 
     //
     // Prolog
@@ -864,7 +866,9 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
             System_Reflection_MethodInfo setter = info->SetMethod;
 
             // we need to jit the setter itself
-            CHECK_AND_RETHROW(jit_method(setter));
+            done = NULL;
+            CHECK_AND_RETHROW(jit_method(setter, &done));
+            CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
 
             // make sure the method is valid
             CHECK(!method_is_static(setter));
