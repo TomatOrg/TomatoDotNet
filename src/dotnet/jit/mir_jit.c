@@ -1678,7 +1678,7 @@ static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
 
     // set type dependencies
     // TODO: use hash array instead
-    if (ctx->current_method != NULL && method_is_static(ctx->current_method)) {
+    if (ctx->current_method != NULL) {
         int idx = hmgeti(ctx->type_init_dependencies, ctx->current_method->DeclaringType);
         if (idx >= 0) {
             System_Type* arr = ctx->type_init_dependencies[idx].value;
@@ -7065,13 +7065,10 @@ static err_t jit_queue_initializer(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
     // don't recurse
-    if (type->RanTypeQueued) {
+    if (type->TypeInitializerQueued) {
         goto cleanup;
     }
-    type->RanTypeQueued = true;
-
-    if (type->TypeInitializer == NULL)
-        goto cleanup;
+    type->TypeInitializerQueued = true;
 
     // handle dependencies
     int idx = hmgeti(ctx->type_init_dependencies, type);
@@ -7083,7 +7080,10 @@ static err_t jit_queue_initializer(jit_context_t* ctx, System_Type type) {
     }
 
     // now we are ready to run our initializer
-    jit_type_init_queue(type);
+    if (type->TypeInitializer != NULL) {
+        jit_type_init_queue(type);
+    }
+
 
 cleanup:
     return err;
