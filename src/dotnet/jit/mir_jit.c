@@ -33,10 +33,10 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (!string_equals_cstr(method->DeclaringType->Name, "Dictionary`2"))
 //        return false;
 
-//    if (!string_equals_cstr(method->Name, "FindValue"))
-//        return false;
-//
-//    return true;
+    if (!string_equals_cstr(method->Name, "TryInsert"))
+        return false;
+
+    return true;
     return false;
 }
 
@@ -54,7 +54,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-//#define JIT_TRACE
+#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
@@ -66,6 +66,17 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
  * the parallel generator instead of the lazy one!
  */
 //#define JIT_DEBUG_SYMBOLS
+
+#define MIR_append_insn_output(__ctx, __func, ...) \
+    do { \
+        MIR_insn_t _insn = __VA_ARGS__; \
+        MIR_context_t ___ctx = __ctx; \
+        MIR_item_t _func = __func; \
+        if (trace_filter(ctx->method)) { \
+            MIR_output_insn(___ctx, stdout, _insn, _func->u.func, true); \
+        } \
+        MIR_append_insn(___ctx, _func, _insn); \
+    } while (0)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // functions we need for the runtime
@@ -804,16 +815,7 @@ static MIR_type_t get_mir_stack_type(System_Type type) {
 }
 
 #ifdef JIT_TRACE_MIR
-#define MIR_append_insn(__ctx, __func, ...) \
-    do { \
-        MIR_insn_t _insn = __VA_ARGS__; \
-        MIR_context_t ___ctx = __ctx; \
-        MIR_item_t _func = __func; \
-        if (trace_filter(ctx->method)) { \
-            MIR_output_insn(___ctx, stdout, _insn, _func->u.func, true); \
-        } \
-        MIR_append_insn(___ctx, _func, _insn); \
-    } while (0)
+    #define MIR_append_insn(...) MIR_append_insn_output(__VA_ARGS__)
 #endif
 
 static MIR_reg_t push_new_reg(jit_method_context_t* ctx, System_Type type, bool temp) {
@@ -873,6 +875,8 @@ static MIR_reg_t push_new_reg(jit_method_context_t* ctx, System_Type type, bool 
 
     return reg;
 }
+
+#undef MIR_prepend_insn
 
 /**
  * Create a new temp register
@@ -1059,6 +1063,10 @@ MIR_insn_code_t jit_number_inscode(System_Type type) {
     return code;
 }
 
+#ifdef JIT_TRACE_MIR
+    #define MIR_append_insn(...) MIR_append_insn_output(__VA_ARGS__)
+#endif
+
 /**
  * Helper for copying memory in MIR.
  *
@@ -1179,6 +1187,8 @@ void jit_emit_zerofill(jit_method_context_t* ctx, MIR_reg_t dest, size_t count) 
                                           MIR_new_uint_op(mir_ctx, count)));
     }
 }
+
+#undef MIR_append_insn
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit the delegate wrappers
@@ -1802,25 +1812,12 @@ cleanup:
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Tracing mir generation along side of the IL
+// Branching helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #ifdef JIT_TRACE_MIR
-#define MIR_append_insn(__ctx, __func, ...) \
-    do { \
-        MIR_insn_t _insn = __VA_ARGS__; \
-        MIR_context_t ___ctx = __ctx; \
-        MIR_item_t _func = __func; \
-        if (trace_filter(ctx->method)) { \
-            MIR_output_insn(___ctx, stdout, _insn, _func->u.func, true); \
-        } \
-        MIR_append_insn(___ctx, _func, _insn); \
-    } while (0)
+    #define MIR_append_insn(...) MIR_append_insn_output(__VA_ARGS__)
 #endif
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Branching helpers
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
  * Resolves a label to the location we want to jump to, so it can be used for the jump.
@@ -4119,6 +4116,15 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_REF:
                     case STACK_TYPE_O: {
+                        if (type_is_interface(value_type)) {
+                            // this is an interface, we need to get the
+                            // object pointer
+                            MIR_append_insn(mir_ctx, mir_func,
+                                            MIR_new_insn(mir_ctx, MIR_MOV,
+                                                         MIR_new_reg_op(mir_ctx, value_reg),
+                                                         MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), value_reg, 0, 1)));
+                        }
+
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_label_op(mir_ctx, label),
@@ -4758,6 +4764,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 CHECK(operand_i32 < arrlen(arguments));
 
                 // resolve the type
+                int arg_index = operand_i32;
                 MIR_op_t arg_op = arguments[operand_i32];
                 System_Type arg_type = NULL;
                 if (!method_is_static(method)) {
@@ -4804,23 +4811,34 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         if (arg_op.mode == MIR_OP_REG) {
                             // allocate space for the argument to be stored
                             char spill_arg_name[64];
-                            snprintf(spill_arg_name, sizeof(spill_arg_name), "sarg%d", operand_i32);
+                            snprintf(spill_arg_name, sizeof(spill_arg_name), "sarg%d", arg_index);
 
-                            MIR_reg_t arg_reg = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, spill_arg_name);
-                            MIR_prepend_insn(mir_ctx, mir_func,
-                                             MIR_new_insn(mir_ctx, MIR_ALLOCA,
-                                                          MIR_new_reg_op(mir_ctx, arg_reg),
-                                                          MIR_new_int_op(mir_ctx, arg_type->StackSize)));
+                            // setup space for the argument
+                            // NOTE: this is switched because we are prepending
+                            MIR_reg_t stack_arg_reg = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, spill_arg_name);
 
                             // setup the new op
-                            MIR_reg_t old_arg_reg = arg_op.u.reg;
-                            arg_op = MIR_new_mem_op(mir_ctx, get_mir_type(arg_type), 0, arg_reg, 0, 1);
+                            MIR_op_t old_arg_op = arg_op;
+                            MIR_reg_t old_arg_reg = old_arg_op.u.reg;
+                            arg_op = MIR_new_mem_op(mir_ctx, get_mir_type(arg_type), 0, stack_arg_reg, 0, 1);
+
+                            // move the value to the stack storage
+                            MIR_prepend_insn(mir_ctx, mir_func,
+                                             MIR_new_insn(mir_ctx, MIR_MOV,
+                                                          arg_op,
+                                                          old_arg_op));
+
+                            // allocate the storage
+                            MIR_prepend_insn(mir_ctx, mir_func,
+                                             MIR_new_insn(mir_ctx, MIR_ALLOCA,
+                                                          MIR_new_reg_op(mir_ctx, stack_arg_reg),
+                                                          MIR_new_int_op(mir_ctx, arg_type->StackSize)));
 
                             // replace the old register access with the new operand
                             CHECK_AND_RETHROW(jit_replace_reg_with_op(mir_func->u.func, old_arg_reg, arg_op));
 
                             // set the new op for future uses
-                            arguments[operand_i32] = arg_op;
+                            arguments[arg_index] = arg_op;
                         }
 
                         // already spilled, just move the pointer in the memory reference
@@ -7131,7 +7149,11 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
     MIR_load_module(m_mir_context, module);
 
     // set a lazy generation
+//#ifdef JIT_DEBUG_SYMBOLS
+//
+//#else
     MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
+//#endif
 
     //------------------------------------------------------------------------------------------------------------------
     // now do the post setup
