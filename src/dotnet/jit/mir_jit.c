@@ -1741,9 +1741,14 @@ static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
         goto cleanup;
     }
 
-    // prepare the base type
+    // references: prepare the base type
     if (type->BaseType != NULL) {
-        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, type));
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, type->BaseType));
+    }
+
+    // arrays and enums: prepare the element type
+    if (type->ElementType != NULL) {
+        CHECK_AND_RETHROW(jit_prepare_static_type(ctx, type->ElementType));
     }
 
     // prepare the static fields
