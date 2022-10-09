@@ -30,13 +30,13 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-    if (method->DeclaringType->GenericTypeDefinition == NULL)
-        return false;
+//    if (method->DeclaringType->GenericTypeDefinition == NULL)
+//        return false;
+//
+//    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "Dictionary`2"))
+//        return false;
 
-    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "Dictionary`2"))
-        return false;
-
-    if (!string_equals_cstr(method->Name, "TryInsert"))
+    if (!string_equals_cstr(method->Name, "get_Log2DeBruijn"))
         return false;
 
     return true;
@@ -1759,7 +1759,7 @@ static err_t jit_prepare_static_type(jit_context_t* ctx, System_Type type) {
                 if (field_is_thread_static(fieldInfo)) {
                     // thread local
                     fieldInfo->ThreadStaticIndex = add_thread_local(fieldInfo->FieldType);
-                } else {
+                } else if (!fieldInfo->HasRva) {
                     // normal field
                     strbuilder_t field_name = strbuilder_new();
                     type_print_full_name(fieldInfo->DeclaringType, &field_name);

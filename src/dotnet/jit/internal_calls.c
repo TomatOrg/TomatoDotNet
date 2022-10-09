@@ -568,6 +568,11 @@ method_result_t System_Environment_GetProcessorCount() {
     return (method_result_t){ .value = get_cpu_count() };
 }
 
+System_Exception System_Diagnostic_DebugProvider_WriteInternal(System_String str) {
+    printf("%U", str);
+    return NULL;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // everything
 //----------------------------------------------------------------------------------------------------------------------
@@ -666,6 +671,8 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Type [Corelib-v1]System.Type::InternalMakeGenericType([Corelib-v1]System.Type[])", System_Type_InternalMakeGenericType },
 
     { "int32 [Corelib-v1]System.Environment::GetProcessorCount()", System_Environment_GetProcessorCount },
+
+    { "[Corelib-v1]System.Diagnostics.DebugProvider::WriteInternal(string)", System_Diagnostic_DebugProvider_WriteInternal },
 
 };
 
