@@ -6,6 +6,7 @@
 #include "dotnet/metadata/sig.h"
 #include "encoding.h"
 #include "loader.h"
+#include "filler.h"
 
 #include <util/strbuilder.h>
 #include <util/stb_ds.h>
@@ -59,7 +60,10 @@ System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
 System_Type tSystem_RuntimeTypeHandle = NULL;
 System_Type tSystem_Nullable = NULL;
+System_Type tSystem_ReadOnlySpan = NULL;
 System_Type tSystem_Span = NULL;
+
+System_Type tSystem_GenericArray = NULL;
 
 System_Type tTinyDotNet_Reflection_InterfaceImpl = NULL;
 System_Type tTinyDotNet_Reflection_MemberReference = NULL;
@@ -194,6 +198,62 @@ static bool match_generic_type(System_Type a, System_Type b) {
     }
 }
 
+bool method_compare_name_and_sig(System_Reflection_MethodInfo method, System_Reflection_MethodInfo signature) {
+    // make sure the name matches
+    if (!string_equals(method->Name, signature->Name)) {
+        return false;
+    }
+
+    // make sure both are static or not static
+    if (method_is_static(signature) != method_is_static(method)) {
+        return false;
+    }
+
+    // make sure generic arguments count is the same
+    if (signature->GenericArguments != NULL) {
+        if (
+            method->GenericArguments == NULL ||
+            method->GenericArguments->Length != signature->GenericArguments->Length
+        ) {
+            return false;
+        }
+    }
+
+    // check the return type
+    if (!match_generic_type(signature->ReturnType, method->ReturnType)) {
+        return false;
+    }
+
+    // make sure the count is the same
+    if (signature->Parameters->Length != method->Parameters->Length) {
+        return false;
+    }
+
+    // check all the parameters
+    for (int i = 0; i < signature->Parameters->Length; i++) {
+        if (!match_generic_type(method->Parameters->Data[i]->ParameterType, signature->Parameters->Data[i]->ParameterType)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+System_Reflection_MethodInfo type_find_method_in_type(System_Type type, System_Reflection_MethodInfo signature) {
+    System_Type lookInType = type;
+    do {
+        for (int i = 0; i < lookInType->Methods->Length; i++) {
+            if (method_compare_name_and_sig(lookInType->Methods->Data[i], signature)) {
+                return lookInType->Methods->Data[i];
+            }
+        }
+
+        lookInType = lookInType->BaseType;
+    } while (lookInType != NULL);
+
+    return NULL;
+}
+
 err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t token, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Reflection_MethodInfo* out_method) {
     err_t err = NO_ERROR;
 
@@ -234,52 +294,16 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
             CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
 
             // get the expected field
-            System_Reflection_MethodInfo wantedInfo;
+            System_Reflection_MethodInfo signature;
             blob_entry_t blob = {
                 .data = ref->Signature->Data,
                 .size = ref->Signature->Length
             };
-            CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &wantedInfo, type->GenericArguments));
+            CHECK_AND_RETHROW(parse_method_ref_sig(blob, assembly, &signature, type->GenericArguments));
+            GC_UPDATE(signature, Name, ref->Name);
 
-            // if this is null it means that this is a generic definition that is not complete, so we are
-            // going to look at the declaration instead
-            if (type->Methods == NULL) {
-                type = type->GenericTypeDefinition;
-            }
-
-            // find a method with that type
-            int index = 0;
-            System_Reflection_MethodInfo methodInfo = NULL;
-            while ((methodInfo = type_iterate_methods(type, ref->Name, &index)) != NULL) {
-                // verify the generic args count matches
-                if (wantedInfo->GenericArguments != NULL || methodInfo->GenericArguments != NULL) {
-                    // both must have generic arguments
-                    if (wantedInfo->GenericArguments == NULL || methodInfo->GenericArguments == NULL) continue;
-
-                    // both must have the same number of arguments
-                    if (wantedInfo->GenericArguments->Length != methodInfo->GenericArguments->Length) continue;
-                }
-
-                // make sure both either have or don't have this
-                if (method_is_static(methodInfo) != method_is_static(wantedInfo)) continue;
-
-                // check the return type and parameters count is the same
-                if (!match_generic_type(methodInfo->ReturnType, wantedInfo->ReturnType)) continue;
-                if (methodInfo->Parameters->Length != wantedInfo->Parameters->Length) continue;
-
-                // check that the parameters are the same
-                bool found = true;
-                for (int pi = 0; pi < methodInfo->Parameters->Length; pi++) {
-                    if (!match_generic_type(methodInfo->Parameters->Data[pi]->ParameterType, wantedInfo->Parameters->Data[pi]->ParameterType)) {
-                        found = false;
-                        break;
-                    }
-                }
-
-                if (found) {
-                    break;
-                }
-            }
+            // now search for it in the type
+            System_Reflection_MethodInfo methodInfo = type_find_method_in_type(type, signature);
 
             // found it
             CHECK(methodInfo != NULL);
@@ -365,11 +389,56 @@ System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, 
     return hmget(assembly->UserStringsTable, token.index);
 }
 
-System_Type get_array_type(System_Type type) {
-    if (type->ArrayType != NULL) {
-        return type->ArrayType;
+static bool m_enable_generic_arrays = false;
+
+static bool THREAD_LOCAL m_nesting_setup_generic_array;
+
+void enable_generic_arrays() {
+    m_enable_generic_arrays = true;
+}
+
+void setup_generic_array(System_Type type) {
+    if (m_nesting_setup_generic_array) {
+        return;
     }
 
+    if (type->IsSetupFinished) {
+        return;
+    }
+
+    PANIC_ON(monitor_enter(type));
+
+    // already inited by the time we took the lock
+    if (type->IsSetupFinished) {
+        return;
+    }
+
+    // don't nest the generic array creation
+    m_nesting_setup_generic_array = true;
+
+    // create the args
+    System_Type_Array args = GC_NEW_ARRAY(tSystem_Type, 1);
+    args->Data[0] = type->ElementType;
+
+    // instantiate
+    System_Type genericArray = NULL;
+    PANIC_ON(type_make_generic(tSystem_GenericArray, args, &genericArray));
+
+    // set the base info, the rest will need to be handled by
+    // someone else when they want them
+    GC_UPDATE(type, Methods, genericArray->Methods);
+    GC_UPDATE(type, InterfaceImpls, genericArray->InterfaceImpls);
+    GC_UPDATE(type, MethodImpls, genericArray->MethodImpls);
+
+    // we no longer nest,
+    m_nesting_setup_generic_array = false;
+
+    type->IsSetupFinished = true;
+
+    PANIC_ON(monitor_exit(type));
+}
+
+static System_Type create_array_type(System_Type type) {
     // TODO: panic on fail
     PANIC_ON(monitor_enter(type));
 
@@ -396,20 +465,17 @@ System_Type get_array_type(System_Type type) {
 
     // this is an array
     ArrayType->IsArray = true;
-    ArrayType->IsFilled = true;
     ArrayType->GenericParameterPosition = -1;
     ArrayType->StackType = STACK_TYPE_O;
 
-    // set the sizes properly
+    // set the sizes properly, we are going to set the size ourselves
+    // because it makes our life easier
+    ArrayType->StackSizeFilled = true;
+    ArrayType->ManagedSizeFilled = true;
     ArrayType->StackSize = tSystem_Array->StackSize;
     ArrayType->ManagedSize = tSystem_Array->ManagedSize;
     ArrayType->StackAlignment = tSystem_Array->StackAlignment;
     ArrayType->ManagedAlignment = tSystem_Array->ManagedAlignment;
-
-    // allocate the vtable
-    GC_UPDATE(ArrayType, VirtualMethods, tSystem_Array->VirtualMethods);
-    ArrayType->VTableSize = tSystem_Array->VTableSize;
-    ArrayType->VTable = tSystem_Array->VTable;
 
     // There are no managed pointers in here (The gc will handle array
     // stuff on its own)
@@ -423,6 +489,16 @@ System_Type get_array_type(System_Type type) {
     PANIC_ON(monitor_exit(type));
 
     return type->ArrayType;
+}
+
+System_Type get_array_type(System_Type type) {
+    System_Type arrayType = type->ArrayType ?: create_array_type(type);
+
+    if (m_enable_generic_arrays && !arrayType->IsSetupFinished) {
+        setup_generic_array(arrayType);
+    }
+
+    return arrayType;
 }
 
 System_Type get_by_ref_type(System_Type type) {
@@ -446,7 +522,8 @@ System_Type get_by_ref_type(System_Type type) {
 
     // this is an array
     ByRefType->IsByRef = true;
-    ByRefType->IsFilled = true;
+    ByRefType->TypeQueued = true;
+    ByRefType->TypeFilled = true;
     ByRefType->StackType = STACK_TYPE_REF;
     ByRefType->GenericParameterPosition = -1;
 
@@ -502,7 +579,11 @@ System_Type get_pointer_type(System_Type type) {
     PointerType->StackAlignment = tSystem_UIntPtr->StackAlignment;
     PointerType->StackType = STACK_TYPE_INTPTR;
     PointerType->GenericParameterPosition = -1;
-    PointerType->IsFilled = true;
+    PointerType->StackSizeFilled = true;
+    PointerType->ManagedSizeFilled = true;
+    PointerType->MethodsFilled = true;
+    PointerType->TypeQueued = true;
+    PointerType->TypeFilled = true;
     PointerType->IsPointer = true;
     GC_UPDATE(PointerType, ElementType, type);
 
@@ -528,14 +609,15 @@ System_Type get_boxed_type(System_Type type) {
     // must not be a byref
     ASSERT(!type->IsByRef);
 
-    // TODO: error handling?
-    PANIC_ON(loader_fill_type(type));
-
     // allocate the new ref type
     System_Type BoxedType = UNSAFE_GC_NEW(tSystem_Type);
     if (BoxedType == NULL) {
         return BoxedType;
     }
+
+    // fill the full type if we want a box of it, this should be fine since
+    // only during runtime we may call this
+    PANIC_ON(filler_fill_type(type));
 
     GC_UPDATE(BoxedType, DeclaringType, type->DeclaringType);
     GC_UPDATE(BoxedType, Module, type->Module);
@@ -546,13 +628,14 @@ System_Type get_boxed_type(System_Type type) {
     GC_UPDATE(BoxedType, Fields, type->Fields);
     GC_UPDATE(BoxedType, Methods, type->Methods);
     GC_UPDATE(BoxedType, UnboxedType, type);
-    BoxedType->ManagedSize = type->ManagedSize;
-    BoxedType->ManagedAlignment = type->ManagedAlignment;
+    BoxedType->ManagedSize = type->StackSize;
+    BoxedType->ManagedAlignment = type->StackAlignment;
     BoxedType->StackSize = tSystem_Object->StackSize;
     BoxedType->StackAlignment = tSystem_Object->StackAlignment;
     BoxedType->StackType = STACK_TYPE_O;
     BoxedType->GenericParameterPosition = -1;
-    BoxedType->IsFilled = true;
+    BoxedType->TypeQueued = true;
+    BoxedType->TypeFilled = true;
     BoxedType->IsBoxed = true;
     GC_UPDATE(BoxedType, InterfaceImpls, type->InterfaceImpls);
     GC_UPDATE(BoxedType, VirtualMethods, type->VirtualMethods);
@@ -707,6 +790,11 @@ bool type_is_array_element_compatible_with(System_Type T, System_Type U) {
 
     // U has underlying type W
     System_Type W = type_get_underlying_type(U);
+
+    // T is the null type, and U is a reference type
+    if (T == NULL && type_is_object_ref(U)) {
+        return true;
+    }
 
     // V is compatible-with W
     if (type_is_compatible_with(V, W)) {
@@ -1296,26 +1384,14 @@ bool check_method_accessibility(System_Reflection_MethodInfo from_method, System
     }
 
     System_Type from_type = from_method->DeclaringType;
-    bool family = is_same_family(from_type, to->DeclaringType);
-    bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
-
-    // make sure all the arguments are known
-    if (to->GenericArguments != NULL && to->GenericMethodDefinition != NULL) {
-        for (int i = 0; i < to->GenericArguments->Length; i++) {
-            if (!check_type_visibility(from_method, to->GenericArguments->Data[i])) {
-                return false;
-            }
-        }
-    }
-
     System_Type to_type = to->DeclaringType;
-    if (to_type->GenericArguments != NULL && !type_is_generic_definition(to_type)) {
-        for (int i = 0; i < to_type->GenericArguments->Length; i++) {
-            if (!check_type_visibility(from_method, to_type->GenericArguments->Data[i])) {
-                return false;
-            }
-        }
-    }
+    bool family = is_same_family(from_type, to_type);
+    bool assembly = from_type->Assembly == to_type->Assembly;
+
+    // TODO: we need to check on generic methods
+    //          if the callsite has no access to the generic argument AND
+    //          it is not coming as a generic argument from the callsite
+    //          then we should fail
 
     switch (method_get_access(to)) {
         case METHOD_COMPILER_CONTROLLED: ASSERT(!"TODO: METHOD_COMPILER_CONTROLLED"); return false;
@@ -1429,8 +1505,6 @@ bool check_type_visibility(System_Reflection_MethodInfo from_method, System_Type
 
     return true;
 }
-
-static err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type);
 
 static err_t expand_field(System_Type type, System_Reflection_FieldInfo field, System_Type_Array arguments, System_Reflection_FieldInfo* out_instance) {
     err_t err = NO_ERROR;
@@ -1571,7 +1645,7 @@ cleanup:
     return err;
 }
 
-static err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type) {
+err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type) {
     err_t err = NO_ERROR;
 
     if (type == NULL) {
@@ -1692,6 +1766,7 @@ err_t type_expand_interface_impls(System_Type instance, TinyDotNet_Reflection_In
     for (int i = 0; i < instance->InterfaceImpls->Length; i++) {
         TinyDotNet_Reflection_InterfaceImpl impl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
         System_Type interfaceType;
+        impl->VTableOffset = -1;
         CHECK_AND_RETHROW(expand_type(interfaceImpls->Data[i]->InterfaceType, instance->GenericArguments, NULL, &interfaceType));
         GC_UPDATE(impl, InterfaceType, interfaceType);
         GC_UPDATE_ARRAY(instance->InterfaceImpls, i, impl);
@@ -1728,8 +1803,6 @@ err_t type_expand_generic(System_Type instance) {
     System_Type type = instance->GenericTypeDefinition;
     System_Type_Array arguments = instance->GenericArguments;
 
-    CHECK(instance->GenericTypeDefinition->IsSetup);
-
     // base type
     System_Type baseType;
     CHECK_AND_RETHROW(expand_type(type->BaseType, arguments, NULL, &baseType));
@@ -1751,9 +1824,9 @@ err_t type_expand_generic(System_Type instance) {
         GC_UPDATE_ARRAY(instance->Methods, i, method);
 
         // setup the static ctor if needed
-//        if (instance->GenericTypeDefinition->StaticCtor == type->Methods->Data[i]) {
-//            GC_UPDATE(instance, StaticCtor, method);
-//        }
+        if (instance->GenericTypeDefinition->TypeInitializer == type->Methods->Data[i]) {
+            GC_UPDATE(instance, TypeInitializer, method);
+        }
     }
 
     // interfaces
@@ -1765,6 +1838,8 @@ err_t type_expand_generic(System_Type instance) {
     if (type->MethodImpls != NULL) {
         CHECK_AND_RETHROW(type_expand_method_impls(instance, type->MethodImpls));
     }
+
+    instance->IsSetupFinished = true;
 
 cleanup:
     return err;
@@ -1780,6 +1855,30 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     CHECK(type_is_generic_definition(type));
     CHECK(type->GenericArguments->Length == arguments->Length);
 
+    // check for an existing instance
+    System_Type inst = type->NextGenericInstance;
+    bool found = false;
+    while (inst != NULL) {
+        found = true;
+        for (int i = 0; i < arguments->Length; i++) {
+            if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
+                found = false;
+                break;
+            }
+        }
+
+        if (found) {
+            break;
+        }
+
+        inst = inst->NextGenericInstance;
+    }
+
+    if (found) {
+        *out_type = inst;
+        goto cleanup;
+    }
+
     // add it
     bool is_full_instantiation = true;
     for (int i = 0; i < arguments->Length; i++) {
@@ -1789,33 +1888,9 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
         }
     }
 
+    // if this is a full generic instance then check if all the arguments
+    // properly match the constraints on the generic arguments
     if (is_full_instantiation) {
-        // check for an existing instance
-        System_Type inst = type->NextGenericInstance;
-        bool found = false;
-        while (inst != NULL) {
-            found = true;
-            for (int i = 0; i < arguments->Length; i++) {
-                if (arguments->Data[i] != inst->GenericArguments->Data[i]) {
-                    found = false;
-                    break;
-                }
-            }
-
-            if (found) {
-                break;
-            }
-
-            inst = inst->NextGenericInstance;
-        }
-
-        if (found) {
-            *out_type = inst;
-            goto cleanup;
-        }
-
-        // check that the arguments and type arguments don't have any
-        // problem with each other
         for (int i = 0; i < arguments->Length; i++) {
             System_Type arg = type->GenericArguments->Data[i];
             System_Type argType = arguments->Data[arg->GenericParameterPosition];
@@ -1860,12 +1935,6 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     instance->Attributes = type->Attributes;
     instance->GenericParameterPosition = -1;
 
-    // handle the value type memes in here
-    if (type->BaseType == tSystem_ValueType) {
-        instance->IsValueType = true;
-        instance->StackType = STACK_TYPE_VALUE_TYPE;
-    }
-
     // create the unique name
     strbuilder_t builder = strbuilder_new();
     strbuilder_utf16(&builder, type->Name->Chars, type->Name->Length);
@@ -1884,16 +1953,12 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     // then we are not going to actually expand it, if it is all real types then
     // we are going to add it, and only after leaving the lock expand it, so we
     // allow the other person to expand it properly
-    if (!is_full_instantiation) {
-        *out_type = instance;
-        goto cleanup;
-    } else {
-        GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
-        GC_UPDATE(type, NextGenericInstance, instance);
+    GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
+    GC_UPDATE(type, NextGenericInstance, instance);
 
-        locked = false;
-        monitor_exit(type);
-    }
+    // unlock it
+    locked = false;
+    monitor_exit(type);
 
     // only expand if the type is setup properly, otherwise we are going
     // to expand it in a later stage once it is actually initialized

@@ -23,6 +23,8 @@ Right now the main work is on the runtime itself, the main features of the runti
   - Done using generated control flow 
 - Full support for integer and floating point types
 - Full support for array types
+  - Including IEnumerable<T>
+  - Missing ICollection<T>/IList<T> 
 - Full support for struct types
 - Full support for interface types
   - Implemented using Fat-Pointers and implicitly casting as needed
@@ -45,11 +47,14 @@ Note that the runtime is still not stable and even tho the features are implemen
 - Basic types 
   - All built-in types
   - Basic exceptions 
+- String library
+  - Comparisons
+  - Manipulation (StringBuilder)
+  - Searching
 - Basic reflection
   - The base classes are defined, no actual methods or attributes 
-- Basic collections 
-  - Enumerators
-  - Generic List implementation 
+- Almost full collections
+  - Most of the generic collections copied from CoreCLR
 - Mostly implemented threading library
   - Interlocked class (missing some signatures)
   - WaitHandle with WaitEvent, Mutex, Semaphore 
@@ -58,12 +63,11 @@ Note that the runtime is still not stable and even tho the features are implemen
     - no support for timeout
 - Support for Span and ReadOnlySpan
   - Only from array types, as void* is not valid
+  - Does support fields with static data
 
 ### Main missing features
 - Async runtime support (wip)
 - Proper for `ref struct` (check they are only stored in other ref structs or on the stack)
-- Proper collections library 
-- String manipulation
 - Streams core functionality 
 - Controlled-mutability managed pointers
 - Overflow math (will come once MIR supports them)

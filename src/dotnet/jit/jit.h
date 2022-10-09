@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../types.h"
+#include "thread/waitable.h"
 
 #include <util/except.h>
 
@@ -10,10 +11,34 @@
 err_t init_jit();
 
 /**
- * Fully jit a type, and all the types that reference this type
+ * Jit a type assuming it is going to be instantiated
  */
-err_t jit_type(System_Type method);
+err_t jit_type(System_Type type, waitable_t** done);
 
+/**
+ * Jit a method assuming it is going to be called
+ */
+err_t jit_method(System_Reflection_MethodInfo method, waitable_t** done);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Type init API
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void jit_type_init_start();
+
+void jit_type_init_queue(System_Type type);
+
+waitable_t* jit_type_init_commit();
+
+/**
+ * Run type initializers on this thread, this function does not
+ * return
+ */
+void jit_run_type_initializers();
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit API
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct jit_generic_extern_hook {
     bool(*can_gen)(System_Reflection_MethodInfo method);

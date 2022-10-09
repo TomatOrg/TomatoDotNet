@@ -127,7 +127,7 @@ typedef struct metadata_class_layout {
 typedef struct metadata_Field_layout {
     uint32_t offset;
     token_t field;
-} PACKED metadata_Field_layout_t;
+} PACKED metadata_field_layout_t;
 
 #define METADATA_STAND_ALONE_SIG 0x11
 typedef struct metadata_stand_alone_sig {

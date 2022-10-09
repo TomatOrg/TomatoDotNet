@@ -186,8 +186,7 @@ static err_t parse_type(
                 CHECK_AND_RETHROW(parse_type(assembly, sig, &elementType, typeArgs, methodArgs, file, metadata));
             }
 
-            *out_type = tSystem_UIntPtr;
-//            *out_type = get_pointer_type(elementType);
+            *out_type = get_pointer_type(elementType);
         } break;
 
         case ELEMENT_TYPE_STRING: *out_type = tSystem_String; break;
@@ -476,6 +475,7 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
         for (int i = 0; i < generic_param_count; i++) {
             System_Type typeParam = GC_NEW(tSystem_Type);
             GC_UPDATE(typeParam, Name, get_empty_string());
+            typeParam->TypeFilled = true; // consier it as filled
             typeParam->GenericParameterPosition = i;
             GC_UPDATE_ARRAY(generic_params, i, typeParam);
         }
@@ -600,7 +600,11 @@ err_t parse_local_var_sig(blob_entry_t _sig, System_Reflection_MethodInfo method
         }
 
         // handle constraint
-        // TODO:
+        CHECK(sig->size > 0);
+        if (sig->data[0] == ELEMENT_TYPE_PINNED) {
+            NEXT_BYTE;
+            variable->IsPinned = true;
+        }
 
         // actually get the type
         bool is_by_ref = false;
@@ -767,8 +771,13 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
     blob_entry_t* sig = &_sig;
     MIR_val_t fixed_args[ctor->Parameters->Length + 1];
 
-    // make sure the type is jitted nicely
-    CHECK_AND_RETHROW(jit_type(ctor->DeclaringType));
+    // we need to jit to type itself, since we are going to create an instance of it
+    CHECK_AND_RETHROW(jit_type(ctor->DeclaringType, NULL));
+
+    // we also need to jit the actual ctor
+    waitable_t* done = NULL;
+    CHECK_AND_RETHROW(jit_method(ctor, &done));
+    CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
 
     //
     // Prolog
@@ -855,6 +864,11 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
             CHECK(info->PropertyType == arg_type);
             CHECK(info->SetMethod != NULL);
             System_Reflection_MethodInfo setter = info->SetMethod;
+
+            // we need to jit the setter itself
+            done = NULL;
+            CHECK_AND_RETHROW(jit_method(setter, &done));
+            CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
 
             // make sure the method is valid
             CHECK(!method_is_static(setter));

@@ -9,7 +9,7 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
 
     // make sure that all the methods of this type
     // are properly jitted and ready to be called
-    CHECK_AND_RETHROW(jit_type(type));
+    CHECK_AND_RETHROW(jit_type(type, NULL));
 
     // reset
     *created = NULL;
@@ -65,6 +65,11 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
         goto cleanup;
     }
 
+    // jit the ctor itself and wait for the result, this will make sure the previous request is also finished
+    waitable_t* done = NULL;
+    CHECK_AND_RETHROW(jit_method(ctor, &done));
+    CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+
     // check the access
     // TODO: we could in theory do it by the caller of this instead
     if (method_get_access(ctor) != METHOD_PUBLIC) {
@@ -79,7 +84,7 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
     System_Exception exception = NULL;
     if (argsCount == 0) {
         // small optimization for default ctors
-//        exception = ((System_Exception(*)(System_Object))(ctor->MirFunc->addr))(new);
+        exception = ((System_Exception(*)(System_Object))(ctor->MirFunc->addr))(new);
     } else {
         // build the arguments nicely
         MIR_val_t vals[argsCount];

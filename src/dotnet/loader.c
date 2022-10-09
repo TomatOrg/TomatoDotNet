@@ -15,6 +15,7 @@
 #include "thread/scheduler.h"
 #include "dotnet/gc/heap.h"
 #include "mem/mem.h"
+#include "filler.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -337,8 +338,7 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
         type->ClassSize = class_layout->class_size;
 
         // can only have packing size on seq layout
-        if (class_layout->packing_size != 0) {
-            CHECK(layout == TYPE_SEQUENTIAL_LAYOUT, "invalid layout %d", layout);
+        if (layout == TYPE_SEQUENTIAL_LAYOUT) {
             type->PackingSize = class_layout->packing_size;
 
             // make sure it is valid
@@ -357,6 +357,55 @@ static err_t set_class_layout(System_Reflection_Assembly assembly, metadata_t* m
                     CHECK_FAIL();
             }
         }
+    }
+
+cleanup:
+    return err;
+}
+
+static err_t set_field_offsets(System_Reflection_Assembly assembly, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_field_layout_t* field_layouts = metadata->tables[METADATA_FIELD_LAYOUT].table;
+    for (int i = 0; i < metadata->tables[METADATA_FIELD_LAYOUT].rows; i++) {
+        metadata_field_layout_t* field_layout = &field_layouts[i];
+        System_Reflection_FieldInfo field;
+        CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, field_layout->field, NULL, NULL, &field));
+        CHECK(field != NULL);
+
+        // verify it
+        CHECK(type_layout(field->DeclaringType) == TYPE_EXPLICIT_LAYOUT);
+        CHECK(!field_is_static(field));
+
+        // set it
+        field->MemoryOffset = field_layout->offset;
+    }
+
+cleanup:
+    return err;
+}
+
+static err_t set_field_rvas(System_Reflection_Assembly assembly, pe_file_t* file, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_field_rva_t* field_rvas = metadata->tables[METADATA_FIELD_RVA].table;
+    for (int i = 0; i < metadata->tables[METADATA_FIELD_RVA].rows; i++) {
+        metadata_field_rva_t* field_rva = &field_rvas[i];
+        System_Reflection_FieldInfo field;
+        CHECK_AND_RETHROW(assembly_get_field_by_token(assembly, field_rva->field, NULL, NULL, &field));
+        CHECK(field != NULL);
+
+        // fill the stack size
+        CHECK_AND_RETHROW(filler_fill_stack_size(field->FieldType));
+
+        // get the rva data, allocated
+        pe_directory_t directory = {
+            .size = field->FieldType->StackSize,
+            .rva = field_rva->rva
+        };
+        field->Rva = pe_get_rva_data(file, directory);
+        CHECK(field->Rva != NULL);
+        field->HasRva = true;
     }
 
 cleanup:
@@ -472,10 +521,10 @@ err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type)
     System_Reflection_Assembly assembly = type->Assembly;
 
     // entry guard
-    if (type->IsSetup) {
+    if (type->IsSetupStarted) {
         goto cleanup;
     }
-    type->IsSetup = true;
+    type->IsSetupStarted = true;
 
     // get the base type
     System_Type base_type;
@@ -507,11 +556,39 @@ err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type)
             // parse the method info
             CHECK_AND_RETHROW(parse_method_cil(methodInfo, (blob_entry_t){
                 .size = directory.size,
-                .data= rva_base
+                .data = rva_base
             }, file, metadata));
         }
 
         CHECK_AND_RETHROW(parse_method_def_sig(method_def->signature, methodInfo, file, metadata));
+
+        int last_idx = (index + 1) == assembly->DefinedMethods->Length ?
+                             assembly->DefinedParameters->Length :
+                             method_def[1].param_list.index - 1;
+        CHECK(last_idx <= assembly->DefinedParameters->Length);
+
+        int param_count = last_idx - method_def->param_list.index + 1;
+
+        for (int pi = 0; pi < param_count; pi++) {
+            int param_idx = method_def->param_list.index + pi - 1;
+            metadata_param_t* param = metadata_get_param(metadata, param_idx);
+            CHECK(param->sequence >= 0 && param->sequence <= methodInfo->Parameters->Length);
+
+            System_Reflection_ParameterInfo parameterInfo = NULL;
+            if (param->sequence == 0) {
+                // the return type
+                parameterInfo = GC_NEW(tSystem_Reflection_ParameterInfo);
+                parameterInfo->ParameterType = methodInfo->ReturnType;
+                // TODO: store in the method
+            } else {
+                // normal variable
+                int pidx = param->sequence - 1;
+                parameterInfo = methodInfo->Parameters->Data[pidx];
+            }
+            parameterInfo->Attributes = param->flags;
+            parameterInfo->Name = new_string_from_cstr(param->name);
+            GC_UPDATE_ARRAY(assembly->DefinedParameters, param_idx, parameterInfo);
+        }
     }
 
     // now we finished the type setup
@@ -705,6 +782,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         GC_UPDATE(typeParam, Name, new_string_from_utf8(generic_param->name, strlen(generic_param->name)));
         typeParam->GenericParameterPosition = generic_param->number;
         typeParam->GenericTypeAttributes = generic_param->flags;
+        typeParam->TypeFilled = true;
 
         int parami = hmgeti(owner_generic_params, owner);
         if (parami == -1) {
@@ -817,7 +895,8 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         System_Type type = interfaces[i].key;
         GC_UPDATE(type, InterfaceImpls, GC_NEW_ARRAY(tTinyDotNet_Reflection_InterfaceImpl, arrlen(interfaces[i].value)));
         for (int j = 0; j < arrlen(interfaces[i].value); j++) {
-            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = UNSAFE_GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+            TinyDotNet_Reflection_InterfaceImpl interfaceImpl = GC_NEW(tTinyDotNet_Reflection_InterfaceImpl);
+            interfaceImpl->VTableOffset = -1;
             GC_UPDATE(interfaceImpl, InterfaceType, interfaces[i].value[j]);
             GC_UPDATE_ARRAY(type->InterfaceImpls, j, interfaceImpl);
         }
@@ -1015,6 +1094,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
 
     // init class layout
     CHECK_AND_RETHROW(set_class_layout(assembly, metadata));
+    CHECK_AND_RETHROW(set_field_offsets(assembly, metadata));
 
 cleanup:
     for (int i = 0; i < hmlen(interfaces); i++) {
@@ -1037,637 +1117,7 @@ cleanup:
     return err;
 }
 
-err_t loader_fill_method(System_Type type, System_Reflection_MethodInfo method) {
-    err_t err = NO_ERROR;
-
-    // don't initialize twice
-    if (method->IsFilled) {
-        goto cleanup;
-    }
-    method->IsFilled = true;
-
-    // init return type
-    if (method->ReturnType != NULL) {
-        CHECK_AND_RETHROW(loader_fill_type(method->ReturnType));
-    }
-
-    // init all the other parameters
-    for (int i = 1; i < method->Parameters->Length; i++) {
-        System_Reflection_ParameterInfo parameterInfo = method->Parameters->Data[i];
-        CHECK_AND_RETHROW(loader_fill_type(parameterInfo->ParameterType));
-    }
-
-cleanup:
-    return err;
-}
-
-#if 0
-    #define TRACE_FILL_TYPE(...) TRACE(__VA_ARGS__)
-#else
-    #define TRACE_FILL_TYPE(...)
-#endif
-
-static System_Reflection_MethodInfo find_virtually_overridden_method(System_Type type, System_Reflection_MethodInfo method) {
-    while (type != NULL) {
-        // search the method impl table
-        if (type->MethodImpls != NULL) {
-            for (int i = 0; i < type->MethodImpls->Length; i++) {
-                if (type->MethodImpls->Data[i]->Declaration == method) {
-                    return type->MethodImpls->Data[i]->Body;
-                }
-            }
-        }
-
-        // Use normal inheritance (I.8.10.4)
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo info = type->Methods->Data[i];
-
-            // not virtual, continue
-            if (!method_is_virtual(info)) continue;
-
-            // match the name
-            if (!string_equals(info->Name, method->Name)) continue;
-
-            // check the return type
-            if (info->ReturnType != method->ReturnType) continue;
-
-            // Check parameter count matches
-            if (info->Parameters->Length != method->Parameters->Length) continue;
-
-            // check the parameters
-            bool signatureMatch = true;
-            for (int j = 0; j < info->Parameters->Length; j++) {
-                System_Reflection_ParameterInfo paramA = info->Parameters->Data[j];
-                System_Reflection_ParameterInfo paramB = method->Parameters->Data[j];
-                if (paramA->ParameterType != paramB->ParameterType) {
-                    signatureMatch = false;
-                    break;
-                }
-            }
-            if (!signatureMatch) continue;
-
-            // set the offset
-            return info;
-        }
-
-        // get the parent for next iteration
-        type = type->BaseType;
-    }
-
-    // not found
-    return NULL;
-}
-
-/**
- * Checks if a value type without needing to initialize the full type
- */
-static bool unprimed_is_value_type(System_Type type) {
-    while (type != NULL) {
-        if (type == tSystem_ValueType) return true;
-        type = type->BaseType;
-    }
-    return false;
-}
-
-static err_t fill_vtable_for_interface(System_Type root, System_Type interface, int base_offset) {
-    err_t err = NO_ERROR;
-
-    CHECK(type_is_interface(interface));
-    CHECK(base_offset + interface->Methods->Length <= root->VirtualMethods->Length);
-
-    // now go over its interfaces
-    int virtual_offset = 0;
-    if (interface->InterfaceImpls != NULL) {
-        for (int i = 0; i < interface->InterfaceImpls->Length; i++) {
-            TinyDotNet_Reflection_InterfaceImpl impl = interface->InterfaceImpls->Data[i];
-
-            // we are going relative to this vtable, so add our base to the offsets
-            CHECK_AND_RETHROW(fill_vtable_for_interface(root, impl->InterfaceType, base_offset + impl->VTableOffset));
-
-            // count how many interface methods we have to get to our actual offset
-            virtual_offset += impl->InterfaceType->VirtualMethods->Length;
-        }
-    }
-
-    // add the base offset to this, so we start from the base offset
-    base_offset += virtual_offset;
-
-    // fill the vtable for this impl
-    for (int i = 0; i < interface->Methods->Length; i++) {
-        System_Reflection_MethodInfo method = interface->Methods->Data[i];
-        if (!type_is_interface(root)) {
-            method = find_virtually_overridden_method(root, method);
-            CHECK(method != NULL);
-        }
-        GC_UPDATE_ARRAY(root->VirtualMethods, base_offset + i, method);
-    }
-
-cleanup:
-    return err;
-}
-
-err_t loader_fill_type(System_Type type) {
-    err_t err = NO_ERROR;
-    static int depth = 0;
-    TRACE_FILL_TYPE("%*s%U.%U", depth * 4, "", type->Namespace, type->Name);
-    depth++;
-
-    bool locked = 0;
-
-    // the type is already filled, ignore it (fast path)
-    if (type->IsFilled) {
-        goto cleanup;
-    }
-
-    // slow path, fill it
-    CHECK_AND_RETHROW(monitor_enter(type));
-    locked = true;
-
-    // check again just in case
-    if (type->IsFilled) {
-        goto cleanup;
-    }
-
-    // we are going to fill the type now
-    type->IsFilled = true;
-
-    // initialize to an invalid value just in case
-    type->VTableSize = -1;
-
-    // special case, we should not have anything else in here that is
-    // important specifically for ValueType class
-    if (type == tSystem_ValueType) {
-        type->IsValueType = true;
-        type->StackType = STACK_TYPE_VALUE_TYPE;
-    }
-
-    int virtual_count = 0;
-
-    int managedSize = 0;
-    int managedSizePrev = 0;
-    int managedAlignment = 1;
-
-    // first check the parent
-    if (type->BaseType != NULL) {
-        if (type_is_interface(type)) {
-            // interfaces must inherit from System.Object
-            // TODO: is that correct?
-            CHECK(type->BaseType == tSystem_Object);
-        }
-
-        // fill the type information of the parent
-        CHECK_AND_RETHROW(loader_fill_type(type->BaseType));
-
-        // validate that we don't inherit from a sealed type
-        CHECK(!type_is_sealed(type->BaseType));
-
-        // check we have a size
-        if (type->BaseType->IsValueType) {
-            // Can not inherit from value types, except for enum which is allowed
-            CHECK(type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum);
-
-            // we are a value type too
-            type->IsValueType = true;
-            if (type->StackType == STACK_TYPE_O) {
-                type->StackType = STACK_TYPE_VALUE_TYPE;
-            }
-        }
-
-        // now check if it has virtual methods
-        if (type->BaseType->VirtualMethods != NULL) {
-            virtual_count = type->BaseType->VirtualMethods->Length;
-        }
-
-        // get the managed size, only needed for any type which is not the
-        // value type which starts without the actual size of the object class
-        if (type != tSystem_ValueType) {
-            managedSize = type->BaseType->ManagedSize;
-            managedSizePrev = managedSize;
-            managedAlignment = type->BaseType->ManagedAlignment;
-        }
-
-        // copy the managed pointers offsets
-        for (int i = 0; i < arrlen(type->BaseType->ManagedPointersOffsets); i++) {
-            arrpush(type->ManagedPointersOffsets, type->BaseType->ManagedPointersOffsets[i]);
-        }
-    }
-
-    // this is only needed for non-generic types
-    if (!type_is_generic_definition(type) && !type_is_generic_parameter(type)) {
-        // make sure this was primed already
-        CHECK(type->Methods != NULL);
-        CHECK(type->Fields != NULL);
-
-        // first we need to take care of the virtual method table
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
-
-            if (method_is_virtual(methodInfo)) {
-                // we don't support generic virtual methods for now, mostly because it is
-                // a fucking mess in terms of vtables
-                CHECK(methodInfo->GenericArguments == NULL);
-
-                if (method_is_new_slot(methodInfo)) {
-                    // this is a newslot, always allocate a new slot
-                    methodInfo->VTableOffset = -1;
-                } else {
-                    System_Reflection_MethodInfo overridden = find_virtually_overridden_method(type->BaseType, methodInfo);
-                    if (overridden == NULL) {
-                        // not a newslot but we did not find the implementation,
-                        // just allocate a new slot for it instead
-                        methodInfo->VTableOffset = -1;
-                    } else {
-                        // if strict do an accessibility check
-                        if (method_is_strict(overridden)) {
-                            CHECK(check_method_accessibility(methodInfo, overridden));
-                        }
-
-                        // should be a virtual method which can be overridden
-                        CHECK(method_is_virtual(overridden));
-                        CHECK(!method_is_final(overridden));
-                        CHECK(overridden->VTableOffset >= 0);
-                        methodInfo->VTableOffset = overridden->VTableOffset;
-                    }
-                }
-            } else {
-                int index = 0;
-                System_Reflection_MethodInfo otherMethod = NULL;
-                while ((otherMethod = type_iterate_methods(type, methodInfo->Name, &index)) != NULL) {
-                    if (otherMethod == methodInfo) continue;
-                    if (otherMethod->ReturnType != methodInfo->ReturnType) continue;
-                    if (otherMethod->Parameters->Length != methodInfo->Parameters->Length) continue;
-                    bool all_matching = true;
-                    for (int j = 0; j < otherMethod->Parameters->Length; j++) {
-                        if (otherMethod->Parameters->Data[j] != methodInfo->Parameters->Data[j]) {
-                            all_matching = false;
-                            break;
-                        }
-                    }
-                    CHECK(!all_matching);
-                }
-            }
-
-            // for interfaces all methods need to be abstract
-            if (type_is_interface(type)) {
-                CHECK(method_is_abstract(methodInfo));
-            }
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Virtual Method Table initial creation
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        // first figure out everything to do with interface implementations
-        if (type->InterfaceImpls != NULL) {
-            // TODO: validate that we have all the interfaces the parent has
-
-            // go over and expand all the interfaces needed
-            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
-                TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
-                System_Type interface = impl->InterfaceType;
-
-                CHECK_AND_RETHROW(loader_fill_type(interface));
-                CHECK(interface->VirtualMethods != NULL);
-
-                // set the offset of this impl and increment our vtable count
-                impl->VTableOffset = virtual_count;
-                virtual_count += interface->VirtualMethods->Length;
-
-                // not interface, setup the offsets of all the functions that
-                // implement this interface
-                if (!type_is_interface(type)) {
-                    for (int mi = 0; mi < interface->VirtualMethods->Length; mi++) {
-                        System_Reflection_MethodInfo method = interface->VirtualMethods->Data[mi];
-                        System_Reflection_MethodInfo implementation = find_virtually_overridden_method(type, method);
-                        CHECK(implementation != NULL);
-
-                        if (implementation->VTableOffset == -1) {
-                            // this is a newslot method, set its offset, its offset is the base of this
-                            // interface + the offset in the virtual methods table of the offset
-                            implementation->VTableOffset = impl->VTableOffset + mi;
-                        }
-                    }
-                }
-            }
-        }
-
-        // now that we have set all the methods that are part of interfaces, check how many
-        // of these methods are not in interfaces, and set them up to be after all of the interfaces
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo method = type->Methods->Data[i];
-            if (!method_is_virtual(method)) continue;
-            if (method->VTableOffset != -1) continue;
-
-            // set its offset
-            method->VTableOffset = virtual_count++;
-        }
-
-        // now we know the exact amount of virtual methods that we have for this type
-        GC_UPDATE(type, VirtualMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, virtual_count));
-        if (virtual_count != 0) {
-            type->VTable = malloc(sizeof(void*) * virtual_count);
-            CHECK_ERROR(type->VTable != NULL, ERROR_OUT_OF_MEMORY);
-        } else {
-            type->VTable = NULL;
-        }
-
-        // copy the parent's vtable
-        if (type->BaseType != NULL) {
-            for (int i = 0; i < type->BaseType->VirtualMethods->Length; i++) {
-                GC_UPDATE_ARRAY(type->VirtualMethods, i, type->BaseType->VirtualMethods->Data[i]);
-            }
-        }
-
-        // now place all of our methods in the vtable
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo method = type->Methods->Data[i];
-            if (!method_is_virtual(method)) continue;
-            GC_UPDATE_ARRAY(type->VirtualMethods, method->VTableOffset, method);
-        }
-
-        if (type->InterfaceImpls != NULL) {
-            for (int i = 0; i < type->InterfaceImpls->Length; i++) {
-                TinyDotNet_Reflection_InterfaceImpl impl = type->InterfaceImpls->Data[i];
-                CHECK_AND_RETHROW(fill_vtable_for_interface(type, impl->InterfaceType, impl->VTableOffset));
-            }
-        }
-
-        // just in case, make sure all the methods are set properly
-        for (int i = 0; i < type->VirtualMethods->Length; i++) {
-            CHECK(type->VirtualMethods->Data[i] != NULL);
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // process all the non-static fields at this moment, we are going to calculate the size the
-        // same way SysV does it
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        // If its not a value-type and the stack-size is not present, then set it up now.
-        // It needs to be done here as non-static fields in non-value types can point to
-        // the containing type.
-        if (type->StackSize == 0 && !type->IsValueType) {
-            if (type_is_interface(type)) {
-                type->StackSize = sizeof(void*) * 2;
-                type->StackAlignment = alignof(void*);
-            } else {
-                type->StackSize = sizeof(void*);
-                type->StackAlignment = alignof(void*);
-            }
-        }
-
-        // TODO: for auto-layout we can optimize the layout
-        //       to have the best packing possible
-
-        // TODO: handle explicit layout, but check for overlapping
-        //       so no reference type will have overlapping with
-        //       another type
-        CHECK(type_layout(type) != TYPE_EXPLICIT_LAYOUT);
-
-        // the default max alignment is 16
-        uint8_t max_alignment = type->PackingSize ?: 16;
-
-        // for non-static we have two steps, first resolve all the stack sizes, for ref types
-        // we are not going to init ourselves yet
-        for (int i = 0; i < type->Fields->Length; i++) {
-            System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
-            if (field_is_static(fieldInfo)) continue;
-
-            // Fill it
-            if (unprimed_is_value_type(fieldInfo->FieldType)) {
-                CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
-                CHECK(fieldInfo->FieldType->StackSize != 0);
-            } else {
-                if (type_is_interface(fieldInfo->FieldType)) {
-                    fieldInfo->FieldType->StackSize = sizeof(void*) * 2;
-                    fieldInfo->FieldType->StackAlignment = alignof(void*);
-                } else {
-                    fieldInfo->FieldType->StackSize = sizeof(void*);
-                    fieldInfo->FieldType->StackAlignment = alignof(void*);
-                }
-            }
-
-            // only static fields can be literal
-            CHECK(!field_is_literal(fieldInfo));
-
-            // align the size
-            int16_t alignment = MIN(max_alignment, fieldInfo->FieldType->StackAlignment);
-            managedSize = ALIGN_UP(managedSize, alignment);
-            fieldInfo->MemoryOffset = managedSize;
-
-            // now add the size
-            managedSize += fieldInfo->FieldType->StackSize;
-            CHECK(managedSize > managedSizePrev, "Type size overflow! %d -> %d", managedSizePrev, managedSize);
-            managedSizePrev = managedSize;
-
-            // pointer offsets for gc
-            if (!fieldInfo->FieldType->IsValueType) {
-                // this is a normal reference type, just add the offset to us
-                arrpush(type->ManagedPointersOffsets, fieldInfo->MemoryOffset);
-            } else {
-                // for value types we are essentially embedding them in us, so we are
-                // going to just copy all the offsets from them and add their base to
-                // our offsets
-                int* offsets = arraddnptr(type->ManagedPointersOffsets, arrlen(fieldInfo->FieldType->ManagedPointersOffsets));
-                for (int j = 0; j < arrlen(fieldInfo->FieldType->ManagedPointersOffsets); j++, offsets++) {
-                    int offset = fieldInfo->FieldType->ManagedPointersOffsets[j];
-                    *offsets = (int)fieldInfo->MemoryOffset + offset;
-                }
-            }
-
-            // set new type alignment
-            managedAlignment = MAX(managedAlignment, fieldInfo->FieldType->StackAlignment);
-            managedAlignment = MIN(max_alignment, managedAlignment);
-        }
-
-        // lastly align the whole size to the struct alignment
-        managedSize = ALIGN_UP(managedSize, managedAlignment);
-        CHECK(managedSize >= managedSizePrev, "Type size overflow! %d >= %d", managedSize, managedSizePrev);
-
-        if (type->ManagedSize != 0) {
-            // only builtin-types should have this, and it means
-            // they should be sequential layout
-            CHECK(type_layout(type) == TYPE_SEQUENTIAL_LAYOUT);
-
-            // This has a C type equivalent, verify the sizes match
-            CHECK(type->ManagedSize == managedSize && type->ManagedAlignment == managedAlignment,
-                  "Size mismatch for type %U.%U (native: %d bytes (%d), dotnet: %d bytes (%d))",
-                  type->Namespace, type->Name,
-                  type->ManagedSize, type->ManagedAlignment,
-                  managedSize, managedAlignment);
-        }
-
-        // set the correct class size, must not be smaller than
-        // the size we got
-        if (type->ClassSize != 0) {
-            CHECK(type->ClassSize >= managedSize);
-            managedSize = type->ClassSize;
-        }
-
-        type->ManagedSize = managedSize;
-        type->ManagedAlignment = managedAlignment;
-
-        // Sort the stack size, if it was a reference type we already set it, otherwise it
-        // is a struct type
-        if (type->StackSize == 0) {
-            CHECK(type->IsValueType);
-            type->StackSize = type->ManagedSize;
-            type->StackAlignment = type->ManagedAlignment;
-
-            // max size for stack type is 1MB
-            CHECK(type->StackSize <= SIZE_1MB);
-        }
-
-        // now that we initialized the instance size of this, we can go over and initialize
-        // all the fields, both static and non-static
-        for (int i = 0; i < type->Fields->Length; i++) {
-            System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
-            if (field_is_static(fieldInfo)) continue;
-
-            // Fill it
-            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Handle static fields
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        // now that all the non-static fields are initialized we can have all our globals initialized properly
-        // there is nothing much to do since most of the work is in the jit
-        for (int i = 0; i < type->Fields->Length; i++) {
-            System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
-            if (!field_is_static(fieldInfo)) continue;
-
-            // Fill it
-            CHECK_AND_RETHROW(loader_fill_type(fieldInfo->FieldType));
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Now handle all the methods
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
-
-
-            if (method_is_rt_special_name(methodInfo)) {
-                CHECK(method_is_special_name(methodInfo));
-
-                if (string_equals_cstr(methodInfo->Name, ".cctor")) {
-                    CHECK(method_is_static(methodInfo));
-                    CHECK(methodInfo->Parameters->Length == 0);
-                    CHECK(methodInfo->ReturnType == NULL);
-                    CHECK(type->StaticCtor == NULL);
-                    GC_UPDATE(type, StaticCtor, methodInfo);
-                } else if (string_equals_cstr(methodInfo->Name, ".ctor")) {
-                    CHECK(!method_is_static(methodInfo));
-                    CHECK(methodInfo->ReturnType == NULL);
-                }
-            } else {
-                // finalize is extra special
-                if (string_equals_cstr(methodInfo->Name, "Finalize")) {
-                    // for performance reason we are not going to have every method have a finalizer
-                    // but instead we are going to have it virtually virtual
-                    if (methodInfo->ReturnType == NULL && methodInfo->Parameters->Length == 0) {
-                        CHECK(type->Finalize == NULL);
-                        GC_UPDATE(type, Finalize, methodInfo);
-                    }
-                }
-
-                // the rest should not be marked rtspecialname (we can have specialname
-                // since Properties use it for example)
-                CHECK(!method_is_rt_special_name(methodInfo));
-            }
-        }
-
-        // figure out if a subclass of us has a finalizer
-        if (type->Finalize == NULL) {
-            System_Type base = type->BaseType;
-            while (base != NULL) {
-                if (base->Finalize != NULL) {
-                    GC_UPDATE(type, Finalize, base->Finalize);
-                    break;
-                }
-                base = base->BaseType;
-            }
-        }
-
-        // Now fill all the method defs
-        for (int i = 0; i < type->Methods->Length; i++) {
-            System_Reflection_MethodInfo methodInfo = type->Methods->Data[i];
-            if (methodInfo->GenericArguments != NULL) continue; // no need to fill generic methods
-            CHECK_AND_RETHROW(loader_fill_method(type, methodInfo));
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Setup interface size and such
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        if (type_is_interface(type)) {
-            // make sure we have no fields
-            CHECK(type->Fields->Length == 0);
-
-            // all interfaces have a single managed pointer which
-            // is the instance field, no need to create this per
-            // type so create this once
-            static int* interface_pointers = NULL;
-            if (interface_pointers) {
-                arrsetlen(interface_pointers, 1);
-                interface_pointers[0] = sizeof(void*);
-            }
-
-            // we are going to treat a raw interface type as a
-            // value type that has two pointers in it, for simplicity
-            type->ManagedSize = sizeof(void*);
-            type->ManagedAlignment = alignof(void*);
-            type->ManagedPointersOffsets = interface_pointers;
-        }
-
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Finally check special runtime types
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        if (type_is_enum(type)) {
-            // for enum types we need to get the underlying type
-            for (int i = 0; i < type->Fields->Length; i++) {
-                System_Reflection_FieldInfo field = type->Fields->Data[i];
-                if (!field_is_static(field)) {
-                    // TODO: check specialname/rtspecialname
-                    CHECK(string_equals_cstr(field->Name, "value__"));
-                    CHECK(type_is_integer(field->FieldType));
-                    type->ElementType = field->FieldType;
-                } else {
-                    CHECK(field_is_literal(field));
-                }
-            }
-        }
-    } else {
-        // fill all the instances instead
-        System_Type instance = type->NextGenericInstance;
-        while (instance != NULL) {
-            CHECK_AND_RETHROW(loader_fill_type(instance));
-            instance = instance->NextGenericInstance;
-        }
-    }
-
-    // set the namespace if this is a nested type
-    if (type->DeclaringType != NULL) {
-        System_Type rootType = type->DeclaringType;
-        while (rootType->DeclaringType != NULL) {
-            rootType = rootType->DeclaringType;
-        }
-        GC_UPDATE(type, Namespace, rootType->Namespace);
-    }
-
-cleanup:
-
-    if (locked) {
-        PANIC_ON(monitor_exit(type));
-    }
-
-    depth--;
-    TRACE_FILL_TYPE("%*s%U.%U - %d, %d", depth * 4, "", type->Namespace, type->Name, type->ManagedSize, type->StackSize);
-    return err;
-}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static err_t parse_user_strings(System_Reflection_Assembly assembly, pe_file_t* file) {
     err_t err = NO_ERROR;
@@ -1782,28 +1232,9 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
 
             case METADATA_PARAM: {
                 // find the parameter we need
-                // TODO: maybe just store an array of all parameters
-                System_Reflection_ParameterInfo parameterInfo = NULL;
-                int param_count = 0;
-                int param_index = 0;
-                int param_we_want = attrib->parent.index - 1;
-                for (
-                    int mi = 0;
-                    mi < assembly->DefinedMethods->Length;
-                    param_index += param_count, mi++
-                ) {
-                    param_count = assembly->DefinedMethods->Data[mi]->Parameters->Length;
-                    if (param_index <= param_we_want && param_we_want < param_index + param_count) {
-                        // found it!
-                        int index = param_we_want - param_index;
-                        parameterInfo = assembly->DefinedMethods->Data[mi]->Parameters->Data[index];
-                        break;
-                    }
-                }
-                CHECK(parameterInfo != NULL);
-
-                // add it
-                key = (System_Object)parameterInfo;
+                CHECK(attrib->parent.index <= assembly->DefinedParameters->Length);
+                int index = attrib->parent.index - 1;
+                key = (System_Object)assembly->DefinedParameters->Data[index];
             } break;
 
             case METADATA_GENERIC_PARAM: {
@@ -1822,6 +1253,10 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
                 } else {
                     CHECK_FAIL();
                 }
+            } break;
+
+            case METADATA_INTERFACE_IMPL: {
+                WARN("TODO: interface impl custom attribute");
             } break;
 
             default:
@@ -1976,12 +1411,15 @@ static type_init_t m_type_init[] = {
     VALUE_TYPE_INIT("System", "Span`1", System_Span, STACK_TYPE_VALUE_TYPE),
     VALUE_TYPE_INIT("System", "Nullable`1", System_Nullable, STACK_TYPE_VALUE_TYPE),
 
+    TYPE_INIT("", "GenericArray`1", System_GenericArray),
+
     TYPE_LOOKUP("System", "Void", tSystem_Void),
     TYPE_LOOKUP("System.Runtime.CompilerServices", "Unsafe", tSystem_Runtime_CompilerServices_Unsafe),
     TYPE_LOOKUP("System.Runtime.CompilerServices", "RuntimeHelpers", tSystem_Runtime_CompilerServices_RuntimeHelpers),
     TYPE_LOOKUP("System.Runtime.CompilerServices", "IsVolatile", tSystem_Runtime_CompilerServices_IsVolatile),
     TYPE_LOOKUP("System.Runtime.InteropServices", "InAttribute", tSystem_Runtime_InteropServices_InAttribute),
     TYPE_LOOKUP("System", "ThreadStaticAttribute", tSystem_ThreadStaticAttribute),
+    TYPE_LOOKUP("System", "ReadOnlySpan`1", tSystem_ReadOnlySpan),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
@@ -1992,12 +1430,16 @@ static void init_type(metadata_type_def_t* type_def, System_Type type) {
             strcmp(type_def->type_namespace, bt->namespace) == 0 &&
             strcmp(type_def->type_name, bt->name) == 0
         ) {
-            if (type->StackSize >= 0) {
+            if (bt->stack_size >= 0) {
                 type->ManagedSize = bt->managed_size;
                 type->StackSize = bt->stack_size;
                 type->ManagedAlignment = bt->managed_alignment;
                 type->StackAlignment = bt->stack_alignment;
                 type->StackType = bt->stack_type;
+                type->IsValueType = bt->stack_type != STACK_TYPE_O;
+                type->StackSizeFilled = true;
+                ASSERT(type->StackAlignment != 0);
+                ASSERT(type->ManagedAlignment != 0);
             }
             *bt->global = type;
             break;
@@ -2061,44 +1503,41 @@ static int calc_object_size(uintptr_t obj) {
     return 2 << (3 + poolidx);
 }
 
-static void assign_array_types_vtables(System_Object object) {
+static void setup_all_arrays(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
     if (OBJECT_TYPE(object) == tSystem_Type) {
         System_Type type = (System_Type)object;
 
-        if (type->VTable == NULL) {
-            if (!type->IsArray) {
-                // if this is not an array, and the VirtualMethods is empty, then we don't care,
-                // since some types can actually have no virtual methods :shrug:
-                if (type->VirtualMethods == NULL || type->VirtualMethods->Length == 0)
-                    return;
+        // only care about arrays
+        if (!type->IsArray)
+            return;
 
-                ASSERT(!"Type with no VTable found");
-            }
-
-            ASSERT(type->IsArray);
-            GC_UPDATE(type, VirtualMethods, tSystem_Array->VirtualMethods);
-            type->VTableSize = tSystem_Array->VTableSize;
-            type->VTable = tSystem_Array->VTable;
-        }
+        // finish the setup
+        setup_generic_array(type);
     } else if (object->type == 0) {
         ASSERT(object->type != 0);
     }
 }
 
-static void fix_array_vtables(System_Object object) {
+static void fill_all_types(System_Object object) {
+    if (object->color == COLOR_BLUE) return;
+    PANIC_ON(filler_fill_type(OBJECT_TYPE(object)));
+}
+
+static void fix_all_vtables(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
     if (object->vtable == NULL) {
         object->vtable = OBJECT_TYPE(object)->VTable;
         if (object->vtable == NULL) {
+            TRACE("VTable was still null after fixups: %U", OBJECT_TYPE(object)->Name);
             ASSERT(object->vtable != NULL);
         }
     }
 }
 
-err_t loader_load_corelib(void* buffer, size_t buffer_size) {
+static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
     metadata_t metadata = { 0 };
 
@@ -2125,6 +1564,7 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
 
     int method_count = metadata.tables[METADATA_METHOD_DEF].rows;
     int field_count = metadata.tables[METADATA_FIELD].rows;
+    int param_count = metadata.tables[METADATA_PARAM].rows;
 
     // do first time allocation and init
     assembly->DefinedTypes = gc_new(NULL, sizeof(struct System_Array) + types_count * sizeof(System_Type));
@@ -2136,6 +1576,11 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
         init_type(type_def, assembly->DefinedTypes->Data[i]);
     }
 
+    // special case for value type, break the chain from object
+    tSystem_ValueType->ManagedSize = tSystem_ValueType->StackSize;
+    tSystem_ValueType->ManagedAlignment = tSystem_ValueType->StackAlignment;
+    tSystem_ValueType->ManagedSizeFilled = true;
+
     // validate we got all the base types we need for a proper runtime
     CHECK_AND_RETHROW(validate_have_init_types());
 
@@ -2146,19 +1591,13 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     assembly->DefinedMethods->Length = method_count;
     assembly->DefinedFields = gc_new(NULL, sizeof(struct System_Array) + field_count * sizeof(System_Reflection_FieldInfo));
     assembly->DefinedFields->Length = field_count;
-
+    assembly->DefinedParameters = gc_new(NULL, sizeof(struct System_Array) + param_count * sizeof(System_Reflection_ParameterInfo));
+    assembly->DefinedParameters->Length = param_count;
     // we need the nested types before we finish up the setup type info
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
 
     // do first time type init
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
-
-    // initialize all the runtime required types
-    for (int i = 0; i < ARRAY_LEN(m_type_init); i++) {
-        type_init_t* bt = &m_type_init[i];
-        System_Type type = *bt->global;
-        CHECK_AND_RETHROW(loader_fill_type(type));
-    }
 
     //
     // now set all the page tables, because we are missing them at
@@ -2170,20 +1609,26 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     RESET_TYPE(assembly->DefinedTypes, get_array_type(tSystem_Type));
     RESET_TYPE(assembly->DefinedMethods, get_array_type(tSystem_Reflection_MethodInfo));
     RESET_TYPE(assembly->DefinedFields, get_array_type(tSystem_Reflection_FieldInfo));
+    RESET_TYPE(assembly->DefinedParameters, get_array_type(tSystem_Reflection_ParameterInfo));
     for (int i = 0; i < types_count; i++) {
         System_Type type = assembly->DefinedTypes->Data[i];
         RESET_TYPE(type, tSystem_Type);
-        type->vtable = tSystem_Type->VTable;
     }
 
-    // we have a little meme where array vtables are actually created quite late in the process
-    // so we need to make sure and fix any array that was created with a NULL vtable at this point,
-    // this is made in two passes, first make sure every array type has a vtable, and the next is
-    // that every array actually has a vtable assigned to it
-    heap_iterate_objects(assign_array_types_vtables);
-    heap_iterate_objects(fix_array_vtables);
+    // before we can enable the generic array creation we need to do it manually for all the arrays
+    // otherwise we can get a problem with nested array creation
+    heap_iterate_objects(setup_all_arrays);
+
+    // now enable generic array creation
+    enable_generic_arrays();
+
+    // and now we can properly fill all the types that were created and we can
+    // fix all the vtables of these types
+    heap_iterate_objects(fill_all_types);
+    heap_iterate_objects(fix_all_vtables);
 
     // get the user strings for the runtime
+    CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
@@ -2202,6 +1647,36 @@ cleanup:
               (microtime() - start) / 1000);
     }
 
+    return err;
+}
+
+err_t loader_load_corelib(void* buffer, size_t buffer_size) {
+    err_t err = NO_ERROR;
+
+    // initialize the assembly
+    CHECK_AND_RETHROW(loader_load_corelib_assembly(buffer, buffer_size));
+
+    // all of these can be created implicitly by the jit, so just jit them right now
+    // instead of later
+    waitable_t* done = NULL;
+    CHECK_AND_RETHROW(jit_type(tSystem_String, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Boolean, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Char, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_SByte, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Byte, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int16, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt16, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int32, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt32, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Int64, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UInt64, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Single, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_Double, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_IntPtr, NULL));
+    CHECK_AND_RETHROW(jit_type(tSystem_UIntPtr, &done));
+    CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+
+cleanup:
     return err;
 }
 
@@ -2231,6 +1706,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     int types_count = metadata.tables[METADATA_TYPE_DEF].rows;
     int method_count = metadata.tables[METADATA_METHOD_DEF].rows;
     int field_count = metadata.tables[METADATA_FIELD].rows;
+    int param_count = metadata.tables[METADATA_PARAM].rows;
 
     // create all the types
     GC_UPDATE(assembly, DefinedTypes, GC_NEW_ARRAY(tSystem_Type, types_count));
@@ -2243,6 +1719,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // create all the methods and fields
     GC_UPDATE(assembly, DefinedMethods, GC_NEW_ARRAY(tSystem_Reflection_MethodInfo, method_count));
     GC_UPDATE(assembly, DefinedFields, GC_NEW_ARRAY(tSystem_Reflection_FieldInfo, field_count));
+    GC_UPDATE(assembly, DefinedParameters, GC_NEW_ARRAY(tSystem_Reflection_ParameterInfo, param_count));
 
     // we need the nested types before we finish up the setup type info
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));
@@ -2251,6 +1728,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     CHECK_AND_RETHROW(setup_type_info(&file, &metadata, assembly));
 
     // get the user strings for the runtime
+    CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 

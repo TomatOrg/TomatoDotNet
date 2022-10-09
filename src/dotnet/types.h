@@ -136,6 +136,10 @@ typedef struct System_Array {
     int Length;
 } *System_Array;
 
+typedef struct System_GenericArray {
+   struct System_Array;
+} *System_GenericArray;
+
 #define DEFINE_ARRAY(type) \
     typedef struct type##_Array { \
         struct System_Array; \
@@ -207,14 +211,18 @@ struct System_Reflection_FieldInfo {
     System_Type FieldType;
     union {
         // for instance fields
-        uintptr_t MemoryOffset;
+        int MemoryOffset;
 
         // for static fields
         MIR_item_t MirField;
 
         // for thread statics
         uintptr_t ThreadStaticIndex;
+
+        // for fields with static data
+        void* Rva;
     };
+    bool HasRva;
     uint16_t Attributes;
 };
 
@@ -258,6 +266,7 @@ static inline bool parameter_has_field_marshal(System_Reflection_ParameterInfo p
 
 typedef struct System_Reflection_LocalVariableInfo {
     struct System_Object;
+    bool IsPinned;
     int LocalIndex;
     System_Type LocalType;
 } *System_Reflection_LocalVariableInfo;
@@ -383,6 +392,12 @@ void method_print_name(System_Reflection_MethodInfo method, strbuilder_t* builde
  */
 void method_print_full_name(System_Reflection_MethodInfo method, strbuilder_t* builder);
 
+/**
+ * Checks that the given method signature (as a MethodInfo) is the same as the method, this includes
+ * name checking and parameter checking
+ */
+bool method_compare_name_and_sig(System_Reflection_MethodInfo method, System_Reflection_MethodInfo signature);
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct System_Reflection_PropertyInfo {
@@ -483,6 +498,7 @@ struct System_Reflection_Assembly {
     System_Reflection_MethodInfo_Array DefinedMethods;
     System_Reflection_FieldInfo_Array DefinedFields;
     System_Reflection_PropertyInfo_Array DefinedProperties;
+    System_Reflection_ParameterInfo_Array DefinedParameters;
     System_Byte_Array_Array DefinedTypeSpecs;
     TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
     TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;
@@ -594,9 +610,6 @@ struct System_Type {
 
     // internal stuff related to offsets, vtables and so on
     int* ManagedPointersOffsets;
-    bool IsSetup;
-    bool IsSetupFinished;
-    bool IsFilled;
     bool IsValueType;
     System_Reflection_MethodInfo Finalize;
     int ManagedSize;
@@ -604,11 +617,62 @@ struct System_Type {
     int StackSize;
     int StackAlignment;
     stack_type_t StackType;
-    System_Reflection_MethodInfo StaticCtor;
+    System_Reflection_MethodInfo TypeInitializer;
+
+    // - IsValueType
+    // - StackType -- TODO: enums too?
+    // - StackSize
+    // - StackAlignment
+    // - BaseType has their size filled
+    uint32_t StackSizeFilled : 1;
+
+    // - ManagedSize
+    // - ManagedAlignment
+    // - Reference field types have been queued
+    // - Value fields have their size filled
+    // - Static fields have been queued
+    // - ManagedPointerOffsets
+    // - Fields have their stack size filled
+    // - Fields are queued
+    uint32_t ManagedSizeFilled : 1;
+
+    // All virtual methods have been resolved
+    // - Finalize
+    // - StaticCctor
+    // - Methods have been queued
+    // - BaseType has their Virtual Methods filled and queued
+    // - InterfaceImpls VirtualMethods have been processed and their methods queued
+    // - VirtualMethods
+    // - VTable
+    uint32_t MethodsFilled : 1;
+
+    // to detect invalid type recursion
+    uint32_t StackSizeBeingFilled : 1;
+    uint32_t ManagedSizeBeingFilled : 1;
+    uint32_t MethodsBeingFilled : 1;
+
+    // - the type has been queued for full filling
+    uint32_t TypeQueued : 1;
+
+    // - the type is fully filled
+    uint32_t TypeFilled : 1;
+
+    // to mark our phase in setup, important for generic
+    // instantiation
+    uint32_t IsSetupStarted : 1;
+    uint32_t IsSetupFinished : 1;
+
+    // did we jit the virtual methods yet
+    uint32_t JittedVirtualMethods : 1;
+
+    // did we run the type initializer yet
+    uint32_t RanTypeInitializer : 1;
+
+    // did we queue the type initializer yet
+    uint32_t TypeInitializerQueued : 1;
 
     System_Reflection_MethodInfo_Array VirtualMethods;
     void** VTable;
-    int VTableSize;
 
     TinyDotNet_Reflection_InterfaceImpl_Array InterfaceImpls;
     TinyDotNet_Reflection_MethodImpl_Array MethodImpls;
@@ -675,6 +739,18 @@ const char* type_visibility_str(type_visibility_t visibility);
 System_Type get_array_type(System_Type type);
 
 /**
+ * Called once bootstrapping is complete to allow creating
+ * the the generic interfaces implementations for the array
+ * type
+ */
+void enable_generic_arrays();
+
+/**
+ * Setup the generic array for the given type
+ */
+void setup_generic_array(System_Type type);
+
+/**
  * Get the by-ref type for the given type
  *
  * @param type  [IN] The type
@@ -702,6 +778,11 @@ void type_print_full_name(System_Type Type, strbuilder_t* builder);
  * @param name      [IN] The name
  */
 System_Reflection_FieldInfo type_get_field(System_Type type, System_String name);
+
+/**
+ * Searched for a method that is the same as the signature (including name) in the given type
+ */
+System_Reflection_MethodInfo type_find_method_in_type(System_Type type, System_Reflection_MethodInfo signature);
 
 /**
  * Iterate all the methods of the type with the same name, starting at the given index
@@ -778,7 +859,10 @@ extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
 extern System_Type tSystem_RuntimeTypeHandle;
 extern System_Type tSystem_Nullable;
+extern System_Type tSystem_ReadOnlySpan;
 extern System_Type tSystem_Span;
+
+extern System_Type tSystem_GenericArray;
 
 extern System_Type tTinyDotNet_Reflection_InterfaceImpl;
 extern System_Type tTinyDotNet_Reflection_MemberReference;
@@ -840,3 +924,8 @@ err_t type_expand_method_impls(System_Type type, TinyDotNet_Reflection_MethodImp
  * Make a new generic method with the given generic arguments
  */
 err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments, System_Reflection_MethodInfo* out_method);
+
+/**
+ * Expand the given type as a generic type from the arguments, while ignoring generic arguments from the ignore list
+ */
+err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type);
