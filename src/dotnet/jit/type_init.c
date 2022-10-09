@@ -18,13 +18,13 @@ void jit_type_init_start() {
 }
 
 void jit_type_init_queue(System_Type type) {
-    arrpush(arrlast(m_type_init_reqs).types, type);
+    arrpush(m_type_init_reqs[0].types, type);
 }
 
 waitable_t* jit_type_init_commit() {
     waitable_t* w = create_waitable(1);
 
-    if (arrlen(arrlast(m_type_init_reqs).types) == 0) {
+    if (arrlen(m_type_init_reqs[0].types) == 0) {
         // send it right now, because we have nothing to submit
         waitable_send(w, false);
 
@@ -35,7 +35,7 @@ waitable_t* jit_type_init_commit() {
         mutex_unlock(&m_type_init_lock);
     } else {
         // put a new reference to the request structure
-        arrlast(m_type_init_reqs).waitable = put_waitable(w);
+        m_type_init_reqs[0].waitable = put_waitable(w);
 
         // unlock this mutex, so it can properly start doing the request
         mutex_unlock(&m_type_init_lock);

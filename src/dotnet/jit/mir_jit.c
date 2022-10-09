@@ -30,14 +30,16 @@
  * Can be used to filter which method to trace for nicer output
  */
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
-//    if (!string_equals_cstr(method->DeclaringType->Name, "Dictionary`2"))
-//        return false;
+    if (method->DeclaringType->GenericTypeDefinition == NULL)
+        return false;
+
+    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "Dictionary`2"))
+        return false;
 
     if (!string_equals_cstr(method->Name, "TryInsert"))
         return false;
 
     return true;
-    return false;
 }
 
 /**
@@ -54,12 +56,18 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-#define JIT_TRACE
+//#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-#define JIT_TRACE_MIR
+//#define JIT_TRACE_MIR
+
+/**
+ * Uncomment to print the final MIR function, will not print
+ * the IL code in between
+ */
+//#define JIT_TRACE_FINAL
 
 /**
  * Uncomment if you want debug symbols, note that this forces
@@ -2711,13 +2719,11 @@ cleanup:
 static err_t jit_replace_reg_with_op(MIR_func_t func, MIR_reg_t reg, MIR_op_t op) {
     err_t err = NO_ERROR;
 
-    MIR_insn_t next_insn = NULL;
     for (
         MIR_insn_t insn = DLIST_HEAD (MIR_insn_t, func->insns);
         insn != NULL;
-        insn = next_insn
+        insn = DLIST_NEXT (MIR_insn_t, insn)
     ) {
-        next_insn = DLIST_NEXT (MIR_insn_t, insn);
         for (int i = 0; i < insn->nops; i++) {
             switch (insn->ops[i].mode) {
                 // reg, check if the one we wanna replace and
@@ -4822,6 +4828,11 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             MIR_reg_t old_arg_reg = old_arg_op.u.reg;
                             arg_op = MIR_new_mem_op(mir_ctx, get_mir_type(arg_type), 0, stack_arg_reg, 0, 1);
 
+                            // replace the old register access with the new operand
+                            // NOTE: this must be done before the storage allocation otherwise it will also
+                            //       replace the register for the storage allocation
+                            CHECK_AND_RETHROW(jit_replace_reg_with_op(mir_func->u.func, old_arg_reg, arg_op));
+
                             // move the value to the stack storage
                             MIR_prepend_insn(mir_ctx, mir_func,
                                              MIR_new_insn(mir_ctx, MIR_MOV,
@@ -4833,9 +4844,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                              MIR_new_insn(mir_ctx, MIR_ALLOCA,
                                                           MIR_new_reg_op(mir_ctx, stack_arg_reg),
                                                           MIR_new_int_op(mir_ctx, arg_type->StackSize)));
-
-                            // replace the old register access with the new operand
-                            CHECK_AND_RETHROW(jit_replace_reg_with_op(mir_func->u.func, old_arg_reg, arg_op));
 
                             // set the new op for future uses
                             arguments[arg_index] = arg_op;
@@ -6899,6 +6907,12 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
         TRACE();
     );
 
+#ifdef JIT_TRACE_FINAL
+    if (trace_filter(ctx->method)) {
+        MIR_output_item(mir_ctx, stdout, mir_func);
+    }
+#endif
+
 cleanup:
     if (IS_ERROR(err)) {
         ERROR("At method %s", method->MirFunc->u.func->name);
@@ -7149,11 +7163,11 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
     MIR_load_module(m_mir_context, module);
 
     // set a lazy generation
-//#ifdef JIT_DEBUG_SYMBOLS
-//
-//#else
+#ifdef JIT_DEBUG_SYMBOLS
+    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
+#else
     MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
-//#endif
+#endif
 
     //------------------------------------------------------------------------------------------------------------------
     // now do the post setup
@@ -7174,6 +7188,22 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
             }
             ASSERT(created_type->VTable[vi] != NULL);
         }
+
+#ifdef JIT_DEBUG_SYMBOLS
+        // register all symbols which are not registered already
+        for (int vi = 0; vi < created_type->Methods->Length; vi++) {
+            // if this has an unboxer use the unboxer instead of the actual method
+            System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
+            if (
+                method->MirFunc != NULL &&
+                method->MirFunc->item_type == MIR_func_item &&
+                debug_lookup_symbol((uintptr_t)method->MirFunc->addr) != NULL
+            ) {
+                size_t size = debug_get_code_size(method->MirFunc->addr);
+                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->addr, size);
+            }
+        }
+#endif
     }
 
     // add the gc roots
@@ -7212,6 +7242,22 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
                     CHECK_FAIL();
             }
         }
+
+#ifdef JIT_DEBUG_SYMBOLS
+        // register all symbols which are not registered already
+        for (int vi = 0; vi < created_type->Methods->Length; vi++) {
+            // if this has an unboxer use the unboxer instead of the actual method
+            System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
+            if (
+                    method->MirFunc != NULL &&
+                    method->MirFunc->item_type == MIR_func_item &&
+                    debug_lookup_symbol((uintptr_t)method->MirFunc->addr) != NULL
+                    ) {
+                size_t size = debug_get_code_size(method->MirFunc->addr);
+                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->addr, size);
+            }
+        }
+#endif
     }
 
     // now handle initializers
