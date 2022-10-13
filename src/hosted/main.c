@@ -21,8 +21,8 @@ void load_file(const char* name, void** file, uint64_t* size) {
 }
 
 int main() {
-    load_file("Pentagon/Corelib/bin/Release/net6.0/Corelib.dll", &corelib_file, &corelib_file_size);
-    load_file("Pentagon/Pentagon/bin/Release/net6.0/Pentagon.dll", &kernel_file, &kernel_file_size);
+    load_file("TomatOS/Corelib/bin/Release/net6.0/Corelib.dll", &corelib_file, &corelib_file_size);
+    load_file("TomatOS/TomatOS/bin/Release/net6.0/TomatOS.dll", &kernel_file, &kernel_file_size);
     //init_gc();
     init_jit();
 

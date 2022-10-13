@@ -84,8 +84,8 @@ typedef uintptr_t System_UIntPtr;
 
 // Store only the lower 48 bits of a pointer
 // if this is hosted usermode TDN, the remaning bits will be zero (only without LA57, TODO:)
-// if this is Pentagon, all allocations are in the higher half kernel heap
-#ifdef PENTAGON_HOSTED
+// if this is TomatOS, all allocations are in the higher half kernel heap
+#ifdef TOMATOS_HOSTED
 #define OBJECT_TYPE(obj) ((System_Type)((obj)->type))
 #else
 #define OBJECT_TYPE(obj) ((System_Type)((obj)->type | 0xFFFF000000000000))
