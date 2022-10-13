@@ -5,6 +5,7 @@
 
 #include "../monitor.h"
 #include "../types.h"
+#include "dotnet/loader.h"
 
 #include <sync/conditional.h>
 #include <sync/wait_group.h>
@@ -374,6 +375,7 @@ static void gc_switch_allocation_clear_colors() {
 }
 
 static void gc_mark_global_roots() {
+    // add all the global roots
     spinlock_lock(&m_global_roots_lock);
     for (int i = 0; i < arrlen(m_global_roots); i++) {
         System_Object object = *m_global_roots[i];
@@ -384,7 +386,14 @@ static void gc_mark_global_roots() {
     }
     spinlock_unlock(&m_global_roots_lock);
 
-    // get all the app domains and iterate all their assemblies and stuff
+    // get all the loaded assemblies
+    spinlock_lock(&g_loaded_assemblies_lock);
+    for (int i = 0; i < shlen(g_loaded_assemblies); i++) {
+        if (g_loaded_assemblies[i].value != NULL) {
+            gc_mark_gray((System_Object)g_loaded_assemblies[i].value);
+        }
+    }
+    spinlock_unlock(&g_loaded_assemblies_lock);
 }
 
 static void gc_mark_fields_gray(void* base, System_Type type) {

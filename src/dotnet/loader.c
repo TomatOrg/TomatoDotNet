@@ -22,6 +22,8 @@
 #include <stdlib.h>
 
 System_Reflection_Assembly g_corelib = NULL;
+loaded_assembly_t* g_loaded_assemblies = NULL;
+spinlock_t g_loaded_assemblies_lock = INIT_SPINLOCK();
 
 // TODO: we really need a bunch of constants for the flags for better readability
 
@@ -438,14 +440,21 @@ static err_t loader_load_type_refs(System_Reflection_Assembly assembly, metadata
         metadata_assembly_ref_t* assembly_ref = &assembly_refs[type_ref->resolution_scope.index - 1];
 
         // resolve the assembly
+        spinlock_lock(&g_loaded_assemblies_lock);
+        int loaded_assembly_idx = shgeti(g_loaded_assemblies, assembly_ref->name);
+
         System_Reflection_Assembly refed = NULL;
-        if (string_equals_cstr(g_corelib->Name, assembly_ref->name)) {
-            refed = g_corelib;
+        if (loaded_assembly_idx == -1) {
+            // not found, we need to load it from zero
+            spinlock_unlock(&g_loaded_assemblies_lock);
+            CHECK_FAIL("TODO: load assemblies");
         } else {
-            // TODO: properly load anything which is not loaded
-            CHECK_FAIL();
+            // found, get it
+            refed = g_loaded_assemblies[loaded_assembly_idx].value;
+            CHECK(refed != NULL);
+
+            spinlock_unlock(&g_loaded_assemblies_lock);
         }
-        CHECK(refed != NULL);
 
         // Validate the version we have loaded
         //  - majors:   must match, indicate a breaking change in the API
@@ -1541,6 +1550,11 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
     metadata_t metadata = { 0 };
 
+    // we want this to be an arena string hashmap
+    if (g_loaded_assemblies == NULL) {
+        sh_new_arena(g_loaded_assemblies);
+    }
+
     uint64_t start = microtime();
 
     // Start by loading the PE file for the corelib
@@ -1631,6 +1645,10 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
+
+    // add it to the global assembly registery
+    metadata_assembly_t* module = metadata.tables[METADATA_ASSEMBLY].table;
+    shput(g_loaded_assemblies, module->name, assembly);
 
     // save this
     g_corelib = assembly;
@@ -1736,6 +1754,21 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     System_Reflection_MethodInfo entryPoint = NULL;
     CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
     GC_UPDATE(assembly, EntryPoint, entryPoint);
+
+    // get the module name
+    metadata_assembly_t* module = metadata.tables[METADATA_ASSEMBLY].table;
+
+    // add it
+    spinlock_lock(&g_loaded_assemblies_lock);
+    if (shgeti(g_loaded_assemblies, module->name) == -1) {
+        shput(g_loaded_assemblies, module->name, assembly);
+        spinlock_unlock(&g_loaded_assemblies_lock);
+    } else {
+        spinlock_unlock(&g_loaded_assemblies_lock);
+
+        // assembly with this name already loaded
+        CHECK_FAIL();
+    }
 
     // give out the assembly
     *out_assembly = assembly;

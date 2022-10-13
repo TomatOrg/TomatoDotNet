@@ -4,6 +4,21 @@
 
 #include "util/except.h"
 
+typedef struct loaded_assembl {
+    const char* key;
+    System_Reflection_Assembly value;
+} loaded_assembly_t;
+
+/**
+ * The loaded assemblies
+ */
+extern loaded_assembly_t* g_loaded_assemblies;
+
+/**
+ * The lock of the loader
+ */
+extern spinlock_t g_loaded_assemblies_lock;
+
 /**
  * The dotnet library instance
  */
