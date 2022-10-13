@@ -8,3 +8,6 @@
 	path = lib/mimalloc
 	url = https://github.com/microsoft/mimalloc.git
 	branch = dev
+[submodule "corelib"]
+	path = corelib
+	url = git@github.com:TomatOrg/corelib.git
