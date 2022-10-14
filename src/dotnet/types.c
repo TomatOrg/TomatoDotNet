@@ -706,7 +706,7 @@ bool field_is_thread_static(System_Reflection_FieldInfo field) {
 
 
 
-static bool type_is_integer(System_Type type) {
+bool type_is_integer(System_Type type) {
     return type == tSystem_Byte || type == tSystem_Int16 || type == tSystem_Int32 || type == tSystem_Int64 ||
            type == tSystem_SByte || type == tSystem_UInt16 || type == tSystem_UInt32 || type == tSystem_UInt64 ||
            type == tSystem_UIntPtr || type == tSystem_IntPtr || type == tSystem_Char || type == tSystem_Boolean;

@@ -3416,7 +3416,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t result_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, value_type, &result_reg));
 
-                MIR_insn_code_t code;
+                MIR_insn_code_t code = 0;
                 switch (type_get_stack_type(value_type)) {
                     case STACK_TYPE_INT32: {
                         code = MIR_NEGS;
@@ -3457,7 +3457,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t result_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, value_type, &result_reg));
 
-                MIR_insn_code_t code;
+                MIR_insn_code_t code = 0;
                 switch (type_get_stack_type(value_type)) {
                     case STACK_TYPE_INT32: {
                         code = MIR_XORS;
@@ -5923,8 +5923,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 }
 
                 // handle the `this` argument
-                MIR_reg_t number_reg;
-                MIR_reg_t this_reg;
+                MIR_reg_t number_reg = 0;
+                MIR_reg_t this_reg = 0;
                 System_Type this_type;
                 if (!method_is_static(operand_method)) {
                     if (opcode == CEE_NEWOBJ) {
