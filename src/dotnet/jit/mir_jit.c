@@ -7222,6 +7222,7 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
             System_Reflection_FieldInfo fieldInfo = created_type->Fields->Data[fi];
             if (!field_is_static(fieldInfo)) continue;
             if (field_is_thread_static(fieldInfo)) continue;
+            if (fieldInfo->HasRva) continue;
             if (fieldInfo->MirField->item_type != MIR_bss_item) continue;
 
             switch (type_get_stack_type(fieldInfo->FieldType)) {
