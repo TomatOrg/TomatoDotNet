@@ -217,8 +217,8 @@ static err_t parse_method_cil(System_Reflection_MethodInfo method, blob_entry_t 
                         if (flags & CorILMethod_Sect_FatFormat) {
                             // fat clause
                             method_fat_exception_clause_t* ec = (method_fat_exception_clause_t*)sig.data;
-                            sig.size -= sizeof(method_section_fat_t);
-                            sig.data += sizeof(method_section_fat_t);
+                            sig.size -= sizeof(method_fat_exception_clause_t);
+                            sig.data += sizeof(method_fat_exception_clause_t);
                             if (ec->flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
                                 System_Type type;
                                 CHECK_AND_RETHROW(assembly_get_type_by_token(method->Module->Assembly, ec->class_token,
@@ -1751,8 +1751,13 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // get the entry point
+    // TODO: arguments support
+    // TODO: Task support
     System_Reflection_MethodInfo entryPoint = NULL;
     CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
+    CHECK(entryPoint->Parameters->Length == 0);
+    CHECK(method_is_static(entryPoint));
+    CHECK(entryPoint->ReturnType == NULL || entryPoint->ReturnType == tSystem_Int32);
     GC_UPDATE(assembly, EntryPoint, entryPoint);
 
     // get the module name
