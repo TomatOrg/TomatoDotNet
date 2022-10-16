@@ -3664,8 +3664,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                 // temp for the cast result
                 MIR_reg_t cast_result_reg = new_temp_reg(ctx, tSystem_Boolean);
-
                 MIR_insn_t cast_success = MIR_new_label(mir_ctx);
+
+                // make sure obj is not null
+                CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
 
                 // if this is an interface get the type instance itself
                 if (type_is_interface(obj_type)) {
@@ -3765,6 +3767,67 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_REF:
                         CHECK_FAIL();
                 }
+            } break;
+
+            case CEE_UNBOX: {
+                System_Type obj_type;
+                MIR_reg_t obj_reg;
+                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
+
+                // must be a value type
+                // TODO: this will require a bit more work
+                CHECK(operand_type->IsValueType);
+                CHECK(operand_type->GenericTypeDefinition != tSystem_Nullable);
+
+                CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O);
+
+                // make sure obj is not null
+                CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
+
+                // push it, but now as the new type
+                MIR_reg_t value_type_ptr_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, get_by_ref_type(operand_type), &value_type_ptr_reg));
+
+                // temp for the cast result
+                MIR_reg_t cast_result_reg = new_temp_reg(ctx, tSystem_Boolean);
+                MIR_insn_t cast_success = MIR_new_label(mir_ctx);
+
+                // if this is an interface get the object instance itself
+                if (type_is_interface(obj_type)) {
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, obj_reg),
+                                                 MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*),
+                                                                obj_reg, 0, 1)));
+                }
+
+                // check the instance of properly
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_call_insn(mir_ctx, 5,
+                                                  MIR_new_ref_op(mir_ctx, m_is_instance_proto),
+                                                  MIR_new_ref_op(mir_ctx, m_is_instance_func),
+                                                  MIR_new_reg_op(mir_ctx, cast_result_reg),
+                                                  MIR_new_reg_op(mir_ctx, obj_reg),
+                                                  MIR_new_ref_op(mir_ctx, operand_type->MirType)));
+
+                // check that it was a success
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_BT,
+                                             MIR_new_label_op(mir_ctx, cast_success),
+                                             MIR_new_reg_op(mir_ctx, cast_result_reg)));
+
+                // no, throw an exception
+                CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_InvalidCastException));
+
+                // yes, return the pointer
+                MIR_append_insn(mir_ctx, mir_func, cast_success);
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_ADD,
+                                             MIR_new_reg_op(mir_ctx, value_type_ptr_reg),
+                                             MIR_new_reg_op(mir_ctx, obj_reg),
+                                             MIR_new_int_op(mir_ctx, tSystem_Object->ManagedSize)));
+
+
             } break;
 
             case CEE_BOX: {
