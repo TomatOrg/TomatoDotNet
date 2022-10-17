@@ -36,7 +36,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "Dictionary`2"))
 //        return false;
 
-    if (!string_equals_cstr(method->Name, "get_Log2DeBruijn"))
+    if (!string_equals_cstr(method->Name, "AppendFormatted<float32>"))
         return false;
 
     return true;
@@ -73,7 +73,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
  * Uncomment if you want debug symbols, note that this forces
  * the parallel generator instead of the lazy one!
  */
-//#define JIT_DEBUG_SYMBOLS
+#define JIT_DEBUG_SYMBOLS
 
 #define MIR_append_insn_output(__ctx, __func, ...) \
     do { \
@@ -175,8 +175,10 @@ static int add_thread_local(System_Type type) {
  */
 static void* get_thread_local_ptr(int local_index) {
     // this local was not accessed ever, allocate it
-    if (arrlen(m_thread_locals) <= local_index) {
+    int cur_len = arrlen(m_thread_locals);
+    if (cur_len <= local_index) {
         arrsetlen(m_thread_locals, local_index + 1);
+        memset(m_thread_locals + cur_len, 0, sizeof(void*) * (local_index - cur_len + 1));
     }
 
     void* ptr = m_thread_locals[local_index];
@@ -934,13 +936,14 @@ static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg
     if (ste != NULL) *ste = entry;
 
     // get the reg stack
+    MIR_insn_code_t mov = MIR_MOV;
     stack_keeping_t* stack = NULL;
     MIR_type_t stack_type = get_mir_stack_type(type);
     switch (stack_type) {
         case MIR_T_BLK: ;
         case MIR_T_I64: stack = &ctx->ireg; break;
-        case MIR_T_F: stack = &ctx->freg; break;
-        case MIR_T_D: stack = &ctx->dreg; break;
+        case MIR_T_F: stack = &ctx->freg; mov = MIR_FMOV; break;
+        case MIR_T_D: stack = &ctx->dreg; mov = MIR_DMOV; break;
         default: ASSERT(FALSE);
     }
 
@@ -959,7 +962,7 @@ static err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg
         }
         MIR_reg_t real_reg = new_temp_reg(ctx, type);
         MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_MOV,
+                        MIR_new_insn(mir_ctx, mov,
                                      MIR_new_reg_op(mir_ctx, real_reg),
                                      MIR_new_reg_op(mir_ctx, reg)));
 
@@ -1082,7 +1085,7 @@ MIR_insn_code_t jit_number_cast_inscode(System_Type srctype, System_Type desttyp
  * Code used for anything that loads a primitive value from a field to the stack, mostly
  * handles giving the correct loading opcode
  */
-MIR_insn_code_t jit_number_inscode(System_Type type) {
+MIR_insn_code_t jit_mov_insn_code(System_Type type) {
     MIR_insn_code_t code = MIR_MOV;
     if (type == tSystem_Single) {
         code = MIR_FMOV;
@@ -3768,7 +3771,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_FLOAT: {
                         // store the item in the type
                         MIR_append_insn(mir_ctx, mir_func,
-                                        MIR_new_insn(mir_ctx, jit_number_inscode(operand_type),
+                                        MIR_new_insn(mir_ctx, jit_mov_insn_code(operand_type),
                                                      MIR_new_reg_op(mir_ctx, obj2_reg),
                                                      MIR_new_mem_op(mir_ctx, get_mir_type(operand_type),
                                                                     tSystem_Object->ManagedSize, obj_reg, 0, 1)));
@@ -3917,7 +3920,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_FLOAT: {
                         // store the item in the type
                         MIR_append_insn(mir_ctx, mir_func,
-                                        MIR_new_insn(mir_ctx, jit_number_inscode(operand_type),
+                                        MIR_new_insn(mir_ctx, jit_mov_insn_code(operand_type),
                                                      MIR_new_mem_op(mir_ctx, get_mir_type(operand_type),
                                                                     tSystem_Object->ManagedSize, obj_reg, 0, 1),
                                                      MIR_new_reg_op(mir_ctx, val_reg)));
@@ -4604,7 +4607,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
                     case STACK_TYPE_FLOAT: {
-                        MIR_insn_code_t code = jit_number_inscode(value_type);
+                        MIR_insn_code_t code = jit_mov_insn_code(value_type);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
@@ -4836,7 +4839,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INT64:
                     case STACK_TYPE_INTPTR:
                     case STACK_TYPE_FLOAT: {
-                        MIR_insn_code_t code = jit_number_inscode(arg_stack_type);
+                        MIR_insn_code_t code = jit_mov_insn_code(arg_stack_type);
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
@@ -4929,7 +4932,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // move the value to the stack storage
                             MIR_prepend_insn(mir_ctx, mir_func,
-                                             MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_insn(mir_ctx, jit_mov_insn_code(arg_type),
                                                           arg_op,
                                                           old_arg_op));
 
@@ -4946,7 +4949,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         // already spilled, just move the pointer in the memory reference
                         CHECK(arg_op.mode == MIR_OP_MEM);
                         MIR_append_insn(mir_ctx, mir_func,
-                                        MIR_new_insn(mir_ctx, MIR_MOV,
+                                        MIR_new_insn(mir_ctx, jit_mov_insn_code(arg_type),
                                                      MIR_new_reg_op(mir_ctx, value_reg),
                                                      MIR_new_reg_op(mir_ctx, arg_op.u.mem.base)));
                     } break;
@@ -5121,7 +5124,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case STACK_TYPE_INTPTR:
                     case STACK_TYPE_FLOAT:
                     case STACK_TYPE_REF: {
-                        MIR_insn_code_t code = jit_number_inscode(top_type);
+                        MIR_insn_code_t code = jit_mov_insn_code(top_type);
                         // normal value, copy the two regs
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
@@ -6380,7 +6383,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         type_get_stack_type(operand_method->DeclaringType) != STACK_TYPE_VALUE_TYPE
                     ) {
                         MIR_append_insn(mir_ctx, mir_func,
-                                        MIR_new_insn(mir_ctx, jit_number_inscode(operand_method->DeclaringType),
+                                        MIR_new_insn(mir_ctx, jit_mov_insn_code(operand_method->DeclaringType),
                                                      MIR_new_reg_op(mir_ctx, number_reg),
                                                      MIR_new_mem_op(mir_ctx, get_mir_type(operand_method->DeclaringType), 0, this_reg, 0, 1)));
                     }
@@ -7299,10 +7302,10 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
             if (
                 method->MirFunc != NULL &&
                 method->MirFunc->item_type == MIR_func_item &&
-                debug_lookup_symbol((uintptr_t)method->MirFunc->addr) != NULL
+                debug_lookup_symbol((uintptr_t)method->MirFunc->u.func->machine_code) == NULL
             ) {
-                size_t size = debug_get_code_size(method->MirFunc->addr);
-                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->addr, size);
+                size_t size = debug_get_code_size(method->MirFunc->u.func->machine_code);
+                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->u.func->machine_code, size);
             }
         }
 #endif
@@ -7352,12 +7355,12 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
             // if this has an unboxer use the unboxer instead of the actual method
             System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
             if (
-                    method->MirFunc != NULL &&
-                    method->MirFunc->item_type == MIR_func_item &&
-                    debug_lookup_symbol((uintptr_t)method->MirFunc->addr) != NULL
-                    ) {
-                size_t size = debug_get_code_size(method->MirFunc->addr);
-                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->addr, size);
+                method->MirFunc != NULL &&
+                method->MirFunc->item_type == MIR_func_item &&
+                debug_lookup_symbol((uintptr_t)method->MirFunc->u.func->machine_code) == NULL
+            ) {
+                size_t size = debug_get_code_size(method->MirFunc->u.func->machine_code);
+                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->u.func->machine_code, size);
             }
         }
 #endif
