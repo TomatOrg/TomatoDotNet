@@ -1009,9 +1009,30 @@ static err_t stack_merge(jit_method_context_t* ctx, stack_t* stack, bool allow_c
             U = S;
         } else if (type_is_verifier_assignable_to(S, T)) {
             U = T;
-        }
-        // TODO: closest common subtype of S and T
-        else {
+        } else if (type_get_stack_type(T) == STACK_TYPE_O && type_get_stack_type(S) == STACK_TYPE_O) {
+            // both are ref types, get the closest common subtype, do that by finding two types
+            // in the inheritance tree that are the same, worst case we will reach to object
+            // in the end which is the smallest common subtype
+
+            while (T != NULL) {
+                System_Type SBase = S;
+                while (SBase != NULL) {
+                    if (T == SBase) {
+                        U = T;
+                        break;
+                    }
+                    SBase = SBase->BaseType;
+                }
+
+                if (U != NULL) {
+                    break;
+                }
+
+                T = T->BaseType;
+            }
+
+            CHECK(U != NULL);
+        } else {
             CHECK_FAIL();
         }
 
@@ -3513,6 +3534,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_CONV_I:
             case CEE_CONV_U:
             case CEE_CONV_R_UN:
+            case CEE_CONV_OVF_I:
+            case CEE_CONV_OVF_U:
             case CEE_CONV_OVF_I1_UN:
             case CEE_CONV_OVF_I2_UN:
             case CEE_CONV_OVF_I4_UN:
@@ -3538,6 +3561,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     case CEE_CONV_OVF_U4_UN: case CEE_CONV_U4: result_type = tSystem_Int32; break;
                     case CEE_CONV_OVF_I8_UN: case CEE_CONV_I8:
                     case CEE_CONV_OVF_U8_UN: case CEE_CONV_U8: result_type = tSystem_Int64; break;
+                    case CEE_CONV_OVF_I: case CEE_CONV_OVF_U:
                     case CEE_CONV_OVF_I_UN: case CEE_CONV_I:
                     case CEE_CONV_OVF_U_UN: case CEE_CONV_U: result_type = tSystem_IntPtr; break;
                     case CEE_CONV_R4: result_type = tSystem_Single; break;
@@ -3582,6 +3606,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             case CEE_CONV_U8: code = MIR_MOV; break;
                             case CEE_CONV_I: code = MIR_MOV; break;
                             case CEE_CONV_U: code = MIR_MOV; break;
+                            case CEE_CONV_OVF_I: code = MIR_MOV; break; // no need for overflow checking, same size
+                            case CEE_CONV_OVF_U: code = MIR_MOV; break; // no need for overflow checking, same size
                             case CEE_CONV_R4: code = MIR_I2F; break;
                             case CEE_CONV_R8: code = MIR_I2D; break;
                             case CEE_CONV_R_UN: code = MIR_UI2D; break;
@@ -6478,8 +6504,16 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 System_Type num_elems_type;
                 CHECK_AND_RETHROW(stack_pop(ctx, &num_elems_type, &num_elems_reg, NULL));
 
-                // make sure it has a valid type
-                CHECK(num_elems_type == tSystem_Int32);
+                // only int32 and intptr are allowed
+                if (type_get_stack_type(num_elems_type) == STACK_TYPE_INT32) {
+                    // sign extend to int64
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_EXT32,
+                                                 MIR_new_reg_op(mir_ctx, num_elems_reg),
+                                                 MIR_new_reg_op(mir_ctx, num_elems_reg)));
+                } else {
+                    CHECK(type_get_stack_type(num_elems_type) == STACK_TYPE_INTPTR);
+                }
 
                 // creating a new array type, make sure that it has all the virtual methods
                 // set up correctly

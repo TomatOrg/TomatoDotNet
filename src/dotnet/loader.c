@@ -1670,13 +1670,13 @@ cleanup:
 
 err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     err_t err = NO_ERROR;
+    waitable_t* done = NULL;
 
     // initialize the assembly
     CHECK_AND_RETHROW(loader_load_corelib_assembly(buffer, buffer_size));
 
     // all of these can be created implicitly by the jit, so just jit them right now
     // instead of later
-    waitable_t* done = NULL;
     CHECK_AND_RETHROW(jit_type(tSystem_String, NULL));
     CHECK_AND_RETHROW(jit_type(tSystem_Boolean, NULL));
     CHECK_AND_RETHROW(jit_type(tSystem_Char, NULL));
@@ -1695,6 +1695,10 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
 
 cleanup:
+    if (done != NULL) {
+        release_waitable(done);
+    }
+
     return err;
 }
 

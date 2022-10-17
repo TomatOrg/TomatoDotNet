@@ -104,42 +104,42 @@ static method_result_t System_Threading_Monitor_WaitInternal(System_Object obj) 
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-// System.Threading.WaitHandle
+// Waitable stuff
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t System_Threading_WaitHandle_WaitableSend(waitable_t* waitable, bool block) {
+static method_result_t TinyDotNet_NativeHost_WaitableSend(waitable_t* waitable, bool block) {
     return (method_result_t) { .exception = NULL, .value = waitable_send(waitable, block) };
 }
 
-static method_result_t System_Threading_WaitHandle_WaitableWait(waitable_t* waitable, bool block) {
+static method_result_t TinyDotNet_NativeHost_WaitableWait(waitable_t* waitable, bool block) {
     return (method_result_t) { .exception = NULL, .value = waitable_wait(waitable, block) };
 }
 
-static method_result_t System_Threading_WaitHandle_WaitableSelect2(waitable_t* w1, waitable_t* w2, bool block) {
-    waitable_t* waitables[] = { w1, w2 };
-    return (method_result_t) { .exception = NULL, .value = waitable_select(waitables, 0, 2, block).index };
+static method_result_t TinyDotNet_NativeHost_WaitableSelect(System_Span waitables, int send_count, int wait_count, bool block) {
+    selected_waitable_t waitable = waitable_select((waitable_t**)waitables.Ptr, send_count, wait_count, block);
+    return (method_result_t) { .exception = NULL, .value = ((uint64_t)waitable.index | (((uint64_t)waitable.success) << 32)) };
 }
 
-static method_result_t System_Threading_WaitHandle_CreateWaitable(int count) {
+static method_result_t TinyDotNet_NativeHost_CreateWaitable(int count) {
     return (method_result_t) { .exception = NULL, .value = (uintptr_t) create_waitable(count)};
 }
 
-static method_result_t System_Threading_WaitHandle_WaitableAfter(int64_t timeout) {
+static method_result_t TinyDotNet_NativeHost_WaitableAfter(int64_t timeout) {
     return (method_result_t) { .exception = NULL, .value = (uintptr_t) after(timeout)};
 }
 
-static method_result_t System_Threading_WaitHandle_ReleaseWaitable(waitable_t* w) {
+static method_result_t TinyDotNet_NativeHost_ReleaseWaitable(waitable_t* w) {
     release_waitable(w);
     return (method_result_t) { .exception = NULL, .value = 0 };
 }
 
-static System_Exception System_Threading_WaitHandle_WaitableClose(waitable_t* w) {
+static System_Exception TinyDotNet_NativeHost_WaitableClose(waitable_t* w) {
     waitable_close(w);
     return NULL;
 }
-
-static method_result_t System_Threading_WaitHandle_PutWaitable(waitable_t* w) {
-    return (method_result_t) { .exception = NULL, .value = (uintptr_t)put_waitable(w) };
+static System_Exception TinyDotNet_NativeHost_WaitableOpen(waitable_t* w) {
+    w->closed = 0;
+    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -179,7 +179,7 @@ static method_result_t System_Threading_CreateNativeThread(System_Delegate deleg
     // create the thread, the parameter is the delegate instance, and set
     // the managed thread that is related to this thread
     thread_t* new_thread = create_thread(invoke->MirFunc->addr, delegate, "dotnet/thread");
-    new_thread->tcb->managed_thread = new_thread;
+    new_thread->tcb->managed_thread = thread;
 
     // we need to keep an instance of the thread since
     // the managed code stores it
@@ -574,12 +574,62 @@ System_Exception System_Diagnostic_DebugProvider_WriteInternal(System_String str
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Synchronization stuff
+//----------------------------------------------------------------------------------------------------------------------
+
+System_Exception TinyDotNet_Sync_Mutex_Lock(mutex_t* mutex) {
+    mutex_lock(mutex);
+    return NULL;
+}
+
+System_Exception TinyDotNet_Sync_Mutex_Unlock(mutex_t* mutex) {
+    mutex_unlock(mutex);
+    return NULL;
+}
+
+
+System_Exception TinyDotNet_Sync_Semaphore_Acquire(semaphore_t* semaphore, bool lifo) {
+    semaphore_acquire(semaphore, lifo);
+    return NULL;
+}
+
+System_Exception TinyDotNet_Sync_Semaphore_Release(semaphore_t* semaphore, bool handoff) {
+    semaphore_release(semaphore, handoff);
+    return NULL;
+}
+
+System_Exception TinyDotNet_Sync_Conditional_Wait(conditional_t* conditional, mutex_t* mutex) {
+    conditional_wait(conditional, mutex);
+    return NULL;
+}
+
+System_Exception TinyDotNet_Sync_Conditional_Signal(conditional_t* conditional) {
+    conditional_signal(conditional);
+    return NULL;
+}
+
+System_Exception TinyDotNet_Sync_Conditional_Broadcast(conditional_t* conditional) {
+    conditional_broadcast(conditional);
+    return NULL;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // everything
 //----------------------------------------------------------------------------------------------------------------------
 
 internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Type object::GetType()", object_GetType },
     { "object object::MemberwiseClone()", object_MemberwiseClone, },
+
+    { "[Corelib-v1]TinyDotNet.Sync.Mutex::Lock()", TinyDotNet_Sync_Mutex_Lock, },
+    { "[Corelib-v1]TinyDotNet.Sync.Mutex::Unlock()", TinyDotNet_Sync_Mutex_Unlock, },
+
+    { "[Corelib-v1]TinyDotNet.Sync.Semaphore::Acquire(bool)", TinyDotNet_Sync_Semaphore_Acquire, },
+    { "[Corelib-v1]TinyDotNet.Sync.Semaphore::Release(bool)", TinyDotNet_Sync_Semaphore_Release, },
+
+    { "[Corelib-v1]TinyDotNet.Sync.Conditional::Wait([Corelib-v1]TinyDotNet.Sync.Mutex&)", TinyDotNet_Sync_Conditional_Wait, },
+    { "[Corelib-v1]TinyDotNet.Sync.Conditional::Signal()", TinyDotNet_Sync_Conditional_Signal, },
+    { "[Corelib-v1]TinyDotNet.Sync.Conditional::Broadcast()", TinyDotNet_Sync_Conditional_Broadcast, },
 
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal([Corelib-v1]System.Byte[],bool)", System_Reflection_Assembly_LoadInternal_raw },
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal(string,bool)", System_Reflection_Assembly_LoadInternal_string },
@@ -604,32 +654,32 @@ internal_call_t g_internal_calls[] = {
     { "int64 [Corelib-v1]System.Diagnostics.Stopwatch::GetTscFrequency()", System_Diagnostic_Stopwatch_GetTscFrequency },
     { "int64 [Corelib-v1]System.Diagnostics.Stopwatch::GetTimestamp()", System_Diagnostic_Stopwatch_GetTimestamp },
 
-    { "[Corelib-v1]System.Threading.Thread [Corelib-v1]System.Threading.Thread::get_CurrentThread()", System_Threading_Thread_get_CurrentThread },
-    { "bool [Corelib-v1]System.Threading.Thread::Yield()", System_Threading_Thread_Yield },
-    { "int32 [Corelib-v1]System.Threading.Thread::GetNativeThreadState(uint64)", System_Threading_Thread_GetNativeThreadState },
+    { "[Corelib-v1]System.Threading.Thread [Corelib-v1]System.Threading.Thread::get_CurrentThread()",                                    System_Threading_Thread_get_CurrentThread },
+    { "bool [Corelib-v1]System.Threading.Thread::Yield()",                                                                               System_Threading_Thread_Yield },
+    { "int32 [Corelib-v1]System.Threading.Thread::GetNativeThreadState(uint64)",                                                         System_Threading_Thread_GetNativeThreadState },
     { "uint64 [Corelib-v1]System.Threading.Thread::CreateNativeThread([Corelib-v1]System.Delegate,[Corelib-v1]System.Threading.Thread)", System_Threading_CreateNativeThread },
-    { "[Corelib-v1]System.Threading.Thread::StartNativeThread(uint64,object)", System_Threading_StartNativeThread },
-    { "[Corelib-v1]System.Threading.Thread::ReleaseNativeThread(uint64)", System_Threading_ReleaseNativeThread },
-    { "[Corelib-v1]System.Threading.Thread::SetNativeThreadName(uint64,string)", System_Threading_SetNativeThreadName },
-    { "int32 [Corelib-v1]System.Threading.Thread::GetCurrentProcessorId()", System_Threading_Thread_GetCurrentProcessorId },
+    { "[Corelib-v1]System.Threading.Thread::StartNativeThread(uint64,object)",                   System_Threading_StartNativeThread },
+    { "[Corelib-v1]System.Threading.Thread::ReleaseNativeThread(uint64)",                        System_Threading_ReleaseNativeThread },
+    { "[Corelib-v1]System.Threading.Thread::SetNativeThreadName(uint64,string)",                 System_Threading_SetNativeThreadName },
+    { "int32 [Corelib-v1]System.Threading.Thread::GetCurrentProcessorId()",                      System_Threading_Thread_GetCurrentProcessorId },
 
-    { "bool [Corelib-v1]System.Threading.WaitHandle::WaitableSend(uint64,bool)",             System_Threading_WaitHandle_WaitableSend },
-    { "int32 [Corelib-v1]System.Threading.WaitHandle::WaitableWait(uint64,bool)",             System_Threading_WaitHandle_WaitableWait },
-    { "int32 [Corelib-v1]System.Threading.WaitHandle::WaitableSelect2(uint64,uint64,bool)",   System_Threading_WaitHandle_WaitableSelect2 },
-    { "uint64 [Corelib-v1]System.Threading.WaitHandle::CreateWaitable(int32)",                 System_Threading_WaitHandle_CreateWaitable },
-    { "uint64 [Corelib-v1]System.Threading.WaitHandle::WaitableAfter(int64)",                  System_Threading_WaitHandle_WaitableAfter },
-    { "[Corelib-v1]System.Threading.WaitHandle::ReleaseWaitable(uint64)",               System_Threading_WaitHandle_ReleaseWaitable },
-    { "[Corelib-v1]System.Threading.WaitHandle::WaitableClose(uint64)",                 System_Threading_WaitHandle_WaitableClose },
-    { "uint64 [Corelib-v1]System.Threading.WaitHandle::PutWaitable(uint64)",                   System_Threading_WaitHandle_PutWaitable },
+    { "bool [Corelib-v1]TinyDotNet.NativeHost::WaitableSend(uint64,bool)",                 TinyDotNet_NativeHost_WaitableSend },
+    { "int32 [Corelib-v1]TinyDotNet.NativeHost::WaitableWait(uint64,bool)",                TinyDotNet_NativeHost_WaitableWait },
+    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableSelect([Corelib-v1]System.ReadOnlySpan`1<uint64>,int32,int32,bool)",      TinyDotNet_NativeHost_WaitableSelect },
+    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::CreateWaitable(int32)",                   TinyDotNet_NativeHost_CreateWaitable },
+    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableAfter(int64)",                    TinyDotNet_NativeHost_WaitableAfter },
+    { "[Corelib-v1]TinyDotNet.NativeHost::ReleaseWaitable(uint64)",                        TinyDotNet_NativeHost_ReleaseWaitable },
+    { "[Corelib-v1]TinyDotNet.NativeHost::WaitableClose(uint64)",                          TinyDotNet_NativeHost_WaitableClose },
+    { "[Corelib-v1]TinyDotNet.NativeHost::WaitableOpen(uint64)",                          TinyDotNet_NativeHost_WaitableOpen },
 
-    { "int32 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int32&,int32)", interlocked_add_i32 },
+    { "int32 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int32&,int32)",    interlocked_add_i32 },
     { "uint32 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.UInt32&,uint32)", interlocked_add_u32 },
-    { "int64 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int64&,int64)", interlocked_add_i64 },
+    { "int64 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int64&,int64)",    interlocked_add_i64 },
     { "uint64 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.UInt64&,uint64)", interlocked_add_u64 },
 
-    { "int32 [Corelib-v1]System.Threading.Interlocked::And([Corelib-v1]System.Int32&,int32)", interlocked_and_i32 },
+    { "int32 [Corelib-v1]System.Threading.Interlocked::And([Corelib-v1]System.Int32&,int32)",    interlocked_and_i32 },
     { "uint32 [Corelib-v1]System.Threading.Interlocked::And([Corelib-v1]System.UInt32&,uint32)", interlocked_and_u32 },
-    { "int64 [Corelib-v1]System.Threading.Interlocked::And([Corelib-v1]System.Int64&,int64)", interlocked_and_i64 },
+    { "int64 [Corelib-v1]System.Threading.Interlocked::And([Corelib-v1]System.Int64&,int64)",    interlocked_and_i64 },
     { "uint64 [Corelib-v1]System.Threading.Interlocked::And([Corelib-v1]System.UInt64&,uint64)", interlocked_and_u64 },
 
     { "int32 [Corelib-v1]System.Threading.Interlocked::Decrement([Corelib-v1]System.Int32&)", interlocked_dec_i32 },

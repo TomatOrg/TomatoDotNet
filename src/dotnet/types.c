@@ -1096,6 +1096,15 @@ System_Reflection_FieldInfo type_get_field(System_Type type, System_String name)
     return NULL;
 }
 
+System_Reflection_FieldInfo type_get_field_cstr(System_Type type, const char* name) {
+    for (int i = 0; i < type->Fields->Length; i++) {
+        if (string_equals_cstr(type->Fields->Data[i]->Name, name)) {
+            return type->Fields->Data[i];
+        }
+    }
+    return NULL;
+}
+
 System_Reflection_MethodInfo type_iterate_methods(System_Type type, System_String name, int* index) {
     for (int i = *index; i < type->Methods->Length; i++) {
         if (string_equals(type->Methods->Data[i]->Name, name)) {

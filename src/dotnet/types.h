@@ -773,11 +773,13 @@ void type_print_full_name(System_Type Type, strbuilder_t* builder);
 
 /**
  * Get a field by its name
- *
- * @param type      [IN] The declaring type
- * @param name      [IN] The name
  */
 System_Reflection_FieldInfo type_get_field(System_Type type, System_String name);
+
+/**
+ * Get a field by its name using a c string
+ */
+System_Reflection_FieldInfo type_get_field_cstr(System_Type type, const char* name);
 
 /**
  * Searched for a method that is the same as the signature (including name) in the given type
