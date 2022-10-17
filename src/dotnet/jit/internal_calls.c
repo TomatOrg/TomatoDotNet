@@ -115,8 +115,9 @@ static method_result_t TinyDotNet_NativeHost_WaitableWait(waitable_t* waitable, 
     return (method_result_t) { .exception = NULL, .value = waitable_wait(waitable, block) };
 }
 
-static method_result_t TinyDotNet_NativeHost_WaitableSelect(System_Span waitables, int send_count, int wait_count, bool block) {
-    selected_waitable_t waitable = waitable_select((waitable_t**)waitables.Ptr, send_count, wait_count, block);
+static method_result_t TinyDotNet_NativeHost_WaitableSelect(System_Span* waitables, int send_count, int wait_count, bool block) {
+    ASSERT(send_count + wait_count <= waitables->Length);
+    selected_waitable_t waitable = waitable_select((waitable_t**)waitables->Ptr, send_count, wait_count, block);
     return (method_result_t) { .exception = NULL, .value = ((uint64_t)waitable.index | (((uint64_t)waitable.success) << 32)) };
 }
 
@@ -665,7 +666,7 @@ internal_call_t g_internal_calls[] = {
 
     { "bool [Corelib-v1]TinyDotNet.NativeHost::WaitableSend(uint64,bool)",                 TinyDotNet_NativeHost_WaitableSend },
     { "int32 [Corelib-v1]TinyDotNet.NativeHost::WaitableWait(uint64,bool)",                TinyDotNet_NativeHost_WaitableWait },
-    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableSelect([Corelib-v1]System.ReadOnlySpan`1<uint64>,int32,int32,bool)",      TinyDotNet_NativeHost_WaitableSelect },
+    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableSelect([Corelib-v1]System.Span`1<uint64>&,int32,int32,bool)",      TinyDotNet_NativeHost_WaitableSelect },
     { "uint64 [Corelib-v1]TinyDotNet.NativeHost::CreateWaitable(int32)",                   TinyDotNet_NativeHost_CreateWaitable },
     { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableAfter(int64)",                    TinyDotNet_NativeHost_WaitableAfter },
     { "[Corelib-v1]TinyDotNet.NativeHost::ReleaseWaitable(uint64)",                        TinyDotNet_NativeHost_ReleaseWaitable },
