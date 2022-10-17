@@ -231,23 +231,23 @@ static method_result_t interlocked_and_i64(_Atomic(int64_t)* location1, int64_t 
 static method_result_t interlocked_and_u64(_Atomic(uint64_t)* location1, uint64_t value)    { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }
 
 static method_result_t interlocked_compare_exchange_i32(_Atomic(int32_t)* location1, int32_t value, int32_t comparand) {
-    atomic_compare_exchange_strong(location1, &value, comparand);
-    return (method_result_t) { .value = value, .exception = NULL };
+    atomic_compare_exchange_strong(location1, &comparand, value);
+    return (method_result_t) { .value = comparand, .exception = NULL };
 }
 
 static method_result_t interlocked_compare_exchange_u32(_Atomic(uint32_t)* location1, uint32_t value, uint32_t comparand) {
-    atomic_compare_exchange_strong(location1, &value, comparand);
-    return (method_result_t) { .value = value, .exception = NULL };
+    atomic_compare_exchange_strong(location1, &comparand, value);
+    return (method_result_t) { .value = comparand, .exception = NULL };
 }
 
 static method_result_t interlocked_compare_exchange_i64(_Atomic(int64_t)* location1, int64_t value, int64_t comparand) {
-    atomic_compare_exchange_strong(location1, &value, comparand);
-    return (method_result_t) { .value = value, .exception = NULL };
+    atomic_compare_exchange_strong(location1, &comparand, value);
+    return (method_result_t) { .value = comparand, .exception = NULL };
 }
 
 static method_result_t interlocked_compare_exchange_u64(_Atomic(uint64_t)* location1, uint64_t value, uint64_t comparand) {
-    atomic_compare_exchange_strong(location1, &value, comparand);
-    return (method_result_t) { .value = value, .exception = NULL };
+    atomic_compare_exchange_strong(location1, &comparand, value);
+    return (method_result_t) { .value = comparand, .exception = NULL };
 }
 
 static method_result_t interlocked_compare_exchange_object(_Atomic(System_Object)* location1, System_Object value, System_Object comparand) {
