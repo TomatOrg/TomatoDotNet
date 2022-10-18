@@ -6157,20 +6157,21 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // get the static dispatch, the call later will
                             // actually handle making sure this is correct
-                            CHECK(operand_method->VTableOffset < constrainedType->VirtualMethods->Length,
-                                "method=%U, offset=%d, constrained=%U, count=%d",
-                                operand_method->Name, operand_method->VTableOffset,
-                                constrainedType->Name, constrainedType->VirtualMethods->Length);
 
                             // figure the real method for this dispatch
                             int vtable_offset = operand_method->VTableOffset;
                             if (type_is_interface(operand_method->DeclaringType)) {
+                                CHECK(operand_method->VTableOffset < constrainedType->VirtualMethods->Length);
+
                                 // comes from interface, need to give a static offset
                                 TinyDotNet_Reflection_InterfaceImpl impl = type_get_interface_impl(constrainedType, operand_method->DeclaringType);
                                 CHECK(impl != NULL);
                                 vtable_offset += impl->VTableOffset;
+
                             } else if (type_is_interface(constrainedType)) {
-                                // I think this is the only case
+                                // I think this is the only case, in this case we are trying to call
+                                // one of the base virtual functions (GetHashCode/Equals/ToString) on
+                                // an interface, which does not have these functions inlined
                                 CHECK(operand_method->DeclaringType == tSystem_Object);
 
                                 // we need to essentially cast to an object
