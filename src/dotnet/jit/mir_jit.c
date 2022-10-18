@@ -466,18 +466,11 @@ static void jit_generate_zeromem() {
     MIR_new_export(m_mir_context, fname);
 }
 
-static thread_t* m_type_init_thread = NULL;
-
 err_t init_jit() {
     err_t err = NO_ERROR;
 
     // we want corelib to have access to extern
     jit_add_extern_whitelist("Corelib.dll");
-
-    // start the type initializer
-    m_type_init_thread = create_thread(jit_run_type_initializers, NULL, "jit/type-initializer");
-    CHECK(m_type_init_thread != NULL);
-    scheduler_ready_thread(m_type_init_thread);
 
     m_mir_context = MIR_init();
 
@@ -6164,7 +6157,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // get the static dispatch, the call later will
                             // actually handle making sure this is correct
-                            CHECK(operand_method->VTableOffset < constrainedType->VirtualMethods->Length);
+                            CHECK(operand_method->VTableOffset < constrainedType->VirtualMethods->Length,
+                                "method=%U, offset=%d, constrained=%U, count=%d",
+                                operand_method->Name, operand_method->VTableOffset,
+                                constrainedType->Name, constrainedType->VirtualMethods->Length);
 
                             // figure the real method for this dispatch
                             int vtable_offset = operand_method->VTableOffset;
@@ -7198,27 +7194,30 @@ static mutex_t m_jit_mutex = INIT_MUTEX();
  */
 static int m_mir_module_gen = 0;
 
-static err_t jit_queue_initializer(jit_context_t* ctx, System_Type type) {
+static err_t jit_run_initializer(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
     // don't recurse
-    if (type->TypeInitializerQueued) {
+    if (type->RanTypeInitializer) {
         goto cleanup;
     }
-    type->TypeInitializerQueued = true;
+    type->RanTypeInitializer = true;
 
     // handle dependencies
     int idx = hmgeti(ctx->type_init_dependencies, type);
     if (idx >= 0) {
         System_Type* arr = ctx->type_init_dependencies[idx].value;
         for (int i = 0; i < arrlen(arr); i++) {
-            CHECK_AND_RETHROW(jit_queue_initializer(ctx, arr[i]));
+            CHECK_AND_RETHROW(jit_run_initializer(ctx, arr[i]));
         }
     }
 
     // now we are ready to run our initializer
     if (type->TypeInitializer != NULL) {
-        jit_type_init_queue(type);
+        System_Exception(*cctor)() = type->TypeInitializer->MirFunc->addr;
+        System_Exception exception = cctor();
+        CHECK(exception == NULL, "Type initializer for %U: `%U`",
+              type->Name, exception->Message);
     }
 
 
@@ -7226,7 +7225,7 @@ cleanup:
     return err;
 }
 
-static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** out_w) {
+static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
     err_t err = NO_ERROR;
     jit_method_context_t mctx;
 
@@ -7367,18 +7366,16 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module, waitable_t** o
     }
 
     // now handle initializers
-    jit_type_init_start();
     for (int i = 0; i < arrlen(ctx->static_types); i++) {
         System_Type created_type = ctx->static_types[i];
-        CHECK_AND_RETHROW(jit_queue_initializer(ctx, created_type));
+        CHECK_AND_RETHROW(jit_run_initializer(ctx, created_type));
     }
-    *out_w = jit_type_init_commit();
 
 cleanup:
     return err;
 }
 
-err_t jit_type(System_Type type, waitable_t** done) {
+err_t jit_type(System_Type type) {
     err_t err = NO_ERROR;
 
     jit_context_t ctx = { 0 };
@@ -7397,15 +7394,7 @@ err_t jit_type(System_Type type, waitable_t** done) {
     CHECK_AND_RETHROW(jit_prepare_instance_type(&ctx, type));
 
     // process it
-    waitable_t* w = NULL;
-    CHECK_AND_RETHROW(jit_process(&ctx, module, &w));
-
-    // if NULL don't wait for it
-    if (done == NULL) {
-        release_waitable(w);
-    } else {
-        *done = w;
-    }
+    CHECK_AND_RETHROW(jit_process(&ctx, module));
 
 cleanup:
     MIR_finish(ctx.ctx);
@@ -7421,7 +7410,7 @@ cleanup:
     return err;
 }
 
-err_t jit_method(System_Reflection_MethodInfo method, waitable_t** done) {
+err_t jit_method(System_Reflection_MethodInfo method) {
     err_t err = NO_ERROR;
 
     jit_context_t ctx = { 0 };
@@ -7440,15 +7429,7 @@ err_t jit_method(System_Reflection_MethodInfo method, waitable_t** done) {
     CHECK_AND_RETHROW(jit_prepare_method(&ctx, method));
 
     // process it
-    waitable_t* w = NULL;
-    CHECK_AND_RETHROW(jit_process(&ctx, module, &w));
-
-    // if NULL don't wait for it
-    if (done == NULL) {
-        release_waitable(w);
-    } else {
-        *done = w;
-    }
+    CHECK_AND_RETHROW(jit_process(&ctx, module));
 
 cleanup:
     // clear the context
@@ -7469,13 +7450,30 @@ cleanup:
 // Jitter API
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static thread_t* m_jit_mutex_owner = NULL;
+
+static int m_depth = 0;
+
 MIR_context_t jit_get_mir_context() {
-    mutex_lock(&m_jit_mutex);
+    thread_t* current_thread = get_current_thread();
+    if (m_jit_mutex_owner != current_thread) {
+        // we are not the owner, wait for the lock
+        mutex_lock(&m_jit_mutex);
+        m_jit_mutex_owner = current_thread;
+    }
+
+    // increase the depth
+    m_depth++;
+
     return m_mir_context;
 }
 
 void jit_release_mir_context() {
-    mutex_unlock(&m_jit_mutex);
+    ASSERT(get_current_thread() == m_jit_mutex_owner);
+    if (--m_depth == 0) {
+        m_jit_mutex_owner = NULL;
+        mutex_unlock(&m_jit_mutex);
+    }
 }
 
 void jit_dump_method(System_Reflection_MethodInfo method) {

@@ -301,9 +301,7 @@ static method_result_t System_Reflection_Assembly_LoadInternal_raw(System_Byte_A
         CHECK(assembly->EntryPoint->ReturnType == NULL);
 
         // jit it
-        waitable_t* done = NULL;
-        CHECK_AND_RETHROW(jit_method(assembly->EntryPoint, &done));
-        CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+        CHECK_AND_RETHROW(jit_method(assembly->EntryPoint));
 
         // run it
         exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
@@ -332,9 +330,7 @@ static method_result_t System_Reflection_Assembly_LoadInternal_string(System_Byt
         CHECK(assembly->EntryPoint->ReturnType == NULL);
 
         // jit it
-        waitable_t* done = NULL;
-        CHECK_AND_RETHROW(jit_method(assembly->EntryPoint, &done));
-        CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+        CHECK_AND_RETHROW(jit_method(assembly->EntryPoint));
 
         // run it
         exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();

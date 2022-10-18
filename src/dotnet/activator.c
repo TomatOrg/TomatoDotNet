@@ -9,7 +9,7 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
 
     // make sure that all the methods of this type
     // are properly jitted and ready to be called
-    CHECK_AND_RETHROW(jit_type(type, NULL));
+    CHECK_AND_RETHROW(jit_type(type));
 
     // reset
     *created = NULL;
@@ -66,9 +66,7 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
     }
 
     // jit the ctor itself and wait for the result, this will make sure the previous request is also finished
-    waitable_t* done = NULL;
-    CHECK_AND_RETHROW(jit_method(ctor, &done));
-    CHECK(waitable_wait(done, true) == WAITABLE_SUCCESS);
+    CHECK_AND_RETHROW(jit_method(ctor));
 
     // check the access
     // TODO: we could in theory do it by the caller of this instead

@@ -13,28 +13,12 @@ err_t init_jit();
 /**
  * Jit a type assuming it is going to be instantiated
  */
-err_t jit_type(System_Type type, waitable_t** done);
+err_t jit_type(System_Type type);
 
 /**
  * Jit a method assuming it is going to be called
  */
-err_t jit_method(System_Reflection_MethodInfo method, waitable_t** done);
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Type init API
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void jit_type_init_start();
-
-void jit_type_init_queue(System_Type type);
-
-waitable_t* jit_type_init_commit();
-
-/**
- * Run type initializers on this thread, this function does not
- * return
- */
-void jit_run_type_initializers();
+err_t jit_method(System_Reflection_MethodInfo method);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit API
@@ -56,7 +40,9 @@ void jit_add_generic_extern_hook(jit_generic_extern_hook_t* hook);
 void jit_add_extern_whitelist(const char* assembly);
 
 /**
- * Get the global MIR context, should be used to add externs to the runtime
+ * Get the global MIR context, should be used to add externs to the runtime.
+ *
+ * NOTE: this takes the jit recursive mutex until you release it
  */
 MIR_context_t jit_get_mir_context();
 
