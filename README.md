@@ -44,31 +44,8 @@ Right now the main work is on the runtime itself, the main features of the runti
 Note that the runtime is still not stable and even tho the features are implemented bugs are likely to be found, we try to fix anything we find.
 
 ### Corelib support
-- Basic types 
-  - All built-in types
-  - Basic exceptions 
-- String library
-  - Comparisons
-  - Manipulation (StringBuilder)
-  - Searching
-- Basic reflection
-  - The base classes are defined, no actual methods or attributes 
-- Almost full collections
-  - Most of the generic collections copied from CoreCLR
-- Mostly implemented threading library
-  - Interlocked class (missing some signatures)
-  - WaitHandle with WaitEvent, Mutex, Semaphore 
-  - Thread class
-  - Monitor support
-    - no support for timeout
-- Support for Span and ReadOnlySpan
-  - Only from array types, as void* is not valid
-  - Does support fields with static data
+The corelib is now part of a separate project that can be found [here](git@github.com:TomatOrg/corelib.git).
 
 ### Main missing features
-- Async runtime support (wip)
-- Proper for `ref struct` (check they are only stored in other ref structs or on the stack)
-- Streams core functionality 
-- Controlled-mutability managed pointers
 - Overflow math (will come once MIR supports them)
 - Stack trace (will need some form of JIT support)
