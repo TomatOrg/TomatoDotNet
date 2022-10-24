@@ -584,9 +584,8 @@ System_Exception TinyDotNet_Sync_Mutex_Unlock(mutex_t* mutex) {
     return NULL;
 }
 
-
-System_Exception TinyDotNet_Sync_Semaphore_Acquire(semaphore_t* semaphore, bool lifo) {
-    semaphore_acquire(semaphore, lifo);
+System_Exception TinyDotNet_Sync_Semaphore_Acquire(semaphore_t* semaphore, bool lifo, int64_t timeout) {
+    semaphore_acquire(semaphore, lifo, timeout);
     return NULL;
 }
 
@@ -621,7 +620,7 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]TinyDotNet.Sync.Mutex::Lock()", TinyDotNet_Sync_Mutex_Lock, },
     { "[Corelib-v1]TinyDotNet.Sync.Mutex::Unlock()", TinyDotNet_Sync_Mutex_Unlock, },
 
-    { "[Corelib-v1]TinyDotNet.Sync.Semaphore::Acquire(bool)", TinyDotNet_Sync_Semaphore_Acquire, },
+    { "bool [Corelib-v1]TinyDotNet.Sync.Semaphore::Acquire(bool,int64)", TinyDotNet_Sync_Semaphore_Acquire, },
     { "[Corelib-v1]TinyDotNet.Sync.Semaphore::Release(bool)", TinyDotNet_Sync_Semaphore_Release, },
 
     { "[Corelib-v1]TinyDotNet.Sync.Conditional::Wait([Corelib-v1]TinyDotNet.Sync.Mutex&)", TinyDotNet_Sync_Conditional_Wait, },

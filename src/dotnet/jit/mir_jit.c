@@ -36,7 +36,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "Dictionary`2"))
 //        return false;
 
-    if (!string_equals_cstr(method->Name, "AppendFormatted<float32>"))
+    if (!string_equals_cstr(method->Name, "DispatchWorkItem"))
         return false;
 
     return true;
@@ -73,7 +73,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
  * Uncomment if you want debug symbols, note that this forces
  * the parallel generator instead of the lazy one!
  */
-#define JIT_DEBUG_SYMBOLS
+//#define JIT_DEBUG_SYMBOLS
 
 #define MIR_append_insn_output(__ctx, __func, ...) \
     do { \
