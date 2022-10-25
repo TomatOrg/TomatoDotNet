@@ -371,36 +371,16 @@ static method_result_t System_Activator_InternalCreateInstance(System_Type type,
 // System.Array
 //----------------------------------------------------------------------------------------------------------------------
 
-static System_Exception System_Array_ClearInternal(System_Array array, int index, int length) {
-    System_Type elementType = OBJECT_TYPE(array)->ElementType;
-    int elementSize = elementType->StackSize;
-
-    if (type_get_stack_type(elementType) == STACK_TYPE_O) {
-        // we need a memset with a barrier so we won't
-        // get preempted in the middle, the nice thing
-        // is that the GC does not actually care for not
-        // using a write barrier with a null value
-        scheduler_preempt_disable();
-        memset((void*)((uintptr_t) (array + 1) + index * elementSize), 0, length * elementSize);
-        scheduler_preempt_enable();
-    } else {
-        // we don't need a barrier
-        memset((void*)((uintptr_t) (array + 1) + index * elementSize), 0, length * elementSize);
-    }
-
-    return NULL;
-}
-
-static System_Exception System_Array_CopyInternal(System_Array sourceArray, int64_t sourceIndex, System_Array destinationArray, int64_t destinationIndex, int64_t length) {
+static System_Exception
+do_array_copy(System_Array sourceArray, System_Array destinationArray, int64_t length) {
     System_Type elementType = OBJECT_TYPE(sourceArray)->ElementType;
     int elementSize = elementType->StackSize;
 
-    // TODO: have this check be done in the IL code
     ASSERT(elementType == OBJECT_TYPE(destinationArray)->ElementType);
 
-    void* src_data = (void*)(sourceArray + 1) + sourceIndex * elementSize;
-    void* dst_data = (void*)(destinationArray + 1) + destinationIndex * elementSize;
-    size_t dst_offset = sizeof(struct System_Array) + (destinationIndex) * elementSize;
+    void* src_data = (void*)(sourceArray + 1);
+    void* dst_data = (void*)(destinationArray + 1);
+    size_t dst_offset = sizeof(struct System_Array);
     size_t copy_size = length * elementSize;
 
     if (type_get_stack_type(elementType) == STACK_TYPE_VALUE_TYPE || type_is_interface(elementType)) {
@@ -523,7 +503,7 @@ static method_result_t object_MemberwiseClone(System_Object this) {
     if (type->IsArray) {
         System_Array inArray = (System_Array)this;
         System_Array outArray = GC_NEW_ARRAY(type->ElementType, inArray->Length);
-        System_Array_CopyInternal(inArray, 0, outArray, 0, inArray->Length);
+        do_array_copy(inArray, outArray, inArray->Length);
         newObject = (System_Object)outArray;
     } else if (type == tSystem_String) {
         System_String inStr = (System_String)this;
@@ -631,9 +611,6 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal(string,bool)", System_Reflection_Assembly_LoadInternal_string },
 
     { "object [Corelib-v1]System.Activator::InternalCreateInstance([Corelib-v1]System.Type,[Corelib-v1]System.Object[])", System_Activator_InternalCreateInstance },
-
-    { "[Corelib-v1]System.Array::ClearInternal([Corelib-v1]System.Array,int32,int32)", System_Array_ClearInternal },
-    { "[Corelib-v1]System.Array::CopyInternal([Corelib-v1]System.Array,int64,[Corelib-v1]System.Array,int64,int64)", System_Array_CopyInternal },
 
     { "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)", System_GC_Collect },
     { "[Corelib-v1]System.GC::KeepAlive(object)", System_GC_KeepAlive },
