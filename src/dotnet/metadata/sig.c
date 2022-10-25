@@ -687,7 +687,10 @@ static err_t parse_elem(blob_entry_t* sig, System_Type paramType, MIR_val_t* val
         CHECK_AND_RETHROW(parse_ser_string(sig, (System_String*)&val->a));
 
     } else if (paramType == tSystem_Type) {
-        CHECK_FAIL("TODO: custom attribute type argument");
+        System_String typeName;
+        CHECK_AND_RETHROW(parse_ser_string(sig, &typeName));
+
+        CHECK_FAIL("TODO: custom attribute type argument `%U`", typeName);
 
     } else if (paramType == tSystem_Object) {
         CHECK_FAIL("TODO: custom attribute argument FieldOrPropType");

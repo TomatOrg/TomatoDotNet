@@ -1266,6 +1266,10 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
                 WARN("TODO: interface impl custom attribute");
             } break;
 
+            case METADATA_GENERIC_PARAM_CONSTRAINT: {
+                WARN("TODO: generic param constraint custom attribute");
+            } break;
+
             default:
                 WARN("TODO: attribute on %02x", attrib->parent.table);
         }

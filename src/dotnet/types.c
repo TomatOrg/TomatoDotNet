@@ -108,6 +108,21 @@ bool string_equals(System_String a, System_String b) {
     return true;
 }
 
+bool string_equals_span(System_String a, System_Span b) {
+    if (a->Length != b.Length) {
+        return false;
+    }
+
+    System_Char* chars = (System_Char*) b.Ptr;
+    for (int i = 0; i < a->Length; i++) {
+        if (a->Chars[i] != chars[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 System_String string_append_cstr(System_String old, const char* str) {
     size_t len = strlen(str);
 
@@ -1335,6 +1350,11 @@ void assembly_dump(System_Reflection_Assembly assembly) {
 }
 
 static bool is_same_family(System_Type from, System_Type to) {
+    // TODO: I am not sure this is actually correct x-x
+    if (from->DeclaringType != NULL && is_same_family(from->DeclaringType, to)) {
+        return true;
+    }
+
     while (from != to) {
         if (from == NULL) {
             return false;
@@ -1477,7 +1497,7 @@ bool check_type_visibility(System_Reflection_MethodInfo from_method, System_Type
         return false;
     }
 
-    bool family = is_same_family(from_type, to->DeclaringType);
+    bool family = is_same_family(from_type, to);
     bool assembly = from_type->Assembly == to->DeclaringType->Assembly;
 
     switch (visibility) {

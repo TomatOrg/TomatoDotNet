@@ -161,6 +161,8 @@ typedef struct System_String {
 
 DEFINE_ARRAY(System_String);
 
+bool string_equals_span(System_String a, System_Span b);
+
 bool string_equals_cstr(System_String a, const char* b);
 
 bool string_equals(System_String a, System_String b);

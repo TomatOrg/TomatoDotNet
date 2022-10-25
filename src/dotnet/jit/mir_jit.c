@@ -32,11 +32,11 @@
 UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (method->DeclaringType->GenericTypeDefinition == NULL)
 //        return false;
-//
-//    if (!string_equals_cstr(method->DeclaringType->GenericTypeDefinition->Name, "Dictionary`2"))
-//        return false;
 
-    if (!string_equals_cstr(method->Name, "DispatchWorkItem"))
+    if (!string_equals_cstr(method->DeclaringType->Name, "ValueTask"))
+        return false;
+
+    if (!string_equals_cstr(method->Name, "GetHashCode"))
         return false;
 
     return true;
@@ -2998,7 +2998,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
         if (
             last_cf == OPCODE_CONTROL_FLOW_BRANCH ||
-            last_cf == OPCODE_CONTROL_FLOW_THROW
+            last_cf == OPCODE_CONTROL_FLOW_THROW ||
+            last_cf == OPCODE_CONTROL_FLOW_RETURN
         ) {
             // control changed by a jump or an exception, this stack can not be full, but rather must
             // be empty or be whatever the stack is already set to be at this point
@@ -4325,6 +4326,27 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 CHECK_AND_RETHROW(jit_throw(ctx, obj_type, false));
             } break;
 
+            case CEE_RETHROW: {
+                // only permitted inside a catch handler
+                System_Type catchType = NULL;
+                System_Reflection_ExceptionHandlingClause_Array exceptions = body->ExceptionHandlingClauses;
+                for (int i = 0; i < exceptions->Length; i++) {
+                    System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
+                    if (clause->Flags != COR_ILEXCEPTION_CLAUSE_EXCEPTION) continue;
+                    if (clause->HandlerOffset <= ctx->il_offset && ctx->il_offset < clause->HandlerOffset + clause->HandlerLength) {
+                        catchType = clause->CatchType;
+                        break;
+                    }
+                }
+
+                CHECK(catchType != NULL);
+
+                // we should already have the exception_reg filled
+
+                // emit the rethrow
+                CHECK_AND_RETHROW(jit_throw(ctx, catchType, true));
+            } break;
+
             case CEE_LEAVE:
             case CEE_LEAVE_S: {
                 // resolve the label
@@ -4506,6 +4528,11 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 CHECK(operand_i32 < body->LocalVariables->Length);
                 System_Reflection_LocalVariableInfo variable = body->LocalVariables->Data[operand_i32];
                 System_Type variable_type = type_get_intermediate_type(variable->LocalType);
+
+                // storing a fake boxed object, unwrap it
+                if (value_type != NULL && value_type->IsBoxed && type_is_object_ref(value_type->UnboxedType) && !type_is_interface(value_type->UnboxedType)) {
+                    value_type = value_type->UnboxedType;
+                }
 
                 // check the type is valid
                 if (value_type == tSystem_IntPtr && variable_type->IsByRef) {
@@ -6163,11 +6190,12 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             if (type_is_interface(operand_method->DeclaringType)) {
                                 CHECK(operand_method->VTableOffset < constrainedType->VirtualMethods->Length);
 
-                                // comes from interface, need to give a static offset
-                                TinyDotNet_Reflection_InterfaceImpl impl = type_get_interface_impl(constrainedType, operand_method->DeclaringType);
-                                CHECK(impl != NULL);
-                                vtable_offset += impl->VTableOffset;
-
+                                // comes from interface, need to give a static offset. If the types are the same
+                                // the offset is actually zero, so no nede to check for impl
+                                if (constrainedType != operand_method->DeclaringType) {
+                                    TinyDotNet_Reflection_InterfaceImpl impl = type_get_interface_impl(constrainedType, operand_method->DeclaringType);
+                                    vtable_offset += impl->VTableOffset;
+                                }
                             } else if (type_is_interface(constrainedType)) {
                                 // I think this is the only case, in this case we are trying to call
                                 // one of the base virtual functions (GetHashCode/Equals/ToString) on
@@ -6188,6 +6216,11 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // clear the type
                             constrainedType = NULL;
+                        }
+
+                        // unbox fake unbox
+                        if (this_type->IsBoxed && type_is_object_ref(this_type) && !type_is_interface(this_type)) {
+                            this_type = this_type->UnboxedType;
                         }
 
                         // verify a normal argument
