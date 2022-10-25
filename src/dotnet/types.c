@@ -393,7 +393,7 @@ System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, 
 
 static bool m_enable_generic_arrays = false;
 
-static bool THREAD_LOCAL m_nesting_setup_generic_array;
+static bool THREAD_LOCAL m_nesting_setup_generic_array = false;
 
 void enable_generic_arrays() {
     m_enable_generic_arrays = true;

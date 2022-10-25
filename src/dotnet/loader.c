@@ -1445,6 +1445,7 @@ static void init_type(metadata_type_def_t* type_def, System_Type type) {
                 type->StackType = bt->stack_type;
                 type->IsValueType = bt->stack_type != STACK_TYPE_O;
                 type->StackSizeFilled = true;
+                type->ValueTypeFilled = true;
                 ASSERT(type->StackAlignment != 0);
                 ASSERT(type->ManagedAlignment != 0);
             }

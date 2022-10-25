@@ -74,8 +74,7 @@ static err_t fill_type_stack_size(System_Type type) {
     CHECK(!type->StackSizeBeingFilled);
     type->StackSizeBeingFilled = true;
 
-    // check the value type
-    CHECK_AND_RETHROW(type_is_value_type(type));
+    CHECK_AND_RETHROW(fill_value_type(type));
 
     // first we need the size of the base type
     if (type->BaseType != NULL) {

@@ -2563,7 +2563,7 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
 
     MIR_reg_t value2_reg;
     MIR_reg_t value1_reg;
-    MIR_reg_t result_reg;
+    MIR_reg_t result_reg = 0;
     System_Type value2_type;
     System_Type value1_type;
     CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg, NULL));
