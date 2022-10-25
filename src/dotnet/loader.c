@@ -863,14 +863,12 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
     metadata_method_spec_t* method_spec = metadata->tables[METADATA_METHOD_SPEC].table;
     GC_UPDATE(assembly, DefinedMethodSpecs, GC_NEW_ARRAY(get_array_type(tTinyDotNet_Reflection_MethodSpec), method_spec_count));
     for (int i = 0; i < method_spec_count; i++) {
-        System_Reflection_MethodInfo method = NULL;
         metadata_method_spec_t* spec = &method_spec[i];
         TinyDotNet_Reflection_MethodSpec methodSpec = UNSAFE_GC_NEW(tTinyDotNet_Reflection_MethodSpec);
-        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->method, NULL, NULL, &method));
         System_Byte_Array blob = GC_NEW_ARRAY(tSystem_Byte, spec->instantiation.size);
         memcpy(blob->Data, spec->instantiation.data, spec->instantiation.size);
         GC_UPDATE(methodSpec, Instantiation, blob);
-        GC_UPDATE(methodSpec, Method, method);
+        methodSpec->Method = spec->method;
         GC_UPDATE_ARRAY(assembly->DefinedMethodSpecs, i, methodSpec);
     }
 
@@ -1628,6 +1626,8 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
         System_Type type = assembly->DefinedTypes->Data[i];
         RESET_TYPE(type, tSystem_Type);
     }
+
+//    CHECK_FAIL();
 
     // before we can enable the generic array creation we need to do it manually for all the arrays
     // otherwise we can get a problem with nested array creation

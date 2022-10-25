@@ -276,8 +276,10 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
             // not found, so parse it
             TinyDotNet_Reflection_MethodSpec spec = assembly->DefinedMethodSpecs->Data[token.index - 1];
 
-            // create it
-            *out_method = spec->Method;
+            // get the generic method declaration
+            CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, spec->Method, typeArgs, methodArgs, out_method));
+
+            // create it according to the method spec
             blob_entry_t entry = {
                 .data = spec->Instantiation->Data,
                 .size = spec->Instantiation->Length
@@ -1903,6 +1905,11 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
         for (int i = 0; i < arguments->Length; i++) {
             System_Type arg = type->GenericArguments->Data[i];
             System_Type argType = arguments->Data[arg->GenericParameterPosition];
+
+            // fill the stack size to get the ValueType to be correct
+            if (!argType->ValueTypeFilled) {
+                CHECK_AND_RETHROW(filler_fill_value_type(argType));
+            }
 
             // check that we have a reference type
             if (generic_argument_is_reference_type(arg)) {

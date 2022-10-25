@@ -32,6 +32,37 @@ static err_t fill_type_managed_size(System_Type type);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static err_t fill_value_type(System_Type type) {
+    err_t err = NO_ERROR;
+
+    if (type->ValueTypeFilled) {
+        return NO_ERROR;
+    }
+
+    // make sure no recurssion
+    CHECK(!type->ValueTypeBeingFilled);
+    type->ValueTypeBeingFilled = true;
+
+    if (type->BaseType != NULL) {
+        CHECK_AND_RETHROW(fill_value_type(type->BaseType));
+
+        // copy the value type and stack type
+        type->IsValueType = type->BaseType->IsValueType;
+        type->StackType = type->BaseType->StackType;
+    }
+
+    // we are done
+    type->ValueTypeFilled = true;
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 static err_t fill_type_stack_size(System_Type type) {
     err_t err = NO_ERROR;
 
@@ -43,13 +74,12 @@ static err_t fill_type_stack_size(System_Type type) {
     CHECK(!type->StackSizeBeingFilled);
     type->StackSizeBeingFilled = true;
 
+    // check the value type
+    CHECK_AND_RETHROW(type_is_value_type(type));
+
     // first we need the size of the base type
     if (type->BaseType != NULL) {
         CHECK_AND_RETHROW(fill_type_stack_size(type->BaseType));
-
-        // copy the value type and stack type
-        type->IsValueType = type->BaseType->IsValueType;
-        type->StackType = type->BaseType->StackType;
 
         if (type->IsValueType) {
             ASSERT(!type_is_object_ref(type));
@@ -699,12 +729,36 @@ err_t filler_fill_type(System_Type type) {
         }
 
         // do all initializations now
+        CHECK_AND_RETHROW(fill_value_type(type));
         CHECK_AND_RETHROW(fill_type_stack_size(type));
         CHECK_AND_RETHROW(fill_type_managed_size(type));
         CHECK_AND_RETHROW(fill_methods(type));
 
         // the type is now fully filled up
         type->TypeFilled = true;
+    }
+
+cleanup:
+    mutex_unlock(&m_type_fill_lock);
+    return err;
+}
+
+err_t filler_fill_value_type(System_Type type) {
+    err_t err = NO_ERROR;
+
+    mutex_lock(&m_type_fill_lock);
+
+    CHECK_AND_RETHROW(fill_value_type(type));
+
+    // clear the types that have been queued, and mark them as not queued, as
+    // we don't actually want to initialize any of them yet other than getting
+    // the basic stack type of the specific type
+    while (true) {
+        type = pop_type();
+        if (type == NULL)
+            break;
+
+        type->TypeQueued = false;
     }
 
 cleanup:

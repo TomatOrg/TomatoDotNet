@@ -10,6 +10,12 @@
 err_t filler_fill_type(System_Type type);
 
 /**
+ * Initialize the value type of this type, useful in places where you just want to know
+ * the stack size of the type but don't want to start any other form of initialization
+ */
+err_t filler_fill_value_type(System_Type type);
+
+/**
  * Initialize the stack size of this type, useful in places where you just want to know
  * the stack size of the type but don't want to start any other form of initialization
  */

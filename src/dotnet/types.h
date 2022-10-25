@@ -474,7 +474,7 @@ DEFINE_ARRAY(TinyDotNet_Reflection_MemberReference);
 
 typedef struct TinyDotNet_Reflection_MethodSpec {
     struct System_Object;
-    System_Reflection_MethodInfo Method;
+    token_t Method;
     System_Byte_Array Instantiation;
 } *TinyDotNet_Reflection_MethodSpec;
 DEFINE_ARRAY(TinyDotNet_Reflection_MethodSpec);
@@ -620,6 +620,8 @@ struct System_Type {
     System_Reflection_MethodInfo TypeInitializer;
 
     // - IsValueType
+    uint32_t ValueTypeFilled : 1;
+
     // - StackType -- TODO: enums too?
     // - StackSize
     // - StackAlignment
@@ -647,6 +649,7 @@ struct System_Type {
     uint32_t MethodsFilled : 1;
 
     // to detect invalid type recursion
+    uint32_t ValueTypeBeingFilled : 1;
     uint32_t StackSizeBeingFilled : 1;
     uint32_t ManagedSizeBeingFilled : 1;
     uint32_t MethodsBeingFilled : 1;
@@ -876,7 +879,7 @@ extern System_Type tSystem_ThreadStaticAttribute;
 
 static inline bool type_is_enum(System_Type type) { return type != NULL && !type->IsByRef && type->BaseType == tSystem_Enum; }
 static inline bool type_is_object_ref(System_Type type) { return type == NULL || type_get_stack_type(type) == STACK_TYPE_O; }
-static inline bool type_is_value_type(System_Type type) { return type != NULL && (type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum); }
+static inline bool type_is_value_type(System_Type type) { return type != NULL && type->IsValueType; }
 bool type_is_integer(System_Type type);
 
 System_Type type_get_underlying_type(System_Type T);
