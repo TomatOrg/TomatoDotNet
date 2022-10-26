@@ -36,7 +36,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (!string_equals_cstr(method->DeclaringType->Name, "ValueTask"))
 //        return false;
 
-    if (!string_equals_cstr(method->Name, "MoveNext"))
+    if (!string_equals_cstr(method->Name, "TryGetStateMachineForDebugger"))
         return false;
 
     return true;
@@ -73,7 +73,7 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
  * Uncomment if you want debug symbols, note that this forces
  * the parallel generator instead of the lazy one!
  */
-//#define JIT_DEBUG_SYMBOLS
+#define JIT_DEBUG_SYMBOLS
 
 #define MIR_append_insn_output(__ctx, __func, ...) \
     do { \
@@ -7084,35 +7084,88 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             // Delegate
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_LDFTN:
-            case CEE_LDVIRTFTN:
-            {
+            case CEE_LDVIRTFTN: {
+                // according to the ECMA spec it should always be
+                //
+                //  DUP
+                //  LDVIRTFTN method
+                //  NEWOBJ delegate_ctor
+                //
+                // the reason is that this makes sure that the method and the type we are
+                // creating the delegate on are def the same type
+                //
+                CHECK(last_opcode == CEE_DUP);
 
-                if (opcode == CEE_LDVIRTFTN) {
-                    // according to the ECMA spec it should always be
-                    //
-                    //  DUP
-                    //  LDVIRTFTN method
-                    //  NEWOBJ delegate_ctor
-                    //
-                    // the reason is that this makes sure that the method and the type we are
-                    // creating the delegate on are def the same type
-                    //
-                    CHECK(last_opcode == CEE_DUP);
+                // pop the object
+                MIR_reg_t object_reg;
+                System_Type object_type;
+                CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg, NULL));
 
-                    // pop the object
-                    MIR_reg_t object_reg;
-                    System_Type object_type;
-                    CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg, NULL));
+                // check that the method matches the object
+                CHECK(type_is_verifier_assignable_to(object_type, operand_method->DeclaringType));
 
-                    // check that the method matches the object
-                    CHECK(type_is_verifier_assignable_to(object_type, operand_method->DeclaringType));
+                // resolve it
+                // TODO: does this cover all cases?
+                CHECK(method_is_virtual(operand_method));
+                operand_method = object_type->VirtualMethods->Data[operand_method->VTableOffset];
 
-                    // resolve it
-                    CHECK(method_is_virtual(operand_method));
-                    operand_method = object_type->VirtualMethods->Data[operand_method->VTableOffset];
+                // save the method that we are pushing
+                ftnMethod = operand_method;
+
+                MIR_reg_t ftn_reg;
+                CHECK_AND_RETHROW(stack_push(ctx, tSystem_UIntPtr, &ftn_reg));
+
+                // save the method that we are pushing
+                ftnMethod = operand_method;
+
+                // get the vtable pointer from the object, it is at the first
+                // item for both an interface and an object
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, ftn_reg),
+                                             MIR_new_mem_op(mir_ctx, MIR_T_P, 0, object_reg, 0, 1)));
+
+                // figure offset and the actual method
+                int vtable_index;
+                if (type_is_interface(object_type)) {
+                    // we have an interface on the stack, the vtable is the first element
+                    // and the vtable index is exactly as given in the operand
+                    vtable_index = operand_method->VTableOffset;
+                } else {
+                    if (type_is_interface(operand_method->DeclaringType)) {
+                        // we want to call an interface method on the object, so resolve it and get the
+                        // object inside the object's vtable instead
+                        vtable_index = type_get_interface_method_impl(object_type, operand_method)->VTableOffset;
+                    } else {
+                        // this is a normal virtual method, nothing to resolve
+                        vtable_index = operand_method->VTableOffset;
+                    }
                 }
 
+                ftnMethod = object_type->VirtualMethods->Data[vtable_index];
+
+                if (type_is_sealed(object_type) || method_is_final(operand_method)) {
+                    // this is an instance class which is a sealed class, choose the unboxer form if exists and the
+                    // normal one otherwise
+                    CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, ftnMethod));
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, ftn_reg),
+                                                 MIR_new_ref_op(mir_ctx, ftnMethod->MirUnboxerFunc ?: ftnMethod->MirFunc)));
+
+
+                } else {
+                    // get the address of the function from the vtable
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                                 MIR_new_reg_op(mir_ctx, ftn_reg),
+                                                 MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                                vtable_index * sizeof(void*),
+                                                                ftn_reg, 0, 1)));
+                }
+            } break;
+
+            case CEE_LDFTN: {
                 // push the reference to the function
                 MIR_reg_t ftn_reg;
                 CHECK_AND_RETHROW(stack_push(ctx, tSystem_UIntPtr, &ftn_reg));
