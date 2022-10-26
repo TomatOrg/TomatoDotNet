@@ -3060,7 +3060,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         TRACE("%*sfinally", jit_trace_indent, "");
                     } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
                         TRACE("%*sfault", jit_trace_indent, "");
-                    } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
+                    } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                         TRACE("%*sfilter", jit_trace_indent, "");
                     }
                     TRACE("%*s{", jit_trace_indent, "");
@@ -3861,7 +3861,13 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // make sure that this is fine
                 CHECK(type_is_verifier_assignable_to(val_type, operand_type));
 
-                System_Type boxed_type = get_boxed_type(val_type);
+                // Only actually do a boxed type if it is boxable
+                System_Type boxed_type;
+                if (type_is_value_type(val_type)) {
+                    boxed_type = get_boxed_type(val_type);
+                } else {
+                    boxed_type = val_type;
+                }
 
                 // we track this as an object now
                 MIR_reg_t obj_reg;
@@ -4528,11 +4534,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 CHECK(operand_i32 < body->LocalVariables->Length);
                 System_Reflection_LocalVariableInfo variable = body->LocalVariables->Data[operand_i32];
                 System_Type variable_type = type_get_intermediate_type(variable->LocalType);
-
-                // storing a fake boxed object, unwrap it
-                if (value_type != NULL && value_type->IsBoxed && type_is_object_ref(value_type->UnboxedType) && !type_is_interface(value_type->UnboxedType)) {
-                    value_type = value_type->UnboxedType;
-                }
 
                 // check the type is valid
                 if (value_type == tSystem_IntPtr && variable_type->IsByRef) {
@@ -6216,11 +6217,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // clear the type
                             constrainedType = NULL;
-                        }
-
-                        // unbox fake unbox
-                        if (this_type->IsBoxed && type_is_object_ref(this_type) && !type_is_interface(this_type)) {
-                            this_type = this_type->UnboxedType;
                         }
 
                         // verify a normal argument
