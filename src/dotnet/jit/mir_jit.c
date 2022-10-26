@@ -3747,8 +3747,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t cast_result_reg = new_temp_reg(ctx, tSystem_Boolean);
                 MIR_insn_t cast_success = MIR_new_label(mir_ctx);
 
-                // make sure obj is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
+                // unbox.any does not accept null
+                if (opcode == CEE_UNBOX_ANY) {
+                    CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
+                }
 
                 // if this is an interface get the type instance itself
                 if (type_is_interface(obj_type)) {
