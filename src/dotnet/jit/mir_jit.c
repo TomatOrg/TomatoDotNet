@@ -305,16 +305,21 @@ static void managed_ref_memcpy(void* base, System_Type struct_type, void* from) 
 
 static void on_throw(System_Exception exception, System_Reflection_MethodInfo methodInfo, int il_offset) {
 #ifdef THROW_TRACE
-    ERROR("Exception `%U` (of type %U.%U) thrown at %U.%U::%U -- IL_%04x",
+    strbuilder_t builder = strbuilder_new();
+    type_print_full_name(methodInfo->DeclaringType, &builder);
+    ERROR("Exception `%U` (of type %U.%U) thrown at %s::%U -- IL_%04x",
           exception->Message, OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name,
-          methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name, il_offset);
+          strbuilder_get(&builder), methodInfo->Name, il_offset);
+    strbuilder_free(&builder);
 #endif
 }
 
 static void on_rethrow(System_Reflection_MethodInfo methodInfo, int il_offset) {
 #ifdef THROW_TRACE
-    ERROR("\trethrown at %U.%U::%U -- IL_%04x",
-          methodInfo->DeclaringType->Namespace, methodInfo->DeclaringType->Name, methodInfo->Name, il_offset);
+    strbuilder_t builder = strbuilder_new();
+    type_print_full_name(methodInfo->DeclaringType, &builder);
+    ERROR("\trethrown at %s::%U -- IL_%04x", strbuilder_get(&builder), methodInfo->Name, il_offset);
+    strbuilder_free(&builder);
 #endif
 }
 
