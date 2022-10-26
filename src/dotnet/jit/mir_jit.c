@@ -33,10 +33,10 @@ UNUSED static bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (method->DeclaringType->GenericTypeDefinition == NULL)
 //        return false;
 
-    if (!string_equals_cstr(method->DeclaringType->Name, "ValueTask"))
-        return false;
+//    if (!string_equals_cstr(method->DeclaringType->Name, "ValueTask"))
+//        return false;
 
-    if (!string_equals_cstr(method->Name, "GetHashCode"))
+    if (!string_equals_cstr(method->Name, "MoveNext"))
         return false;
 
     return true;
@@ -2018,16 +2018,27 @@ static err_t jit_jump_to_exception_clause(jit_method_context_t* ctx, System_Refl
     CHECK(i != -1);
     MIR_label_t label = ctx->clause_to_label[i].value;
 
-    if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+    if (
+        clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION ||
+        clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER
+    ) {
+        // in filter we go to the filter offset first
+        int handler_offset = clause->HandlerOffset;
+        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+            handler_offset = clause->FilterOffset;
+        }
+
         // get the stack snapshot so we know which reg stores the stack slot
         // of the pushed exception
-        i = hmgeti(ctx->pc_to_stack_snapshot, clause->HandlerOffset);
+        i = hmgeti(ctx->pc_to_stack_snapshot, handler_offset);
         CHECK(i != -1);
         stack_t stack = ctx->pc_to_stack_snapshot[i].stack;
 
         // validate it is the correct one
         CHECK(arrlen(stack.entries) == 1);
-        CHECK(stack.entries[0].type == clause->CatchType);
+        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+            CHECK(stack.entries[0].type == clause->CatchType);
+        }
 
         // move the exception to it
         MIR_append_insn(mir_ctx, mir_func,
@@ -2147,7 +2158,10 @@ static err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow
                 MIR_append_insn(mir_ctx, mir_func, skip);
             }
         } else {
-            CHECK_FAIL("TODO: filter exception handler");
+            // for filter we are always going to jump to it, if it wants it, it will
+            // jump to its handler, otherwise it will just rethrow and search again
+            my_clause = clause;
+            break;
         }
     }
 
@@ -2936,10 +2950,15 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
     for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
+        int handler_offset = clause->HandlerOffset;
+        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+            handler_offset = clause->FilterOffset;
+        }
+
         // create the stack location
         MIR_label_t label = MIR_new_label(mir_ctx);
         stack_snapshot_t snapshot = {
-            .key = clause->HandlerOffset,
+            .key = handler_offset,
             .label = label,
             .stack = { .entries = NULL },
             .ireg_depth = 0,
@@ -2962,6 +2981,34 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 ctx->ireg.depth--;
                 created_first_entry = true;
             }
+        } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+            // this is  filter caluse, we need to have the exception pushed on the stack
+            // prepare it
+            arrpush(snapshot.stack.entries, (stack_entry_t) { .type = tSystem_Object });
+            snapshot.ireg_depth++;
+            if (!created_first_entry) {
+                // create the first stack entry just in case, we are going to create a reg
+                // and pop it right away since we don't actually want to have it pushed
+                // right now, we just wanna make sure that the stack location exists
+                push_new_reg(ctx, tSystem_Object, false);
+                ctx->ireg.depth--;
+                created_first_entry = true;
+            }
+
+            // also add the stack position at the position of the handler itself, which will get jumped to
+            // implicitly by the endfilter
+            MIR_label_t handler_label = MIR_new_label(mir_ctx);
+            stack_snapshot_t handler_snapshot = {
+                .key = clause->HandlerOffset,
+                .label = handler_label,
+                .stack = { .entries = NULL },
+                .ireg_depth = 0,
+                .freg_depth = 0,
+                .dreg_depth = 0,
+            };
+            arrpush(handler_snapshot.stack.entries, (stack_entry_t) { .type = tSystem_Object });
+            handler_snapshot.ireg_depth++;
+            hmputs(ctx->pc_to_stack_snapshot, handler_snapshot);
         }
 
         // now put it in
@@ -2981,6 +3028,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
     System_Reflection_MethodInfo ftnMethod = NULL;
     System_Type constrainedType = NULL;
     int il_ptr = 0;
+    System_Reflection_ExceptionHandlingClause filter_clause = NULL;
     while (il_ptr < body->Il->Length) {
 
         //--------------------------------------------------------------------------------------------------------------
@@ -3071,7 +3119,13 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 }
             );
 
+            bool entered_filter = false;
+            if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+                entered_filter = clause->FilterOffset == ctx->il_offset;
+            }
+
             if (
+                entered_filter ||
                 clause->HandlerOffset == ctx->il_offset ||
                 clause->HandlerOffset + clause->HandlerLength == ctx->il_offset ||
                 clause->TryOffset + clause->TryLength == ctx->il_offset
@@ -3084,6 +3138,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     last_cf == OPCODE_CONTROL_FLOW_THROW ||
                     last_cf == OPCODE_CONTROL_FLOW_RETURN
                 );
+            }
+
+            if (entered_filter) {
+                filter_clause = clause;
             }
         }
 
@@ -4334,18 +4392,30 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
             case CEE_RETHROW: {
                 // only permitted inside a catch handler
+                bool found_handler = true;
                 System_Type catchType = NULL;
                 System_Reflection_ExceptionHandlingClause_Array exceptions = body->ExceptionHandlingClauses;
                 for (int i = 0; i < exceptions->Length; i++) {
                     System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
-                    if (clause->Flags != COR_ILEXCEPTION_CLAUSE_EXCEPTION) continue;
+
+                    // check if we are in this handler
                     if (clause->HandlerOffset <= ctx->il_offset && ctx->il_offset < clause->HandlerOffset + clause->HandlerLength) {
-                        catchType = clause->CatchType;
-                        break;
+                        // catch clause
+                        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                            catchType = clause->CatchType;
+                            found_handler = true;
+                            break;
+                        }
+
+                        // filter clause
+                        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+                            found_handler = true;
+                            break;
+                        }
                     }
                 }
 
-                CHECK(catchType != NULL);
+                CHECK(found_handler);
 
                 // we should already have the exception_reg filled
 
@@ -4355,6 +4425,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
             case CEE_LEAVE:
             case CEE_LEAVE_S: {
+                CHECK(filter_clause == NULL);
+
                 // resolve the label
                 MIR_label_t target_label;
                 CHECK_AND_RETHROW(jit_resolve_branch(ctx, operand_i32, &target_label));
@@ -4447,7 +4519,10 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         continue;
 
                     // make sure we are getting a final block
-                    CHECK (clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY);
+                    CHECK (
+                        clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
+                        clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT
+                    );
 
                     // lets get the clause label and offset
                     int clausei = hmgeti(ctx->clause_to_label, clause);
@@ -4512,6 +4587,48 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 }
 
                 CHECK(found);
+            } break;
+
+            case CEE_ENDFILTER: {
+                CHECK(filter_clause != NULL);
+
+                JIT_TRACE(
+                    TRACE("%*s} {", jit_trace_indent, "");
+                );
+
+                // get the value
+                MIR_reg_t value_reg;
+                System_Type value_type;
+                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+
+                // must be an int32
+                CHECK(value_type == tSystem_Int32);
+
+                // get the handler location
+                int idx = hmgeti(ctx->pc_to_stack_snapshot, filter_clause->HandlerOffset);
+                CHECK(idx != -1);
+                MIR_label_t handler_label = ctx->pc_to_stack_snapshot[idx].label;
+
+                // move the exception to it (its fine if we don't end up jumping to here)
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, ctx->ireg.regs[0]),
+                                             MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+
+                // check the result of this operation, if its non-zero go to the handler
+                // otherwise rethrow
+                // NOTE: in theory it should be 1 for handler, but any other value is unspecified
+                //       so we can just do this
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_BT,
+                                             MIR_new_label_op(mir_ctx, handler_label),
+                                             MIR_new_reg_op(mir_ctx, value_reg)));
+
+                // continue with the rethrow, exception_reg should still have it
+                CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
+
+                // we are outside the handler now
+                filter_clause = NULL;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -6428,6 +6545,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             } break;
 
             case CEE_RET: {
+                CHECK(filter_clause == NULL);
+
                 System_Type method_ret_type = type_get_underlying_type(method->ReturnType);
 
                 if (method_ret_type == NULL) {

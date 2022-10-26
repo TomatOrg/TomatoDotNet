@@ -268,11 +268,6 @@ static err_t parse_method_cil(System_Reflection_MethodInfo method, blob_entry_t 
                         CHECK(clause->HandlerOffset + clause->HandlerLength <= header->code_size);
                         CHECK(clause->TryOffset < header->code_size);
                         CHECK(clause->TryOffset + clause->TryLength <= header->code_size);
-
-                        // TODO: check for overlaps
-
-                        // make sure handler comes after try
-                        CHECK(clause->TryOffset < clause->HandlerOffset);
                     }
                 } break;
 
