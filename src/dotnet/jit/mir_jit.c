@@ -6399,6 +6399,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                                      MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), this_reg, 0, 1)));
                     }
 
+                    // get the real method we are going to call now
+                    System_Reflection_MethodInfo real_method = this_type->VirtualMethods->Data[vtable_index];
+
                     if (this_type->IsByRef) {
                         // we have a ref on the stack, which means it must be a value type, so we can call the actual
                         // method directly since all value types are sealed by default
@@ -6407,12 +6410,13 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, m));
                         arg_ops[1] = MIR_new_ref_op(mir_ctx, m->MirFunc);
                         CHECK(arg_ops[1].u.ref != NULL);
-                    } else if (type_is_sealed(this_type)) {
+
+                    } else if (type_is_sealed(this_type) || method_is_final(real_method)) {
                         // this is an instance class which is a sealed class, choose the unboxer form if exists and the
                         // normal one otherwise
-                        System_Reflection_MethodInfo m = this_type->VirtualMethods->Data[vtable_index];
-                        CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, m));
-                        arg_ops[1] = MIR_new_ref_op(mir_ctx, m->MirUnboxerFunc ?: m->MirFunc);
+                        CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, real_method));
+                        arg_ops[1] = MIR_new_ref_op(mir_ctx, real_method->MirUnboxerFunc ?: real_method->MirFunc);
+
                     } else {
                         // get the address of the function from the vtable
                         MIR_append_insn(mir_ctx, mir_func,
