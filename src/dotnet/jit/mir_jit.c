@@ -6382,28 +6382,21 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                                  MIR_new_reg_op(mir_ctx, temp_reg),
                                                  MIR_new_mem_op(mir_ctx, MIR_T_P, 0, this_reg, 0, 1)));
 
-                    // figure offset and the actual method
-                    int vtable_index;
-                    if (type_is_interface(this_type)) {
-                        // we have an interface on the stack, the vtable is the first element
-                        // and the vtable index is exactly as given in the operand
-                        vtable_index = operand_method->VTableOffset;
+                    // get the base offset of the method
+                    size_t vtable_index = operand_method->VTableOffset;
+                    if (type_is_interface(operand_method->DeclaringType) && operand_method->DeclaringType != this_type) {
+                        // the method we want to call is an interface method, and its not the same type
+                        // as the this_type meaning we need to find the real implementation offset
+                        vtable_index += type_get_interface_impl(this_type, operand_method->DeclaringType)->VTableOffset;
+                    }
 
-                        // read the actual instance pointer of the interface, so we can use it
-                        // when calling the function
+                    // read the actual instance pointer of the interface, so we can use it
+                    // when calling the function
+                    if (type_is_interface(this_type)) {
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_MOV,
                                                      MIR_new_reg_op(mir_ctx, this_reg),
                                                      MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), this_reg, 0, 1)));
-                    } else {
-                        if (type_is_interface(operand_method->DeclaringType)) {
-                            // we want to call an interface method on the object, so resolve it and get the
-                            // object inside the object's vtable instead
-                            vtable_index = type_get_interface_method_impl(this_type, operand_method)->VTableOffset;
-                        } else {
-                            // this is a normal virtual method, nothing to resolve
-                            vtable_index = operand_method->VTableOffset;
-                        }
                     }
 
                     if (this_type->IsByRef) {
