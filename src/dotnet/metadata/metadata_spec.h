@@ -180,6 +180,11 @@ typedef struct metadata_method_impl {
     token_t method_declaration;
 } PACKED metadata_method_impl_t;
 
+#define METADATA_MODULE_REF 0x1A
+typedef struct metadata_module_ref {
+    const char* name;
+} PACKED metadata_module_ref_t;
+
 #define METADATA_TYPE_SPEC 0x1b
 typedef struct metadata_type_spec {
     blob_entry_t signature;
@@ -225,6 +230,13 @@ typedef struct metadata_assembly_ref_os {
     token_t assembly_ref;
 } PACKED metadata_assembly_ref_os_t;
 
+#define METADATA_FILE 0x26
+typedef struct metadata_file {
+    uint32_t flags;
+    const char* name;
+    blob_entry_t hash_value;
+} PACKED metadata_file_t;
+
 #define METADATA_EXPORTED_TYPE 0x27
 typedef struct metadata_exported_type {
     uint32_t flags;
@@ -233,6 +245,14 @@ typedef struct metadata_exported_type {
     const char* type_namespace;
     token_t implementation;
 } PACKED metadata_exported_type_t;
+
+#define METADATA_MANIFEST_RESOURCE 0x28
+typedef struct metadata_manifest_resource {
+    uint32_t offset;
+    uint32_t flags;
+    const char* name;
+    token_t implementation;
+} PACKED metadata_manifest_resource_t;
 
 #define METADATA_NESTED_CLASS 0x29
 typedef struct metadata_nested_class {

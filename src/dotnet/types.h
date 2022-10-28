@@ -466,6 +466,17 @@ struct System_MulticastDelegate {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_Reflection_ManifestResourceInfo {
+    struct System_Object;
+    System_String FileName;
+    System_Reflection_Assembly ReferencedAssembly;
+    int ResourceLocation;
+    System_Byte_Array Data;
+} *System_Reflection_ManifestResourceInfo;
+DEFINE_ARRAY(System_Reflection_ManifestResourceInfo);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef struct TinyDotNet_Reflection_MemberReference {
     struct System_Object;
     System_String Name;
@@ -504,6 +515,7 @@ struct System_Reflection_Assembly {
     System_Byte_Array_Array DefinedTypeSpecs;
     TinyDotNet_Reflection_MemberReference_Array DefinedMemberRefs;
     TinyDotNet_Reflection_MethodSpec_Array DefinedMethodSpecs;
+    System_Reflection_ManifestResourceInfo_Array DefinedManifestResources;
 
     // types imported from other assemblies, for easy lookup whenever needed
     System_Type_Array ImportedTypes;
@@ -850,6 +862,7 @@ extern System_Type tSystem_Reflection_ParameterInfo;
 extern System_Type tSystem_Reflection_PropertyInfo;
 extern System_Type tSystem_Reflection_LocalVariableInfo;
 extern System_Type tSystem_Reflection_ExceptionHandlingClause;
+extern System_Type tSystem_Reflection_ManifestResourceInfo;
 extern System_Type tSystem_Reflection_MethodBase;
 extern System_Type tSystem_Reflection_MethodBody;
 extern System_Type tSystem_Reflection_MethodInfo;

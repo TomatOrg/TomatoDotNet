@@ -47,6 +47,7 @@ System_Type tSystem_Reflection_ParameterInfo = NULL;
 System_Type tSystem_Reflection_PropertyInfo = NULL;
 System_Type tSystem_Reflection_LocalVariableInfo = NULL;
 System_Type tSystem_Reflection_ExceptionHandlingClause = NULL;
+System_Type tSystem_Reflection_ManifestResourceInfo;
 System_Type tSystem_Reflection_MethodBase = NULL;
 System_Type tSystem_Reflection_MethodBody = NULL;
 System_Type tSystem_Reflection_MethodInfo = NULL;

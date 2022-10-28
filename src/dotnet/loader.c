@@ -1306,6 +1306,57 @@ cleanup:
     return err;
 }
 
+static err_t parse_manifest_resource(System_Reflection_Assembly assembly, pe_file_t* file, metadata_t* metadata) {
+    err_t err = NO_ERROR;
+
+    metadata_manifest_resource_t* manifests = metadata->tables[METADATA_MANIFEST_RESOURCE].table;
+    int resource_count = metadata->tables[METADATA_MANIFEST_RESOURCE].rows;
+
+    System_Reflection_ManifestResourceInfo_Array array = GC_NEW_ARRAY(tSystem_Reflection_ManifestResourceInfo, resource_count);
+    GC_UPDATE(assembly, DefinedManifestResources, array);
+    for (int i = 0; i < resource_count; i++) {
+        metadata_manifest_resource_t* manifest = &manifests[i];
+        System_Reflection_ManifestResourceInfo resource = GC_NEW(tSystem_Reflection_ManifestResourceInfo);
+
+        GC_UPDATE(resource, FileName, new_string_from_cstr(manifest->name));
+        GC_UPDATE(resource, ReferencedAssembly, assembly);
+
+        if (manifest->implementation.index == 0) {
+            // embedded in the current assembly
+            resource->ResourceLocation = 1;
+
+            pe_directory_t directory = file->cli_header->resources;
+            CHECK(manifest->offset < directory.size);
+            directory.rva += manifest->offset;
+
+            // get the max size and pointer
+            size_t max_size = directory.size - manifest->offset;
+            const uint8_t* data = pe_get_rva_ptr(file, &directory);
+            CHECK(max_size < directory.size);
+
+            // figure the real size
+            CHECK(max_size >= 4);
+            uint32_t real_size = *(uint32_t*)data;
+            data += 4;
+            max_size -= 4;
+            CHECK(real_size <= max_size);
+
+            // copy it to an array
+            System_Byte_Array arr = GC_NEW_ARRAY(tSystem_Byte, real_size);
+            memcpy(arr->Data, data, real_size);
+            GC_UPDATE(resource, Data, arr);
+        } else {
+            // TODO: support other places to put this
+            CHECK_FAIL();
+        }
+
+        GC_UPDATE_ARRAY(array, i, resource);
+    }
+
+cleanup:
+    return err;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Type init
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1398,6 +1449,7 @@ static type_init_t m_type_init[] = {
     TYPE_INIT("System.Reflection", "PropertyInfo", System_Reflection_PropertyInfo),
     TYPE_INIT("System.Reflection", "LocalVariableInfo", System_Reflection_LocalVariableInfo),
     TYPE_INIT("System.Reflection", "ExceptionHandlingClause", System_Reflection_ExceptionHandlingClause),
+    TYPE_INIT("System.Reflection", "ManifestResourceInfo", System_Reflection_ManifestResourceInfo),
     TYPE_INIT("System.Reflection", "MethodBase", System_Reflection_MethodBase),
     TYPE_INIT("System.Reflection", "MethodBody", System_Reflection_MethodBody),
     TYPE_INIT("System.Reflection", "MethodInfo", System_Reflection_MethodInfo),
@@ -1644,6 +1696,7 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     // get the user strings for the runtime
     CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
+    CHECK_AND_RETHROW(parse_manifest_resource(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
     // add it to the global assembly registery
@@ -1746,17 +1799,20 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // get the user strings for the runtime
     CHECK_AND_RETHROW(set_field_rvas(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_user_strings(assembly, &file));
+    CHECK_AND_RETHROW(parse_manifest_resource(assembly, &file, &metadata));
     CHECK_AND_RETHROW(parse_custom_attributes(assembly, &metadata));
 
-    // get the entry point
-    // TODO: arguments support
-    // TODO: Task support
-    System_Reflection_MethodInfo entryPoint = NULL;
-    CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
-    CHECK(entryPoint->Parameters->Length == 0);
-    CHECK(method_is_static(entryPoint));
-    CHECK(entryPoint->ReturnType == NULL || entryPoint->ReturnType == tSystem_Int32);
-    GC_UPDATE(assembly, EntryPoint, entryPoint);
+    // get the entry point and call it if any
+    if (file.cli_header->entry_point_token.table != 0) {
+        // TODO: arguments support
+        // TODO: Task support
+        System_Reflection_MethodInfo entryPoint = NULL;
+        CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, file.cli_header->entry_point_token, NULL, NULL, &entryPoint));
+        CHECK(entryPoint->Parameters->Length == 0);
+        CHECK(method_is_static(entryPoint));
+        CHECK(entryPoint->ReturnType == NULL || entryPoint->ReturnType == tSystem_Int32);
+        GC_UPDATE(assembly, EntryPoint, entryPoint);
+    }
 
     // get the module name
     metadata_assembly_t* module = metadata.tables[METADATA_ASSEMBLY].table;
