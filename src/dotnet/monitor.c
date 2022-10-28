@@ -267,8 +267,8 @@ err_t monitor_exit(void* object) {
     CHECK_ERROR(monitor->locker == get_current_thread(), ERROR_SYNCHRONIZATION_LOCK);
 
     // unlock the mutex
-    mutex_unlock(&monitor->mutex);
     release_lock(monitor);
+    mutex_unlock(&monitor->mutex);
 
 cleanup:
     return err;
