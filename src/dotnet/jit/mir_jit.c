@@ -6400,22 +6400,30 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     }
 
                     // get the real method we are going to call now
-                    System_Reflection_MethodInfo real_method = this_type->VirtualMethods->Data[vtable_index];
-
+                    System_Reflection_MethodInfo real_method;
+                    bool sealed;
                     if (this_type->IsByRef) {
-                        // we have a ref on the stack, which means it must be a value type, so we can call the actual
-                        // method directly since all value types are sealed by default
-                        CHECK(type_is_sealed(this_type->BaseType));
-                        System_Reflection_MethodInfo m = this_type->BaseType->VirtualMethods->Data[vtable_index];
-                        CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, m));
-                        arg_ops[1] = MIR_new_ref_op(mir_ctx, m->MirFunc);
-                        CHECK(arg_ops[1].u.ref != NULL);
+                        real_method = this_type->BaseType->VirtualMethods->Data[vtable_index];
+                        sealed = type_is_sealed(this_type->BaseType);
+                    } else {
+                        real_method = this_type->VirtualMethods->Data[vtable_index];
+                        sealed = type_is_sealed(this_type);
+                    }
 
-                    } else if (type_is_sealed(this_type) || method_is_final(real_method)) {
-                        // this is an instance class which is a sealed class, choose the unboxer form if exists and the
-                        // normal one otherwise
-                        CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, real_method));
-                        arg_ops[1] = MIR_new_ref_op(mir_ctx, real_method->MirUnboxerFunc ?: real_method->MirFunc);
+                    // prepare the method
+                    MIR_item_t func;
+                    CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, real_method));
+                    if (this_type->IsByRef) {
+                        func = real_method->MirFunc;
+                    } else {
+                        func = real_method->MirUnboxerFunc ?: real_method->MirFunc;
+                    }
+
+                    if (sealed || method_is_final(real_method)) {
+                        // this is either a sealed class or a final method, meaning that no
+                        // one can inherit from them, so we can de-virtualize the call safely
+                        // without worrying about anything else
+                        arg_ops[1] = MIR_new_ref_op(mir_ctx, func);
 
                     } else {
                         // get the address of the function from the vtable
