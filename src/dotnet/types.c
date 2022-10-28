@@ -2097,3 +2097,100 @@ bool type_is_generic_parameter(System_Type type) {
     }
 }
 
+static System_Type assembly_get_type_by_name_span(System_Reflection_Assembly assembly, System_Span namespace, System_Span name) {
+    for (int i = 0; i < assembly->DefinedTypes->Length; i++) {
+        System_Type type = assembly->DefinedTypes->Data[i];
+
+        if (
+            string_equals_span(type->Namespace, namespace) &&
+            string_equals_span(type->Name, name)
+        ) {
+            return type;
+        }
+    }
+
+    return NULL;
+}
+
+err_t get_type_by_name(System_Reflection_Assembly reference, System_String str, System_Type* type) {
+    err_t err = NO_ERROR;
+    System_Char* chars = str->Chars;
+    int length = str->Length;
+
+
+    // first figure if we need a different assembly
+    System_Reflection_Assembly wantedAssembly = NULL;
+    for (int i = 0; i < length; i++) {
+        if (chars[i] == L',') {
+            // skip the current one
+            i++;
+
+            // get the end
+            int start = i;
+            for (; i < length; i++) {
+                if (chars[i] == L',') {
+                    break;
+                }
+            }
+
+            // the length is now going to not include this part
+            length = start - 1;
+
+            // got the full name, try and get the assembly
+//            System_Span assemblyName = {
+//                .Length = i - start,
+//                .Ptr = (uintptr_t) &chars[start]
+//            };
+
+            CHECK_FAIL("TODO: specific assembly lookup");
+            wantedAssembly = NULL;
+
+            break;
+        }
+    }
+
+    // now get the namespace and name
+    int lastDot = 0;
+    int end = length;
+    for (int i = 0; i < length; i++) {
+        if (chars[i] == L'.') {
+            lastDot = i;
+        } else if (chars[i] == L'+') {
+            end = i;
+            break;
+        }
+    }
+
+    System_Span namespace = { .Length = lastDot, .Ptr = (uintptr_t) chars };
+    System_Span name = { .Length = end - lastDot - 1, .Ptr = (uintptr_t) &chars[lastDot + 1] };
+
+    // now try to find the type with these
+    System_Type baseType = NULL;
+    if (wantedAssembly) {
+        // try to search inside the explicit assembly
+        baseType = assembly_get_type_by_name_span(wantedAssembly, namespace, name);
+    } else {
+        // try to search inside the reference if we have one
+        if (reference != NULL) {
+            baseType = assembly_get_type_by_name_span(reference, namespace, name);
+        }
+
+        // not found? try to search inside the corelib
+        if (baseType == NULL && g_corelib != NULL) {
+            baseType = assembly_get_type_by_name_span(g_corelib, namespace, name);
+        }
+    }
+    CHECK(baseType != NULL);
+
+    // now that we found it, check if we need to continue
+    // and search for nested types
+    if (chars[end] == L'+') {
+        CHECK_FAIL("TODO: nested types");
+    }
+
+    // success!
+    *type = baseType;
+
+cleanup:
+    return err;
+}

@@ -657,7 +657,7 @@ cleanup:
     return err;
 }
 
-static err_t parse_elem(blob_entry_t* sig, System_Type paramType, MIR_val_t* val) {
+static err_t parse_elem(blob_entry_t* sig, System_Reflection_Assembly reference, System_Type paramType, MIR_val_t* val) {
     err_t err = NO_ERROR;
 
     if (type_is_integer(paramType) || type_is_enum(paramType)) {
@@ -690,7 +690,10 @@ static err_t parse_elem(blob_entry_t* sig, System_Type paramType, MIR_val_t* val
         System_String typeName;
         CHECK_AND_RETHROW(parse_ser_string(sig, &typeName));
 
-        CHECK_FAIL("TODO: custom attribute type argument `%U`", typeName);
+        // resolve the type
+        System_Type type = NULL;
+        CHECK_AND_RETHROW(get_type_by_name(reference, typeName, &type));
+        val->a = type;
 
     } else if (paramType == tSystem_Object) {
         CHECK_FAIL("TODO: custom attribute argument FieldOrPropType");
@@ -704,7 +707,7 @@ cleanup:
     return err;
 }
 
-static err_t parse_fixed_arg(blob_entry_t* sig, System_Type paramType, MIR_val_t* val) {
+static err_t parse_fixed_arg(blob_entry_t* sig, System_Reflection_Assembly reference, System_Type paramType, MIR_val_t* val) {
     err_t err = NO_ERROR;
 
     if (paramType->IsArray) {
@@ -719,14 +722,14 @@ static err_t parse_fixed_arg(blob_entry_t* sig, System_Type paramType, MIR_val_t
             val->a = GC_NEW_ARRAY(paramType, count);
             for (int i = 0; i < count; i++) {
                 MIR_val_t cur_val = { .u = 0 };
-                CHECK_AND_RETHROW(parse_elem(sig, paramType, &cur_val));
+                CHECK_AND_RETHROW(parse_elem(sig, reference, paramType, &cur_val));
                 // TODO: ref type
                 memcpy(val->a + tSystem_Array->ManagedSize + paramType->StackSize * i, &cur_val, paramType->StackSize);
             }
         }
     } else {
         // single item
-        CHECK_AND_RETHROW(parse_elem(sig, paramType, val));
+        CHECK_AND_RETHROW(parse_elem(sig, reference, paramType, val));
     }
 
 
@@ -769,7 +772,7 @@ typedef System_Exception (*property_set_func_i_t)(void* obj, uintptr_t value);
 typedef System_Exception (*property_set_func_f_t)(void* obj, float value);
 typedef System_Exception (*property_set_func_d_t)(void* obj, double value);
 
-err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, System_Object *out) {
+err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_Assembly reference, System_Reflection_MethodInfo ctor, System_Object *out) {
     err_t err = NO_ERROR;
     blob_entry_t* sig = &_sig;
     MIR_val_t fixed_args[ctor->Parameters->Length + 1];
@@ -793,7 +796,7 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
 
     // parse the fixed parameters
     for (int i = 0; i < ctor->Parameters->Length; i++) {
-        CHECK_AND_RETHROW(parse_fixed_arg(sig,
+        CHECK_AND_RETHROW(parse_fixed_arg(sig, reference,
                                           ctor->Parameters->Data[i]->ParameterType,
                                           &fixed_args[i + 1]));
     }
@@ -834,7 +837,7 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_MethodInfo ctor, 
 
         // get the fixed argument
         MIR_val_t val;
-        CHECK_AND_RETHROW(parse_fixed_arg(sig, arg_type, &val));
+        CHECK_AND_RETHROW(parse_fixed_arg(sig, reference, arg_type, &val));
 
         if (type == ELEMENT_TYPE_FIELD) {
             // get the field

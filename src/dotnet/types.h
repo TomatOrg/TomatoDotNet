@@ -933,3 +933,9 @@ err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array
  * Expand the given type as a generic type from the arguments, while ignoring generic arguments from the ignore list
  */
 err_t expand_type(System_Type type, System_Type_Array arguments, System_Type_Array ignore_arguments, System_Type* out_type);
+
+/**
+ * Get a type by its fully qualified name, optionally with an assembly to
+ * search against locally
+ */
+err_t get_type_by_name(System_Reflection_Assembly reference, System_String str, System_Type* type);

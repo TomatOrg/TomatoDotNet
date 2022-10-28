@@ -1198,7 +1198,7 @@ static err_t parse_custom_attributes(System_Reflection_Assembly assembly, metada
 
         // now actually parse the custom attributes
         System_Object value = NULL;
-        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, methodInfo, &value));
+        CHECK_AND_RETHROW(parse_custom_attrib(attrib->value, assembly, methodInfo, &value));
 
         // now parse the parent
         System_Object key = NULL;
