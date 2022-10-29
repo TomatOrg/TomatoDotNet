@@ -32,7 +32,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
     // are going to make sure it goes to the same place
     bool in_a_protected_block = false;
     System_Reflection_ExceptionHandlingClause_Array exceptions = body->ExceptionHandlingClauses;
-    for (int i = 0; i < exceptions->Length; i++) {
+    for (int i = exceptions->Length - 1; i >= 0; i--) {
         System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
 
         if (clause->HandlerOffset <= ctx->il_offset && ctx->il_offset < clause->HandlerOffset + clause->HandlerLength) {
@@ -121,8 +121,8 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
 
         // make sure we are getting a final block
         CHECK (
-                clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
-                clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT
+            clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
+            clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT
         );
 
         // lets get the clause label and offset
