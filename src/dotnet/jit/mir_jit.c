@@ -2324,9 +2324,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
     MIR_op_t* arguments = NULL;
 
     // jump table dynamic array
-    MIR_op_t *switch_ops = NULL;
+    MIR_op_t* switch_ops = NULL;
 
-    // Create the exception handling reg
+    // Create the exception handling reg and zero it
     ctx->exception_reg = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, "exception");
 
     // get the return block register, if any
@@ -5879,6 +5879,9 @@ cleanup:
     arrfree(ctx->dtmp.regs);
     arrfree(ctx->ftmp.regs);
 
+    for (int i = 0; i < hmlen(ctx->finally_chain); i++) {
+        arrfree(ctx->finally_chain[i].labels);
+    }
     hmfree(ctx->finally_chain);
 
     return err;

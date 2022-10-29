@@ -267,12 +267,6 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
         if (clause->HandlerOffset <= ctx->il_offset && ctx->il_offset < clause->HandlerOffset + clause->HandlerLength) {
             CHECK(clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION);
 
-            // reset the exception register, since we handled this exception
-            MIR_append_insn(mir_ctx, mir_func,
-                            MIR_new_insn(mir_ctx, MIR_MOV,
-                                         MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                         MIR_new_int_op(mir_ctx, 0)));
-
             // we found where we are
             our_clause = i;
             break;
@@ -343,23 +337,28 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
             MIR_label_t last_clause_label;
             CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, last_clause->HandlerOffset, &last_clause_label));
 
-            hmgets(ctx->finally_chain, last_clause).should_be = last_clause_label;
+            hmgets(ctx->finally_chain, last_clause).new_label = last_clause_label;
         }
 
         // resolve the label of the finally handler
         int clausei = hmgeti(ctx->finally_chain, clause);
         if (clausei == -1) {
+            char reg_name[128];
+            snprintf(reg_name, sizeof(reg_name), "selector%d", i);
+
             // this finally does not know where to go
             // next, set it
             finally_chain_t chain = (finally_chain_t){
                 .key = clause,
-                .should_be = label
+                .labels = NULL,
+                .selector = MIR_new_func_reg(mir_ctx, mir_func->u.func, MIR_T_I64, reg_name),
+                .new_label = label,
             };
             hmputs(ctx->finally_chain, chain);
         } else {
             // this exists, set that the label should be something new
-            CHECK(ctx->finally_chain[clausei].should_be == NULL);
-            ctx->finally_chain[clausei].should_be = label;
+            CHECK(ctx->finally_chain[clausei].new_label == NULL);
+            ctx->finally_chain[clausei].new_label = label;
         }
 
         // this is the one we actually want to jump to
@@ -376,27 +375,47 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
         // merge all the should be entries
         for (int i = our_clause; i >= 0; i--) {
             finally_chain_t* chain = hmgetp_null(ctx->finally_chain, last_clause);
-            if (chain == NULL) {
+            if (chain == NULL || chain->new_label == NULL) {
                 continue;
             }
 
-            if (chain->value == NULL) {
-                // this is the first time, set it
-                chain->value = chain->should_be;
-            } else {
-                // we already have a value, make sure it does not change
-                CHECK(chain->value == chain->should_be,
-                      "wanted to go to %p, but going to %p", chain->value, chain->should_be);
+            // check which of these we need for this one
+            int at = -1;
+            for (int j = 0; j < arrlen(chain->labels); j++) {
+                if (chain->labels[j] == chain->new_label) {
+                    at = j;
+                    break;
+                }
             }
 
+            // this is a new entry, add it
+            if (at == -1) {
+                CHECK(!chain->done);
+                at = arrlen(chain->labels);
+                arrpush(chain->labels, chain->new_label);
+            }
+
+            // set the selector
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_MOV,
+                                         MIR_new_reg_op(mir_ctx, chain->selector),
+                                         MIR_new_int_op(mir_ctx, at)));
+
             // we handled this merge
-            chain->should_be = NULL;
+            chain->new_label = NULL;
         }
 
         // now resolve the jump to the first clause instead
         // of going directly outside
         CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, first_clause->HandlerOffset, &label));
     }
+
+    // zero out the exception register, to make sure we
+    // have no exception in it
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_insn(mir_ctx, MIR_MOV,
+                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg),
+                                 MIR_new_int_op(mir_ctx, 0)));
 
     // finally jump to the label for the next clause/to
     // go outside
@@ -412,10 +431,11 @@ cleanup:
 
 err_t jit_emit_endfinally(jit_method_context_t* ctx) {
     err_t err = NO_ERROR;
+    MIR_op_t* switch_ops = NULL;
 
     // we need to figure the surrounding catch handler, and figure what to do with it when the exception is thrown
     bool found = false;
-    MIR_label_t label = NULL;
+    finally_chain_t* chain = NULL;
     for (int i = body->ExceptionHandlingClauses->Length - 1; i >= 0; i--) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
@@ -434,10 +454,7 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
         found = true;
 
         // try to see if the success has somewhere to go to
-        finally_chain_t* chain = hmgetp_null(ctx->finally_chain, clause);
-        if (chain != NULL) {
-            label = chain->value;
-        }
+        chain = hmgetp_null(ctx->finally_chain, clause);
 
         break;
     }
@@ -448,12 +465,38 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
     // for finally we have the success case which we need to handle, but
     // even for that we have cases that there is an unconditional throw inside
     // the try-finally handler, so we might unconditionally rethrow
-    if (label != NULL) {
-        // if we don't have an exception, go to the success label
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_BF,
-                                     MIR_new_label_op(mir_ctx, label),
-                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+    if (chain != NULL) {
+        if (chain->labels != NULL) {
+            if (arrlen(chain->labels) == 1) {
+                // there is a single entry, no need for a switch
+                // if we don't have an exception, go to the success label
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_BF,
+                                             MIR_new_label_op(mir_ctx, chain->labels[0]),
+                                             MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+            } else {
+                // we have multiple possibilities, use a switch
+                // allocate enough space for the ops
+                switch_ops = malloc((arrlen(chain->labels) + 1) * sizeof(MIR_op_t));
+
+                // branch selector
+                switch_ops[0] = MIR_new_reg_op(mir_ctx, chain->selector);
+
+                // all the locations
+                for (int i = 0; i < arrlen(chain->labels); i++) {
+                    switch_ops[i + 1] = MIR_new_label_op(mir_ctx, chain->labels[i]);
+                }
+
+                // and do it
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn_arr(mir_ctx, MIR_SWITCH,
+                                                 arrlen(chain->labels) + 1,
+                                                 switch_ops));
+            }
+        }
+
+        // this can not be changed anymore
+        chain->done = true;
     }
 
     // if we got to this instruction then we are
@@ -462,6 +505,8 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
     CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
 
 cleanup:
+    SAFE_FREE(switch_ops);
+
     return err;
 }
 

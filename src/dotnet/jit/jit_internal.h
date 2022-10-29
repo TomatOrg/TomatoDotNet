@@ -58,10 +58,17 @@ typedef struct finally_chain_t {
     System_Reflection_ExceptionHandlingClause key;
 
     // the label it is going to
-    MIR_label_t value;
+    MIR_label_t* labels;
 
-    // the label that it should be
-    MIR_label_t should_be;
+    // used to select which one to use
+    MIR_reg_t selector;
+
+    // the label we want to add right now
+    MIR_label_t new_label;
+
+    // this was already set, if we need
+    // to set anything new we are wrong
+    bool done;
 } finally_chain_t;
 
 typedef struct jit_context {
@@ -483,12 +490,12 @@ extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsRefere
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-#define JIT_TRACE
+//#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-#define JIT_TRACE_MIR
+//#define JIT_TRACE_MIR
 
 /**
  * Uncomment to print the final MIR function, will not print
@@ -509,11 +516,11 @@ static inline bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (method->DeclaringType->GenericTypeDefinition == NULL)
 //        return false;
 
-//    if (!string_equals_cstr(method->DeclaringType->Name, "ValueTask"))
-//        return false;
+    if (!string_equals_cstr(method->DeclaringType->Name, "ConditionalWeakTable`2<[Corelib-v1]ThreadLocalArray<char>[],object>"))
+        return false;
 
-//    if (!string_equals_cstr(method->Name, "NumberToStringFormat"))
-//        return false;
+    if (!string_equals_cstr(method->Name, "Add"))
+        return false;
 
     return true;
 }
