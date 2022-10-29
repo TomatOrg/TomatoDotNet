@@ -53,16 +53,16 @@ typedef struct stack_keeping {
     int depth;
 } stack_keeping_t;
 
-typedef struct exception_handling {
+typedef struct finally_chain_t {
+    // the finally we are in
     System_Reflection_ExceptionHandlingClause key;
+
+    // the label it is going to
     MIR_label_t value;
 
-    // the next finally after this one
-    MIR_label_t next_clause;
-
-    // is this the last finally we have
-    bool last_in_chain;
-} exception_handling_t;
+    // the label that it should be
+    MIR_label_t should_be;
+} finally_chain_t;
 
 typedef struct jit_context {
     // the mir context for this jit instance
@@ -142,7 +142,7 @@ typedef struct jit_method_context {
     MIR_reg_t exception_reg;
 
     // transform a clause to a label
-    exception_handling_t* clause_to_label;
+    finally_chain_t* finally_chain;
 
     // The current filter clause we are in
     System_Reflection_ExceptionHandlingClause filter_clause;
@@ -253,7 +253,7 @@ err_t jit_stack_push(jit_method_context_t* ctx, System_Type type, MIR_reg_t* out
  * @param out_reg   [OUT, OPTIONAL]     The register of the element
  * @param ste       [OUT, OPTIONAL]     The stack entry itself (attributes)
  */
-err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, stack_entry_t* ste);
+err_t jit_stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, stack_entry_t* ste);
 
 //----------------------------------------------------------------------------------------------------------------------
 // Type helpers
@@ -342,14 +342,6 @@ err_t jit_branch_point(jit_method_context_t* ctx, int il_target, MIR_label_t* la
 //----------------------------------------------------------------------------------------------------------------------
 // Exception throwing
 //----------------------------------------------------------------------------------------------------------------------
-
-/**
- * Jump to the given exception clause, setting up the stack as the clause handler needs.
- *
- * @param ctx           [IN]    The jit context
- * @param clause        [IN]    The clause to jump to
- */
-err_t jit_jump_to_exception_clause(jit_method_context_t* ctx, System_Reflection_ExceptionHandlingClause clause);
 
 /**
  * Throw an exception that was put to the exception register, this makes sure
@@ -491,12 +483,12 @@ extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsRefere
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-//#define JIT_TRACE
+#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-//#define JIT_TRACE_MIR
+#define JIT_TRACE_MIR
 
 /**
  * Uncomment to print the final MIR function, will not print
@@ -520,8 +512,8 @@ static inline bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (!string_equals_cstr(method->DeclaringType->Name, "ValueTask"))
 //        return false;
 
-    if (!string_equals_cstr(method->Name, "NumberToStringFormat"))
-        return false;
+//    if (!string_equals_cstr(method->Name, "NumberToStringFormat"))
+//        return false;
 
     return true;
 }

@@ -709,7 +709,7 @@ cleanup:
  * Pop an item from the stack, returning its type and register location, will fail
  * if there are not enough items on the stack
  */
-err_t stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, stack_entry_t* ste) {
+err_t jit_stack_pop(jit_method_context_t* ctx, System_Type* out_type, MIR_reg_t* out_reg, stack_entry_t* ste) {
     err_t err = NO_ERROR;
 
     // pop the entry
@@ -1756,249 +1756,6 @@ cleanup:
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Excpetion jitting helpers
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Given the dotnet clause, will generate a jump to it and setup the stack for it accordingly
- */
-err_t jit_jump_to_exception_clause(jit_method_context_t* ctx, System_Reflection_ExceptionHandlingClause clause) {
-    err_t err = NO_ERROR;
-
-    // we have found an exact handler to jump to, jump to it
-    int i = hmgeti(ctx->clause_to_label, clause);
-    CHECK(i != -1);
-    MIR_label_t label = ctx->clause_to_label[i].value;
-
-    if (
-        clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION ||
-        clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER
-    ) {
-        // in filter we go to the filter offset first
-        int handler_offset = clause->HandlerOffset;
-        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-            handler_offset = clause->FilterOffset;
-        }
-
-        // get the stack snapshot so we know which reg stores the stack slot
-        // of the pushed exception
-        i = hmgeti(ctx->pc_to_stack_snapshot, handler_offset);
-        CHECK(i != -1);
-        stack_t stack = ctx->pc_to_stack_snapshot[i].stack;
-
-        // validate it is the correct one
-        CHECK(arrlen(stack.entries) == 1);
-        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-            CHECK(stack.entries[0].type == clause->CatchType);
-        }
-
-        // move the exception to it
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_MOV,
-                                     MIR_new_reg_op(mir_ctx, ctx->ireg.regs[0]),
-                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
-    }
-
-    // jump to the correct handler
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_JMP,
-                                 MIR_new_label_op(mir_ctx, label)));
-
-cleanup:
-    return err;
-}
-
-err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow) {
-    err_t err = NO_ERROR;
-
-    // verify it is a valid object
-    CHECK(type_is_object_ref(type));
-
-#ifdef THROW_TRACE
-    if (rethrow) {
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 4,
-                                          MIR_new_ref_op(mir_ctx, m_on_rethrow_proto),
-                                          MIR_new_ref_op(mir_ctx, m_on_rethrow_func),
-                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
-                                          MIR_new_int_op(mir_ctx, ctx->il_offset)));
-    } else {
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 5,
-                                          MIR_new_ref_op(mir_ctx, m_on_throw_proto),
-                                          MIR_new_ref_op(mir_ctx, m_on_throw_func),
-                                          MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
-                                          MIR_new_int_op(mir_ctx, ctx->il_offset)));
-
-    }
-#endif
-
-    MIR_reg_t temp_reg = 0;
-
-    // find the exception handler to use
-    System_Reflection_ExceptionHandlingClause_Array exceptions = ctx->method->MethodBody->ExceptionHandlingClauses;
-    System_Reflection_ExceptionHandlingClause my_clause = NULL;
-    for (int i = exceptions->Length - 1; i >= 0; i--) {
-        System_Reflection_ExceptionHandlingClause clause = exceptions->Data[i];
-
-        // check that this instruction is in the try range
-        if (clause->TryOffset > ctx->il_offset || ctx->il_offset >= clause->TryOffset + clause->TryLength)
-            continue;
-
-        // if this is a finally or fault block, then we can jump to it directly
-        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT || clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-            my_clause = clause;
-            break;
-        }
-
-        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-            if (type != NULL) {
-                // check if the exception matches anything in here
-                System_Type thrown = type;
-                while (thrown != NULL) {
-                    if (thrown == clause->CatchType) {
-                        // found the correct one!
-                        break;
-                    }
-
-                    // try next
-                    thrown = thrown->BaseType;
-                }
-
-                if (thrown != NULL) {
-                    // we found the correct one!
-                    my_clause = clause;
-                    break;
-                }
-            } else {
-                // we don't know the exact exception type that
-                // is thrown, so we need to handle it dynamically
-
-                // if needed create a temp register to hold the
-                // result of the check
-                if (temp_reg == 0) {
-                    temp_reg = jit_new_temp_reg(ctx, tSystem_Boolean);
-                }
-
-                MIR_label_t skip = MIR_new_label(mir_ctx);
-
-                // check if the current instance is dervied
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_call_insn(mir_ctx, 5,
-                                                  MIR_new_ref_op(mir_ctx, m_is_instance_proto),
-                                                  MIR_new_ref_op(mir_ctx, m_is_instance_func),
-                                                  MIR_new_reg_op(mir_ctx, temp_reg),
-                                                  MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                                  MIR_new_ref_op(mir_ctx, clause->CatchType->MirType)));
-
-                // check the result, if it was false then skip the jump to the exception handler
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_BF,
-                                             MIR_new_label_op(mir_ctx, skip),
-                                             MIR_new_reg_op(mir_ctx, temp_reg)));
-
-                // emit the jump to the exception handler
-                CHECK_AND_RETHROW(jit_jump_to_exception_clause(ctx, clause));
-
-                // insert the skip label
-                MIR_append_insn(mir_ctx, mir_func, skip);
-            }
-        } else {
-            // for filter we are always going to jump to it, if it wants it, it will
-            // jump to its handler, otherwise it will just rethrow and search again
-            my_clause = clause;
-            break;
-        }
-    }
-
-    if (my_clause == NULL) {
-        // check if we need the extra argument or not
-        size_t nres = 1;
-        if (ctx->method->ReturnType != NULL) {
-            MIR_type_t mtype = jit_get_mir_type(ctx->method->ReturnType);
-            if (mtype != MIR_T_BLK) {
-                nres = 2;
-            }
-        }
-
-        // we did not have a handler in the current function, just
-        // return our own instruction
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_ret_insn(mir_ctx, nres,
-                                         MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                         MIR_new_int_op(mir_ctx, 0)));
-    } else {
-        // we found an exact clause to jump to
-        CHECK_AND_RETHROW(jit_jump_to_exception_clause(ctx, my_clause));
-    }
-
-cleanup:
-    return err;
-}
-
-err_t jit_throw_new(jit_method_context_t* ctx, System_Type type) {
-    err_t err = NO_ERROR;
-
-    // call the default ctor
-    System_Reflection_MethodInfo ctor = NULL;
-    for (int i = 0; i < type->Methods->Length; i++) {
-        System_Reflection_MethodInfo mi = type->Methods->Data[i];
-        if (method_is_static(mi)) continue;
-        if (!method_is_special_name(mi) || !method_is_rt_special_name(mi)) continue;
-        if (!string_equals_cstr(mi->Name, ".ctor")) continue;
-        if (mi->Parameters->Length != 0) continue;
-        if (mi->ReturnType != NULL) continue;
-        ctor = mi;
-        break;
-    }
-    CHECK(ctor != NULL);
-
-    // prepare the ctor
-    CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, ctor));
-
-    // the temp reg for the new obejct
-    MIR_reg_t exception_obj = jit_new_temp_reg(ctx, type);
-
-    // allocate the new object
-    CHECK_AND_RETHROW(jit_new(ctx, exception_obj, type, MIR_new_int_op(mir_ctx, type->ManagedSize)));
-
-    // call the ctor for it
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_call_insn(mir_ctx, 4,
-                                      MIR_new_ref_op(mir_ctx, ctor->MirProto),
-                                      MIR_new_ref_op(mir_ctx, ctor->MirFunc),
-                                      MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                      MIR_new_reg_op(mir_ctx, exception_obj)));
-
-    MIR_label_t no_exception = MIR_new_label(mir_ctx);
-
-    // check if we need to throw an exception coming from creating this exception
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_BF,
-                                 MIR_new_label_op(mir_ctx, no_exception),
-                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
-
-    // throw an unknown exception
-    CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
-
-    // put the label to skip the ctor exception handling
-    MIR_append_insn(mir_ctx, mir_func, no_exception);
-
-    // mov the newly created exception to the exception register
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                 MIR_new_reg_op(mir_ctx, exception_obj)));
-
-    // throw it nicely
-    CHECK_AND_RETHROW(jit_throw(ctx, type, false));
-
-cleanup:
-    return err;
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Checking for stuff
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2171,8 +1928,8 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
     MIR_reg_t value1_reg;
     System_Type value2_type;
     System_Type value1_type;
-    CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg, NULL));
-    CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg, NULL));
+    CHECK_AND_RETHROW(jit_stack_pop(ctx, &value2_type, &value2_reg, NULL));
+    CHECK_AND_RETHROW(jit_stack_pop(ctx, &value1_type, &value1_reg, NULL));
 
     MIR_reg_t result_reg = 0;
     MIR_label_t label = NULL;
@@ -2323,8 +2080,8 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
     MIR_reg_t result_reg = 0;
     System_Type value2_type;
     System_Type value1_type;
-    CHECK_AND_RETHROW(stack_pop(ctx, &value2_type, &value2_reg, NULL));
-    CHECK_AND_RETHROW(stack_pop(ctx, &value1_type, &value1_reg, NULL));
+    CHECK_AND_RETHROW(jit_stack_pop(ctx, &value2_type, &value2_reg, NULL));
+    CHECK_AND_RETHROW(jit_stack_pop(ctx, &value1_type, &value1_reg, NULL));
 
     stack_type_t value1_stacktype = type_get_stack_type(value1_type);
     stack_type_t value2_stacktype = type_get_stack_type(value2_type);
@@ -2743,9 +2500,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
         // now put it in
         hmputs(ctx->pc_to_stack_snapshot, snapshot);
-
-        // add to label lookup
-        hmput(ctx->clause_to_label, clause, label);
     }
 
     ctx->jit_trace_indent = 4;
@@ -2826,6 +2580,13 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 } else if (clause->TryOffset + clause->TryLength == ctx->il_offset) {
                     ctx->jit_trace_indent -= 4;
                     TRACE("%*s} // end .try", ctx->jit_trace_indent, "");
+
+                }
+
+                if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER && clause->FilterOffset == ctx->il_offset) {
+                    TRACE("%*sfilter", ctx->jit_trace_indent, "");
+                    TRACE("%*s{", ctx->jit_trace_indent, "");
+                    ctx->jit_trace_indent += 4;
                 }
 
                 if (clause->HandlerOffset == ctx->il_offset) {
@@ -2836,7 +2597,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT) {
                         TRACE("%*sfault", ctx->jit_trace_indent, "");
                     } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-                        TRACE("%*sfilter", ctx->jit_trace_indent, "");
+                        TRACE("%*scatch", ctx->jit_trace_indent, "");
                     }
                     TRACE("%*s{", ctx->jit_trace_indent, "");
                     ctx->jit_trace_indent += 4;
@@ -2846,20 +2607,40 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 }
             );
 
+            // figure if we enter a filter right now
             bool entered_filter = false;
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                 entered_filter = clause->FilterOffset == ctx->il_offset;
             }
 
+            // for catch/filter we need to set the first register on
+            // the stack to the exception register so we will have the
+            // correct value on the stack the start
+            if (
+                (
+                    clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER ||
+                    clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION
+                ) &&
+                (
+                    clause->HandlerOffset == ctx->il_offset ||
+                    entered_filter
+                )
+            ) {
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, ctx->ireg.regs[0]),
+                                             MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+            }
+
+            // entry/exit to handler can only happen from exception, so
+            // we can't have any instruction that goes next, that is
+            // the same for exiting from handler or protected block
             if (
                 entered_filter ||
                 clause->HandlerOffset == ctx->il_offset ||
                 clause->HandlerOffset + clause->HandlerLength == ctx->il_offset ||
                 clause->TryOffset + clause->TryLength == ctx->il_offset
             ) {
-                // entry/exit to handler can only happen from exception, so
-                // we can't have any instruction that goes next, that is
-                // the same for exiting from handler or protected block
                 CHECK(
                     last_cf == OPCODE_CONTROL_FLOW_BRANCH ||
                     last_cf == OPCODE_CONTROL_FLOW_THROW ||
@@ -2867,6 +2648,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 );
             }
 
+            // remember that we are now in a filter clause, so we can handle
+            // endfilter correctly
             if (entered_filter) {
                 ctx->filter_clause = clause;
             }
@@ -3204,7 +2987,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_NEG: {
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 MIR_reg_t result_reg;
                 CHECK_AND_RETHROW(jit_stack_push(ctx, value_type, &result_reg));
@@ -3245,7 +3028,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_NOT: {
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 MIR_reg_t result_reg;
                 CHECK_AND_RETHROW(jit_stack_push(ctx, value_type, &result_reg));
@@ -3320,7 +3103,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_CONV_OVF_U_UN: {
                 MIR_reg_t reg;
                 System_Type type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &type, &reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &type, &reg, NULL));
 
                 MIR_reg_t result_reg;
                 System_Type result_type;
@@ -3442,7 +3225,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_UNBOX_ANY: {
                 MIR_reg_t obj_reg;
                 System_Type obj_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // the object type must always be a ref type for unboxing
                 CHECK(obj_type->StackType == STACK_TYPE_O);
@@ -3572,7 +3355,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_UNBOX: {
                 System_Type obj_type;
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // must be a value type
                 // TODO: this will require a bit more work
@@ -3633,7 +3416,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_BOX: {
                 System_Type val_type;
                 MIR_reg_t val_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &val_type, &val_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &val_type, &val_reg, NULL));
 
                 // make sure that this is fine
                 CHECK(type_is_verifier_assignable_to(val_type, operand_type));
@@ -3771,7 +3554,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // pop all the values from the stack
                 MIR_reg_t addr_reg;
                 System_Type addr_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &addr_type, &addr_reg, NULL));
 
                 // this must be an reference
                 MIR_reg_t value_reg;
@@ -3860,8 +3643,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t addr_reg;
                 System_Type value_type;
                 System_Type addr_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &addr_type, &addr_reg, &addr_entry));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &addr_type, &addr_reg, &addr_entry));
 
                 if (addr_type->IsByRef) {
                     CHECK(!addr_entry.readonly_ref);
@@ -3973,7 +3756,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the value
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // get the label
                 MIR_label_t label;
@@ -4043,7 +3826,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_SWITCH: {
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // allocate enough space for the ops
                 switch_ops = realloc(switch_ops, (operand_switch_n + 1) * sizeof(MIR_op_t));
@@ -4105,7 +3888,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 stack_entry_t value_entry;
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, &value_entry));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, &value_entry));
 
                 // get the variable
                 CHECK(operand_i32 < body->LocalVariables->Length);
@@ -4297,7 +4080,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the top value
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // check the length is fine
                 CHECK(operand_i32 < arrlen(arguments));
@@ -4699,7 +4482,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the top value
                 MIR_reg_t top_reg;
                 System_Type top_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &top_type, &top_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &top_type, &top_reg, NULL));
 
                 // create new two values
                 MIR_reg_t value_1;
@@ -4749,7 +4532,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             } break;
 
             case CEE_POP: {
-                CHECK_AND_RETHROW(stack_pop(ctx, NULL, NULL, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, NULL, NULL, NULL));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4760,7 +4543,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the top value
                 MIR_reg_t value_reg;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
 
                 // get the field type, ignoring stuff like enums
                 System_Type field_type = type_get_underlying_type(operand_field->FieldType);
@@ -4989,8 +4772,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t value_reg;
                 System_Type obj_type;
                 System_Type value_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, &obj_entry));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &obj_type, &obj_reg, &obj_entry));
 
                 // validate that the object type is a valid one for stfld
                 if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
@@ -5175,7 +4958,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the object instance
                 System_Type obj_type;
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
                 // validate that the object type is a valid one for stfld
                 if (type_get_stack_type(obj_type) == STACK_TYPE_REF) {
@@ -5271,7 +5054,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 stack_entry_t obj_entry;
                 System_Type obj_type;
                 MIR_reg_t obj_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &obj_type, &obj_reg, &obj_entry));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &obj_type, &obj_reg, &obj_entry));
 
                 // validate that the object type is a valid one for ldfld
                 CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O || type_get_stack_type(obj_type) == STACK_TYPE_REF);
@@ -5349,7 +5132,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // pop the size
                 System_Type size_type;
                 MIR_reg_t size_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &size_type, &size_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &size_type, &size_reg, NULL));
 
                 // push the address
                 MIR_reg_t addr_reg;
@@ -5390,7 +5173,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             case CEE_INITOBJ: {
                 System_Type dest_type;
                 MIR_reg_t dest_reg;
-                CHECK_AND_RETHROW(stack_pop(ctx, &dest_type, &dest_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &dest_type, &dest_reg, NULL));
 
                 CHECK(dest_type->IsByRef);
                 CHECK(type_is_verifier_assignable_to(operand_type, dest_type->BaseType));
@@ -5415,7 +5198,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     // pop the return from the stack
                     MIR_reg_t ret_arg;
                     System_Type ret_type;
-                    CHECK_AND_RETHROW(stack_pop(ctx, &ret_type, &ret_arg, NULL));
+                    CHECK_AND_RETHROW(jit_stack_pop(ctx, &ret_type, &ret_arg, NULL));
 
                     // verify the stack is empty
                     CHECK(arrlen(ctx->stack.entries) == 0);
@@ -5504,7 +5287,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the number of elements
                 MIR_reg_t num_elems_reg;
                 System_Type num_elems_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &num_elems_type, &num_elems_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &num_elems_type, &num_elems_reg, NULL));
 
                 // only int32 and intptr are allowed
                 if (type_get_stack_type(num_elems_type) == STACK_TYPE_INT32) {
@@ -5561,7 +5344,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // get the number of elements
                 MIR_reg_t array_reg;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5599,9 +5382,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 System_Type value_type;
                 System_Type index_type;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &value_type, &value_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &value_type, &value_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &index_type, &index_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5770,8 +5553,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t array_reg;
                 System_Type index_type;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &index_type, &index_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5883,8 +5666,8 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t array_reg;
                 System_Type index_type;
                 System_Type array_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &index_type, &index_reg, NULL));
-                CHECK_AND_RETHROW(stack_pop(ctx, &array_type, &array_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &index_type, &index_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &array_type, &array_reg, NULL));
 
                 // this must be an array
                 CHECK(array_type->IsArray);
@@ -5954,7 +5737,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // pop the object
                 MIR_reg_t object_reg;
                 System_Type object_type;
-                CHECK_AND_RETHROW(stack_pop(ctx, &object_type, &object_reg, NULL));
+                CHECK_AND_RETHROW(jit_stack_pop(ctx, &object_type, &object_reg, NULL));
 
                 // check that the method matches the object
                 CHECK(type_is_verifier_assignable_to(object_type, operand_method->DeclaringType));
@@ -6096,7 +5879,7 @@ cleanup:
     arrfree(ctx->dtmp.regs);
     arrfree(ctx->ftmp.regs);
 
-    hmfree(ctx->clause_to_label);
+    hmfree(ctx->finally_chain);
 
     return err;
 }

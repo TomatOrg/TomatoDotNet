@@ -98,7 +98,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
         stack_entry_t arg_entry;
         MIR_reg_t arg_reg;
         System_Type arg_type;
-        CHECK_AND_RETHROW(stack_pop(ctx, &arg_type, &arg_reg, &arg_entry));
+        CHECK_AND_RETHROW(jit_stack_pop(ctx, &arg_type, &arg_reg, &arg_entry));
 
         // do implicit conversion as needed
         bool mem_op = false;
@@ -370,7 +370,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
             }
         } else {
             // this is a call, get it from the stack
-            CHECK_AND_RETHROW(stack_pop(ctx, &this_type, &this_reg, NULL));
+            CHECK_AND_RETHROW(jit_stack_pop(ctx, &this_type, &this_reg, NULL));
 
             // Value types have their this as a by-ref
             System_Type signature_this_type = operand_method->DeclaringType;
