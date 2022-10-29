@@ -374,7 +374,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
     if (first_clause != NULL) {
         // merge all the should be entries
         for (int i = our_clause; i >= 0; i--) {
-            finally_chain_t* chain = hmgetp_null(ctx->finally_chain, last_clause);
+            finally_chain_t* chain = hmgetp_null(ctx->finally_chain, body->ExceptionHandlingClauses->Data[i]);
             if (chain == NULL || chain->new_label == NULL) {
                 continue;
             }
