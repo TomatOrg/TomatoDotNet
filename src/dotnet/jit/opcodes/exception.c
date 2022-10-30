@@ -265,7 +265,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
 
         // we are inside this handler, so we are exiting from a handler
         if (clause->HandlerOffset <= ctx->il_offset && ctx->il_offset < clause->HandlerOffset + clause->HandlerLength) {
-            CHECK(clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION);
+            CHECK(clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION || clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER);
 
             // we found where we are
             our_clause = i;
