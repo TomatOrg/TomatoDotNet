@@ -85,7 +85,11 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
         exception = ((System_Exception(*)(System_Object))(ctor->MirFunc->addr))(new);
     } else {
         // build the arguments nicely
-        MIR_val_t vals[argsCount];
+        MIR_val_t vals[1 + argsCount];
+        // first parameter to pass to constructors is the to-fill object
+        // compare with CEE_NEWOBJ implementation
+        vals[0].a = new;
+        // fill the remaining parameters, i starts at 1 because 0 is already filled
         for (int i = 0; i < ctor->Parameters->Length; i++) {
             System_Type paramType = ctor->Parameters->Data[i]->ParameterType;
             System_Object value = args[i];
@@ -99,7 +103,7 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
                         // because we box everything, interfaces are going to
                         // be turned into objects, so we can't have this in here
                         ASSERT(!type_is_interface(valueType));
-                        vals[i].a = value;
+                        vals[1 + i].a = value;
                     }
                 } break;
 
@@ -108,16 +112,16 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
                 case STACK_TYPE_INT32:
                 case STACK_TYPE_INT64:
                 case STACK_TYPE_INTPTR: {
-                    vals[i].u = 0;
-                    memcpy(&vals[i].u, value + 1, valueType->ManagedSize);
+                    vals[1 + i].u = 0;
+                    memcpy(&vals[1 + i].u, value + 1, valueType->ManagedSize);
                     // TODO: do we need to sign extend in here?
                 } break;
 
                 case STACK_TYPE_FLOAT: {
                     if (paramType == tSystem_Single) {
-                        vals[i].f = *(float*)(value + 1);
+                        vals[1 + i].f = *(float*)(value + 1);
                     } else {
-                        vals[i].d = *(double*)(value + 1);
+                        vals[1 + i].d = *(double*)(value + 1);
                     }
                 } break;
 
@@ -134,7 +138,9 @@ err_t activator_create_instance(System_Type type, System_Object* args, int argsC
         // now that we built the arguments, call into it
         MIR_val_t result = { 0 };
         MIR_context_t ctx = jit_get_mir_context();
-        MIR_interp_arr(ctx, ctor->MirFunc, &result, argsCount, vals);
+        // it needs to be a MIR call because the number of argument varies
+        // and consider the first argument is the this object
+        MIR_interp_arr(ctx, ctor->MirFunc, &result, 1 + argsCount, vals);
         jit_release_mir_context();
         exception = result.a;
     }
