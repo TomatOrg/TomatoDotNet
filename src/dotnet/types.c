@@ -2118,6 +2118,7 @@ err_t get_type_by_name(System_Reflection_Assembly reference, System_String str, 
     System_Char* chars = str->Chars;
     int length = str->Length;
 
+    TRACE("Searching for type %U", str);
 
     // first figure if we need a different assembly
     System_Reflection_Assembly wantedAssembly = NULL;
@@ -2185,8 +2186,35 @@ err_t get_type_by_name(System_Reflection_Assembly reference, System_String str, 
 
     // now that we found it, check if we need to continue
     // and search for nested types
-    if (chars[end] == L'+') {
-        CHECK_FAIL("TODO: nested types");
+    while (end < length) {
+        // skip the `+`
+        CHECK(chars[end] == L'+');
+        end++;
+
+        // find the end of the current nested name span
+        System_Span nestedTypeName = { .Length = length - end, .Ptr = (uintptr_t) &chars[end]};
+        for (int i = 0; i < nestedTypeName.Length; i++) {
+            if (chars[end + i] == '+') {
+                // update the length properly
+                nestedTypeName.Length = i;
+                break;
+            }
+        }
+
+        // find it under the nested types
+        System_Type nestedType = baseType->NestedTypes;
+        baseType = NULL;
+        while (nestedType != NULL) {
+            if (string_equals_span(nestedType->Name, nestedTypeName)) {
+                baseType = nestedType;
+                break;
+            }
+            nestedType = nestedType->NextNestedType;
+        }
+        CHECK(baseType != NULL);
+
+        // skip everything up to the current +
+        end += nestedTypeName.Length;
     }
 
     // success!
