@@ -2118,8 +2118,6 @@ err_t get_type_by_name(System_Reflection_Assembly reference, System_String str, 
     System_Char* chars = str->Chars;
     int length = str->Length;
 
-    TRACE("Searching for type %U", str);
-
     // first figure if we need a different assembly
     System_Reflection_Assembly wantedAssembly = NULL;
     for (int i = 0; i < length; i++) {

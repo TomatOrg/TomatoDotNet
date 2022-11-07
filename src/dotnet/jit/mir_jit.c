@@ -4848,17 +4848,16 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                                                             value_type, field_type));
                             }
                         } else {
+                            // check for interface -> object casting
+                            if (type_is_interface(value_type)) {
+                                MIR_append_insn(mir_ctx, mir_func,
+                                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                                             MIR_new_reg_op(mir_ctx, value_reg),
+                                                             MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), value_reg, 0, 1)));
+                            }
+
                             // storing to an object from an object, use a write-barrier
                             if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
-
-                                // check for interface -> object casting
-                                if (type_is_interface(value_type)) {
-                                    MIR_append_insn(mir_ctx, mir_func,
-                                                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                                                 MIR_new_reg_op(mir_ctx, value_reg),
-                                                                 MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), value_reg, 0, 1)));
-                                }
-
                                 // the base is an object, call the gc_update write barrier
                                 MIR_append_insn(mir_ctx, mir_func,
                                                 MIR_new_call_insn(mir_ctx, 5,
