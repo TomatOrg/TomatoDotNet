@@ -334,10 +334,10 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
             // we have a last clause, it should jump
             // to this clause instead of where it was
             // supposed to be before that
-            MIR_label_t last_clause_label;
-            CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, last_clause->HandlerOffset, &last_clause_label));
+            MIR_label_t current_clause_label;
+            CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->HandlerOffset, &current_clause_label));
 
-            hmgets(ctx->finally_chain, last_clause).new_label = last_clause_label;
+            hmgets(ctx->finally_chain, last_clause).new_label = current_clause_label;
         }
 
         // resolve the label of the finally handler
