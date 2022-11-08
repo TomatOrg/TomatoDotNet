@@ -2579,7 +2579,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     ctx->jit_trace_indent += 4;
                 } else if (clause->TryOffset + clause->TryLength == ctx->il_offset) {
                     ctx->jit_trace_indent -= 4;
-                    TRACE("%*s} // end .try", ctx->jit_trace_indent, "");
+                    TRACE("%*s} // end .try %d", ctx->jit_trace_indent, "", i);
 
                 }
 

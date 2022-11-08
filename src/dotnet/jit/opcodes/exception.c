@@ -91,7 +91,7 @@ err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow) {
     bool found_handler = false;
 
     // we need to figure the surrounding catch handler, and figure what to do with it when the exception is thrown
-    for (int i = body->ExceptionHandlingClauses->Length - 1; i >= 0; i--) {
+    for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
         // skip any clause we are not inside
@@ -260,7 +260,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
 
     // first find where we are coming from
     int our_clause = -1;
-    for (int i = body->ExceptionHandlingClauses->Length - 1; i >= 0; i--) {
+    for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
         // we are inside this handler, so we are exiting from a handler
@@ -306,7 +306,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
     // now we need to find to which finally which are jumping out of
     System_Reflection_ExceptionHandlingClause first_clause = NULL;
     System_Reflection_ExceptionHandlingClause last_clause = NULL;
-    for (int i = our_clause; i >= 0; i--) {
+    for (int i = our_clause; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
         // not a finally, we don't care
@@ -373,7 +373,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
     // now that we have figured all of this out, we just need to make sure that all of the
     if (first_clause != NULL) {
         // merge all the should be entries
-        for (int i = our_clause; i >= 0; i--) {
+        for (int i = our_clause; i < body->ExceptionHandlingClauses->Length; i++) {
             finally_chain_t* chain = hmgetp_null(ctx->finally_chain, body->ExceptionHandlingClauses->Data[i]);
             if (chain == NULL || chain->new_label == NULL) {
                 continue;
@@ -436,7 +436,7 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
     // we need to figure the surrounding catch handler, and figure what to do with it when the exception is thrown
     bool found = false;
     finally_chain_t* chain = NULL;
-    for (int i = body->ExceptionHandlingClauses->Length - 1; i >= 0; i--) {
+    for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
         // skip any clause we are not inside
@@ -588,7 +588,7 @@ err_t jit_emit_rethrow(jit_method_context_t* ctx) {
     // only permitted inside a catch handler
     bool found_handler = true;
     System_Type catchType = NULL;
-    for (int i = body->ExceptionHandlingClauses->Length - 1; i >= 0; i--) {
+    for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
         // check if we are in this handler
