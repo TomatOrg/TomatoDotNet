@@ -526,6 +526,7 @@ err_t parse_method_spec(blob_entry_t _sig, System_Reflection_Assembly assembly, 
         // expand it
         System_Type declaring;
         CHECK_AND_RETHROW(type_make_generic(method->DeclaringType, typeArgs, &declaring));
+        CHECK_AND_RETHROW(type_expand_generic(declaring));
 
         // now find the method in the new type
         method = declaring->Methods->Data[method->MethodIndex];

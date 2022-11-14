@@ -598,12 +598,6 @@ err_t loader_setup_type(pe_file_t* file, metadata_t* metadata, System_Type type)
     // now we finished the type setup
     type->IsSetupFinished = true;
 
-    // expand all the type instances that
-    // were already created from this type
-    for (System_Type instance = type->NextGenericInstance; instance != NULL; instance = instance->NextGenericInstance) {
-        CHECK_AND_RETHROW(type_expand_generic(instance));
-    }
-
 cleanup:
     return err;
 }
@@ -716,6 +710,8 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             fieldInfo->Attributes = field->flags;
         }
 
+        // the basics of the type are expanded properly
+        type->IsTypeExpanded = true;
     }
 
     //
@@ -968,11 +964,11 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
         }
 
         // Update the created interfaces of the interface impls
-        System_Type genericChild = type->NextGenericInstance;
-        while (genericChild != NULL) {
-            type_expand_method_impls(genericChild, type->MethodImpls);
-            genericChild = genericChild->NextGenericInstance;
-        }
+//        System_Type genericChild = type->NextGenericInstance;
+//        while (genericChild != NULL) {
+//            CHECK_AND_RETHROW(type_expand_method_impls(genericChild, type->MethodImpls));
+//            genericChild = genericChild->NextGenericInstance;
+//        }
     }
 
     //------------------------------------------------------------------------------------------------------------------

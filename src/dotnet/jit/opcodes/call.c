@@ -246,8 +246,14 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
             arg_ops[i] = MIR_new_reg_op(mir_ctx, arg_reg);
         }
 
-        // verify a normal argument
-        CHECK(type_is_verifier_assignable_to(arg_type, signature_type));
+        // passing pointer as a reference
+        if (arg_type == tSystem_IntPtr && signature_type->IsByRef) {
+            CHECK(ctx->allow_pointers, "passing pointer to byref is not allowed");
+        } else {
+            // verify a normal argument
+            CHECK(type_is_verifier_assignable_to(arg_type, signature_type),
+                  "%U TO %U", arg_type->Name, signature_type->Name);
+        }
     }
 
     // handle the `this` argument

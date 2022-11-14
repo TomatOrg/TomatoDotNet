@@ -530,7 +530,17 @@ method_result_t System_Type_InternalMakeGenericType(System_Type type, System_Typ
     System_Type new_type = NULL;
     System_Exception exception = NULL;
 
+    // create the generic type
     err_t err = type_make_generic(type, arguments, &new_type);
+    if (err != NO_ERROR) {
+        switch (err) {
+            case ERROR_OUT_OF_MEMORY: exception = activator_create_exception(tSystem_OutOfMemoryException); break;
+            default: exception = activator_create_exception(tSystem_Exception); break;
+        }
+    }
+
+    // actually expand it now that it was created
+    err = type_expand_generic(new_type);
     if (err != NO_ERROR) {
         switch (err) {
             case ERROR_OUT_OF_MEMORY: exception = activator_create_exception(tSystem_OutOfMemoryException); break;

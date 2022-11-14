@@ -565,10 +565,12 @@ MIR_type_t jit_get_mir_type(System_Type type) {
         return MIR_T_F;
     } else if (type == tSystem_Double) {
         return MIR_T_D;
+    } else if (type->IsByRef || type->IsPointer) {
+        return MIR_T_P;
     } else if (type->IsValueType || type_is_interface(type)) {
         return MIR_T_BLK;
     } else {
-        ASSERT(type == NULL || type_is_object_ref(type) || type->IsByRef || type->IsPointer);
+        ASSERT(type == NULL || type_is_object_ref(type));
         return MIR_T_P;
     }
 }
@@ -691,6 +693,15 @@ MIR_reg_t jit_new_temp_reg(jit_method_context_t* ctx, System_Type type) {
  */
 err_t jit_stack_push(jit_method_context_t* ctx, System_Type type, MIR_reg_t* out_reg) {
     err_t err = NO_ERROR;
+
+    ASSERT(type == NULL || type->IsSetupFinished);
+
+    if (type != NULL) {
+        // some types can get here unfilled because they were
+        // taken from other generation stuff, so make sure
+        // that they are filled right now
+        CHECK_AND_RETHROW(filler_fill_type(type));
+    }
 
     // Make sure we don't exceed the stack depth
     CHECK(arrlen(ctx->stack.entries) < ctx->method->MethodBody->MaxStackSize);
@@ -2297,7 +2308,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
     // we are going to allow to corelib specifically
     // to do deref on pointers
-    bool allow_pointers = string_equals_cstr(method->Module->Name, "Corelib.dll");
+    ctx->allow_pointers = string_equals_cstr(method->Module->Name, "Corelib.dll");
 
     System_Reflection_Assembly assembly = method->Module->Assembly;
 
@@ -2982,6 +2993,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
             // overflow binary operations
             // TODO: just a stub for now
             case CEE_ADD_OVF:   CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_ADD, false)); break;
+            case CEE_MUL_OVF:   CHECK_AND_RETHROW(jit_binary_numeric_operation(ctx, MIR_MUL, false)); break;
 
             // unary operations
             case CEE_NEG: {
@@ -3203,7 +3215,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                     case STACK_TYPE_O:
                     case STACK_TYPE_REF: {
-                        CHECK(allow_pointers, "con.x reference to integer is not allowed");
+                        CHECK(ctx->allow_pointers, "con.x reference to integer is not allowed");
                         goto conv_intptr;
                     } break;
 
@@ -3573,7 +3585,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     // make sure we are trying to access via a pointer, note that
                     // only the corelib can use pointers
                     CHECK(addr_type == tSystem_IntPtr);
-                    CHECK(allow_pointers, "ldind/ldobj from pointer is not allowed");
+                    CHECK(ctx->allow_pointers, "ldind/ldobj from pointer is not allowed");
                     CHECK_AND_RETHROW(jit_stack_push(ctx, type_get_intermediate_type(operand_type), &value_reg));
                 }
 
@@ -3659,7 +3671,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     CHECK(type_is_verifier_assignable_to(value_type, operand_type));
                 } else {
                     CHECK(addr_type == tSystem_IntPtr);
-                    CHECK(allow_pointers, "stind/stobj to pointer is not allowed");
+                    CHECK(ctx->allow_pointers, "stind/stobj to pointer is not allowed");
                     CHECK(operand_type != NULL);
                 }
 
@@ -3898,7 +3910,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // check the type is valid
                 if (value_type == tSystem_IntPtr && variable_type->IsByRef) {
                     // trying to store pointer to a ref field, stop that
-                    CHECK(allow_pointers, "stloc from native int to byref is not allowed");
+                    CHECK(ctx->allow_pointers, "stloc from native int to byref is not allowed");
                 } else {
                     CHECK(type_is_verifier_assignable_to(value_type, variable_type));
                 }
@@ -5693,8 +5705,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 CHECK_AND_RETHROW(jit_oob_check(ctx, array_reg, index_reg));
 
                 // push to the stack
-                CHECK_AND_RETHROW(
-                        jit_stack_push(ctx, get_by_ref_type(type_get_verification_type(operand_type)), &value_reg));
+                CHECK_AND_RETHROW(jit_stack_push(ctx, get_by_ref_type(type_get_verification_type(operand_type)), &value_reg));
                 STACK_TOP.non_local_ref = true;
 
                 // calculate the element reference offset

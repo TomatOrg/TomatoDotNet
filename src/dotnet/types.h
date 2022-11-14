@@ -685,6 +685,11 @@ struct System_Type {
     // did we run the type initializer yet
     uint32_t RanTypeInitializer : 1;
 
+    // did we expand the type enough to have the Methods/Fields fields
+    uint32_t IsTypeExpanded : 1;
+
+    uint32_t : 17;
+
     System_Reflection_MethodInfo_Array VirtualMethods;
     void** VTable;
 

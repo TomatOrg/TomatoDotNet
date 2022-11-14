@@ -7,17 +7,20 @@
 
 static System_Type* m_type_fill = NULL;
 
-static mutex_t m_type_fill_lock = INIT_MUTEX();
+static err_t queue_type(System_Type type) {
+    err_t err = NO_ERROR;
 
-static void queue_type(System_Type type) {
     if (type->TypeQueued || type->TypeFilled)
-        return;
+        goto cleanup;
 
     // make sure this is a fully setup type...
-    ASSERT(type->IsSetupFinished);
+    CHECK_AND_RETHROW(type_expand_generic(type));
 
     type->TypeQueued = true;
     arrpush(m_type_fill, type);
+
+cleanup:
+    return err;
 }
 
 static System_Type pop_type() {
@@ -48,7 +51,9 @@ static err_t fill_value_type(System_Type type) {
 
         // copy the value type and stack type
         type->IsValueType = type->BaseType->IsValueType;
-        type->StackType = type->BaseType->StackType;
+        if (type->StackType == STACK_TYPE_O) {
+            type->StackType = type->BaseType->StackType;
+        }
     }
 
     // we are done
@@ -88,7 +93,7 @@ static err_t fill_type_stack_size(System_Type type) {
 
         if (type->IsValueType) {
             // Can not inherit from value types, except for enum which is allowed
-            CHECK(type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum);
+            CHECK(type->BaseType == tSystem_ValueType || type->BaseType == tSystem_Enum || type->IsByRef);
         }
     }
 
@@ -177,7 +182,7 @@ static err_t fill_type_managed_size(System_Type type) {
         System_Reflection_FieldInfo fieldInfo = type->Fields->Data[i];
 
         // queue for full init
-        queue_type(fieldInfo->FieldType);
+        CHECK_AND_RETHROW(queue_type(fieldInfo->FieldType));
 
         // ignore static fields for now
         if (field_is_static(fieldInfo)) {
@@ -220,11 +225,19 @@ static err_t fill_type_managed_size(System_Type type) {
                 int ends_at = fieldInfo->MemoryOffset + fieldInfo->FieldType->StackSize;
                 CHECK(ends_at >= 0);
 
+                if (ends_at > current_size) {
+                    current_size = ends_at;
+                }
+
                 // don't allow non-value types for now
                 CHECK(fieldInfo->FieldType->IsValueType);
 
-                // make sure it ends before the class size
-                CHECK(ends_at < type->ClassSize);
+                // make sure it ends before the class size,
+                // if the size is zero then the size is going to be set
+                // implicitly depending on the last field
+                if (type->ClassSize != 0) {
+                    CHECK(ends_at < type->ClassSize);
+                }
             } break;
 
             default:
@@ -249,8 +262,13 @@ static err_t fill_type_managed_size(System_Type type) {
 
     // finalize the managed size
     if (type->ClassSize == 0) {
-        // align the class size properly
-        current_size = ALIGN_UP(current_size, current_alignment);
+        if (type_layout(type) == TYPE_EXPLICIT_LAYOUT) {
+            // explicit size with an implicit full size, set it in here
+            type->ClassSize = current_size;
+        } else {
+            // align the class size properly
+            current_size = ALIGN_UP(current_size, current_alignment);
+        }
     } else {
         // make sure the size is still in bounds
         CHECK(current_size <= type->ClassSize);
@@ -437,7 +455,7 @@ static err_t fill_methods(System_Type type) {
 
             // queue return type
             if (methodInfo->ReturnType != NULL)
-                queue_type(methodInfo->ReturnType);
+                CHECK_AND_RETHROW(queue_type(methodInfo->ReturnType));
 
             // queue the parameters, skip generic parameters
             for (int j = 0; j < methodInfo->Parameters->Length; j++) {
@@ -446,7 +464,7 @@ static err_t fill_methods(System_Type type) {
                     continue;
                 }
 
-                queue_type(parameterInfo->ParameterType);
+                CHECK_AND_RETHROW(queue_type(parameterInfo->ParameterType));
             }
         }
 
@@ -519,7 +537,7 @@ static err_t fill_methods(System_Type type) {
             }
 
             // queue the interface
-            queue_type(interface);
+            CHECK_AND_RETHROW(queue_type(interface));
 
             // we need the virtual methods of that type
             CHECK_AND_RETHROW(fill_methods(interface));
@@ -684,9 +702,7 @@ err_t filler_fill_type(System_Type type) {
         return NO_ERROR;
     }
 
-    mutex_lock(&m_type_fill_lock);
-
-    queue_type(type);
+    CHECK_AND_RETHROW(queue_type(type));
 
     while (true) {
         type = pop_type();
@@ -707,15 +723,18 @@ err_t filler_fill_type(System_Type type) {
         // validate the base type
         if (type->BaseType != NULL) {
             // queue the base type
-            queue_type(type->BaseType);
+            CHECK_AND_RETHROW(queue_type(type->BaseType));
 
             if (type_is_interface(type)) {
                 // interfaces must inherit from System.Object
                 CHECK(type->BaseType == tSystem_Object);
             }
 
-            // validate that we don't inherit from a sealed type
-            CHECK(!type_is_sealed(type->BaseType));
+            // validate that we don't inherit from a sealed type, ref
+            // is the only exception
+            if (!type->IsByRef) {
+                CHECK(!type_is_sealed(type->BaseType));
+            }
         }
 
         // set the namespace if this is a nested type
@@ -738,15 +757,16 @@ err_t filler_fill_type(System_Type type) {
     }
 
 cleanup:
-    mutex_unlock(&m_type_fill_lock);
     return err;
 }
 
 err_t filler_fill_value_type(System_Type type) {
     err_t err = NO_ERROR;
 
-    mutex_lock(&m_type_fill_lock);
+    // make sure this is a fully setup type...
+    CHECK_AND_RETHROW(type_expand_generic(type));
 
+    // and now fill it
     CHECK_AND_RETHROW(fill_value_type(type));
 
     // clear the types that have been queued, and mark them as not queued, as
@@ -761,15 +781,16 @@ err_t filler_fill_value_type(System_Type type) {
     }
 
 cleanup:
-    mutex_unlock(&m_type_fill_lock);
     return err;
 }
 
 err_t filler_fill_stack_size(System_Type type) {
     err_t err = NO_ERROR;
 
-    mutex_lock(&m_type_fill_lock);
+    // make sure this is a fully setup type...
+    CHECK_AND_RETHROW(type_expand_generic(type));
 
+    // and now fill it
     CHECK_AND_RETHROW(fill_type_stack_size(type));
 
     // clear the types that have been queued, and mark them as not queued, as
@@ -784,6 +805,5 @@ err_t filler_fill_stack_size(System_Type type) {
     }
 
 cleanup:
-    mutex_unlock(&m_type_fill_lock);
     return err;
 }

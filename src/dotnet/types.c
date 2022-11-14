@@ -321,6 +321,7 @@ err_t assembly_get_method_by_token(System_Reflection_Assembly assembly, token_t 
             GC_UPDATE(signature, Name, ref->Name);
 
             // now search for it in the type
+            CHECK_AND_RETHROW(type_expand_generic(type));
             System_Reflection_MethodInfo methodInfo = type_find_method_in_type(type, signature);
 
             // found it
@@ -359,6 +360,7 @@ err_t assembly_get_field_by_token(System_Reflection_Assembly assembly, token_t t
             // get the enclosing type
             System_Type type;
             CHECK_AND_RETHROW(assembly_get_type_by_token(assembly, ref->Class, typeArgs, methodArgs, &type));
+            CHECK_AND_RETHROW(type_expand_generic(type));
 
             // get the expected field
             System_Reflection_FieldInfo wantedInfo = GC_NEW(tSystem_Reflection_FieldInfo);
@@ -409,30 +411,15 @@ System_String assembly_get_string_by_token(System_Reflection_Assembly assembly, 
 
 static bool m_enable_generic_arrays = false;
 
-static bool THREAD_LOCAL m_nesting_setup_generic_array = false;
-
 void enable_generic_arrays() {
     m_enable_generic_arrays = true;
 }
 
 void setup_generic_array(System_Type type) {
-    if (m_nesting_setup_generic_array) {
-        return;
-    }
-
-    if (type->IsSetupFinished) {
-        return;
-    }
-
-    PANIC_ON(monitor_enter(type));
-
     // already inited by the time we took the lock
     if (type->IsSetupFinished) {
         return;
     }
-
-    // don't nest the generic array creation
-    m_nesting_setup_generic_array = true;
 
     // create the args
     System_Type_Array args = GC_NEW_ARRAY(tSystem_Type, 1);
@@ -441,6 +428,7 @@ void setup_generic_array(System_Type type) {
     // instantiate
     System_Type genericArray = NULL;
     PANIC_ON(type_make_generic(tSystem_GenericArray, args, &genericArray));
+    PANIC_ON(type_expand_generic(genericArray));
 
     // set the base info, the rest will need to be handled by
     // someone else when they want them
@@ -448,20 +436,12 @@ void setup_generic_array(System_Type type) {
     GC_UPDATE(type, InterfaceImpls, genericArray->InterfaceImpls);
     GC_UPDATE(type, MethodImpls, genericArray->MethodImpls);
 
-    // we no longer nest,
-    m_nesting_setup_generic_array = false;
-
     type->IsSetupFinished = true;
-
-    PANIC_ON(monitor_exit(type));
+    type->IsTypeExpanded = true;
 }
 
 static System_Type create_array_type(System_Type type) {
-    // TODO: panic on fail
-    PANIC_ON(monitor_enter(type));
-
     if (type->ArrayType != NULL) {
-        PANIC_ON(monitor_exit(type));
         return type->ArrayType;
     }
 
@@ -504,7 +484,6 @@ static System_Type create_array_type(System_Type type) {
 
     // Set the array type
     GC_UPDATE(type, ArrayType, ArrayType);
-    PANIC_ON(monitor_exit(type));
 
     return type->ArrayType;
 }
@@ -524,13 +503,6 @@ System_Type get_by_ref_type(System_Type type) {
         return type->ByRefType;
     }
 
-    PANIC_ON(monitor_enter(type));
-
-    if (type->ByRefType != NULL) {
-        PANIC_ON(monitor_exit(type));
-        return type->ByRefType;
-    }
-
     // must not be a byref
     ASSERT(!type->IsByRef);
 
@@ -540,10 +512,11 @@ System_Type get_by_ref_type(System_Type type) {
 
     // this is an array
     ByRefType->IsByRef = true;
-    ByRefType->TypeQueued = true;
-    ByRefType->TypeFilled = true;
+    ByRefType->TypeQueued = false;
+    ByRefType->TypeFilled = type->TypeFilled;
     ByRefType->StackType = STACK_TYPE_REF;
     ByRefType->GenericParameterPosition = -1;
+    ByRefType->IsTypeExpanded = true;
 
     // set the type information to look as ref type
     GC_UPDATE(ByRefType, Module, type->Module);
@@ -557,23 +530,19 @@ System_Type get_by_ref_type(System_Type type) {
     ByRefType->ManagedSize = type->StackSize;
     ByRefType->StackAlignment = alignof(void*);
     ByRefType->ManagedAlignment = type->StackAlignment;
+    ByRefType->ManagedSizeFilled = true;
+    ByRefType->MethodsFilled = true;
+    ByRefType->StackSizeFilled = true;
+    ByRefType->IsSetupFinished = true;
 
     // Set the array type
     GC_UPDATE(type, ByRefType, ByRefType);
-    PANIC_ON(monitor_exit(type));
 
     return type->ByRefType;
 }
 
 System_Type get_pointer_type(System_Type type) {
     if (type->PointerType != NULL) {
-        return type->PointerType;
-    }
-
-    PANIC_ON(monitor_enter(type));
-
-    if (type->PointerType != NULL) {
-        PANIC_ON(monitor_exit(type));
         return type->PointerType;
     }
 
@@ -603,24 +572,18 @@ System_Type get_pointer_type(System_Type type) {
     PointerType->TypeQueued = true;
     PointerType->TypeFilled = true;
     PointerType->IsPointer = true;
+    PointerType->IsSetupFinished = true;
+    PointerType->IsTypeExpanded = true;
     GC_UPDATE(PointerType, ElementType, type);
 
     // Set the array type
     GC_UPDATE(type, PointerType, PointerType);
-    PANIC_ON(monitor_exit(type));
 
     return type->PointerType;
 }
 
 System_Type get_boxed_type(System_Type type) {
     if (type->BoxedType != NULL) {
-        return type->BoxedType;
-    }
-
-    PANIC_ON(monitor_enter(type));
-
-    if (type->BoxedType != NULL) {
-        PANIC_ON(monitor_exit(type));
         return type->BoxedType;
     }
 
@@ -655,12 +618,13 @@ System_Type get_boxed_type(System_Type type) {
     BoxedType->TypeQueued = true;
     BoxedType->TypeFilled = true;
     BoxedType->IsBoxed = true;
+    BoxedType->IsSetupFinished = true;
+    BoxedType->IsTypeExpanded = true;
     GC_UPDATE(BoxedType, InterfaceImpls, type->InterfaceImpls);
     GC_UPDATE(BoxedType, VirtualMethods, type->VirtualMethods);
 
     // Set the array type
     GC_UPDATE(type, BoxedType, BoxedType);
-    PANIC_ON(monitor_exit(type));
 
     return type->BoxedType;
 }
@@ -1752,6 +1716,7 @@ static err_t find_expanded_method(System_Reflection_MethodInfo method, System_Ty
 
     System_Type type;
     CHECK_AND_RETHROW(expand_type(method->DeclaringType, arguments, NULL, &type));
+    CHECK_AND_RETHROW(type_expand_generic(type));
 
     int index = 0;
     System_Reflection_MethodInfo methodInfo = NULL;
@@ -1835,6 +1800,25 @@ err_t type_expand_generic(System_Type instance) {
     System_Type type = instance->GenericTypeDefinition;
     System_Type_Array arguments = instance->GenericArguments;
 
+    // if this is not a generic type then ignore it
+    if (type == NULL) {
+//        CHECK(instance->IsTypeExpanded);
+        goto cleanup;
+    }
+
+    // setup of the parent must be finished before we start the setup of the son.
+    CHECK(type->IsSetupFinished);
+
+    if (instance->IsSetupFinished) {
+        goto cleanup;
+    }
+
+    // don't recurse
+    if (instance->IsSetupStarted) {
+        goto cleanup;
+    }
+    instance->IsSetupStarted = true;
+
     // base type
     System_Type baseType;
     CHECK_AND_RETHROW(expand_type(type->BaseType, arguments, NULL, &baseType));
@@ -1872,6 +1856,7 @@ err_t type_expand_generic(System_Type instance) {
     }
 
     instance->IsSetupFinished = true;
+    instance->IsTypeExpanded = true;
 
 cleanup:
     return err;
@@ -1879,10 +1864,6 @@ cleanup:
 
 err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Type* out_type) {
     err_t err = NO_ERROR;
-    bool locked = false;
-
-    monitor_enter(type);
-    locked = true;
 
     CHECK(type_is_generic_definition(type));
     CHECK(type->GenericArguments->Length == arguments->Length);
@@ -1993,30 +1974,14 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     GC_UPDATE(instance, NextGenericInstance, type->NextGenericInstance);
     GC_UPDATE(type, NextGenericInstance, instance);
 
-    // unlock it
-    locked = false;
-    monitor_exit(type);
-
-    // only expand if the type is setup properly, otherwise we are going
-    // to expand it in a later stage once it is actually initialized
-    if (type->IsSetupFinished) {
-        CHECK_AND_RETHROW(type_expand_generic(instance));
-    }
-
     *out_type = instance;
 
 cleanup:
-    if (locked) {
-        monitor_exit(type);
-    }
-
     return err;
 }
 
 err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array arguments, System_Reflection_MethodInfo* out_method) {
     err_t err = NO_ERROR;
-
-    monitor_enter(method);
 
     CHECK(!type_is_generic_definition(method->DeclaringType));
 
@@ -2072,8 +2037,6 @@ err_t method_make_generic(System_Reflection_MethodInfo method, System_Type_Array
     *out_method = instance;
 
 cleanup:
-    monitor_exit(method);
-
     return err;
 }
 

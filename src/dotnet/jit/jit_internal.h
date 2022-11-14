@@ -179,6 +179,9 @@ typedef struct jit_method_context {
 
     // the method we are dealing with
     System_Reflection_MethodInfo method;
+
+    // marks that pointers are allowed to be used
+    bool allow_pointers;
 } jit_method_context_t;
 
 /**
@@ -516,10 +519,10 @@ static inline bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (method->DeclaringType->GenericTypeDefinition == NULL)
 //        return false;
 
-    if (!string_equals_cstr(method->DeclaringType->Name, "ConditionalWeakTable`2<[Corelib-v1]ThreadLocalArray<char>[],object>"))
+    if (!string_equals_cstr(method->DeclaringType->Name, "Utf8Utility"))
         return false;
 
-    if (!string_equals_cstr(method->Name, "Add"))
+    if (!string_equals_cstr(method->Name, "TranscodeToUtf16"))
         return false;
 
     return true;
