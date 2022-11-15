@@ -1459,7 +1459,8 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
     //
     } else if (method_get_code_type(method) == METHOD_IL) {
         // don't allow, as we may use this in a later stage
-        CHECK(!method_is_internal_call(method));
+        CHECK(!method_is_internal_call(method),
+              "Method marked as IL must not be internal (%s)", strbuilder_get(&func_name));
 
         // TODO: support for synchronized methods
         CHECK(!method_is_synchronized(method));
@@ -1951,6 +1952,10 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
         CHECK_AND_RETHROW(jit_stack_push(ctx, tSystem_Int32, &result_reg));
     }
 
+    // get the float offset, different for EQ and NE
+    int float_offset = (code == MIR_EQ || code == MIR_NE || code == MIR_BEQ || code == MIR_BNE) ? 2 : 4;
+    int double_offset = float_offset + 1;
+
     switch (type_get_stack_type(value1_type)) {
         case STACK_TYPE_INT32: {
             if (type_get_stack_type(value2_type) == STACK_TYPE_INT32) {
@@ -1985,13 +1990,28 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
         case STACK_TYPE_FLOAT: {
             CHECK(value2_type == tSystem_Double || value2_type == tSystem_Single);
 
+            // convert unsigned operations to normal ones
+            // TODO: figure what the fuck unordered means and how do I make MIR do that
+            switch (code) {
+                case MIR_ULT: code = MIR_LT; break;
+                case MIR_ULE: code = MIR_LE; break;
+                case MIR_UGT: code = MIR_GT; break;
+                case MIR_UGE: code = MIR_GE; break;
+                case MIR_UBLT: code = MIR_BLT; break;
+                case MIR_UBLE: code = MIR_BLE; break;
+                case MIR_UBGT: code = MIR_BGT; break;
+                case MIR_UBGE: code = MIR_BGE; break;
+                default:
+                    break;
+            }
+
             if (value1_type == tSystem_Single) {
                 if (value2_type == tSystem_Single) {
-                    // need to do float math
-                    code += 2;
+                    // need to do float compare
+                    code += float_offset;
                 } else if (value2_type == tSystem_Double) {
-                    // need to do double math
-                    code += 3;
+                    // need to do double compare
+                    code += double_offset;
 
                     // implicit conversion float->double
                     MIR_reg_t value1_double_reg = jit_new_temp_reg(ctx, tSystem_Double);
@@ -2003,7 +2023,7 @@ static err_t jit_compare_branch(jit_method_context_t* ctx, int il_target, MIR_in
                 }
             } else if (value1_type == tSystem_Double) {
                 // always double math
-                code += 3;
+                code += double_offset;
 
                 if (value2_type == tSystem_Single) {
                     // implicit conversion float->double
@@ -2229,10 +2249,29 @@ static err_t jit_binary_numeric_operation(jit_method_context_t* ctx, MIR_insn_co
                 }
             } break;
 
-                // not allowed to do math on these
+            // only allowed if pointers are allowed
+            case STACK_TYPE_REF: {
+                CHECK(ctx->allow_pointers, "math on byref is not allowed");
+                CHECK(code == MIR_ADD); // only addition is supported
+
+                CHECK_AND_RETHROW(jit_stack_push(ctx, value1_type, &result_reg));
+
+                if (type_get_stack_type(value2_type) == STACK_TYPE_INT32) {
+                    // ref x int32
+                    // sign extend
+                    MIR_append_insn(mir_ctx, mir_func,
+                                    MIR_new_insn(mir_ctx, MIR_EXT32,
+                                                 MIR_new_reg_op(mir_ctx, value2_reg),
+                                                 MIR_new_reg_op(mir_ctx, value2_reg)));
+                } else {
+                    // ref x intptr
+                    CHECK(type_get_stack_type(value2_type) == STACK_TYPE_INTPTR);
+                }
+            } break;
+
+            // not allowed to do math on these
             case STACK_TYPE_VALUE_TYPE:
             case STACK_TYPE_O:
-            case STACK_TYPE_REF:
                 CHECK_FAIL();
         }
     }
@@ -3617,7 +3656,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             code = MIR_UEXT16;
                         } else if (operand_type == tSystem_Single) {
                             code = MIR_FMOV;
-                        } else if (operand_type == tSystem_Single) {
+                        } else if (operand_type == tSystem_Double) {
                             code = MIR_DMOV;
                         }
 
@@ -4706,7 +4745,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             insn = MIR_UEXT16;
                         } else if (field_type == tSystem_Single) {
                             insn = MIR_FMOV;
-                        } else if (field_type == tSystem_Single) {
+                        } else if (field_type == tSystem_Double) {
                             insn = MIR_DMOV;
                         }
 
@@ -5031,7 +5070,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             insn = MIR_UEXT16;
                         } else if (field_type == tSystem_Single) {
                             insn = MIR_FMOV;
-                        } else if (field_type == tSystem_Single) {
+                        } else if (field_type == tSystem_Double) {
                             insn = MIR_DMOV;
                         }
 
@@ -5628,7 +5667,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                             code = MIR_UEXT16;
                         } else if (operand_type == tSystem_Single) {
                             code = MIR_FMOV;
-                        } else if (operand_type == tSystem_Single) {
+                        } else if (operand_type == tSystem_Double) {
                             code = MIR_DMOV;
                         }
 
