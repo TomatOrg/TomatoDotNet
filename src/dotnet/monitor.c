@@ -33,7 +33,7 @@ typedef struct monitor {
 } monitor_t;
 
 typedef struct monitor_root {
-    spinlock_t lock;
+    mutex_t lock;
 
     // root of balanced tree of unique locks
     monitor_t* treap;
@@ -99,14 +99,14 @@ static void rotate_right(monitor_root_t* root, monitor_t* y) {
 }
 
 static monitor_t* get_monitor(monitor_root_t* root, void* addr) {
-    spinlock_lock(&root->lock);
+    mutex_lock(&root->lock);
 
     monitor_t* last = NULL;
     monitor_t** pm = &root->treap;
     for (monitor_t* m = *pm; m != NULL; m = *pm) {
         if (m->object == addr) {
             // Already have addr in the list
-            spinlock_unlock(&root->lock);
+            mutex_unlock(&root->lock);
             return m;
         }
 
@@ -131,7 +131,7 @@ static monitor_t* get_monitor(monitor_root_t* root, void* addr) {
     // It will not affect treap's quality noticeably.
     monitor_t* monitor = malloc(sizeof(monitor_t));
     if (monitor == NULL) {
-        spinlock_unlock(&root->lock);
+        mutex_unlock(&root->lock);
         return NULL;
     }
     monitor->cond = INIT_CONDITIONAL();
@@ -154,7 +154,7 @@ static monitor_t* get_monitor(monitor_root_t* root, void* addr) {
         }
     }
 
-    spinlock_unlock(&root->lock);
+    mutex_unlock(&root->lock);
     return monitor;
 }
 
@@ -162,7 +162,7 @@ static monitor_t* get_monitor(monitor_root_t* root, void* addr) {
 void free_monitor(void* object) {
     monitor_root_t* root = get_monitor_root(object);
 
-    spinlock_lock(&root->lock);
+    mutex_lock(&root->lock);
 
     monitor_t** pm = &root->treap;
     monitor_t* m = *pm;
@@ -178,7 +178,7 @@ void free_monitor(void* object) {
     }
 
     // no monitor for this object
-    spinlock_unlock(&root->lock);
+    mutex_unlock(&root->lock);
     return;
 
 found:
@@ -202,7 +202,7 @@ found:
         root->treap = NULL;
     }
 
-    spinlock_unlock(&root->lock);
+    mutex_unlock(&root->lock);
 
     // we can now properly free it
     free(m);
