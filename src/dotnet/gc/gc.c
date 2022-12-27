@@ -6,6 +6,7 @@
 #include "../monitor.h"
 #include "../types.h"
 #include "dotnet/loader.h"
+#include "time/tick.h"
 
 #include <sync/conditional.h>
 #include <sync/wait_group.h>

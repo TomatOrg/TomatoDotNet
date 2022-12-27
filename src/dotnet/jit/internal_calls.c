@@ -56,7 +56,7 @@ void managed_memcpy(System_Object this, System_Type struct_type, size_t offset, 
 //----------------------------------------------------------------------------------------------------------------------
 
 static method_result_t System_Diagnostic_Stopwatch_GetTscFrequency() {
-    return (method_result_t) { .exception = NULL, .value = get_tsc_freq() * 1000000 };
+    return (method_result_t) { .exception = NULL, .value = get_tsc_freq() };
 }
 
 static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {

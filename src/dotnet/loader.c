@@ -16,6 +16,7 @@
 #include "dotnet/gc/heap.h"
 #include "mem/mem.h"
 #include "filler.h"
+#include "time/tick.h"
 
 #include <stdalign.h>
 #include <string.h>
