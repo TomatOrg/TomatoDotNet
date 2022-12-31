@@ -47,18 +47,38 @@ void gc_get_memory_info(System_GCMemoryInfo* memoryInfo);
 #define UNSAFE_GC_NEW(type) \
     ({ \
         System_Type __type = type; \
-        void* object = gc_new(__type, __type->ManagedSize); \
-        ASSERT(object != NULL); \
-        object; \
+        void* __object = gc_new(__type, __type->ManagedSize); \
+        ASSERT(__object != NULL); \
+        __object; \
     })
 
 #define GC_NEW(type) \
     ({ \
         System_Type __type = type; \
-        void* object = gc_new(__type, __type->ManagedSize); \
-        CHECK_ERROR(object != NULL, ERROR_OUT_OF_MEMORY); \
-        object; \
+        void* __object = gc_new(__type, __type->ManagedSize); \
+        CHECK_ERROR(__object != NULL, ERROR_OUT_OF_MEMORY); \
+        __object; \
     })
+
+#define GC_NEW_TYPE() \
+    ({ \
+        System_Type __new_type = GC_NEW(tSystem_Type); \
+        void** __smallPointer = lowmem_malloc(sizeof(void*)); \
+        *__smallPointer = __new_type; \
+        __new_type->SmallPointer = (uintptr_t)__smallPointer; \
+        __new_type; \
+    })
+
+#define UNSAFE_GC_NEW_TYPE() \
+    ({ \
+        System_Type __new_type = UNSAFE_GC_NEW(tSystem_Type); \
+        if (__new_type != NULL) {\
+            void** __smallPointer = lowmem_malloc(sizeof(void*)); \
+            *__smallPointer = __new_type; \
+            __new_type->SmallPointer = (uintptr_t)__smallPointer; \
+        } \
+        __new_type; \
+     })
 
 #define GC_NEW_STRING(count) \
     ({ \

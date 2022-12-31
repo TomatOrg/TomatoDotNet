@@ -477,7 +477,9 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_MOV,
                                      MIR_new_reg_op(mir_ctx, temp_reg),
-                                     MIR_new_mem_op(mir_ctx, MIR_T_P, 0, this_reg, 0, 1)));
+                                     MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                    offsetof(struct System_Object, vtable),
+                                                            this_reg, 0, 1)));
 
         // get the base offset of the method
         size_t vtable_index = operand_method->VTableOffset;

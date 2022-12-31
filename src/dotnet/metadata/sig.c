@@ -473,7 +473,7 @@ err_t parse_method_ref_sig(blob_entry_t _sig, System_Reflection_Assembly assembl
         CHECK_AND_RETHROW(parse_compressed_integer(sig, &generic_param_count));
         System_Type_Array generic_params = GC_NEW_ARRAY(tSystem_Type, generic_param_count);
         for (int i = 0; i < generic_param_count; i++) {
-            System_Type typeParam = GC_NEW(tSystem_Type);
+            System_Type typeParam = GC_NEW_TYPE();
             GC_UPDATE(typeParam, Name, get_empty_string());
             typeParam->TypeFilled = true; // consier it as filled
             typeParam->GenericParameterPosition = i;

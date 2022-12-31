@@ -446,9 +446,9 @@ static System_Type create_array_type(System_Type type) {
     }
 
     // allocate the new type
-    System_Type ArrayType = UNSAFE_GC_NEW(tSystem_Type);
+    System_Type ArrayType = UNSAFE_GC_NEW_TYPE();
     if (ArrayType == NULL) {
-        return ArrayType;
+        return NULL;
     }
 
     // make sure this was called after system array was initialized
@@ -507,8 +507,10 @@ System_Type get_by_ref_type(System_Type type) {
     ASSERT(!type->IsByRef);
 
     // allocate the new ref type
-    System_Type ByRefType = UNSAFE_GC_NEW(tSystem_Type);
-    ASSERT(ByRefType != NULL);
+    System_Type ByRefType = UNSAFE_GC_NEW_TYPE();
+    if (ByRefType == NULL) {
+        return NULL;
+    }
 
     // this is an array
     ByRefType->IsByRef = true;
@@ -550,9 +552,9 @@ System_Type get_pointer_type(System_Type type) {
     ASSERT(!type->IsByRef);
 
     // allocate the new ref type
-    System_Type PointerType = UNSAFE_GC_NEW(tSystem_Type);
+    System_Type PointerType = UNSAFE_GC_NEW_TYPE();
     if (PointerType == NULL) {
-        return PointerType;
+        return NULL;
     }
 
     GC_UPDATE(PointerType, Module, type->Module);
@@ -591,9 +593,9 @@ System_Type get_boxed_type(System_Type type) {
     ASSERT(!type->IsByRef);
 
     // allocate the new ref type
-    System_Type BoxedType = UNSAFE_GC_NEW(tSystem_Type);
+    System_Type BoxedType = UNSAFE_GC_NEW_TYPE();
     if (BoxedType == NULL) {
-        return BoxedType;
+        return NULL;
     }
 
     // fill the full type if we want a box of it, this should be fine since
@@ -685,7 +687,6 @@ bool field_is_thread_static(System_Reflection_FieldInfo field) {
 
     return false;
 }
-
 
 
 bool type_is_integer(System_Type type) {
@@ -1943,7 +1944,7 @@ err_t type_make_generic(System_Type type, System_Type_Array arguments, System_Ty
     }
 
     // instance not found, create one
-    System_Type instance = GC_NEW(tSystem_Type);
+    System_Type instance = GC_NEW_TYPE();
     GC_UPDATE(instance, DeclaringType, type->DeclaringType);
     GC_UPDATE(instance, Module, type->Module);
     GC_UPDATE(instance, Assembly, type->Assembly);

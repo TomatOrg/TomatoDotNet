@@ -5,6 +5,7 @@
 
 #include <util/strbuilder.h>
 #include <sync/mutex.h>
+#include <util/defs.h>
 
 #include <mir/mir.h>
 
@@ -78,27 +79,22 @@ typedef uintptr_t System_UIntPtr;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+//// the type is indirect, we have a 32bit pointer to a 64bit pointer, this allows to more
+//// easily have everything fit inside the 16byte header in the object
+#define OBJECT_TYPE(obj) (*((System_Type*)((uintptr_t)((obj)->type))))
+
 /**
  * Represents a dotnet object
  */
-
-// Store only the lower 48 bits of a pointer
-// if this is hosted usermode TDN, the remaning bits will be zero (only without LA57, TODO:)
-// if this is TomatOS, all allocations are in the higher half kernel heap
-#ifdef TOMATOS_HOSTED
-#define OBJECT_TYPE(obj) ((System_Type)((obj)->type))
-#else
-#define OBJECT_TYPE(obj) ((System_Type)((obj)->type | 0xFFFF000000000000))
-#endif
 struct System_Object {
     // the vtable of the object
     void** vtable;
 
     // the type of the object
-    uint64_t type : 48;
+    uint32_t type;
 
     // the color of the object
-    uint64_t color : 3;
+    uint32_t color : 3;
 #define COLOR_BLUE      0   /* unallocated object */
 #define COLOR_WHITE     1   /* object that has not been traced */
 #define COLOR_GRAY      2   /* object that has been traced, but its children have not been traced yet */
@@ -109,10 +105,10 @@ struct System_Object {
 #define COLOR_RESERVED1 7   /* reserved for future use */
 
     // should finalizer be called or not
-    uint64_t suppress_finalizer : 1;
+    uint32_t suppress_finalizer : 1;
 
     // unused for now
-    uint64_t _reserved : 12;
+    uint32_t _reserved : 12;
 };
 STATIC_ASSERT(sizeof(struct System_Object) == sizeof(void*) * 2);
 
@@ -156,7 +152,7 @@ DEFINE_ARRAY(System_Object);
 typedef struct System_String {
     struct System_Object;
     int Length;
-    System_Char Chars[];
+    System_Char Chars[1];
 } *System_String;
 
 DEFINE_ARRAY(System_String);
@@ -605,6 +601,9 @@ struct System_Type {
     bool IsByRef;
     bool IsBoxed;
     bool IsPointer;
+
+    // a 32bit pointer pointing to a pointer to this object
+    int SmallPointer;
 
     // for type parameter (not instantiated)
     System_Type GenericTypeDefinition;

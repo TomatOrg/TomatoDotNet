@@ -605,7 +605,7 @@ static err_t fill_methods(System_Type type) {
 
     // no need to allocate a vtable for abstract or interface types
     if (!type_is_abstract(type) && !type_is_interface(type)) {
-        type->VTable = malloc(sizeof(void*) * virtual_count);
+        type->VTable = lowmem_malloc(sizeof(void*) * virtual_count);
         CHECK_ERROR(type->VTable != NULL, ERROR_OUT_OF_MEMORY);
     }
 

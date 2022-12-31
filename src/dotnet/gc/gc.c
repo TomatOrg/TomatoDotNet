@@ -100,8 +100,14 @@ void* gc_new(System_Type type, size_t size) {
 
     // set the object type
     if (type != NULL) {
-        o->type = (uintptr_t)type;
+        // set the indirect, 32bit type pointer
+        ASSERT(type->SmallPointer != 0);
+        o->type = type->SmallPointer;
+
         o->vtable = type->VTable;
+//        uintptr_t vtable = (uintptr_t)type->VTable;
+//        ASSERT(vtable < BASE_4GB);
+//        o->vtable = vtable;
     }
 
     // if there is no finalize then always suppress the finalizer

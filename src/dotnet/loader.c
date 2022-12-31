@@ -778,7 +778,7 @@ static err_t setup_type_info(pe_file_t* file, metadata_t* metadata, System_Refle
             CHECK_AND_RETHROW(assembly_get_method_by_token(assembly, generic_param->owner, NULL, NULL, (void*)&owner));
         }
 
-        System_Type typeParam = UNSAFE_GC_NEW(tSystem_Type);
+        System_Type typeParam = GC_NEW_TYPE();
         typeParam->MetadataToken = (token_t) { .table = METADATA_GENERIC_PARAM, .index = i + 1 };
         GC_UPDATE(typeParam, Name, new_string_from_utf8(generic_param->name, strlen(generic_param->name)));
         typeParam->GenericParameterPosition = generic_param->number;
@@ -1551,7 +1551,8 @@ cleanup:
 
 #define RESET_TYPE(instance, _type) \
     do { \
-        instance->type = (uintptr_t)_type; \
+        ASSERT(_type->SmallPointer != 0); \
+        instance->type = _type->SmallPointer; \
     } while (0);
 
 static int calc_object_size(uintptr_t obj) {
@@ -1591,6 +1592,16 @@ static void fix_all_vtables(System_Object object) {
             ASSERT(object->vtable != NULL);
         }
     }
+//    if (object->vtable == 0) {
+//        uintptr_t vtable = (uintptr_t)OBJECT_TYPE(object)->VTable;
+//        ASSERT(vtable < BASE_4GB);
+//        object->vtable = vtable;
+//
+//        if (object->vtable == 0) {
+//            TRACE("VTable was still null after fixups: %U", OBJECT_TYPE(object)->Name);
+//            ASSERT(object->vtable != 0);
+//        }
+//    }
 }
 
 static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
@@ -1632,7 +1643,14 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     assembly->DefinedTypes->Length = types_count;
     for (int i = 0; i < types_count; i++) {
         metadata_type_def_t* type_def = &type_defs[i];
-        assembly->DefinedTypes->Data[i] = gc_new(NULL, sizeof(struct System_Type));
+        System_Type type = gc_new(NULL, sizeof(struct System_Type));
+
+        // set the small type
+        void** smallPointer = lowmem_malloc(sizeof(void*));
+        *smallPointer = type;
+        type->SmallPointer = (uintptr_t)smallPointer;
+
+        assembly->DefinedTypes->Data[i] = type;
         CHECK(assembly->DefinedTypes->Data[i] != NULL);
         init_type(type_def, assembly->DefinedTypes->Data[i]);
     }
@@ -1777,7 +1795,7 @@ err_t loader_load_assembly(void* buffer, size_t buffer_size, System_Reflection_A
     // create all the types
     GC_UPDATE(assembly, DefinedTypes, GC_NEW_ARRAY(tSystem_Type, types_count));
     for (int i = 0; i < types_count; i++) {
-        GC_UPDATE_ARRAY(assembly->DefinedTypes, i, UNSAFE_GC_NEW(tSystem_Type));
+        GC_UPDATE_ARRAY(assembly->DefinedTypes, i, GC_NEW_TYPE());
     }
 
     CHECK_AND_RETHROW(loader_setup_module(assembly, &metadata));

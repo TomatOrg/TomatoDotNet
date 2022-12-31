@@ -215,7 +215,7 @@ static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, Sys
     }
 
     // set the interface fields
-    dest[0] = &source->vtable[interface->VTableOffset];
+    dest[0] = &((void**)(uintptr_t)source->vtable)[interface->VTableOffset];
     dest[1] = source;
 
     return true;
@@ -5810,7 +5810,9 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_MOV,
                                              MIR_new_reg_op(mir_ctx, ftn_reg),
-                                             MIR_new_mem_op(mir_ctx, MIR_T_P, 0, object_reg, 0, 1)));
+                                             MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                            offsetof(struct System_Object, vtable),
+                                                                    object_reg, 0, 1)));
 
                 // figure offset and the actual method
                 int vtable_index;
