@@ -83,7 +83,7 @@ void gc_get_memory_info(System_GCMemoryInfo* memoryInfo);
 #define GC_NEW_STRING(count) \
     ({ \
         size_t __count = count; \
-        System_String __str = gc_new(tSystem_String, tSystem_String->ManagedSize + 2 * __count); \
+        System_String __str = gc_new(tSystem_String, sizeof(struct System_String) + sizeof(System_Char) * __count); \
         ASSERT(__str != NULL); \
         __str->Length = __count; \
         __str; \

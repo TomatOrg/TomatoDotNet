@@ -154,7 +154,7 @@ static err_t fill_type_managed_size(System_Type type) {
     type->ManagedSizeBeingFilled = true;
 
     int current_size = 0;
-    int current_alignment = 1;
+    int current_alignment = type->PackingSize ?: 1;
     int max_alignment = type->PackingSize ?: 128;
 
     // fill the size of the parent and verify it
@@ -162,7 +162,7 @@ static err_t fill_type_managed_size(System_Type type) {
         CHECK_AND_RETHROW(fill_type_managed_size(type->BaseType));
 
         current_size = type->BaseType->ManagedSize;
-        current_alignment = type->BaseType->ManagedAlignment;
+        current_alignment = MAX(current_alignment, type->BaseType->ManagedAlignment);
         CHECK(current_alignment <= max_alignment);
 
         // copy the managed pointers offsets

@@ -17,6 +17,7 @@
 #include "mem/mem.h"
 #include "filler.h"
 #include "time/tick.h"
+#include "mimalloc.h"
 
 #include <stdalign.h>
 #include <string.h>
@@ -1585,11 +1586,11 @@ static void fill_all_types(System_Object object) {
 static void fix_all_vtables(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
-    if (object->vtable == NULL) {
-        object->vtable = OBJECT_TYPE(object)->VTable;
-        if (object->vtable == NULL) {
+    if (object->vtable == 0) {
+        object->vtable = (uintptr_t)OBJECT_TYPE(object)->VTable;
+        if (object->vtable == 0) {
             TRACE("VTable was still null after fixups: %U", OBJECT_TYPE(object)->Name);
-            ASSERT(object->vtable != NULL);
+            ASSERT(object->vtable != 0);
         }
     }
 }
@@ -1629,7 +1630,7 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     int param_count = metadata.tables[METADATA_PARAM].rows;
 
     // do first time allocation and init
-    assembly->DefinedTypes = gc_new(NULL, sizeof(struct System_Array) + types_count * sizeof(System_Type));
+    assembly->DefinedTypes = gc_new(NULL, sizeof(System_Type_Array) + types_count * sizeof(System_Type));
     assembly->DefinedTypes->Length = types_count;
     for (int i = 0; i < types_count; i++) {
         metadata_type_def_t* type_def = &type_defs[i];
@@ -1656,11 +1657,13 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     // create the module
     CHECK_AND_RETHROW(loader_setup_module(assembly, &metadata));
 
-    assembly->DefinedMethods = gc_new(NULL, sizeof(struct System_Array) + method_count * sizeof(System_Reflection_MethodInfo));
+    heap_iterate_objects(NULL);
+
+    assembly->DefinedMethods = gc_new(NULL, sizeof(System_Reflection_MethodInfo_Array) + method_count * sizeof(System_Reflection_MethodInfo));
     assembly->DefinedMethods->Length = method_count;
-    assembly->DefinedFields = gc_new(NULL, sizeof(struct System_Array) + field_count * sizeof(System_Reflection_FieldInfo));
+    assembly->DefinedFields = gc_new(NULL, sizeof(System_Reflection_FieldInfo_Array) + field_count * sizeof(System_Reflection_FieldInfo));
     assembly->DefinedFields->Length = field_count;
-    assembly->DefinedParameters = gc_new(NULL, sizeof(struct System_Array) + param_count * sizeof(System_Reflection_ParameterInfo));
+    assembly->DefinedParameters = gc_new(NULL, sizeof(System_Reflection_ParameterInfo_Array) + param_count * sizeof(System_Reflection_ParameterInfo));
     assembly->DefinedParameters->Length = param_count;
     // we need the nested types before we finish up the setup type info
     CHECK_AND_RETHROW(connect_nested_types(assembly, &metadata));

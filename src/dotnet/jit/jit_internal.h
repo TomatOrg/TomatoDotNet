@@ -473,6 +473,7 @@ extern MIR_item_t m_unsafe_as_func;
 
 // intrinsic methods
 extern System_Reflection_MethodInfo m_Unsafe_SizeOf;
+extern System_Reflection_MethodInfo m_MemoryMarshal_GetArrayDataReference;
 extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsReferences;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

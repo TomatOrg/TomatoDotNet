@@ -725,7 +725,7 @@ static err_t parse_fixed_arg(blob_entry_t* sig, System_Reflection_Assembly refer
                 MIR_val_t cur_val = { .u = 0 };
                 CHECK_AND_RETHROW(parse_elem(sig, reference, paramType, &cur_val));
                 // TODO: ref type
-                memcpy(val->a + tSystem_Array->ManagedSize + paramType->StackSize * i, &cur_val, paramType->StackSize);
+                memcpy(val->a + get_array_type(paramType)->ManagedSize + paramType->StackSize * i, &cur_val, paramType->StackSize);
             }
         }
     } else {

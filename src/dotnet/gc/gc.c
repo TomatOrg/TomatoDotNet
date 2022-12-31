@@ -103,8 +103,7 @@ void* gc_new(System_Type type, size_t size) {
         // set the indirect, 32bit type pointer
         ASSERT(type->SmallPointer != 0);
         o->type = type->SmallPointer;
-
-        o->vtable = type->VTable;
+        o->vtable = (uintptr_t)type->VTable;
     }
 
     // if there is no finalize then always suppress the finalizer
@@ -418,13 +417,13 @@ static void gc_mark_black(System_Object object) {
             // this is an array of structs that have managed values, so we need to iterate each
             // of the items and read all the pointers
             for (int i = 0; i < array->Length; i++) {
-                size_t offset = sizeof(struct System_Array) + i * elementType->StackSize;
+                size_t offset = type->ManagedSize + i * elementType->StackSize;
                 gc_mark_fields_gray(read_field(object, offset), elementType);
             }
         } else if (!elementType->IsValueType) {
             // this is an array of pointers
             for (int i = 0; i < array->Length; i++) {
-                size_t offset = sizeof(struct System_Array) + i * sizeof(void *);
+                size_t offset = type->ManagedSize + i * sizeof(void *);
                 gc_mark_gray(read_field(object, offset));
             }
         }

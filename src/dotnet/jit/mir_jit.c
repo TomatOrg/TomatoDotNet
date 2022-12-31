@@ -69,6 +69,7 @@ MIR_item_t m_unsafe_as_func = NULL;
 #define INVALID_IMPORT ((void*)-1)
 
 System_Reflection_MethodInfo m_Unsafe_SizeOf;
+System_Reflection_MethodInfo m_MemoryMarshal_GetArrayDataReference;
 System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsReferences;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -261,27 +262,6 @@ static void on_rethrow(System_Reflection_MethodInfo methodInfo, int il_offset) {
  */
 static MIR_context_t m_mir_context;
 
-static void jit_generate_System_Array_GetDataPtr() {
-    const char* fname = "[Corelib-v1]System.Void* [Corelib-v1]System.Array::GetDataPtr()";
-    MIR_type_t res[] = {
-        MIR_T_P,
-        MIR_T_P
-    };
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "this");
-    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_insn(m_mir_context, MIR_ADD,
-                                 MIR_new_reg_op(m_mir_context, this),
-                                 MIR_new_reg_op(m_mir_context, this),
-                                 MIR_new_int_op(m_mir_context, sizeof(struct System_Array))));
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 2,
-                                     MIR_new_int_op(m_mir_context, 0),
-                                     MIR_new_reg_op(m_mir_context, this)));
-    MIR_finish_func(m_mir_context);
-    MIR_new_export(m_mir_context, fname);
-}
-
 static void jit_generate_System_Type_GetTypeFromHandle() {
     const char* fname = "[Corelib-v1]System.Type [Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
     MIR_var_t args[] = {
@@ -457,7 +437,6 @@ err_t init_jit() {
 
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
-    jit_generate_System_Array_GetDataPtr();
     jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
     jit_generate_unsafe_as();
@@ -5371,7 +5350,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                 MIR_new_insn(mir_ctx, MIR_ADD,
                                              MIR_new_reg_op(mir_ctx, size_reg),
                                              MIR_new_reg_op(mir_ctx, size_reg),
-                                             MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                             MIR_new_int_op(mir_ctx, array_type->ManagedSize)));
 
                 // actually allocate it now
                 // allocate the new object
@@ -5485,7 +5464,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                                 MIR_new_insn(mir_ctx, MIR_ADD,
                                                              MIR_new_reg_op(mir_ctx, index_reg),
                                                              MIR_new_reg_op(mir_ctx, index_reg),
-                                                             MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                                             MIR_new_int_op(mir_ctx, array_type->ManagedSize)));
                                 MIR_append_insn(mir_ctx, mir_func,
                                                 MIR_new_insn(mir_ctx, MIR_ADD,
                                                              MIR_new_reg_op(mir_ctx, index_reg),
@@ -5517,7 +5496,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                             MIR_new_insn(mir_ctx, MIR_ADD,
                                                          MIR_new_reg_op(mir_ctx, index_reg),
                                                          MIR_new_reg_op(mir_ctx, index_reg),
-                                                         MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                                         MIR_new_int_op(mir_ctx, array_type->ManagedSize)));
 
                             // storing to an object from an object
                             MIR_append_insn(mir_ctx, mir_func,
@@ -5538,7 +5517,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_mem_op(mir_ctx, jit_get_mir_type(operand_type),
-                                                                    tSystem_Array->ManagedSize,
+                                                                    array_type->ManagedSize,
                                                                     array_reg, index_reg, operand_type->StackSize),
                                                      MIR_new_reg_op(mir_ctx, value_reg)));
                     } break;
@@ -5555,7 +5534,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                         MIR_new_insn(mir_ctx, MIR_ADD,
                                                      MIR_new_reg_op(mir_ctx, index_reg),
                                                      MIR_new_reg_op(mir_ctx, index_reg),
-                                                     MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                                     MIR_new_int_op(mir_ctx, array_type->ManagedSize)));
 
                         if (arrlen(value_type->ManagedPointersOffsets) == 0) {
                             // add the base, so we have an abs address
@@ -5676,7 +5655,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                         MIR_new_insn(mir_ctx, code,
                                                      MIR_new_reg_op(mir_ctx, value_reg),
                                                      MIR_new_mem_op(mir_ctx, jit_get_mir_type(operand_type),
-                                                                    tSystem_Array->ManagedSize,
+                                                                    array_type->ManagedSize,
                                                                     array_reg, index_reg, operand_type->StackSize)));
                     } break;
 
@@ -5693,7 +5672,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                         MIR_new_insn(mir_ctx, MIR_ADD,
                                                      MIR_new_reg_op(mir_ctx, index_reg),
                                                      MIR_new_reg_op(mir_ctx, index_reg),
-                                                     MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                                     MIR_new_int_op(mir_ctx, array_type->ManagedSize)));
                         MIR_append_insn(mir_ctx, mir_func,
                                         MIR_new_insn(mir_ctx, MIR_ADD,
                                                      MIR_new_reg_op(mir_ctx, array_reg),
@@ -5757,7 +5736,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                                 MIR_new_insn(mir_ctx, MIR_ADD,
                                              MIR_new_reg_op(mir_ctx, value_reg),
                                              MIR_new_reg_op(mir_ctx, value_reg),
-                                             MIR_new_int_op(mir_ctx, tSystem_Array->ManagedSize)));
+                                             MIR_new_int_op(mir_ctx, array_type->ManagedSize)));
 
                 // add the object base to the offset
                 MIR_append_insn(mir_ctx, mir_func,

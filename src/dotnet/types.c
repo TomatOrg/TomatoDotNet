@@ -470,10 +470,14 @@ static System_Type create_array_type(System_Type type) {
     // because it makes our life easier
     ArrayType->StackSizeFilled = true;
     ArrayType->ManagedSizeFilled = true;
-    ArrayType->StackSize = tSystem_Array->StackSize;
-    ArrayType->ManagedSize = tSystem_Array->ManagedSize;
+
     ArrayType->StackAlignment = tSystem_Array->StackAlignment;
-    ArrayType->ManagedAlignment = tSystem_Array->ManagedAlignment;
+    ArrayType->StackSize = tSystem_Array->StackSize;
+
+    ArrayType->ManagedAlignment = MAX(tSystem_Array->ManagedAlignment, type->StackAlignment);
+    ArrayType->ManagedSize = ALIGN_UP(tSystem_Array->ManagedSize, ArrayType->ManagedAlignment);
+
+//    TRACE("%U[] -- %d : %d", ArrayType->Name, ArrayType->ManagedAlignment, ArrayType->ManagedSize);
 
     // There are no managed pointers in here (The gc will handle array
     // stuff on its own)

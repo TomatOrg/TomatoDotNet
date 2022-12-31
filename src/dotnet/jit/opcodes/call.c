@@ -361,7 +361,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
                                     MIR_new_insn(mir_ctx, MIR_ADD,
                                                  MIR_new_reg_op(mir_ctx, size_reg),
                                                  MIR_new_reg_op(mir_ctx, size_reg),
-                                                 MIR_new_int_op(mir_ctx, tSystem_String->ManagedSize)));
+                                                 MIR_new_int_op(mir_ctx, sizeof(struct System_String))));
 
                     // create the op
                     size_op = MIR_new_reg_op(mir_ctx, size_reg);

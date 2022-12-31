@@ -88,7 +88,8 @@ typedef uintptr_t System_UIntPtr;
  */
 struct System_Object {
     // the vtable of the object
-    void** vtable;
+    uint32_t vtable;
+    uint32_t _reserved2;
 
     // the type of the object
     uint32_t type;
@@ -139,7 +140,7 @@ typedef struct System_GenericArray {
 #define DEFINE_ARRAY(type) \
     typedef struct type##_Array { \
         struct System_Array; \
-        type Data[0];\
+        type Data[]; \
     } *type##_Array;
 
 DEFINE_ARRAY(System_Type);
@@ -152,7 +153,7 @@ DEFINE_ARRAY(System_Object);
 typedef struct System_String {
     struct System_Object;
     int Length;
-    System_Char Chars[1];
+    System_Char Chars[];
 } *System_String;
 
 DEFINE_ARRAY(System_String);
@@ -603,7 +604,7 @@ struct System_Type {
     bool IsPointer;
 
     // a 32bit pointer pointing to a pointer to this object
-    int SmallPointer;
+    uint32_t SmallPointer;
 
     // for type parameter (not instantiated)
     System_Type GenericTypeDefinition;

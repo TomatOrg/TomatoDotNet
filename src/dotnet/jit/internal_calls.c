@@ -380,7 +380,7 @@ do_array_copy(System_Array sourceArray, System_Array destinationArray, int64_t l
 
     void* src_data = (void*)(sourceArray + 1);
     void* dst_data = (void*)(destinationArray + 1);
-    size_t dst_offset = sizeof(struct System_Array);
+    size_t dst_offset = OBJECT_TYPE(destinationArray)->ManagedSize;
     size_t copy_size = length * elementSize;
 
     if (type_get_stack_type(elementType) == STACK_TYPE_VALUE_TYPE || type_is_interface(elementType)) {
@@ -556,7 +556,7 @@ method_result_t System_Environment_GetProcessorCount() {
 }
 
 System_Exception System_Diagnostic_DebugProvider_WriteInternal(System_String str) {
-    printf("%U", str);
+    TRACE("%d - `%c` %U", str->Length, str->Chars[0], str);
     return NULL;
 }
 
