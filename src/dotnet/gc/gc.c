@@ -105,9 +105,6 @@ void* gc_new(System_Type type, size_t size) {
         o->type = type->SmallPointer;
 
         o->vtable = type->VTable;
-//        uintptr_t vtable = (uintptr_t)type->VTable;
-//        ASSERT(vtable < BASE_4GB);
-//        o->vtable = vtable;
     }
 
     // if there is no finalize then always suppress the finalizer

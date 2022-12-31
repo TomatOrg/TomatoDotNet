@@ -1882,7 +1882,7 @@ err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_ADD,
                                      MIR_new_reg_op(mir_ctx, vtable_reg),
-                                     MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                     MIR_new_mem_op(mir_ctx, MIR_T_U32,
                                                     offsetof(struct System_Object, vtable),
                                                     from_reg, 0, 1),
                                      MIR_new_int_op(mir_ctx, interface->VTableOffset * sizeof(void *))));
@@ -5810,7 +5810,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_MOV,
                                              MIR_new_reg_op(mir_ctx, ftn_reg),
-                                             MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                             MIR_new_mem_op(mir_ctx, MIR_T_U32,
                                                             offsetof(struct System_Object, vtable),
                                                                     object_reg, 0, 1)));
 

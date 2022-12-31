@@ -1592,16 +1592,6 @@ static void fix_all_vtables(System_Object object) {
             ASSERT(object->vtable != NULL);
         }
     }
-//    if (object->vtable == 0) {
-//        uintptr_t vtable = (uintptr_t)OBJECT_TYPE(object)->VTable;
-//        ASSERT(vtable < BASE_4GB);
-//        object->vtable = vtable;
-//
-//        if (object->vtable == 0) {
-//            TRACE("VTable was still null after fixups: %U", OBJECT_TYPE(object)->Name);
-//            ASSERT(object->vtable != 0);
-//        }
-//    }
 }
 
 static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
