@@ -131,6 +131,7 @@ typedef struct System_Nullable {
 typedef struct System_Array {
     struct System_Object;
     int Length;
+    int Padding;
 } *System_Array;
 
 typedef struct System_GenericArray {

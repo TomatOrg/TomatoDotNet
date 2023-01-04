@@ -262,6 +262,27 @@ static void on_rethrow(System_Reflection_MethodInfo methodInfo, int il_offset) {
  */
 static MIR_context_t m_mir_context;
 
+static void jit_generate_System_Array_GetDataPtr() {
+    const char* fname = "[Corelib-v1]System.Void* [Corelib-v1]System.Array::GetDataPtr()";
+    MIR_type_t res[] = {
+        MIR_T_P,
+        MIR_T_P
+    };
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "this");
+    MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_insn(m_mir_context, MIR_ADD,
+                                 MIR_new_reg_op(m_mir_context, this),
+                                 MIR_new_reg_op(m_mir_context, this),
+                                 MIR_new_int_op(m_mir_context, sizeof(struct System_Array))));
+    MIR_append_insn(m_mir_context, func,
+                    MIR_new_ret_insn(m_mir_context, 2,
+                                     MIR_new_int_op(m_mir_context, 0),
+                                     MIR_new_reg_op(m_mir_context, this)));
+    MIR_finish_func(m_mir_context);
+    MIR_new_export(m_mir_context, fname);
+}
+
 static void jit_generate_System_Type_GetTypeFromHandle() {
     const char* fname = "[Corelib-v1]System.Type [Corelib-v1]System.Type::GetTypeFromHandle([Corelib-v1]System.RuntimeTypeHandle)";
     MIR_var_t args[] = {
@@ -437,6 +458,7 @@ err_t init_jit() {
 
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
+    jit_generate_System_Array_GetDataPtr();
     jit_generate_System_Type_GetTypeFromHandle();
     jit_generate_delegate_ctor();
     jit_generate_unsafe_as();
@@ -1560,7 +1582,7 @@ cleanup:
     return err;
 }
 
-static err_t jit_prepare_instance_type(jit_context_t* ctx, System_Type type) {
+err_t jit_prepare_instance_type(jit_context_t* ctx, System_Type type) {
     err_t err = NO_ERROR;
 
     // mark that we don't need this again
