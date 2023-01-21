@@ -11,7 +11,6 @@
 #include "loader.h"
 #include "encoding.h"
 #include "opcodes.h"
-#include "monitor.h"
 #include "thread/scheduler.h"
 #include "dotnet/gc/heap.h"
 #include "mem/mem.h"
@@ -1476,6 +1475,7 @@ static type_init_t m_type_init[] = {
     TYPE_LOOKUP("System.Runtime.InteropServices", "InAttribute", tSystem_Runtime_InteropServices_InAttribute),
     TYPE_LOOKUP("System", "ThreadStaticAttribute", tSystem_ThreadStaticAttribute),
     TYPE_LOOKUP("System", "ReadOnlySpan`1", tSystem_ReadOnlySpan),
+    TYPE_LOOKUP("System.Threading", "SynchronizationLockException", tSystem_Threading_SynchronizationLockException),
 };
 
 static void init_type(metadata_type_def_t* type_def, System_Type type) {
@@ -1586,6 +1586,8 @@ static void fill_all_types(System_Object object) {
 static void fix_all_vtables(System_Object object) {
     if (object->color == COLOR_BLUE) return;
 
+    ASSERT(object->type != 0);
+
     if (object->vtable == 0) {
         object->vtable = (uintptr_t)OBJECT_TYPE(object)->VTable;
         if (object->vtable == 0) {
@@ -1688,6 +1690,10 @@ static err_t loader_load_corelib_assembly(void* buffer, size_t buffer_size) {
     }
 
 //    CHECK_FAIL();
+
+    // we finished setting all the basic types, don't
+    // allow null types anymore
+    g_allow_null_type = false;
 
     // before we can enable the generic array creation we need to do it manually for all the arrays
     // otherwise we can get a problem with nested array creation

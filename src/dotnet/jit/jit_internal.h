@@ -511,7 +511,7 @@ extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsRefere
  * Uncomment if you want debug symbols, note that this forces
  * the parallel generator instead of the lazy one!
  */
-//#define JIT_DEBUG_SYMBOLS
+#define JIT_DEBUG_SYMBOLS
 
 /**
  * This function is called to decide if we should trace or not

@@ -3,13 +3,9 @@
 #include "gc_thread_data.h"
 #include "heap.h"
 
-#include "../monitor.h"
 #include "../types.h"
 #include "dotnet/loader.h"
 #include "time/tick.h"
-
-#include <sync/conditional.h>
-#include <sync/wait_group.h>
 
 #include <thread/scheduler.h>
 #include <thread/thread.h>
@@ -92,6 +88,8 @@ void gc_remove_root(void* object) {
     spinlock_unlock(&m_global_roots_lock);
 }
 
+bool g_allow_null_type = true;
+
 void* gc_new(System_Type type, size_t size) {
     scheduler_preempt_disable();
 
@@ -104,6 +102,9 @@ void* gc_new(System_Type type, size_t size) {
         ASSERT(type->SmallPointer != 0);
         o->type = type->SmallPointer;
         o->vtable = (uintptr_t)type->VTable;
+    } else if (!g_allow_null_type) {
+        // no longer allowed
+        ASSERT(type != NULL);
     }
 
     // if there is no finalize then always suppress the finalizer
@@ -235,8 +236,8 @@ static void gc_mark_ptr(uintptr_t ptr) {
         gc_mark_gray(object);
     }
 }
-
-static wait_group_t m_gc_handshake_wg = INIT_WAIT_GROUP();
+//
+//static wait_group_t m_gc_handshake_wg = INIT_WAIT_GROUP();
 
 static void gc_handshake_thread(void* arg) {
     gc_thread_status_t status = (gc_thread_status_t)(uintptr_t)arg;
@@ -306,12 +307,12 @@ static void gc_handshake_thread(void* arg) {
     }
     unlock_all_threads();
     
-    wait_group_done(&m_gc_handshake_wg);
+//    wait_group_done(&m_gc_handshake_wg);
 }
 
 static void gc_post_handshake(gc_thread_status_t status) {
     // add the work
-    wait_group_add(&m_gc_handshake_wg, 1);
+//    wait_group_add(&m_gc_handshake_wg, 1);
 
     // set the status of our thread so everything will sync nicely
     GTD->status = status;
@@ -326,7 +327,7 @@ static void gc_post_handshake(gc_thread_status_t status) {
 }
 
 static void gc_wait_handshake() {
-    wait_group_wait(&m_gc_handshake_wg);
+//    wait_group_wait(&m_gc_handshake_wg);
 }
 
 static void gc_handshake(gc_thread_status_t status) {
@@ -515,7 +516,6 @@ static void gc_free_clear_objects(System_Object object) {
     if (object->color == m_clear_color) {
         // if this is still marked as clear color it means
         // that it should not be alive for finalization
-        free_monitor(object);
         heap_free(object);
     }
 }
@@ -566,7 +566,6 @@ static void gc_finalize(System_Object object) {
     }
 
     // we can now free this object, the rest will follow suite
-    free_monitor(object);
     heap_free(object);
 }
 
@@ -601,26 +600,21 @@ static mutex_t m_gc_mutex = INIT_MUTEX();
 /**
  * Conditional variable for waking the garbage collector
  */
-static conditional_t m_gc_wake = INIT_CONDITIONAL();
+static condition_t m_gc_wake = INIT_CONDITION();
 
 /**
  * Conditional variable for waiting for the gc to be finished on the cycle
  */
-static conditional_t m_gc_done = INIT_CONDITIONAL();
-
-/**
- * Allows init_gc to return only when gc_thread has been created
- */
-static wait_group_t m_gc_start = INIT_WAIT_GROUP();
+static condition_t m_gc_done = INIT_CONDITION();
 
 /**
  * Allows the gc to wait until the next request for a collection
  */
 static void gc_conductor_next() {
     m_gc_running = false;
-    conditional_broadcast(&m_gc_done);
+    condition_notify_all(&m_gc_done);
     do {
-        conditional_wait(&m_gc_wake, &m_gc_mutex);
+        condition_wait(&m_gc_wake, &m_gc_mutex, -1);
     } while (!m_gc_running);
 }
 
@@ -635,7 +629,7 @@ static void gc_conductor_wake() {
     }
 
     m_gc_running = true;
-    conditional_signal(&m_gc_wake);
+    condition_notify_one(&m_gc_wake);
 }
 
 /**
@@ -643,7 +637,7 @@ static void gc_conductor_wake() {
  */
 static void gc_conductor_wait() {
     do {
-        conditional_wait(&m_gc_done, &m_gc_mutex);
+        condition_wait(&m_gc_done, &m_gc_mutex, -1);
     } while (m_gc_running);
 }
 
@@ -670,9 +664,6 @@ static atomic_bool m_had_full_collection = false;
 static atomic_int m_gc_count = 0;
 
 noreturn static void gc_thread(void* ctx) {
-    wait_group_done(&m_gc_start);
-    wait_group_wait(&m_gc_start);
-
     TRACE("gc: GC thread started");
     while (true) {
         mutex_lock(&m_gc_mutex);
@@ -699,15 +690,12 @@ noreturn static void gc_thread(void* ctx) {
 }
 
 err_t init_gc() {
-    wait_group_add(&m_gc_start, 2);
-
     err_t err = NO_ERROR;
-    m_collector_thread = create_thread(gc_thread, NULL, "gc/collector");
-    CHECK(m_collector_thread != NULL);
-    scheduler_ready_thread(m_collector_thread);
-    
-    wait_group_done(&m_gc_start);
-    wait_group_wait(&m_gc_start);
+
+//    m_collector_thread = create_thread(gc_thread, NULL, "gc/collector");
+//    CHECK(m_collector_thread != NULL);
+//    scheduler_ready_thread(m_collector_thread);
+
 cleanup:
     return err;
 }

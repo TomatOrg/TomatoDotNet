@@ -2,9 +2,11 @@
 
 #include "metadata/metadata_spec.h"
 #include "metadata/metadata.h"
+#include "sync/mutex.h"
+#include "sync/condition.h"
 
 #include <util/strbuilder.h>
-#include <sync/mutex.h>
+#include <sync/word_lock.h>
 #include <util/defs.h>
 
 #include <mir/mir.h>
@@ -87,12 +89,35 @@ typedef uintptr_t System_UIntPtr;
  * Represents a dotnet object
  */
 struct System_Object {
+    // *** dword 0 ***
+
     // the vtable of the object
     uint32_t vtable;
-    uint32_t _reserved2;
+
+    // *** dword 1 ***
 
     // the type of the object
     uint32_t type;
+
+    // *** dword 2 ***
+
+    // the lock for monitor (1 byte)
+    mutex_t mutex;
+
+    // the condition for monitor (1 byte)
+    condition_t condition;
+
+    // the locker thread id
+    uint16_t lock_thread_id;
+
+    // *** dword 3 ***
+
+    // the recursion depth of the lock, this is the max we will allow
+    // if you overflow this you get an exception
+    uint32_t lock_depth : 24;
+
+    // unused bits
+    uint32_t : 4;
 
     // the color of the object
     uint32_t color : 3;
@@ -107,11 +132,13 @@ struct System_Object {
 
     // should finalizer be called or not
     uint32_t suppress_finalizer : 1;
-
-    // unused for now
-    uint32_t _reserved : 12;
 };
 STATIC_ASSERT(sizeof(struct System_Object) == sizeof(void*) * 2);
+
+typedef struct Interface {
+    void** VTable;
+    System_Object This;
+} Interface;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -131,7 +158,7 @@ typedef struct System_Nullable {
 typedef struct System_Array {
     struct System_Object;
     int Length;
-    int Padding;
+    int _padding;
 } *System_Array;
 
 typedef struct System_GenericArray {
@@ -142,7 +169,8 @@ typedef struct System_GenericArray {
     typedef struct type##_Array { \
         struct System_Array; \
         type Data[]; \
-    } *type##_Array;
+    } *type##_Array;       \
+    STATIC_ASSERT(alignof(type) <= 8)
 
 DEFINE_ARRAY(System_Type);
 DEFINE_ARRAY(System_Reflection_MethodInfo);
@@ -880,6 +908,7 @@ extern System_Type tSystem_NullReferenceException;
 extern System_Type tSystem_InvalidCastException;
 extern System_Type tSystem_OutOfMemoryException;
 extern System_Type tSystem_OverflowException;
+extern System_Type tSystem_Threading_SynchronizationLockException;
 extern System_Type tSystem_RuntimeTypeHandle;
 extern System_Type tSystem_Nullable;
 extern System_Type tSystem_ReadOnlySpan;

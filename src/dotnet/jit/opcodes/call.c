@@ -389,6 +389,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
 
             if (constrainedType != NULL) {
                 CHECK(this_type->IsByRef);
+                CHECK(method_is_virtual(operand_method));
                 CHECK(type_is_verifier_assignable_to(this_type->BaseType, constrainedType));
 
                 // If this_type is a reference type (as opposed to a value type)
@@ -432,7 +433,9 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_insn(mir_ctx, MIR_MOV,
                                                  MIR_new_reg_op(mir_ctx, this_reg),
-                                                 MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), this_reg, 0, 1)));
+                                                 MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                                offsetof(Interface, This),
+                                                                this_reg, 0, 1)));
                 }
                 operand_method = constrainedType->VirtualMethods->Data[vtable_offset];
 
@@ -472,8 +475,9 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
 
         MIR_reg_t temp_reg = jit_new_temp_reg(ctx, tSystem_Type);
 
-        // get the vtable pointer from the object, it is at the first
-        // item for both an interface and an object
+        // get the vtable pointer from the object.
+        // NOTE: this must be before we get the `this`, because that gives us the correct
+        //       vtable to get an offset from.
         MIR_append_insn(mir_ctx, mir_func,
                         MIR_new_insn(mir_ctx, MIR_MOV,
                                      MIR_new_reg_op(mir_ctx, temp_reg),
@@ -537,6 +541,17 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
             arg_ops[1] = MIR_new_reg_op(mir_ctx, temp_reg);
         }
     } else {
+        // in some cases we do have a static call into an interface (specifically
+        // for the Object non-virtual methods), so we need to deref in here
+        if (type_is_interface(this_type)) {
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_MOV,
+                                         MIR_new_reg_op(mir_ctx, this_reg),
+                                         MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                        offsetof(Interface, This),
+                                                        this_reg, 0, 1)));
+        }
+
         // static dispatch
         CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, operand_method));
         arg_ops[1] = MIR_new_ref_op(mir_ctx, operand_method->MirFunc);

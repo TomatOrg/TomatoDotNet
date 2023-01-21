@@ -28,6 +28,12 @@ void gc_add_root(void* object);
 void gc_remove_root(void* object);
 
 /**
+ * Do we allow to allocate null types, set to false once we finish
+ * loading up the corelib nicely
+ */
+extern bool g_allow_null_type;
+
+/**
  * Allocate a new object from the garbage collector of the given type and of
  * the given size
  *

@@ -1,16 +1,16 @@
 #include "internal_calls.h"
 
+#include "jit_internal.h"
 #include "jit.h"
 
 #include "../gc/gc.h"
 #include "../types.h"
 #include "time/tsc.h"
-#include "thread/waitable.h"
 #include "converter.h"
-#include "dotnet/monitor.h"
 #include "dotnet/loader.h"
 #include "dotnet/activator.h"
 #include "kernel.h"
+#include "time/tick.h"
 
 #include <thread/scheduler.h>
 
@@ -67,81 +67,7 @@ static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
 // System.Threading.Monitor
 //----------------------------------------------------------------------------------------------------------------------
 
-// TODO: figure how to properly throw errors from native code...
-
-static method_result_t System_Threading_Monitor_IsEntered(System_Object obj) {
-    bool taken = false;
-    err_t err = monitor_is_entered(obj, &taken);
-    return (method_result_t) { .exception = NULL, .value = IS_ERROR(err) ? false : taken };
-}
-
-static method_result_t System_Threading_Monitor_EnterInternal(System_Object obj, bool* lockTaken) {
-    err_t err = monitor_enter(obj);
-    if (err == NO_ERROR) {
-        *lockTaken = true;
-    }
-    return (method_result_t) { .exception = NULL, .value = err };
-}
-
-static method_result_t System_Threading_Monitor_ExitInternal(System_Object obj) {
-    err_t err = monitor_exit(obj);
-    return (method_result_t) { .exception = NULL, .value = err };
-}
-
-static method_result_t System_Threading_Monitor_PulseInternal(System_Object obj) {
-    err_t err = monitor_pulse(obj);
-    return (method_result_t) { .exception = NULL, .value = err };
-}
-
-static method_result_t System_Threading_Monitor_PulseAllInternal(System_Object obj) {
-    err_t err = monitor_pulse_all(obj);
-    return (method_result_t) { .exception = NULL, .value = err };
-}
-
-static method_result_t System_Threading_Monitor_WaitInternal(System_Object obj) {
-    err_t err = monitor_wait(obj);
-    return (method_result_t) { .exception = NULL, .value = err };
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-// Waitable stuff
-//----------------------------------------------------------------------------------------------------------------------
-
-static method_result_t TinyDotNet_NativeHost_WaitableSend(waitable_t* waitable, bool block) {
-    return (method_result_t) { .exception = NULL, .value = waitable_send(waitable, block) };
-}
-
-static method_result_t TinyDotNet_NativeHost_WaitableWait(waitable_t* waitable, bool block) {
-    return (method_result_t) { .exception = NULL, .value = waitable_wait(waitable, block) };
-}
-
-static method_result_t TinyDotNet_NativeHost_WaitableSelect(System_Span* waitables, int send_count, int wait_count, bool block) {
-    ASSERT(send_count + wait_count <= waitables->Length);
-    selected_waitable_t waitable = waitable_select((waitable_t**)waitables->Ptr, send_count, wait_count, block);
-    return (method_result_t) { .exception = NULL, .value = ((uint64_t)waitable.index | (((uint64_t)waitable.success) << 32)) };
-}
-
-static method_result_t TinyDotNet_NativeHost_CreateWaitable(int count) {
-    return (method_result_t) { .exception = NULL, .value = (uintptr_t) create_waitable(count)};
-}
-
-static method_result_t TinyDotNet_NativeHost_WaitableAfter(int64_t timeout) {
-    return (method_result_t) { .exception = NULL, .value = (uintptr_t) after(timeout)};
-}
-
-static method_result_t TinyDotNet_NativeHost_ReleaseWaitable(waitable_t* w) {
-    release_waitable(w);
-    return (method_result_t) { .exception = NULL, .value = 0 };
-}
-
-static System_Exception TinyDotNet_NativeHost_WaitableClose(waitable_t* w) {
-    waitable_close(w);
-    return NULL;
-}
-static System_Exception TinyDotNet_NativeHost_WaitableOpen(waitable_t* w) {
-    w->closed = 0;
-    return NULL;
-}
+// TODO: this
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Runtime.Intrinsics.X86
@@ -493,7 +419,11 @@ method_result_t System_Attribute_GetCustomAttributeNative(System_Object element,
 
 // TODO: generate this instead
 static method_result_t object_GetType(System_Object this) {
-    return (method_result_t){ .exception = NULL, .value = (uintptr_t) OBJECT_TYPE(this) };
+    if (this == NULL) {
+        return (method_result_t){ .exception = activator_create_exception(tSystem_NullReferenceException), .value = 0 };
+    } else {
+        return (method_result_t){ .exception = NULL, .value = (uintptr_t) OBJECT_TYPE(this) };
+    }
 }
 
 static method_result_t object_MemberwiseClone(System_Object this) {
@@ -556,7 +486,7 @@ method_result_t System_Environment_GetProcessorCount() {
 }
 
 System_Exception System_Diagnostic_DebugProvider_WriteInternal(System_String str) {
-    TRACE("%d - `%c` %U", str->Length, str->Chars[0], str);
+    printf("%U", str);
     return NULL;
 }
 
@@ -564,38 +494,103 @@ System_Exception System_Diagnostic_DebugProvider_WriteInternal(System_String str
 // Synchronization stuff
 //----------------------------------------------------------------------------------------------------------------------
 
-System_Exception TinyDotNet_Sync_Mutex_Lock(mutex_t* mutex) {
+static void monitor_enter(System_Object object) {
+    // if this thread does not own the lock then simply try to lock
+    // it directly with the mutex
+    thread_t* thread = get_current_thread();
+    if (object->lock_thread_id != thread->id) {
+        mutex_lock(&object->mutex);
+        object->lock_thread_id = thread->id;
+    }
+
+    // increment the depth and make sure it does not overflow
+    object->lock_depth++;
+    ASSERT(object->lock_depth != 0); // TODO: overflow
+}
+
+static System_Exception System_Threading_Monitor_Enter(System_Object object) {
+    if (object == NULL) {
+#ifdef THROW_TRACE
+        ERROR("Exception of type System.NullReferenceException thrown at %s (%s:%d)", __FUNCTION__, __FILE__, __LINE__);
+#endif
+        return activator_create_exception(tSystem_NullReferenceException);
+    }
+
+    monitor_enter(object);
+
+    return NULL;
+}
+
+static System_Exception System_Threading_Monitor_Exit(System_Object object) {
+    if (object == NULL) {
+#ifdef THROW_TRACE
+        ERROR("Exception of type System.NullReferenceException thrown at %s (%s:%d)", __FUNCTION__ , __FILE__, __LINE__);
+#endif
+        return activator_create_exception(tSystem_NullReferenceException);
+    }
+
+    // verify this thread owns the lock
+    if (object->lock_thread_id != get_current_thread()->id) {
+#ifdef THROW_TRACE
+        ERROR("Exception of type System.Threading.SynchronizationLockException thrown at %s (%s:%d)", __FUNCTION__, __FILE__, __LINE__);
+#endif
+        return activator_create_exception(tSystem_Threading_SynchronizationLockException);
+    }
+
+    // decrement the recursion, if reaches zero then this is
+    // no longer ours
+    if (--object->lock_depth == 0) {
+        object->lock_thread_id = 0;
+        mutex_unlock(&object->mutex);
+    }
+
+    return NULL;
+}
+
+static method_result_t System_Threading_Monitor_IsEnteredNative(System_Object object) {
+    return (method_result_t){ .value = object->lock_thread_id == get_current_thread()->id, .exception = NULL };
+}
+
+static System_Exception System_Threading_Monitor_ReliableEnter(System_Object object, bool* lockTaken) {
+    if (object == NULL) {
+#ifdef THROW_TRACE
+        ERROR("Exception of type System.NullReferenceException thrown at %s (%s:%d)", __FUNCTION__, __FILE__, __LINE__);
+#endif
+        return activator_create_exception(tSystem_NullReferenceException);
+    }
+
+    monitor_enter(object);
+    *lockTaken = true;
+
+    return NULL;
+}
+
+static System_Exception TinyDotNet_Sync_Mutex_Lock(mutex_t* mutex) {
     mutex_lock(mutex);
     return NULL;
 }
 
-System_Exception TinyDotNet_Sync_Mutex_Unlock(mutex_t* mutex) {
+static System_Exception TinyDotNet_Sync_Mutex_Unlock(mutex_t* mutex) {
     mutex_unlock(mutex);
     return NULL;
 }
 
-System_Exception TinyDotNet_Sync_Semaphore_Acquire(semaphore_t* semaphore, bool lifo, int64_t timeout) {
-    semaphore_acquire(semaphore, lifo, timeout);
-    return NULL;
+static method_result_t TinyDotNet_Sync_Condition_Wait(condition_t* condition, mutex_t* mutex, int64_t timeoutMilliseconds) {
+    return (method_result_t) {
+        .value = condition_wait(condition, mutex, timeoutMilliseconds * TICKS_PER_MILLISECOND),
+        .exception = NULL
+    };
 }
 
-System_Exception TinyDotNet_Sync_Semaphore_Release(semaphore_t* semaphore, bool handoff) {
-    semaphore_release(semaphore, handoff);
-    return NULL;
+static method_result_t TinyDotNet_Sync_Condition_NotifyOne(condition_t* condition) {
+    return (method_result_t) {
+        .value = condition_notify_one(condition),
+        .exception = NULL
+    };
 }
 
-System_Exception TinyDotNet_Sync_Conditional_Wait(conditional_t* conditional, mutex_t* mutex) {
-    conditional_wait(conditional, mutex);
-    return NULL;
-}
-
-System_Exception TinyDotNet_Sync_Conditional_Signal(conditional_t* conditional) {
-    conditional_signal(conditional);
-    return NULL;
-}
-
-System_Exception TinyDotNet_Sync_Conditional_Broadcast(conditional_t* conditional) {
-    conditional_broadcast(conditional);
+static System_Exception TinyDotNet_Sync_Condition_NotifyAll(condition_t* condition) {
+    condition_notify_all(condition);
     return NULL;
 }
 
@@ -607,16 +602,6 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Type object::GetType()", object_GetType },
     { "object object::MemberwiseClone()", object_MemberwiseClone, },
 
-    { "[Corelib-v1]TinyDotNet.Sync.Mutex::Lock()", TinyDotNet_Sync_Mutex_Lock, },
-    { "[Corelib-v1]TinyDotNet.Sync.Mutex::Unlock()", TinyDotNet_Sync_Mutex_Unlock, },
-
-    { "bool [Corelib-v1]TinyDotNet.Sync.Semaphore::Acquire(bool,int64)", TinyDotNet_Sync_Semaphore_Acquire, },
-    { "[Corelib-v1]TinyDotNet.Sync.Semaphore::Release(bool)", TinyDotNet_Sync_Semaphore_Release, },
-
-    { "[Corelib-v1]TinyDotNet.Sync.Conditional::Wait([Corelib-v1]TinyDotNet.Sync.Mutex&)", TinyDotNet_Sync_Conditional_Wait, },
-    { "[Corelib-v1]TinyDotNet.Sync.Conditional::Signal()", TinyDotNet_Sync_Conditional_Signal, },
-    { "[Corelib-v1]TinyDotNet.Sync.Conditional::Broadcast()", TinyDotNet_Sync_Conditional_Broadcast, },
-
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal([Corelib-v1]System.Byte[],bool)", System_Reflection_Assembly_LoadInternal_raw },
     { "[Corelib-v1]System.Reflection.Assembly [Corelib-v1]System.Reflection.Assembly::LoadInternal(string,bool)", System_Reflection_Assembly_LoadInternal_string },
 
@@ -625,12 +610,17 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.GC::Collect(int32,[Corelib-v1]System.GCCollectionMode,bool)", System_GC_Collect },
     { "[Corelib-v1]System.GC::KeepAlive(object)", System_GC_KeepAlive },
 
-    { "bool [Corelib-v1]System.Threading.Monitor::IsEntered(object)", System_Threading_Monitor_IsEntered },
-    { "int32 [Corelib-v1]System.Threading.Monitor::EnterInternal(object,[Corelib-v1]System.Boolean&)", System_Threading_Monitor_EnterInternal },
-    { "int32 [Corelib-v1]System.Threading.Monitor::ExitInternal(object)", System_Threading_Monitor_ExitInternal },
-    { "int32 [Corelib-v1]System.Threading.Monitor::PulseInternal(object)", System_Threading_Monitor_PulseInternal },
-    { "int32 [Corelib-v1]System.Threading.Monitor::PulseAllInternal(object)", System_Threading_Monitor_PulseAllInternal },
-    { "int32 [Corelib-v1]System.Threading.Monitor::WaitInternal(object)", System_Threading_Monitor_WaitInternal },
+    { "[Corelib-v1]System.Threading.Monitor::Enter(object)", System_Threading_Monitor_Enter },
+    { "[Corelib-v1]System.Threading.Monitor::Exit(object)", System_Threading_Monitor_Exit },
+    { "bool [Corelib-v1]System.Threading.Monitor::IsEnteredNative(object)", System_Threading_Monitor_IsEnteredNative },
+    { "[Corelib-v1]System.Threading.Monitor::ReliableEnter(object,[Corelib-v1]System.Boolean&)", System_Threading_Monitor_ReliableEnter },
+
+    { "[Corelib-v1]TinyDotNet.Sync.Mutex::Lock()", TinyDotNet_Sync_Mutex_Lock },
+    { "[Corelib-v1]TinyDotNet.Sync.Mutex::Unlock()", TinyDotNet_Sync_Mutex_Unlock },
+
+    { "bool [Corelib-v1]TinyDotNet.Sync.Condition::Wait([Corelib-v1]TinyDotNet.Sync.Mutex&,int64)", TinyDotNet_Sync_Condition_Wait },
+    { "bool [Corelib-v1]TinyDotNet.Sync.Condition::NotifyOne()", TinyDotNet_Sync_Condition_NotifyOne },
+    { "[Corelib-v1]TinyDotNet.Sync.Condition::NotifyAll()", TinyDotNet_Sync_Condition_NotifyAll },
 
     { "[Corelib-v1]System.Runtime.Intrinsics.X86.X86Base::Pause()", System_Runtime_Intrinsics_X86_X86Base_Pause },
 
@@ -645,15 +635,6 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Threading.Thread::ReleaseNativeThread(uint64)",                        System_Threading_ReleaseNativeThread },
     { "[Corelib-v1]System.Threading.Thread::SetNativeThreadName(uint64,string)",                 System_Threading_SetNativeThreadName },
     { "int32 [Corelib-v1]System.Threading.Thread::GetCurrentProcessorId()",                      System_Threading_Thread_GetCurrentProcessorId },
-
-    { "bool [Corelib-v1]TinyDotNet.NativeHost::WaitableSend(uint64,bool)",                 TinyDotNet_NativeHost_WaitableSend },
-    { "int32 [Corelib-v1]TinyDotNet.NativeHost::WaitableWait(uint64,bool)",                TinyDotNet_NativeHost_WaitableWait },
-    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableSelect([Corelib-v1]System.Span`1<uint64>&,int32,int32,bool)",      TinyDotNet_NativeHost_WaitableSelect },
-    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::CreateWaitable(int32)",                   TinyDotNet_NativeHost_CreateWaitable },
-    { "uint64 [Corelib-v1]TinyDotNet.NativeHost::WaitableAfter(int64)",                    TinyDotNet_NativeHost_WaitableAfter },
-    { "[Corelib-v1]TinyDotNet.NativeHost::ReleaseWaitable(uint64)",                        TinyDotNet_NativeHost_ReleaseWaitable },
-    { "[Corelib-v1]TinyDotNet.NativeHost::WaitableClose(uint64)",                          TinyDotNet_NativeHost_WaitableClose },
-    { "[Corelib-v1]TinyDotNet.NativeHost::WaitableOpen(uint64)",                          TinyDotNet_NativeHost_WaitableOpen },
 
     { "int32 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.Int32&,int32)",    interlocked_add_i32 },
     { "uint32 [Corelib-v1]System.Threading.Interlocked::Add([Corelib-v1]System.UInt32&,uint32)", interlocked_add_u32 },

@@ -1,6 +1,5 @@
 #include "types.h"
 #include "opcodes.h"
-#include "monitor.h"
 
 #include "gc/gc.h"
 #include "dotnet/metadata/sig.h"
@@ -59,6 +58,7 @@ System_Type tSystem_NullReferenceException = NULL;
 System_Type tSystem_InvalidCastException = NULL;
 System_Type tSystem_OutOfMemoryException = NULL;
 System_Type tSystem_OverflowException = NULL;
+System_Type tSystem_Threading_SynchronizationLockException = NULL;
 System_Type tSystem_RuntimeTypeHandle = NULL;
 System_Type tSystem_Nullable = NULL;
 System_Type tSystem_ReadOnlySpan = NULL;

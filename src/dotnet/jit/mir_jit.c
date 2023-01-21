@@ -1,8 +1,6 @@
 #include "jit.h"
-#include "dotnet/monitor.h"
 #include "thread/scheduler.h"
 #include "internal_calls.h"
-#include "sync/rwmutex.h"
 #include "debug/debug.h"
 #include "dotnet/filler.h"
 
@@ -25,6 +23,7 @@
 #include <stddef.h>
 
 #include "opcodes/opcodes.h"
+#include "sync/rwmutex.h"
 
 // TODO: we need a mir try-catch so we can recover from mir errors
 
@@ -77,25 +76,34 @@ System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsReferences;
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Arrays of locals for this thread
+ * Arrays of locals for this thread, no need for a mutex
+ * to protect because this can only be accessed from a single
  */
 static THREAD_LOCAL void** m_thread_locals = NULL;
 
 /**
- * Used to generate thread local ids
+ * Used to generate thread local ids, need a protection
+ * since this can be read from any thread and can also
+ * happen at the same time as a thread local addition
  */
 static System_Type* m_thread_local_types = 0;
 
+/**
+ * We will use a rwmutex to allow multiple
+ * threads to read form the local types at
+ * the same time but only the jit can write
+ * to it
+ */
 static rwmutex_t m_thread_local_mutex = { 0 };
 
 /**
  * Adds a new thread local
  */
 static int add_thread_local(System_Type type) {
-    rwmutex_lock(&m_thread_local_mutex);
+    rwmutex_write_lock(&m_thread_local_mutex);
     int index = arrlen(m_thread_local_types);
     arrpush(m_thread_local_types, type);
-    rwmutex_unlock(&m_thread_local_mutex);
+    rwmutex_write_unlock(&m_thread_local_mutex);
     return index;
 }
 
@@ -117,7 +125,7 @@ static void* get_thread_local_ptr(int local_index) {
         int first = 0;
 
         // get the stack size
-        rwmutex_rlock(&m_thread_local_mutex);
+        rwmutex_read_lock(&m_thread_local_mutex);
         System_Type type = m_thread_local_types[local_index];
         size_t size = type->StackSize;
         int* managedOffsets = NULL;
@@ -129,7 +137,7 @@ static void* get_thread_local_ptr(int local_index) {
             managedOffsets = &first;
             managedOffsetsCount = 1;
         }
-        rwmutex_runlock(&m_thread_local_mutex);
+        rwmutex_read_unlock(&m_thread_local_mutex);
 
         // allocate the entry in memory to hold this local,
         // and add it as a gc root
@@ -158,7 +166,7 @@ void jit_free_thread_locals() {
             continue;
 
         // get the managed offsets to remove them
-        rwmutex_rlock(&m_thread_local_mutex);
+        rwmutex_read_lock(&m_thread_local_mutex);
         System_Type type = m_thread_local_types[local_index];
         int* managedOffsets = NULL;
         int managedOffsetsCount = 0;
@@ -169,7 +177,7 @@ void jit_free_thread_locals() {
             managedOffsets = &first;
             managedOffsetsCount = 1;
         }
-        rwmutex_runlock(&m_thread_local_mutex);
+        rwmutex_read_unlock(&m_thread_local_mutex);
 
         // remove it from the gc
         for (int i = 0; i < managedOffsetsCount; i++) {
@@ -206,18 +214,18 @@ static void memmove_wrapper(void* dest, void* src, size_t count) {
 
 
 // TODO: generate this instead?
-static bool dynamic_cast_obj_to_interface(void** dest, System_Object source, System_Type targetInterface) {
+static bool dynamic_cast_obj_to_interface(Interface* dest, System_Object source, System_Type targetInterface) {
     // should only be called after the type checking
     TinyDotNet_Reflection_InterfaceImpl interface = type_get_interface_impl(OBJECT_TYPE(source), targetInterface);
     if (interface == NULL) {
-        dest[0] = 0;
-        dest[1] = 0;
+        dest->VTable = 0;
+        dest->This = 0;
         return false;
     }
 
     // set the interface fields
-    dest[0] = &((void**)(uintptr_t)source->vtable)[interface->VTableOffset];
-    dest[1] = source;
+    dest->VTable = &((void**)(uintptr_t)source->vtable)[interface->VTableOffset];
+    dest->This = source;
 
     return true;
 }
@@ -504,7 +512,7 @@ err_t init_jit() {
     int count = 1;
     MIR_gen_init(m_mir_context, count);
     for (int i = 0; i < count; i++) {
-        MIR_gen_set_optimize_level(m_mir_context, i, 3);
+        MIR_gen_set_optimize_level(m_mir_context, i, 0);
     }
 
 #if 0
@@ -1745,24 +1753,24 @@ err_t jit_new(jit_method_context_t* ctx, MIR_reg_t result, System_Type type, MIR
 #endif
 
     // this is an edge case, if we get to this point then just let it crash...
-    if (type != tSystem_OutOfMemoryException) {
-        // if we got NULL from the gc_new function it means we got an OOM
-
-        // handle any exception which might have been thrown
-        MIR_insn_t label = MIR_new_label(mir_ctx);
-
-        // if we have a non-zero value then skip the throw
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_BT,
-                                     MIR_new_label_op(mir_ctx, label),
-                                     MIR_new_reg_op(mir_ctx, result)));
-
-        // throw the error, it has an unknown type
-        CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_OutOfMemoryException));
-
-        // insert the skip label
-        MIR_append_insn(mir_ctx, mir_func, label);
-    }
+//    if (type != tSystem_OutOfMemoryException) {
+//        // if we got NULL from the gc_new function it means we got an OOM
+//
+//        // handle any exception which might have been thrown
+//        MIR_insn_t label = MIR_new_label(mir_ctx);
+//
+//        // if we have a non-zero value then skip the throw
+//        MIR_append_insn(mir_ctx, mir_func,
+//                        MIR_new_insn(mir_ctx, MIR_BT,
+//                                     MIR_new_label_op(mir_ctx, label),
+//                                     MIR_new_reg_op(mir_ctx, result)));
+//
+//        // throw the error, it has an unknown type
+//        CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_OutOfMemoryException));
+//
+//        // insert the skip label
+//        MIR_append_insn(mir_ctx, mir_func, label);
+//    }
 
 cleanup:
     return err;
@@ -1900,7 +1908,9 @@ err_t jit_cast_obj_to_interface(jit_method_context_t* ctx,
     // result_reg[0] = vtable_reg;
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_insn(mir_ctx, MIR_MOV,
-                                 MIR_new_mem_op(mir_ctx, MIR_T_P, 0, result_reg, 0, 1),
+                                 MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                offsetof(Interface, VTable),
+                                                result_reg, 0, 1),
                                  vtable_op));
 
     // TODO: figure a way to optimize this better, update the object reference

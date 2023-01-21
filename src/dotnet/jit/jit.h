@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../types.h"
-#include "thread/waitable.h"
 
 #include <util/except.h>
 
