@@ -512,7 +512,7 @@ err_t init_jit() {
     int count = 1;
     MIR_gen_init(m_mir_context, count);
     for (int i = 0; i < count; i++) {
-        MIR_gen_set_optimize_level(m_mir_context, i, 0);
+        MIR_gen_set_optimize_level(m_mir_context, i, 4);
     }
 
 #if 0
