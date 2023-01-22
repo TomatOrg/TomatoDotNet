@@ -548,7 +548,10 @@ static System_Exception System_Threading_Monitor_Exit(System_Object object) {
 }
 
 static method_result_t System_Threading_Monitor_IsEnteredNative(System_Object object) {
-    return (method_result_t){ .value = object->lock_thread_id == get_current_thread()->id, .exception = NULL };
+    return (method_result_t){
+        .value = object->lock_thread_id == get_current_thread()->id,
+        .exception = NULL
+    };
 }
 
 static System_Exception System_Threading_Monitor_ReliableEnter(System_Object object, bool* lockTaken) {
@@ -563,6 +566,22 @@ static System_Exception System_Threading_Monitor_ReliableEnter(System_Object obj
     *lockTaken = true;
 
     return NULL;
+}
+
+static method_result_t System_Threading_Monitor_ObjWait(int millisecondTimeout, System_Object object) {
+    // save the depth, and release the lock id so new threads can take it afterwards and see it
+    // as not entered
+    int lock_depth = object->lock_depth;
+    object->lock_thread_id = 0;
+    object->lock_depth = 0;
+
+    bool result = condition_wait(&object->condition, &object->mutex, millisecondTimeout * TICKS_PER_MILLISECOND);
+
+    // we have the lock again
+    object->lock_thread_id = get_current_thread()->id;
+    object->lock_depth = lock_depth;
+
+    return (method_result_t){ .value = result, .exception = NULL };
 }
 
 static System_Exception TinyDotNet_Sync_Mutex_Lock(mutex_t* mutex) {
@@ -614,6 +633,7 @@ internal_call_t g_internal_calls[] = {
     { "[Corelib-v1]System.Threading.Monitor::Exit(object)", System_Threading_Monitor_Exit },
     { "bool [Corelib-v1]System.Threading.Monitor::IsEnteredNative(object)", System_Threading_Monitor_IsEnteredNative },
     { "[Corelib-v1]System.Threading.Monitor::ReliableEnter(object,[Corelib-v1]System.Boolean&)", System_Threading_Monitor_ReliableEnter },
+    { "bool [Corelib-v1]System.Threading.Monitor::ObjWait(int32,object)", System_Threading_Monitor_ObjWait },
 
     { "[Corelib-v1]TinyDotNet.Sync.Mutex::Lock()", TinyDotNet_Sync_Mutex_Lock },
     { "[Corelib-v1]TinyDotNet.Sync.Mutex::Unlock()", TinyDotNet_Sync_Mutex_Unlock },
