@@ -259,7 +259,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
     // handle the `this` argument
     MIR_reg_t number_reg = 0;
     MIR_reg_t this_reg = 0;
-    System_Type this_type;
+    System_Type this_type = NULL;
     if (!method_is_static(operand_method)) {
         if (opcode == CEE_NEWOBJ) {
             // this is the this_type
@@ -543,7 +543,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
     } else {
         // in some cases we do have a static call into an interface (specifically
         // for the Object non-virtual methods), so we need to deref in here
-        if (type_is_interface(this_type)) {
+        if (this_type != NULL && type_is_interface(this_type)) {
             MIR_append_insn(mir_ctx, mir_func,
                             MIR_new_insn(mir_ctx, MIR_MOV,
                                          MIR_new_reg_op(mir_ctx, this_reg),
