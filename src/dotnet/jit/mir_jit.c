@@ -6130,6 +6130,17 @@ cleanup:
     return err;
 }
 
+#ifdef JIT_DEBUG_SYMBOLS
+
+static void debug_set_gen_interface(MIR_context_t ctx, MIR_item_t func_item) {
+    if (func_item == NULL) return; /* finish setting interfaces */
+    MIR_gen (ctx, 0, func_item);
+    size_t size = debug_get_code_size(func_item->u.func->machine_code);
+    debug_create_symbol(func_item->u.func->name, (uintptr_t)func_item->u.func->machine_code, size);
+}
+
+#endif
+
 static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
     err_t err = NO_ERROR;
     jit_method_context_t mctx;
@@ -6173,9 +6184,9 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
 
     // set a lazy generation
 #ifdef JIT_DEBUG_SYMBOLS
-    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
+    MIR_link(m_mir_context, debug_set_gen_interface, NULL);
 #else
-    MIR_link(m_mir_context, MIR_set_lazy_gen_interface, NULL);
+    MIR_link(m_mir_context, MIR_set_parallel_gen_interface, NULL);
 #endif
 
     //------------------------------------------------------------------------------------------------------------------
@@ -6197,22 +6208,6 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
             }
             ASSERT(created_type->VTable[vi] != NULL);
         }
-
-#ifdef JIT_DEBUG_SYMBOLS
-        // register all symbols which are not registered already
-        for (int vi = 0; vi < created_type->Methods->Length; vi++) {
-            // if this has an unboxer use the unboxer instead of the actual method
-            System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
-            if (
-                method->MirFunc != NULL &&
-                method->MirFunc->item_type == MIR_func_item &&
-                debug_lookup_symbol((uintptr_t)method->MirFunc->u.func->machine_code) == NULL
-            ) {
-                size_t size = debug_get_code_size(method->MirFunc->u.func->machine_code);
-                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->u.func->machine_code, size);
-            }
-        }
-#endif
     }
 
     // add the gc roots
@@ -6252,22 +6247,6 @@ static err_t jit_process(jit_context_t* ctx, MIR_module_t module) {
                     CHECK_FAIL();
             }
         }
-
-#ifdef JIT_DEBUG_SYMBOLS
-        // register all symbols which are not registered already
-        for (int vi = 0; vi < created_type->Methods->Length; vi++) {
-            // if this has an unboxer use the unboxer instead of the actual method
-            System_Reflection_MethodInfo method = created_type->Methods->Data[vi];
-            if (
-                method->MirFunc != NULL &&
-                method->MirFunc->item_type == MIR_func_item &&
-                debug_lookup_symbol((uintptr_t)method->MirFunc->u.func->machine_code) == NULL
-            ) {
-                size_t size = debug_get_code_size(method->MirFunc->u.func->machine_code);
-                debug_create_symbol(method->MirFunc->u.func->name, (uintptr_t)method->MirFunc->u.func->machine_code, size);
-            }
-        }
-#endif
     }
 
     // now handle initializers
