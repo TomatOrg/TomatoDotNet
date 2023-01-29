@@ -471,6 +471,9 @@ extern MIR_item_t m_get_thread_local_ptr_func;
 extern MIR_item_t m_delegate_ctor_func;
 extern MIR_item_t m_unsafe_as_func;
 
+extern MIR_item_t m_debug_trace_proto;
+extern MIR_item_t m_debug_trace_func;
+
 // intrinsic methods
 extern System_Reflection_MethodInfo m_Unsafe_SizeOf;
 extern System_Reflection_MethodInfo m_MemoryMarshal_GetArrayDataReference;
@@ -511,7 +514,7 @@ extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsRefere
  * Uncomment if you want debug symbols, note that this forces
  * the parallel generator instead of the lazy one!
  */
-//#define JIT_DEBUG_SYMBOLS
+#define JIT_DEBUG_SYMBOLS
 
 /**
  * This function is called to decide if we should trace or not

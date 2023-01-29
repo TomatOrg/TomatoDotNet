@@ -61,6 +61,9 @@ MIR_item_t m_get_thread_local_ptr_func = NULL;
 MIR_item_t m_delegate_ctor_func = NULL;
 MIR_item_t m_unsafe_as_func = NULL;
 
+MIR_item_t m_debug_trace_proto = NULL;
+MIR_item_t m_debug_trace_func = NULL;
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // methods that are used as intrinsics
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -261,6 +264,10 @@ static void on_rethrow(System_Reflection_MethodInfo methodInfo, int il_offset) {
 #endif
 }
 
+static void debug_trace(uintptr_t ptr) {
+    TRACE("%08lx", ptr);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // init the jit
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -453,6 +460,9 @@ err_t init_jit() {
     m_on_rethrow_proto = MIR_new_proto(m_mir_context, "on_rethrow$proto", 0, NULL, 2, MIR_T_P, "method_info", MIR_T_I32, "il_offset");
     m_on_rethrow_func = MIR_new_import(m_mir_context, "on_rethrow");
 
+    m_debug_trace_proto = MIR_new_proto(m_mir_context, "debug_trace$proto", 0, NULL, 1, MIR_T_I64, "a");
+    m_debug_trace_func = MIR_new_import(m_mir_context, "debug_trace");
+
     m_get_thread_local_ptr_proto = MIR_new_proto(m_mir_context, "get_thread_local_ptr$proto", 1, &res_type, 1, MIR_T_I32, "local_index");
     m_get_thread_local_ptr_func = MIR_new_import(m_mir_context, "get_thread_local_ptr");
 
@@ -497,6 +507,7 @@ err_t init_jit() {
     MIR_load_external(m_mir_context, "on_throw", on_throw);
     MIR_load_external(m_mir_context, "on_rethrow", on_rethrow);
     MIR_load_external(m_mir_context, "get_thread_local_ptr", get_thread_local_ptr);
+    MIR_load_external(m_mir_context, "debug_trace", debug_trace);
 
     // load internal functions
     for (int i = 0; i < g_internal_calls_count; i++) {

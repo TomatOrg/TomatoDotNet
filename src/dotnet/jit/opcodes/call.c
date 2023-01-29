@@ -395,6 +395,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
                 // If this_type is a reference type (as opposed to a value type)
                 if (type_is_object_ref(constrainedType)) {
                     // ptr is dereferenced and passed as the ‘this’ pointer to the callvirt of method
+                    CHECK(this_type->IsByRef);
                     this_type = constrainedType;
                     MIR_append_insn(mir_ctx, mir_func,
                                     MIR_new_insn(mir_ctx, MIR_MOV,
