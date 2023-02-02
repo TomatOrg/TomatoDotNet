@@ -1745,7 +1745,6 @@ err_t loader_load_corelib(void* buffer, size_t buffer_size) {
     // instead of later
     CHECK_AND_RETHROW(jit_type(tSystem_Object));
     CHECK_AND_RETHROW(jit_type(tSystem_Type));
-    CHECK_AND_RETHROW(jit_type(tSystem_ValueType));
     CHECK_AND_RETHROW(jit_type(tSystem_String));
     CHECK_AND_RETHROW(jit_type(tSystem_Boolean));
     CHECK_AND_RETHROW(jit_type(tSystem_Char));
