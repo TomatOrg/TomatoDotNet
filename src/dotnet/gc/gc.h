@@ -43,11 +43,6 @@ extern bool g_allow_null_type;
 void* gc_new(System_Type type, size_t size);
 
 /**
- * Get the memory info of the GC
- */
-void gc_get_memory_info(System_GCMemoryInfo* memoryInfo);
-
-/**
  * Helper to allocate a new gc object
  */
 #define UNSAFE_GC_NEW(type) \

@@ -25,4 +25,4 @@ typedef struct gc_thread_data {
 /**
  * The default gc thread data, used when creating new threads
  */
-extern gc_thread_data_t m_default_gc_thread_data;
+extern gc_thread_data_t g_default_gc_thread_data;

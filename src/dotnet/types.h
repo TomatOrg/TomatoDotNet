@@ -39,23 +39,6 @@ typedef struct System_Guid {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-typedef struct System_GCMemoryInfo {
-    uint64_t FinalizationPendingCount;
-    uint64_t FragmentedBytes;
-    int Generation;
-    // TODO: generation info
-    uint64_t HeapSizeBytes;
-    uint64_t HighMemoryLoadThresholdBytes;
-    uint64_t Index;
-    uint64_t MemoryLoadBytes;
-    // TODO: Pause Duration
-    double PauseTimePercentage;
-    uint64_t TotalAvailableMemoryBytes;
-    uint64_t TotalCommittedBytes;
-} System_GCMemoryInfo;
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 typedef struct System_ValueType {
     // empty...
 } System_ValueType;
@@ -126,9 +109,9 @@ struct System_Object {
 #define COLOR_GRAY      2   /* object that has been traced, but its children have not been traced yet */
 #define COLOR_BLACK     3   /* object that has been traced, and its children have been traced as well */
 #define COLOR_YELLOW    4   /* object that has not been traced (for color switching) */
-#define COLOR_GREEN     5   /* object that should be finalized */
-#define COLOR_RESERVED0 6   /* reserved for future use */
-#define COLOR_RESERVED1 7   /* reserved for future use */
+#define COLOR_RESERVED0 5
+#define COLOR_RESERVED1 6
+#define COLOR_RESERVED2 7
 
     // should finalizer be called or not
     uint32_t suppress_finalizer : 1;

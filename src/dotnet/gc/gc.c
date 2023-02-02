@@ -24,7 +24,7 @@
  */
 #define GTD ((gc_thread_data_t __seg_fs*)offsetof(thread_control_block_t, gc_data))
 
-gc_thread_data_t m_default_gc_thread_data;
+gc_thread_data_t g_default_gc_thread_data;
 
 /**
  * The color used for allocation, switched with clear
@@ -62,17 +62,28 @@ static void write_field(void* o, size_t offset, void* new) {
     *(void**)((uintptr_t)o + offset) = new;
 }
 
-static spinlock_t m_global_roots_lock;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Global root management
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Protects the global root list
+ */
+static mutex_t m_global_roots_lock;
+
+/**
+ * The global root list
+ */
 static System_Object** m_global_roots = NULL;
 
 void gc_add_root(void* object) {
-    spinlock_lock(&m_global_roots_lock);
+    mutex_lock(&m_global_roots_lock);
     arrpush(m_global_roots, object);
-    spinlock_unlock(&m_global_roots_lock);
+    mutex_unlock(&m_global_roots_lock);
 }
 
 void gc_remove_root(void* object) {
-    spinlock_lock(&m_global_roots_lock);
+    mutex_lock(&m_global_roots_lock);
 
     int index = -1;
     for (int i = 0; i < arrlen(m_global_roots); i++) {
@@ -85,8 +96,10 @@ void gc_remove_root(void* object) {
 
     stbds_arrdelswap(m_global_roots, index);
 
-    spinlock_unlock(&m_global_roots_lock);
+    mutex_unlock(&m_global_roots_lock);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 bool g_allow_null_type = true;
 
@@ -135,47 +148,39 @@ static void gc_mark_gray(System_Object object) {
     }
 }
 
+#define MARK_BEGIN(o, new) \
+    do { \
+        scheduler_preempt_disable(); \
+        if (GTD->status != THREAD_STATUS_ASYNC) { \
+            gc_mark_gray(o); \
+            gc_mark_gray(new); \
+        } else if (m_gc_tracing) { \
+            gc_mark_gray(o); \
+            /* Mark card, done implicitly because we */ \
+            /* are going to change the object */ \
+        } else { \
+            /* Mark card, done implicitly because we */ \
+            /* are going to change the object */ \
+        } \
+    } while (0)
+
+#define MARK_END \
+    do { \
+        scheduler_preempt_enable(); \
+    } while (0)
+
 void gc_update(void* o, size_t offset, void* new) {
-    scheduler_preempt_disable();
-
-    if (GTD->status != THREAD_STATUS_ASYNC) {
-        gc_mark_gray(o);
-        gc_mark_gray(new);
-    } else if (m_gc_tracing) {
-        gc_mark_gray(o);
-        // Mark card, done implicitly because we
-        // are going to change the object
-    } else {
-        // Mark card, done implicitly because we
-        // are going to change the object
-    }
-
-    // set it
+    MARK_BEGIN(o, new);
     write_field(o, offset, new);
-
-    scheduler_preempt_enable();
+    MARK_END;
 }
 
 System_Object gc_compare_exchange_ref(_Atomic(System_Object)* ptr, System_Object new, System_Object comparand) {
     System_Object object = heap_find_fast(ptr);
     if (object != NULL) {
-        scheduler_preempt_disable();
-
-        if (GTD->status != THREAD_STATUS_ASYNC) {
-            gc_mark_gray(object);
-            gc_mark_gray(new);
-        } else if (m_gc_tracing) {
-            gc_mark_gray(object);
-            // Mark card, done implicitly because we
-            // are going to change the object
-        } else {
-            // Mark card, done implicitly because we
-            // are going to change the object
-        }
-
-        // set it
+        MARK_BEGIN(object, new);
         atomic_compare_exchange_strong(ptr, &comparand, new);
-        scheduler_preempt_enable();
+        MARK_END;
         return comparand;
     } else {
         atomic_compare_exchange_strong(ptr, &comparand, new);
@@ -186,25 +191,9 @@ System_Object gc_compare_exchange_ref(_Atomic(System_Object)* ptr, System_Object
 System_Object gc_exchange_ref(_Atomic(System_Object)* ptr, System_Object new) {
     System_Object object = heap_find_fast(ptr);
     if (object != NULL) {
-        scheduler_preempt_disable();
-
-        if (GTD->status != THREAD_STATUS_ASYNC) {
-            gc_mark_gray(object);
-            gc_mark_gray(new);
-        } else if (m_gc_tracing) {
-            gc_mark_gray(object);
-            // Mark card, done implicitly because we
-            // are going to change the object
-        } else {
-            // Mark card, done implicitly because we
-            // are going to change the object
-        }
-
-        // set it
+        MARK_BEGIN(object, new);
         System_Object res = atomic_exchange(ptr, new);
-
-        scheduler_preempt_enable();
-
+        MARK_END;
         return res;
     } else {
         return atomic_exchange(ptr, new);
@@ -231,14 +220,33 @@ static const char* m_status_str[] = {
 };
 
 static void gc_mark_ptr(uintptr_t ptr) {
+
+    // TODO: this also needs to check for DmaBuffer pointers to make sure
+    //       to not delete dma buffers until even the stack no longer has it
+
     System_Object object = heap_find(ptr);
     if (object != NULL) {
         gc_mark_gray(object);
     }
 }
-//
-//static wait_group_t m_gc_handshake_wg = INIT_WAIT_GROUP();
 
+/**
+ * The mutex that protects the condition
+ */
+static mutex_t m_gc_handshake_mutex = INIT_MUTEX();
+
+/**
+ * The condition that is set when the condition is done
+ */
+static condition_t m_gc_handshake_condition = INIT_CONDITION();
+
+/**
+ * This thread performs the work of the handshake
+ *
+ * TODO: maybe turn this into being a signal sent to all threads so
+ *       the scheduler can do it nicely, the original allocator did have
+ *       it so the mutators are the one running the code anyways
+ */
 static void gc_handshake_thread(void* arg) {
     gc_thread_status_t status = (gc_thread_status_t)(uintptr_t)arg;
 
@@ -252,16 +260,16 @@ static void gc_handshake_thread(void* arg) {
     lock_all_threads();
 
     // set the default status for the next threads that will be created
-    m_default_gc_thread_data.status = status;
+    g_default_gc_thread_data.status = status;
 
     for (int i = 0; i < arrlen(g_all_threads); i++) {
         // get the thread and suspend it if it is not us
         // TODO: optimize by only doing the threads that don't run right now or something
         // TODO: skip any gc thread
         thread_t* thread = g_all_threads[i];
-        
+
         if (!thread) continue;
-        
+
         // don't suspend either our thread or the collector thread
         if (thread == get_current_thread() || thread == m_collector_thread) continue;
 
@@ -305,20 +313,20 @@ static void gc_handshake_thread(void* arg) {
         // resume the threads operation
         scheduler_resume_thread(state);
     }
+
     unlock_all_threads();
-    
-//    wait_group_done(&m_gc_handshake_wg);
+
+    mutex_lock(&m_gc_handshake_mutex);
+    condition_notify_all(&m_gc_handshake_condition);
+    mutex_unlock(&m_gc_handshake_mutex);
 }
 
 static void gc_post_handshake(gc_thread_status_t status) {
-    // add the work
-//    wait_group_add(&m_gc_handshake_wg, 1);
-
     // set the status of our thread so everything will sync nicely
     GTD->status = status;
 
     // create the handshake thread and ready it
-    thread_t* thread = create_thread(gc_handshake_thread, (void*)status, "gc/handshake[%s]", m_status_str[status]);
+    thread_t* thread = create_thread(gc_handshake_thread, (void *) status, "gc/handshake[%s]", m_status_str[status]);
     if (thread == NULL) {
         // TODO: panic
         ASSERT(!"failed to create gc_post_handshake thread");
@@ -327,7 +335,9 @@ static void gc_post_handshake(gc_thread_status_t status) {
 }
 
 static void gc_wait_handshake() {
-//    wait_group_wait(&m_gc_handshake_wg);
+    mutex_lock(&m_gc_handshake_mutex);
+    condition_wait(&m_gc_handshake_condition, &m_gc_handshake_mutex, -1);
+    mutex_unlock(&m_gc_handshake_mutex);
 }
 
 static void gc_handshake(gc_thread_status_t status) {
@@ -380,7 +390,7 @@ static void gc_switch_allocation_clear_colors() {
 
 static void gc_mark_global_roots() {
     // add all the global roots
-    spinlock_lock(&m_global_roots_lock);
+    mutex_lock(&m_global_roots_lock);
     for (int i = 0; i < arrlen(m_global_roots); i++) {
         System_Object object = *m_global_roots[i];
         if (!object) continue;
@@ -388,7 +398,7 @@ static void gc_mark_global_roots() {
             gc_mark_gray(object);
         }
     }
-    spinlock_unlock(&m_global_roots_lock);
+    mutex_unlock(&m_global_roots_lock);
 
     // get all the loaded assemblies
     spinlock_lock(&g_loaded_assemblies_lock);
@@ -494,21 +504,17 @@ static void gc_trace() {
     gc_complete_trace();
 }
 
-static atomic_size_t m_objects_to_finalize = 0;
-
-static void gc_revive_finalized_objects(System_Object object) {
+static void gc_finalize_clear_objects(System_Object object) {
     if (object->color == m_clear_color && !object->suppress_finalizer) {
         // mark that no need for finalizer anymore
         object->suppress_finalizer = 1;
 
-        // revive all the children
-        gc_mark_black(object);
-
-        // mark as a green object
-        object->color = COLOR_GREEN;
-
-        // we have another object to finalize
-        m_objects_to_finalize++;
+        // get the finalizer function and run it
+        System_Exception(*finalize)(System_Object this) = OBJECT_TYPE(object)->Finalize->MirFunc->addr;
+        System_Exception exception = finalize(object);
+        if (exception != NULL) {
+            WARN("Got exception in finalizer: `%U`", exception->Message);
+        }
     }
 }
 
@@ -521,21 +527,17 @@ static void gc_free_clear_objects(System_Object object) {
 }
 
 static void gc_sweep(bool full_collection) {
-    // go over all the objects that should be freed but have a finalizer
-    heap_iterate_objects(gc_revive_finalized_objects);
+    // first we will run the finalizer of all the objects, this makes sure that the
+    // objects are fully finalized and ready to be cleared by the time that we need
+    // to free them, and that we don't have any invalid refs, this saves on the need
+    // to revive at the cost of running finalizers on the main gc thread, which I don't
+    // think should be a real problem
+    heap_iterate_objects(gc_finalize_clear_objects);
 
-    // revive all these objects
-    gc_complete_trace();
-
-    // now free all the objects that don't need to stay alive anymore
+    // now actually free all the objects
     heap_iterate_objects(gc_free_clear_objects);
 
     if (full_collection) {
-        // if we do a full collection run the finalizers right now
-        if (gc_need_to_run_finalizers()) {
-            gc_run_finalizers();
-        }
-
         // in a full collection we are also going to reclaim memory back
         // from the collector to the pmm, this is a bit slower so only
         // done on full collection
@@ -551,32 +553,6 @@ static void gc_collection_cycle(bool full_collection) {
     gc_trace();
     gc_sweep(full_collection);
     m_gc_tracing = false;
-}
-
-static void gc_finalize(System_Object object) {
-    if (object->color != COLOR_GREEN) return;
-
-    m_objects_to_finalize--;
-
-    // get the finalizer function and run it
-    System_Exception(*finalize)(System_Object this) = OBJECT_TYPE(object)->Finalize->MirFunc->addr;
-    System_Exception exception = finalize(object);
-    if (exception != NULL) {
-        WARN("Got exception in finalizer: `%U`", exception->Message);
-    }
-
-    // we can now free this object, the rest will follow suite
-    heap_free(object);
-}
-
-void gc_run_finalizers() {
-    while (atomic_load(&m_objects_to_finalize) != 0) {
-        heap_iterate_objects(gc_finalize);
-    }
-}
-
-bool gc_need_to_run_finalizers() {
-    return m_objects_to_finalize != 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -692,26 +668,10 @@ noreturn static void gc_thread(void* ctx) {
 err_t init_gc() {
     err_t err = NO_ERROR;
 
-//    m_collector_thread = create_thread(gc_thread, NULL, "gc/collector");
-//    CHECK(m_collector_thread != NULL);
-//    scheduler_ready_thread(m_collector_thread);
+    m_collector_thread = create_thread(gc_thread, NULL, "gc/collector");
+    CHECK(m_collector_thread != NULL);
+    scheduler_ready_thread(m_collector_thread);
 
 cleanup:
     return err;
-}
-
-void gc_get_memory_info(System_GCMemoryInfo* memoryInfo) {
-    scheduler_preempt_disable();
-    memoryInfo->FinalizationPendingCount = atomic_load(&m_objects_to_finalize);
-    memoryInfo->FragmentedBytes = 0;                            // TODO: The amount of wasted space
-    memoryInfo->Generation = m_had_full_collection ? 1 : 0;
-    memoryInfo->HeapSizeBytes = 0;                              // TODO: The size of the heap in bytes, includes both allocated and free objects
-    memoryInfo->HighMemoryLoadThresholdBytes = 0;               // TODO: I am not sure what this is supposed to be
-    memoryInfo->Index = m_gc_count;
-    memoryInfo->MemoryLoadBytes = 0;                            // TODO: The amount of allocated bytes in the whole system (?)
-    memoryInfo->PauseTimePercentage = 0.0;
-    memoryInfo->TotalAvailableMemoryBytes = 0;                  // TODO: The amount of available memory in the whole system
-    memoryInfo->TotalCommittedBytes = 0;                        // TODO: The committed bytes of the heap (for now same as HeapSizeBytes)
-    m_had_full_collection = false;
-    scheduler_preempt_enable();
 }
