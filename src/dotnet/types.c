@@ -63,6 +63,7 @@ System_Type tSystem_RuntimeTypeHandle = NULL;
 System_Type tSystem_Nullable = NULL;
 System_Type tSystem_ReadOnlySpan = NULL;
 System_Type tSystem_Span = NULL;
+System_Type tSystem_WeakReference = NULL;
 
 System_Type tSystem_GenericArray = NULL;
 

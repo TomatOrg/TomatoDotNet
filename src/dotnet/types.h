@@ -125,6 +125,13 @@ typedef struct Interface {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct System_WeakReference {
+    struct System_Object;
+    System_Object referant;
+} *System_WeakReference;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef struct System_Span {
     uintptr_t Ptr;
     int32_t Length;
@@ -598,6 +605,8 @@ typedef struct System_RuntimeTypeHandle {
     System_Type Type;
 } System_RuntimeTypeHandle;
 
+typedef System_Exception (*System_Object_Finalize)(System_Object this);
+
 struct System_Type {
     // basic type information
     struct System_Reflection_MemberInfo;
@@ -896,6 +905,7 @@ extern System_Type tSystem_RuntimeTypeHandle;
 extern System_Type tSystem_Nullable;
 extern System_Type tSystem_ReadOnlySpan;
 extern System_Type tSystem_Span;
+extern System_Type tSystem_WeakReference;
 
 extern System_Type tSystem_GenericArray;
 

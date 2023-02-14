@@ -354,19 +354,10 @@ err_t jit_branch_point(jit_method_context_t* ctx, int il_target, MIR_label_t* la
 //----------------------------------------------------------------------------------------------------------------------
 
 /**
- * Throw an exception that was put to the exception register, this makes sure
- * to find the proper exception handler to jump to, and jump to it.
- *
- * If the type is not known it will simply resolve it at runtime
- *
- * The rethrow is only used when THROW_TRACE is enabled to show a nice trace
- * of the exception throwing.
- *
- * @param ctx           [IN]            The jit context
- * @param type          [IN, OPTIONAL]  The exception type
- * @param rethrow       [IN]            Is this coming from a rethrow
+ * Emit a try point, preparing a frame and jumping
+ * to the exception handler if something happens
  */
-err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow);
+err_t jit_emit_try(jit_method_context_t* ctx, System_Reflection_ExceptionHandlingClause clause);
 
 /**
  * Throw a new exception, creating it and putting it in the exception register
@@ -376,16 +367,6 @@ err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow);
  * @param type          [IN]    The clause to jump to
  */
 err_t jit_throw_new(jit_method_context_t* ctx, System_Type type);
-
-/**
- * Perform a null check, on the object inside of reg, if the type is null assuming this
- * is already a null and throwing un-conditionally
- *
- * @param ctx           [IN]    The jit context
- * @param reg           [IN]    The object location
- * @param type          [IN]    The object type
- */
-err_t jit_null_check(jit_method_context_t* ctx, MIR_reg_t reg, System_Type type);
 
 //----------------------------------------------------------------------------------------------------------------------
 // Type handling
@@ -470,6 +451,19 @@ extern MIR_item_t m_get_thread_local_ptr_proto;
 extern MIR_item_t m_get_thread_local_ptr_func;
 extern MIR_item_t m_delegate_ctor_func;
 extern MIR_item_t m_unsafe_as_func;
+
+extern MIR_item_t m_exception_set_frame_proto;
+extern MIR_item_t m_exception_set_frame_func;
+extern MIR_item_t m_exception_pop_frame_proto;
+extern MIR_item_t m_exception_pop_frame_func;
+extern MIR_item_t m_exception_get_proto;
+extern MIR_item_t m_exception_get_func;
+extern MIR_item_t m_exception_clear_proto;
+extern MIR_item_t m_exception_clear_func;
+extern MIR_item_t m_exception_throw_proto;
+extern MIR_item_t m_exception_throw_func;
+extern MIR_item_t m_exception_rethrow_proto;
+extern MIR_item_t m_exception_rethrow_func;
 
 extern MIR_item_t m_debug_trace_proto;
 extern MIR_item_t m_debug_trace_func;

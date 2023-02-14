@@ -76,11 +76,10 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
     // prepare array of all the operands
     // 1st is the prototype
     // 2nd is the reference
-    // 3rd is exception return
-    // 4rd is return type (optionally)
-    // 5th is this type (optionally)
+    // 3rd is return type (optionally)
+    // 4th is this type (optionally)
     // Rest are the arguments
-    size_t other_args = 3;
+    size_t other_args = 2;
     if (ret_type != NULL) other_args++;
     if (!method_is_static(operand_method)) other_args++;
     arg_ops = malloc((other_args + arg_count) * sizeof(MIR_op_t));
@@ -222,7 +221,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
             if (!method_is_static(ftnMethod)) {
                 // this is an instance method, emit a null check on the target
                 // to make sure that it is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, arg_reg, arg_type));
+                // TODO: add an explicit null check on the object since it should not be null
             } else {
                 // this is a static method, we need a null target, if already null
                 // ignore it, otherwise just zero the reg
@@ -452,11 +451,6 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
             } else {
                 CHECK(type_is_verifier_assignable_to(this_type, signature_this_type));
             }
-
-            // make sure that the object is not null, only if not a byref
-            if (this_type == NULL || !this_type->IsByRef) {
-                CHECK_AND_RETHROW(jit_null_check(ctx, this_reg, this_type));
-            }
         }
 
         arg_ops[i] = MIR_new_reg_op(mir_ctx, this_reg);
@@ -524,6 +518,10 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
         }
 
         if (sealed || method_is_final(real_method)) {
+            // TODO: emit an explicit null check since this will not
+            //       actually touch the `this` object, since it does not
+            //       need to touch the vtable
+
             // this is either a sealed class or a final method, meaning that no
             // one can inherit from them, so we can de-virtualize the call safely
             // without worrying about anything else
@@ -544,23 +542,25 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
     } else {
         // in some cases we do have a static call into an interface (specifically
         // for the Object non-virtual methods), so we need to deref in here
-        if (this_type != NULL && type_is_interface(this_type)) {
-            MIR_append_insn(mir_ctx, mir_func,
-                            MIR_new_insn(mir_ctx, MIR_MOV,
-                                         MIR_new_reg_op(mir_ctx, this_reg),
-                                         MIR_new_mem_op(mir_ctx, MIR_T_P,
-                                                        offsetof(Interface, This),
-                                                        this_reg, 0, 1)));
+        if (this_type != NULL) {
+            if (type_is_interface(this_type)) {
+                MIR_append_insn(mir_ctx, mir_func,
+                                MIR_new_insn(mir_ctx, MIR_MOV,
+                                             MIR_new_reg_op(mir_ctx, this_reg),
+                                             MIR_new_mem_op(mir_ctx, MIR_T_P,
+                                                            offsetof(Interface, This),
+                                                            this_reg, 0, 1)));
+            }
+
+            // TODO: emit an explicit null check since this will not
+            //       actually touch the `this` object, since it does not
+            //       need to touch the vtable
         }
 
         // static dispatch
         CHECK_AND_RETHROW(jit_prepare_method(ctx->ctx, operand_method));
         arg_ops[1] = MIR_new_ref_op(mir_ctx, operand_method->MirFunc);
     }
-
-    // get it to a temp register
-    MIR_reg_t exception_reg = jit_new_temp_reg(ctx, tSystem_Exception);
-    arg_ops[2] = MIR_new_reg_op(mir_ctx, exception_reg);
 
     #define IS_INTRINSIC(name) \
         ((name) != NULL && operand_method->GenericMethodDefinition == (name))
@@ -612,7 +612,7 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
             // this should just work, because if the value is a struct it is going to be allocated properly
             // in the stack push, and it is going to be passed by a pointer that we give, and everything will
             // just work out because of how we have the order of everything :)
-            arg_ops[3] = MIR_new_reg_op(mir_ctx, ret_reg);
+            arg_ops[2] = MIR_new_reg_op(mir_ctx, ret_reg);
             MIR_append_insn(mir_ctx, mir_func,
                             MIR_new_insn_arr(mir_ctx, aggressive_inlining ? MIR_INLINE : MIR_CALL,
                                              other_args + arg_count,
@@ -624,27 +624,6 @@ err_t jit_emit_call(jit_method_context_t* ctx, opcode_t opcode) {
                                              other_args + arg_count,
                                              arg_ops));
         }
-
-        // handle any exception which might have been thrown
-        MIR_insn_t label = MIR_new_label(mir_ctx);
-
-        // if we have a zero value skip the return
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_BF,
-                                     MIR_new_label_op(mir_ctx, label),
-                                     MIR_new_reg_op(mir_ctx, exception_reg)));
-
-        // set the exception register to have the new exception
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_MOV,
-                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                     MIR_new_reg_op(mir_ctx, exception_reg)));
-
-        // throw the error, it has an unknown type
-        CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
-
-        // insert the skip label
-        MIR_append_insn(mir_ctx, mir_func, label);
 
         // check if we need to copy the left out value from the stack
         // to the eval stack

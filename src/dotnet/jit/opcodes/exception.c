@@ -1,5 +1,6 @@
 #include "../jit_internal.h"
 #include "util/except.h"
+#include "dotnet/exception.h"
 
 #ifdef JIT_TRACE_MIR
 #define MIR_append_insn(...) MIR_append_insn_output(__VA_ARGS__)
@@ -8,44 +9,6 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Actual exception throwing code
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Return an exception from the function properly
- */
-static err_t jit_return_exception(jit_method_context_t* ctx) {
-    err_t err = NO_ERROR;
-
-    // we assume we have no result
-    size_t nres = 1;
-
-    // create a dummy one
-    MIR_op_t result_op = MIR_new_int_op(mir_ctx, 0);
-
-    // handle the return value
-    if (ctx->method->ReturnType != NULL) {
-        MIR_type_t type = jit_get_mir_type(ctx->method->ReturnType);
-        if (type != MIR_T_BLK) {
-            nres = 2;
-        }
-
-        // if we need to return a float make sure we have a float op and
-        // not an int op
-        if (type == MIR_T_F) {
-            result_op = MIR_new_float_op(mir_ctx, 0.0f);
-        } else if (type == MIR_T_D) {
-            result_op = MIR_new_double_op(mir_ctx, 0.0);
-        }
-    }
-
-    // now return the exception
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_ret_insn(mir_ctx, nres,
-                                     MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                     result_op));
-
-cleanup:
-    return err;
-}
 
 /**
  * Resolves the label of the exception clause, making sure it looks valid
@@ -62,120 +25,95 @@ cleanup:
     return err;
 }
 
-err_t jit_throw(jit_method_context_t* ctx, System_Type type, bool rethrow) {
+err_t jit_emit_try(jit_method_context_t* ctx, System_Reflection_ExceptionHandlingClause clause) {
     err_t err = NO_ERROR;
 
-    // verify it is a valid object
-    CHECK(type_is_object_ref(type));
+    // push a new frame
+    // TODO: maybe have the frame know what the clause it is doing is, and just
+    MIR_reg_t frame = jit_new_temp_reg(ctx, tSystem_UIntPtr);
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_insn(mir_ctx, MIR_ALLOCA,
+                                 MIR_new_reg_op(mir_ctx, frame),
+                                 MIR_new_int_op(mir_ctx, sizeof(exception_frame_t))));
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_call_insn(mir_ctx, 4,
+                                      MIR_new_ref_op(mir_ctx, m_exception_set_frame_proto),
+                                      MIR_new_ref_op(mir_ctx, m_exception_set_frame_func),
+                                      MIR_new_reg_op(mir_ctx, frame),
+                                      MIR_new_reg_op(mir_ctx, frame)));
 
-#ifdef THROW_TRACE
-    if (rethrow) {
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 4,
-                                          MIR_new_ref_op(mir_ctx, m_on_rethrow_proto),
-                                          MIR_new_ref_op(mir_ctx, m_on_rethrow_func),
-                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
-                                          MIR_new_int_op(mir_ctx, ctx->il_offset)));
-    } else {
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_call_insn(mir_ctx, 5,
-                                          MIR_new_ref_op(mir_ctx, m_on_throw_proto),
-                                          MIR_new_ref_op(mir_ctx, m_on_throw_func),
-                                          MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                          MIR_new_uint_op(mir_ctx, (uintptr_t)ctx->method),
-                                          MIR_new_int_op(mir_ctx, ctx->il_offset)));
+    // if the frame returned 0 then we don't need to run the exception
+    // handling code, otherwise we do need to run it
+    MIR_label_t no_exception = MIR_new_label(mir_ctx);
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_insn(mir_ctx, MIR_BF,
+                                 MIR_new_reg_op(mir_ctx, frame),
+                                 MIR_new_label_op(mir_ctx, no_exception)));
 
-    }
-#endif
-
-    bool found_handler = false;
-
-    // we need to figure the surrounding catch handler, and figure what to do with it when the exception is thrown
-    for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
-        System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
-
-        // skip any clause we are not inside
-        if (clause->TryOffset > ctx->il_offset || clause->TryOffset + clause->TryLength < ctx->il_offset) {
-            continue;
-        }
-
-        // we are inside this
-        switch (clause->Flags) {
-            case COR_ILEXCEPTION_CLAUSE_FAULT:
-            case COR_ILEXCEPTION_CLAUSE_FINALLY: {
+    switch (clause->Flags) {
+        case COR_ILEXCEPTION_CLAUSE_FAULT:
+        case COR_ILEXCEPTION_CLAUSE_FINALLY: {
                 // for fault/finally just jump to the handler
-                found_handler = true;
-
-                // do the jump
                 MIR_label_t label;
                 CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->HandlerOffset, &label));
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_JMP,
                                              MIR_new_label_op(mir_ctx, label)));
-            } break;
+        } break;
 
-            case COR_ILEXCEPTION_CLAUSE_FILTER: {
-                // for the filter just jump to the filter
-                // itself, the endfilter will optionally jump to the handler if needed
-                found_handler = true;
+        case COR_ILEXCEPTION_CLAUSE_FILTER: {
+//                // for the filter just jump to the filter
+//                // itself, the endfilter will optionally jump to the handler if needed
+            MIR_label_t label;
+            CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->FilterOffset, &label));
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_JMP,
+                                         MIR_new_label_op(mir_ctx, label)));
+        } break;
 
-                // do the jump
-                MIR_label_t label;
-                CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->FilterOffset, &label));
-                MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_JMP,
-                                             MIR_new_label_op(mir_ctx, label)));
-            } break;
+        // TODO: in theory the exception_throw can do this for us, so we won't
+        //       have to check for the different cases on our own, but that will
+        //       be done at another time
+        case COR_ILEXCEPTION_CLAUSE_EXCEPTION: {
+            // get the current exception so we can handle it, put
+            // it in the exception register so if it is the code
+            // in the handler will already have access to it
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_call_insn(mir_ctx, 3,
+                                              MIR_new_ref_op(mir_ctx, m_exception_get_proto),
+                                              MIR_new_ref_op(mir_ctx, m_exception_get_func),
+                                              ctx->exception_reg));
 
-            case COR_ILEXCEPTION_CLAUSE_EXCEPTION: {
-                // fast path, if we can verify right now that this matches, then just give
-                // it to it without any other check
-                if (type != NULL && type_is_verifier_assignable_to(type, clause->CatchType)) {
-                    // this matches right now! jump to it right away and stop looking
-                    found_handler = true;
+            // check if the exception is something we want to handle or not
+            MIR_reg_t result = jit_new_temp_reg(ctx, tSystem_Boolean);
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_call_insn(mir_ctx, 5,
+                                              MIR_new_ref_op(mir_ctx, m_is_instance_proto),
+                                              MIR_new_ref_op(mir_ctx, m_is_instance_func),
+                                              MIR_new_reg_op(mir_ctx, result),
+                                              MIR_new_reg_op(mir_ctx, ctx->exception_reg),
+                                              MIR_new_ref_op(mir_ctx, clause->CatchType->MirType)));
 
-                    // jump to the clause directly
-                    MIR_label_t label;
-                    CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->HandlerOffset, &label));
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_JMP,
-                                                 MIR_new_label_op(mir_ctx, label)));
+            // now jump only if the is instance was true
+            MIR_label_t label;
+            CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->HandlerOffset, &label));
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_insn(mir_ctx, MIR_BT,
+                                         MIR_new_label_op(mir_ctx, label),
+                                         MIR_new_reg_op(mir_ctx, result)));
 
-                } else if (type != NULL && type_is_verifier_assignable_to(clause->CatchType, type)) {
-                    // the catch type can in theory have this type, so we are going to emit a dynamic check
-
-                    // first check if this is valid
-                    MIR_reg_t result = jit_new_temp_reg(ctx, tSystem_Boolean);
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_call_insn(mir_ctx, 5,
-                                                      MIR_new_ref_op(mir_ctx, m_is_instance_proto),
-                                                      MIR_new_ref_op(mir_ctx, m_is_instance_func),
-                                                      MIR_new_reg_op(mir_ctx, result),
-                                                      MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                                      MIR_new_ref_op(mir_ctx, clause->CatchType->MirType)));
-
-                    // now jump only if the is instance was true
-                    MIR_label_t label;
-                    CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, clause->HandlerOffset, &label));
-                    MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_insn(mir_ctx, MIR_BT,
-                                                 MIR_new_label_op(mir_ctx, label),
-                                                 MIR_new_reg_op(mir_ctx, result)));
-
-                }
-            } break;
-        }
-
-        if (found_handler) {
-            break;
-        }
+            // if it was false, just rethrow, which will pop the current
+            // frame and pass the exception to the next one
+            MIR_append_insn(mir_ctx, mir_func,
+                            MIR_new_call_insn(mir_ctx, 2,
+                                              MIR_new_ref_op(mir_ctx, m_exception_rethrow_proto),
+                                              MIR_new_ref_op(mir_ctx, m_exception_rethrow_func)));
+        } break;
     }
 
-    if (!found_handler) {
-        // we did not find a handler that definitely handles this exception, we need
-        // to add another fallback of just rethrowing the exception to the caller
-        CHECK_AND_RETHROW(jit_return_exception(ctx));
-    }
+    // skip all the exception throwing on the non-throwing path
+    MIR_append_insn(mir_ctx, mir_func, no_exception);
+
 
 cleanup:
     return err;
@@ -209,34 +147,17 @@ err_t jit_throw_new(jit_method_context_t* ctx, System_Type type) {
 
     // call the ctor for it
     MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_call_insn(mir_ctx, 4,
+                    MIR_new_call_insn(mir_ctx, 3,
                                       MIR_new_ref_op(mir_ctx, ctor->MirProto),
                                       MIR_new_ref_op(mir_ctx, ctor->MirFunc),
-                                      MIR_new_reg_op(mir_ctx, ctx->exception_reg),
                                       MIR_new_reg_op(mir_ctx, exception_obj)));
 
-    MIR_label_t no_exception = MIR_new_label(mir_ctx);
-
-    // check if we need to throw an exception coming from creating this exception
+    // throw the newly created exception
     MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_BF,
-                                 MIR_new_label_op(mir_ctx, no_exception),
-                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
-
-    // throw an unknown exception
-    CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
-
-    // put the label to skip the ctor exception handling
-    MIR_append_insn(mir_ctx, mir_func, no_exception);
-
-    // mov the newly created exception to the exception register
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                 MIR_new_reg_op(mir_ctx, exception_obj)));
-
-    // throw it nicely
-    CHECK_AND_RETHROW(jit_throw(ctx, type, false));
+                    MIR_new_call_insn(mir_ctx, 3,
+                                      MIR_new_ref_op(mir_ctx, m_exception_throw_proto),
+                                      MIR_new_ref_op(mir_ctx, m_exception_throw_func),
+                                      MIR_new_reg_op(mir_ctx, exception_obj)));
 
 cleanup:
     return err;
@@ -255,6 +176,12 @@ cleanup:
 
 err_t jit_emit_leave(jit_method_context_t* ctx) {
     err_t err = NO_ERROR;
+
+    // Clear the current exception and pop our frame
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_call_insn(mir_ctx, 2,
+                                      MIR_new_ref_op(mir_ctx, m_exception_clear_proto),
+                                      MIR_new_ref_op(mir_ctx, m_exception_clear_func)));
 
     CHECK(ctx->filter_clause == NULL);
 
@@ -410,13 +337,6 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
         CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, first_clause->HandlerOffset, &label));
     }
 
-    // zero out the exception register, to make sure we
-    // have no exception in it
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                 MIR_new_int_op(mir_ctx, 0)));
-
     // finally jump to the label for the next clause/to
     // go outside
     MIR_append_insn(mir_ctx, mir_func,
@@ -432,6 +352,14 @@ cleanup:
 err_t jit_emit_endfinally(jit_method_context_t* ctx) {
     err_t err = NO_ERROR;
     MIR_op_t* switch_ops = NULL;
+
+    // we are done, first of all check pop our frame and try to
+    // rethrow the current exception if any, if we don't have any
+    // then we will simply go on to go to the next finally
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_call_insn(mir_ctx, 2,
+                                      MIR_new_ref_op(mir_ctx, m_exception_rethrow_proto),
+                                      MIR_new_ref_op(mir_ctx, m_exception_rethrow_func)));
 
     // we need to figure the surrounding catch handler, and figure what to do with it when the exception is thrown
     bool found = false;
@@ -469,11 +397,10 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
         if (chain->labels != NULL) {
             if (arrlen(chain->labels) == 1) {
                 // there is a single entry, no need for a switch
-                // if we don't have an exception, go to the success label
+                // go to the success label
                 MIR_append_insn(mir_ctx, mir_func,
-                                MIR_new_insn(mir_ctx, MIR_BF,
-                                             MIR_new_label_op(mir_ctx, chain->labels[0]),
-                                             MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
+                                MIR_new_insn(mir_ctx, MIR_JMP,
+                                             MIR_new_label_op(mir_ctx, chain->labels[0])));
             } else {
                 // we have multiple possibilities, use a switch
                 // allocate enough space for the ops
@@ -499,11 +426,6 @@ err_t jit_emit_endfinally(jit_method_context_t* ctx) {
         chain->done = true;
     }
 
-    // if we got to this instruction then we are
-    // in the faulting path, so we need to essentially rethrow, this will at most
-    // return to the next one
-    CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
-
 cleanup:
     SAFE_FREE(switch_ops);
 
@@ -521,7 +443,6 @@ err_t jit_emit_endfilter(jit_method_context_t* ctx) {
         TRACE("%*s} // end filter", ctx->jit_trace_indent, "");
         ctx->jit_trace_indent -= 4;
     );
-
 
     // pop from the stack the result
     System_Type value_type;
@@ -545,7 +466,10 @@ err_t jit_emit_endfilter(jit_method_context_t* ctx) {
                                  MIR_new_reg_op(mir_ctx, value_reg)));
 
     // if we got to here then we got a zero, meaning we need to rethrow
-    CHECK_AND_RETHROW(jit_throw(ctx, NULL, true));
+    MIR_append_insn(mir_ctx, mir_func,
+                    MIR_new_call_insn(mir_ctx, 2,
+                                      MIR_new_ref_op(mir_ctx, m_exception_rethrow_proto),
+                                      MIR_new_ref_op(mir_ctx, m_exception_rethrow_func)));
 
     // we are outside the handler now
     ctx->filter_clause = NULL;
@@ -564,17 +488,12 @@ err_t jit_emit_throw(jit_method_context_t* ctx) {
     System_Type obj_type;
     CHECK_AND_RETHROW(jit_stack_pop(ctx, &obj_type, &obj_reg, NULL));
 
-    // check the object is not null
-    CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
-
     // append the instruction itself
     MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_insn(mir_ctx, MIR_MOV,
-                                 MIR_new_reg_op(mir_ctx, ctx->exception_reg),
-                                 MIR_new_reg_op(mir_ctx, obj_reg)));
-
-    // throw it
-    CHECK_AND_RETHROW(jit_throw(ctx, obj_type, false));
+                    MIR_new_call_insn(mir_ctx, 3,
+                                      MIR_new_ref_op(mir_ctx, m_exception_throw_proto),
+                                      MIR_new_ref_op(mir_ctx, m_exception_throw_func),
+                                      MIR_new_reg_op(mir_ctx, obj_reg)));
 
 cleanup:
     return err;
@@ -587,7 +506,6 @@ err_t jit_emit_rethrow(jit_method_context_t* ctx) {
 
     // only permitted inside a catch handler
     bool found_handler = true;
-    System_Type catchType = NULL;
     for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
         System_Reflection_ExceptionHandlingClause clause = body->ExceptionHandlingClauses->Data[i];
 
@@ -595,7 +513,6 @@ err_t jit_emit_rethrow(jit_method_context_t* ctx) {
         if (clause->HandlerOffset <= ctx->il_offset && ctx->il_offset < clause->HandlerOffset + clause->HandlerLength) {
             // catch clause
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-                catchType = clause->CatchType;
                 found_handler = true;
                 break;
             }
@@ -610,10 +527,11 @@ err_t jit_emit_rethrow(jit_method_context_t* ctx) {
 
     CHECK(found_handler);
 
-    // we should already have the exception_reg filled
-
     // emit the rethrow
-    CHECK_AND_RETHROW(jit_throw(ctx, catchType, true));
+    MIR_append_insn(mir_ctx, mir_func,
+                   MIR_new_call_insn(mir_ctx, 2,
+                                     MIR_new_ref_op(mir_ctx, m_exception_rethrow_proto),
+                                     MIR_new_ref_op(mir_ctx, m_exception_rethrow_func)));
 
 cleanup:
     return err;

@@ -24,6 +24,7 @@
 
 #include "opcodes/opcodes.h"
 #include "sync/rwmutex.h"
+#include "dotnet/exception.h"
 
 // TODO: we need a mir try-catch so we can recover from mir errors
 
@@ -63,6 +64,19 @@ MIR_item_t m_unsafe_as_func = NULL;
 
 MIR_item_t m_debug_trace_proto = NULL;
 MIR_item_t m_debug_trace_func = NULL;
+
+MIR_item_t m_exception_set_frame_proto = NULL;
+MIR_item_t m_exception_set_frame_func = NULL;
+MIR_item_t m_exception_pop_frame_proto = NULL;
+MIR_item_t m_exception_pop_frame_func = NULL;
+MIR_item_t m_exception_get_proto = NULL;
+MIR_item_t m_exception_get_func = NULL;
+MIR_item_t m_exception_clear_proto = NULL;
+MIR_item_t m_exception_clear_func = NULL;
+MIR_item_t m_exception_throw_proto = NULL;
+MIR_item_t m_exception_throw_func = NULL;
+MIR_item_t m_exception_rethrow_proto = NULL;
+MIR_item_t m_exception_rethrow_func = NULL;
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // methods that are used as intrinsics
@@ -279,11 +293,8 @@ static MIR_context_t m_mir_context;
 
 static void jit_generate_System_Array_GetDataPtr() {
     const char* fname = "[Corelib-v1]System.Void* [Corelib-v1]System.Array::GetDataPtr()";
-    MIR_type_t res[] = {
-        MIR_T_P,
-        MIR_T_P
-    };
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "this");
+    MIR_type_t res = MIR_T_P;
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 1, MIR_T_P, "this");
     MIR_reg_t this = MIR_reg(m_mir_context, "this", func->u.func);
     MIR_append_insn(m_mir_context, func,
                     MIR_new_insn(m_mir_context, MIR_ADD,
@@ -291,8 +302,7 @@ static void jit_generate_System_Array_GetDataPtr() {
                                  MIR_new_reg_op(m_mir_context, this),
                                  MIR_new_int_op(m_mir_context, sizeof(struct System_Array))));
     MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 2,
-                                     MIR_new_int_op(m_mir_context, 0),
+                    MIR_new_ret_insn(m_mir_context, 1,
                                      MIR_new_reg_op(m_mir_context, this)));
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
@@ -307,15 +317,11 @@ static void jit_generate_System_Type_GetTypeFromHandle() {
             .size = sizeof(System_RuntimeTypeHandle)
         }
     };
-    MIR_type_t res[] = {
-        MIR_T_P,
-        MIR_T_P
-    };
-    MIR_item_t func = MIR_new_func_arr(m_mir_context, fname, 2, res, 1, args);
+    MIR_type_t res = MIR_T_P;
+    MIR_item_t func = MIR_new_func_arr(m_mir_context, fname, 1, &res, 1, args);
     MIR_reg_t handle = MIR_reg(m_mir_context, "handle", func->u.func);
     MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 2,
-                                     MIR_new_int_op(m_mir_context, 0),
+                    MIR_new_ret_insn(m_mir_context, 1,
                                      MIR_new_mem_op(m_mir_context, MIR_T_P, 0, handle, 0, 1)));
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
@@ -330,8 +336,7 @@ static void jit_generate_System_Type_GetTypeFromHandle() {
  */
 static void jit_generate_delegate_ctor() {
     const char* fname = "delegate_ctor";
-    MIR_type_t res = MIR_T_P;
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 3, MIR_T_P, "this", MIR_T_P, "target", MIR_T_P, "method");
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 0, NULL, 3, MIR_T_P, "this", MIR_T_P, "target", MIR_T_P, "method");
     MIR_reg_t this_reg = MIR_reg(m_mir_context, "this", func->u.func);
     MIR_reg_t target_reg = MIR_reg(m_mir_context, "target", func->u.func);
     MIR_reg_t method_reg = MIR_reg(m_mir_context, "method", func->u.func);
@@ -349,9 +354,7 @@ static void jit_generate_delegate_ctor() {
                                  fnptr_op,
                                  MIR_new_reg_op(m_mir_context, method_reg)));
 
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 1,
-                                     MIR_new_int_op(m_mir_context, 0)));
+    MIR_append_insn(m_mir_context, func, MIR_new_ret_insn(m_mir_context, 0));
 
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
@@ -360,15 +363,11 @@ static void jit_generate_delegate_ctor() {
 
 static void jit_generate_unsafe_as() {
     const char* fname = "unsafe_as";
-    MIR_type_t res[] = {
-        MIR_T_P,
-        MIR_T_P,
-    };
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 2, res, 1, MIR_T_P, "arg");
+    MIR_type_t res = MIR_T_P;
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 1, MIR_T_P, "arg");
     MIR_reg_t arg = MIR_reg(m_mir_context, "arg", func->u.func);
     MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 2,
-                                     MIR_new_int_op(m_mir_context, 0),
+                    MIR_new_ret_insn(m_mir_context, 1,
                                      MIR_new_reg_op(m_mir_context, arg)));
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
@@ -377,8 +376,7 @@ static void jit_generate_unsafe_as() {
 
 static void jit_generate_memmove() {
     const char* fname = "[Corelib-v1]System.Buffer::Memmove([Corelib-v1]System.Byte&,[Corelib-v1]System.Byte&,nuint)";
-    MIR_type_t res = MIR_T_P;
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 3, MIR_T_P, "dst", MIR_T_P, "src", MIR_T_U64, "len");
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 0, NULL, 3, MIR_T_P, "dst", MIR_T_P, "src", MIR_T_U64, "len");
     MIR_reg_t dst_reg = MIR_reg(m_mir_context, "dst", func->u.func);
     MIR_reg_t src_reg = MIR_reg(m_mir_context, "src", func->u.func);
     MIR_reg_t len_reg = MIR_reg(m_mir_context, "len", func->u.func);
@@ -389,17 +387,14 @@ static void jit_generate_memmove() {
                                       MIR_new_reg_op(m_mir_context, dst_reg),
                                       MIR_new_reg_op(m_mir_context, src_reg),
                                       MIR_new_reg_op(m_mir_context, len_reg)));
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 1,
-                                      MIR_new_int_op(m_mir_context, 0)));
+    MIR_append_insn(m_mir_context, func, MIR_new_ret_insn(m_mir_context, 0));
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
 }
 
 static void jit_generate_zeromem() {
     const char* fname = "[Corelib-v1]System.Buffer::_ZeroMemory([Corelib-v1]System.Byte&,nuint)";
-    MIR_type_t res = MIR_T_P;
-    MIR_item_t func = MIR_new_func(m_mir_context, fname, 1, &res, 2, MIR_T_P, "b", MIR_T_U64, "len");
+    MIR_item_t func = MIR_new_func(m_mir_context, fname, 0, NULL, 2, MIR_T_P, "b", MIR_T_U64, "len");
     MIR_reg_t b_reg = MIR_reg(m_mir_context, "b", func->u.func);
     MIR_reg_t len_reg = MIR_reg(m_mir_context, "len", func->u.func);
     MIR_append_insn(m_mir_context, func,
@@ -409,9 +404,7 @@ static void jit_generate_zeromem() {
                                       MIR_new_reg_op(m_mir_context, b_reg),
                                       MIR_new_int_op(m_mir_context, 0),
                                       MIR_new_reg_op(m_mir_context, len_reg)));
-    MIR_append_insn(m_mir_context, func,
-                    MIR_new_ret_insn(m_mir_context, 1,
-                                     MIR_new_int_op(m_mir_context, 0)));
+    MIR_append_insn(m_mir_context, func, MIR_new_ret_insn(m_mir_context, 0));
     MIR_finish_func(m_mir_context);
     MIR_new_export(m_mir_context, fname);
 }
@@ -474,6 +467,22 @@ err_t init_jit() {
     m_is_instance_proto = MIR_new_proto(m_mir_context, "isinstance$proto", 1, &res_type, 2, MIR_T_P, "object", MIR_T_P, "type");
     m_is_instance_func = MIR_new_import(m_mir_context, "isinstance");
 
+
+    res_type = MIR_T_I32;
+    m_exception_set_frame_proto = MIR_new_proto(m_mir_context, "exception_set_frame$proto", 1, &res_type, 1, MIR_T_P, "frame");
+    m_exception_set_frame_func = MIR_new_import(m_mir_context, "exception_set_frame");
+    m_exception_pop_frame_proto = MIR_new_proto(m_mir_context, "exception_pop_frame$proto", 0, NULL, 0);
+    m_exception_pop_frame_func = MIR_new_import(m_mir_context, "exception_pop_frame");
+    res_type = MIR_T_P;
+    m_exception_get_proto = MIR_new_proto(m_mir_context, "exception_get$proto", 1, &res_type, 0);
+    m_exception_get_func = MIR_new_import(m_mir_context, "exception_get");
+    m_exception_clear_proto = MIR_new_proto(m_mir_context, "exception_clear$proto", 0, NULL, 0);
+    m_exception_clear_func = MIR_new_import(m_mir_context, "exception_clear");
+    m_exception_throw_proto = MIR_new_proto(m_mir_context, "exception_throw$proto", 0, NULL, 1, MIR_T_P, "exception_object");
+    m_exception_throw_func = MIR_new_import(m_mir_context, "exception_throw");
+    m_exception_rethrow_proto = MIR_new_proto(m_mir_context, "exception_rethrow$proto", 0, NULL, 0);
+    m_exception_rethrow_func = MIR_new_import(m_mir_context, "exception_rethrow");
+
     // generate some builtin methods that we can't properly create in CIL because we don't allow
     // any unsafe code, and it is not worth having them as native functions
     jit_generate_System_Array_GetDataPtr();
@@ -508,6 +517,12 @@ err_t init_jit() {
     MIR_load_external(m_mir_context, "on_rethrow", on_rethrow);
     MIR_load_external(m_mir_context, "get_thread_local_ptr", get_thread_local_ptr);
     MIR_load_external(m_mir_context, "debug_trace", debug_trace);
+    MIR_load_external(m_mir_context, "exception_clear", exception_clear);
+    MIR_load_external(m_mir_context, "exception_pop_frame", exception_pop_frame);
+    MIR_load_external(m_mir_context, "exception_get", exception_get);
+    MIR_load_external(m_mir_context, "exception_throw", exception_throw);
+    MIR_load_external(m_mir_context, "exception_set_frame", exception_set_frame);
+    MIR_load_external(m_mir_context, "exception_rethrow", exception_rethrow);
 
     // load internal functions
     for (int i = 0; i < g_internal_calls_count; i++) {
@@ -1056,11 +1071,10 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
     // prepare array of all the operands
     // 1st is the prototype
     // 2nd is the reference
-    // 3rd is exception_reg return
-    // 4rd is return type (optionally)
-    // 5th is this type (optionally)
+    // 3rd is return type (optionally)
+    // 4th is this type (optionally)
     // Rest are the arguments
-    size_t other_args = 3;
+    size_t other_args = 2;
     if (ret_type != NULL) other_args++;
     other_args++;
     MIR_op_t arg_ops[other_args + arg_count];
@@ -1099,12 +1113,8 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
     // indirect call
     arg_ops[1] = fnptr_op;
 
-    // get it to the exception_reg register
-    MIR_reg_t exception_reg = MIR_new_func_reg(ctx->ctx, func->u.func, MIR_T_I64, "exception_reg");
-    arg_ops[2] = MIR_new_reg_op(ctx->ctx, exception_reg);
-
     // handle the return type
-    size_t nres = 1;
+    size_t nres = 0;
     MIR_reg_t return_reg = 0;
 
     // emit the IR
@@ -1178,26 +1188,6 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
                                      arg_ops));
 
     //
-    // Check for exception from the delegate's call
-    //
-
-    MIR_append_insn(ctx->ctx, func, label_check_exception);
-
-    MIR_insn_t label_no_exception = MIR_new_label(ctx->ctx);
-
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_insn(ctx->ctx, MIR_BF,
-                                 MIR_new_label_op(ctx->ctx, label_no_exception),
-                                 MIR_new_reg_op(ctx->ctx, exception_reg)));
-
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_ret_insn(ctx->ctx, nres,
-                                     MIR_new_reg_op(ctx->ctx, exception_reg),
-                                     MIR_new_int_op(ctx->ctx, 0)));
-
-    MIR_append_insn(ctx->ctx, func, label_no_exception);
-
-    //
     // call the next delegate, do that by overriding the this register with the next
     // multicast delegate and then calling it
     //
@@ -1220,7 +1210,6 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
 
     MIR_append_insn(ctx->ctx, func,
                     MIR_new_ret_insn(ctx->ctx, nres,
-                                     MIR_new_int_op(ctx->ctx, 0),
                                      MIR_new_reg_op(ctx->ctx, return_reg)));
 
 cleanup:
@@ -1251,18 +1240,15 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
     func_name = strbuilder_new();
     method_print_full_name(method, &func_name);
 
-    size_t nres = 1;
-    MIR_type_t res_type[2] = {
-        MIR_T_P, // exception
-        MIR_T_UNDEF, // return value if any
-    };
+    size_t nres = 0;
+    MIR_type_t res_type = MIR_T_UNDEF;
 
     // handle the return value
     if (method->ReturnType != NULL) {
         CHECK_AND_RETHROW(jit_prepare_static_type(ctx, method->ReturnType));
 
-        res_type[1] = jit_get_mir_type(method->ReturnType);
-        if (res_type[1] == MIR_T_BLK) {
+        res_type = jit_get_mir_type(method->ReturnType);
+        if (res_type == MIR_T_BLK) {
             // value type return
             MIR_var_t var = {
                 .name = "return_block",
@@ -1272,7 +1258,7 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
             arrpush(vars, var);
         } else {
             // we can use normal return
-            nres = 2;
+            nres = 1;
         }
     }
 
@@ -1311,7 +1297,7 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
     }
 
     // create the proto def
-    method->MirProto = MIR_new_proto_arr(ctx->ctx, strbuilder_get(&proto_name), nres, res_type, arrlen(vars), vars);
+    method->MirProto = MIR_new_proto_arr(ctx->ctx, strbuilder_get(&proto_name), nres, &res_type, arrlen(vars), vars);
 
     // no need to do anything else if the method is abstract
     if (method_is_abstract(method)) {
@@ -1375,18 +1361,18 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
                     method->DeclaringType->DelegateSignature = method;
 
                     // create the function
-                    method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars),
-                                                       vars);
+                    method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres,
+                                                       &res_type, arrlen(vars), vars);
 
                     // remove the this so we can have a static prototype
-                            arrdel(vars, this_index);
+                    arrdel(vars, this_index);
 
                     // prepare the signature for the non-
                     proto_static_name = strbuilder_new();
                     method_print_full_name(method, &proto_static_name);
                     strbuilder_cstr(&proto_static_name, "$proto_static");
                     MIR_item_t static_invoke_proto = MIR_new_proto_arr(ctx->ctx, strbuilder_get(&proto_static_name), nres,
-                                                                       res_type, arrlen(vars), vars);
+                                                                       &res_type, arrlen(vars), vars);
 
                     // generate the dispatcher
                     CHECK_AND_RETHROW(jit_multicast_delegate_invoke(ctx, method, method->MirFunc, static_invoke_proto));
@@ -1442,7 +1428,7 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
                     if (m_generic_extern_hooks[i]->can_gen(method)) {
 
                         // create the function
-                        method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+                        method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, &res_type, arrlen(vars), vars);
                         CHECK_AND_RETHROW(m_generic_extern_hooks[i]->gen(ctx->ctx, method));
                         MIR_finish_func(ctx->ctx);
                         MIR_new_export(ctx->ctx, strbuilder_get(&func_name));
@@ -1486,7 +1472,7 @@ err_t jit_prepare_method(jit_context_t* ctx, System_Reflection_MethodInfo method
         CHECK(!method_is_synchronized(method));
 
         // create a function, we will finish it right away and append to it in the future
-        method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+        method->MirFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, &res_type, arrlen(vars), vars);
         MIR_finish_func(ctx->ctx);
 
         // queue for jit
@@ -1739,8 +1725,6 @@ cleanup:
 
 /**
  * Allocate a new object, testing for out of memory if needed
- *
- * TODO: maybe move the throwing into the allocating function and call it normally?
  */
 err_t jit_new(jit_method_context_t* ctx, MIR_reg_t result, System_Type type, MIR_op_t size) {
     err_t err = NO_ERROR;
@@ -1759,30 +1743,6 @@ err_t jit_new(jit_method_context_t* ctx, MIR_reg_t result, System_Type type, MIR
                                       MIR_new_ref_op(mir_ctx, type->MirType),
                                       size));
 
-#ifdef READABLE_JIT
-    goto cleanup;
-#endif
-
-    // this is an edge case, if we get to this point then just let it crash...
-//    if (type != tSystem_OutOfMemoryException) {
-//        // if we got NULL from the gc_new function it means we got an OOM
-//
-//        // handle any exception which might have been thrown
-//        MIR_insn_t label = MIR_new_label(mir_ctx);
-//
-//        // if we have a non-zero value then skip the throw
-//        MIR_append_insn(mir_ctx, mir_func,
-//                        MIR_new_insn(mir_ctx, MIR_BT,
-//                                     MIR_new_label_op(mir_ctx, label),
-//                                     MIR_new_reg_op(mir_ctx, result)));
-//
-//        // throw the error, it has an unknown type
-//        CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_OutOfMemoryException));
-//
-//        // insert the skip label
-//        MIR_append_insn(mir_ctx, mir_func, label);
-//    }
-
 cleanup:
     return err;
 }
@@ -1790,51 +1750,6 @@ cleanup:
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Checking for stuff
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/**
- * Emit a null check, throwing System.NullReferenceException if the value at reg is null
- */
-err_t jit_null_check(jit_method_context_t* ctx, MIR_reg_t reg, System_Type type) {
-    err_t err = NO_ERROR;
-
-#ifdef READABLE_JIT
-    goto cleanup;
-#endif
-
-    if (type == NULL) {
-        // this is a null type, just throw it
-        CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_NullReferenceException));
-    } else {
-        CHECK(type_is_object_ref(type));
-
-        MIR_label_t not_null = MIR_new_label(mir_ctx);
-
-        if (type_is_interface(type)) {
-            // this is an interface, we need to get the object reference in it and check if
-            // that is zero
-            MIR_reg_t temp_reg = jit_new_temp_reg(ctx, tSystem_Object);
-            MIR_append_insn(mir_ctx, mir_func,
-                            MIR_new_insn(mir_ctx, MIR_MOV,
-                                         MIR_new_reg_op(mir_ctx, temp_reg),
-                                         MIR_new_mem_op(mir_ctx, MIR_T_P,
-                                                        sizeof(void*), reg, 0, 1)));
-            reg = temp_reg;
-        }
-
-        // check if reg is null
-        MIR_append_insn(mir_ctx, mir_func,
-                        MIR_new_insn(mir_ctx, MIR_BT,
-                                     MIR_new_label_op(mir_ctx, not_null),
-                                     MIR_new_reg_op(mir_ctx, reg)));
-
-        CHECK_AND_RETHROW(jit_throw_new(ctx, tSystem_NullReferenceException));
-
-        MIR_append_insn(mir_ctx, mir_func, not_null);
-    }
-
-cleanup:
-    return err;
-}
 
 /**
  * Emit a range check on an array, throwing System.IndexOutOfRangeException if the index was
@@ -2685,6 +2600,11 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 entered_filter = clause->FilterOffset == ctx->il_offset;
             }
 
+            // for try entry we need to setup a new frame
+            if (clause->TryOffset == ctx->il_offset) {
+                CHECK_AND_RETHROW(jit_emit_try(ctx, clause));
+            }
+
             // for catch/filter we need to set the first register on
             // the stack to the exception register so we will have the
             // correct value on the stack the start
@@ -3320,11 +3240,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t cast_result_reg = jit_new_temp_reg(ctx, tSystem_Boolean);
                 MIR_insn_t cast_success = MIR_new_label(mir_ctx);
 
-                // unbox.any does not accept null
-                if (opcode == CEE_UNBOX_ANY) {
-                    CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
-                }
-
                 // if this is an interface get the type instance itself
                 if (type_is_interface(obj_type)) {
                     MIR_append_insn(mir_ctx, mir_func,
@@ -3436,9 +3351,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 CHECK(operand_type->GenericTypeDefinition != tSystem_Nullable);
 
                 CHECK(type_get_stack_type(obj_type) == STACK_TYPE_O);
-
-                // make sure obj is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
 
                 // push it, but now as the new type
                 MIR_reg_t value_type_ptr_reg;
@@ -4886,11 +4798,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     );
                 }
 
-                // check the object is not null
-                if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
-                    CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
-                }
-
                 // validate the assignability
                 CHECK(type_is_verifier_assignable_to(value_type, operand_field->FieldType));
 
@@ -5059,11 +4966,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 MIR_reg_t value_reg;
                 CHECK_AND_RETHROW(jit_stack_push(ctx, field_stack_type, &value_reg));
 
-                // check the object is not null
-                if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
-                    CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
-                }
-
                 switch (type_get_stack_type(field_type)) {
                     case STACK_TYPE_O: {
                         if (type_is_interface(field_type)) {
@@ -5171,11 +5073,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     STACK_TOP.readonly_ref = readonly;
                 }
 
-                // check the object is not null
-                if (type_get_stack_type(obj_type) == STACK_TYPE_O) {
-                    CHECK_AND_RETHROW(jit_null_check(ctx, obj_reg, obj_type));
-                }
-
                 // very simple, just add to the object the field offset
                 MIR_append_insn(mir_ctx, mir_func,
                                 MIR_new_insn(mir_ctx, MIR_ADD,
@@ -5264,8 +5161,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                     // there is no return value, just add a ret
                     MIR_append_insn(mir_ctx, mir_func,
-                                    MIR_new_ret_insn(mir_ctx, 1,
-                                                     MIR_new_int_op(mir_ctx, 0)));
+                                    MIR_new_ret_insn(mir_ctx, 0));
                 } else {
                     // pop the return from the stack
                     MIR_reg_t ret_arg;
@@ -5292,15 +5188,13 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                                     // return no exception
                                     MIR_append_insn(mir_ctx, mir_func,
-                                                    MIR_new_ret_insn(mir_ctx, 1,
-                                                                     MIR_new_int_op(mir_ctx, 0)));
+                                                    MIR_new_ret_insn(mir_ctx, 0));
                                 }
                             } else {
                                 if (type_is_interface(ret_type)) {
                                     // interface -> object
                                     MIR_append_insn(mir_ctx, mir_func,
-                                                    MIR_new_ret_insn(mir_ctx, 2,
-                                                                     MIR_new_int_op(mir_ctx, 0),
+                                                    MIR_new_ret_insn(mir_ctx, 1,
                                                                      MIR_new_mem_op(mir_ctx, MIR_T_P, sizeof(void*), ret_arg, 0, 1)));
                                 } else {
                                     // object -> object
@@ -5319,8 +5213,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // it is stored in a register directly, just return it
                             MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_ret_insn(mir_ctx, 2,
-                                                             MIR_new_int_op(mir_ctx, 0),
+                                            MIR_new_ret_insn(mir_ctx, 1,
                                                              MIR_new_reg_op(mir_ctx, ret_arg)));
                         } break;
 
@@ -5331,8 +5224,7 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
 
                             // return no exception
                             MIR_append_insn(mir_ctx, mir_func,
-                                            MIR_new_ret_insn(mir_ctx, 1,
-                                                             MIR_new_int_op(mir_ctx, 0)));
+                                            MIR_new_ret_insn(mir_ctx, 0));
                         } break;
 
                         case STACK_TYPE_REF:
@@ -5421,9 +5313,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 // this must be an array
                 CHECK(array_type->IsArray);
 
-                // check the object is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, array_reg, array_type));
-
                 // push the length
                 MIR_reg_t length_reg;
                 CHECK_AND_RETHROW(jit_stack_push(ctx, tSystem_IntPtr, &length_reg));
@@ -5481,9 +5370,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 } else {
                     CHECK(type_get_stack_type(index_type) == STACK_TYPE_INTPTR);
                 }
-
-                // check the object is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, array_reg, array_type));
 
                 // check the array indexes
                 CHECK_AND_RETHROW(jit_oob_check(ctx, array_reg, index_reg));
@@ -5651,9 +5537,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                     CHECK(type_get_stack_type(index_type) == STACK_TYPE_INTPTR);
                 }
 
-                // check the object is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, array_reg, array_type));
-
                 // check the array indexes
                 CHECK_AND_RETHROW(jit_oob_check(ctx, array_reg, index_reg));
 
@@ -5758,9 +5641,6 @@ static err_t jit_method_body(jit_method_context_t* ctx) {
                 } else {
                     CHECK(type_get_stack_type(index_type) == STACK_TYPE_INTPTR);
                 }
-
-                // check the object is not null
-                CHECK_AND_RETHROW(jit_null_check(ctx, array_reg, array_type));
 
                 // check the array indexes
                 CHECK_AND_RETHROW(jit_oob_check(ctx, array_reg, index_reg));
@@ -5985,16 +5865,13 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
     method_print_full_name(method, &func_name);
     strbuilder_cstr(&func_name, "$unboxer");
 
-    size_t nres = 1;
-    MIR_type_t res_type[2] = {
-        MIR_T_P, // exception
-        MIR_T_UNDEF, // return value if any
-    };
+    size_t nres = 0;
+    MIR_type_t res_type = MIR_T_UNDEF;
 
     // handle the return value
     if (method->ReturnType != NULL) {
-        res_type[1] = jit_get_mir_type(method->ReturnType);
-        if (res_type[1] == MIR_T_BLK) {
+        res_type = jit_get_mir_type(method->ReturnType);
+        if (res_type == MIR_T_BLK) {
             // value type return
             MIR_var_t var = {
                 .name = "return_block",
@@ -6004,7 +5881,7 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
             arrpush(vars, var);
         } else {
             // we can use normal return
-            nres = 2;
+            nres = 1;
         }
     }
 
@@ -6028,20 +5905,16 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
         arrpush(vars, var);
     }
 
-    method->MirUnboxerFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, res_type, arrlen(vars), vars);
+    method->MirUnboxerFunc = MIR_new_func_arr(ctx->ctx, strbuilder_get(&func_name), nres, &res_type, arrlen(vars), vars);
 
     // push the prototype and the address
     arrpush(ops, MIR_new_ref_op(ctx->ctx, method->MirProto));
     arrpush(ops, MIR_new_ref_op(ctx->ctx, method->MirFunc));
 
-    // the exception return register
-    MIR_reg_t exception_reg = MIR_new_func_reg(ctx->ctx, method->MirUnboxerFunc->u.func, MIR_T_I64, "exception");
-    arrpush(ops, MIR_new_reg_op(ctx->ctx, exception_reg));
-
     // the return value
     MIR_reg_t return_reg = 0;
     if (method->ReturnType != NULL) {
-        if (res_type[1] == MIR_T_BLK) {
+        if (res_type == MIR_T_BLK) {
             // uses an implicit pointer, get it
             MIR_reg_t return_block = MIR_reg(ctx->ctx, "return_block", method->MirUnboxerFunc->u.func);
             arrpush(ops, MIR_new_reg_op(ctx->ctx, return_block));
@@ -6083,7 +5956,6 @@ static err_t jit_generate_unboxer(jit_context_t* ctx, System_Reflection_MethodIn
     // return the exception and value
     MIR_append_insn(ctx->ctx, method->MirUnboxerFunc,
                     MIR_new_ret_insn(ctx->ctx, nres,
-                                     MIR_new_reg_op(ctx->ctx, exception_reg),
                                      MIR_new_reg_op(ctx->ctx, return_reg)));
 
     MIR_finish_func(ctx->ctx);

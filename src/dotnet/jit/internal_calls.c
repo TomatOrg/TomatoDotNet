@@ -11,6 +11,7 @@
 #include "dotnet/activator.h"
 #include "kernel.h"
 #include "time/tick.h"
+#include "dotnet/exception.h"
 
 #include <thread/scheduler.h>
 
@@ -55,12 +56,12 @@ void managed_memcpy(System_Object this, System_Type struct_type, size_t offset, 
 // System.Diagnostic.Stopwatch
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t System_Diagnostic_Stopwatch_GetTscFrequency() {
-    return (method_result_t) { .exception = NULL, .value = get_tsc_freq() };
+static int64_t System_Diagnostic_Stopwatch_GetTscFrequency() {
+    return get_tsc_freq();
 }
 
-static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
-    return (method_result_t) { .exception = NULL, .value = get_tsc() };
+static int64_t System_Diagnostic_Stopwatch_GetTimestamp() {
+    return get_tsc();
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -73,31 +74,30 @@ static method_result_t System_Diagnostic_Stopwatch_GetTimestamp() {
 // System.Runtime.Intrinsics.X86
 //----------------------------------------------------------------------------------------------------------------------
 
-static System_Exception System_Runtime_Intrinsics_X86_X86Base_Pause() {
+static void System_Runtime_Intrinsics_X86_X86Base_Pause() {
     __builtin_ia32_pause();
-    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Threading.Thread
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t System_Threading_Thread_get_CurrentThread(System_Object this) {
-    return (method_result_t) { .exception = NULL, .value = (uintptr_t) get_current_thread()->tcb->managed_thread };
+static void* System_Threading_Thread_get_CurrentThread(System_Object this) {
+    return get_current_thread()->tcb->managed_thread;
 }
 
-static method_result_t System_Threading_Thread_Yield() {
+static bool System_Threading_Thread_Yield() {
     // TODO: properly figure out if we got a reschedule or not, probably via
     //       implementing it in the scheduler_yield function
     scheduler_yield();
-    return (method_result_t){ .exception = NULL, .value = true };
+    return true;
 }
 
-static method_result_t System_Threading_Thread_GetNativeThreadState() {
-    return (method_result_t){ .exception = NULL, .value = get_thread_status(get_current_thread()) };
+static int32_t System_Threading_Thread_GetNativeThreadState() {
+    return get_thread_status(get_current_thread());
 }
 
-static method_result_t System_Threading_CreateNativeThread(System_Delegate delegate, System_Object thread) {
+static uint64_t System_Threading_CreateNativeThread(System_Delegate delegate, System_Object thread) {
     // first we need to get the invoke method, since it is going to be the actual
     // entry point of the function
     System_Type type = OBJECT_TYPE(delegate);
@@ -113,108 +113,102 @@ static method_result_t System_Threading_CreateNativeThread(System_Delegate deleg
     put_thread(new_thread);
 
     // return it
-    return (method_result_t){ .exception = NULL, .value = (uintptr_t) new_thread};
+    return (uintptr_t)new_thread;
 }
 
-static System_Exception System_Threading_StartNativeThread(thread_t* thread, System_Object parameter) {
+static void System_Threading_StartNativeThread(thread_t* thread, System_Object parameter) {
     // the first argument is set to be the delegate, the second
     // is going to be the actual parameter we want to pass
     thread->save_state.rsi = (uint64_t) parameter;
 
     // queue the thread for scheduling
     scheduler_ready_thread(thread);
-
-    // no exception
-    return NULL;
 }
 
-static System_Exception System_Threading_ReleaseNativeThread(thread_t* thread) {
+static void System_Threading_ReleaseNativeThread(thread_t* thread) {
     release_thread(thread);
-    return NULL;
 }
 
-static System_Exception System_Threading_SetNativeThreadName(thread_t* thread, System_String name) {
+static void System_Threading_SetNativeThreadName(thread_t* thread, System_String name) {
     utf16_to_utf8(name->Chars, name->Length, (utf8_t*)thread->name, sizeof(thread->name));
-    return NULL;
 }
 
-static method_result_t System_Threading_Thread_GetCurrentProcessorId() {
-    return (method_result_t){ .value = get_apic_id() };
+static int32_t System_Threading_Thread_GetCurrentProcessorId() {
+    return get_apic_id();
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Threading.Interlocked
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t interlocked_add_i32(_Atomic(int32_t)* location1, int32_t value)      { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
-static method_result_t interlocked_add_u32(_Atomic(uint32_t)* location1, uint32_t value)    { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
-static method_result_t interlocked_add_i64(_Atomic(int64_t)* location1, int64_t value)      { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
-static method_result_t interlocked_add_u64(_Atomic(uint64_t)* location1, uint64_t value)    { return (method_result_t) { .value = atomic_fetch_add(location1, value) + value, .exception = NULL }; }
+static int32_t interlocked_add_i32(_Atomic(int32_t)* location1, int32_t value) { return atomic_fetch_add(location1, value) + value; }
+static uint32_t interlocked_add_u32(_Atomic(uint32_t)* location1, uint32_t value) { return atomic_fetch_add(location1, value) + value; }
+static int64_t interlocked_add_i64(_Atomic(int64_t)* location1, int64_t value) { return atomic_fetch_add(location1, value) + value; }
+static uint64_t interlocked_add_u64(_Atomic(uint64_t)* location1, uint64_t value) { return atomic_fetch_add(location1, value) + value; }
 
-static method_result_t interlocked_and_i32(_Atomic(int32_t)* location1, int32_t value)      { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }
-static method_result_t interlocked_and_u32(_Atomic(uint32_t)* location1, uint32_t value)    { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }
-static method_result_t interlocked_and_i64(_Atomic(int64_t)* location1, int64_t value)      { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }
-static method_result_t interlocked_and_u64(_Atomic(uint64_t)* location1, uint64_t value)    { return (method_result_t) { .value = atomic_fetch_and(location1, value), .exception = NULL }; }
+static int32_t interlocked_and_i32(_Atomic(int32_t)* location1, int32_t value) { return atomic_fetch_and(location1, value); }
+static uint32_t interlocked_and_u32(_Atomic(uint32_t)* location1, uint32_t value) { return atomic_fetch_and(location1, value); }
+static int64_t interlocked_and_i64(_Atomic(int64_t)* location1, int64_t value) { return atomic_fetch_and(location1, value); }
+static uint64_t interlocked_and_u64(_Atomic(uint64_t)* location1, uint64_t value) { return atomic_fetch_and(location1, value); }
 
-static method_result_t interlocked_compare_exchange_i32(_Atomic(int32_t)* location1, int32_t value, int32_t comparand) {
+static int32_t interlocked_compare_exchange_i32(_Atomic(int32_t)* location1, int32_t value, int32_t comparand) {
     atomic_compare_exchange_strong(location1, &comparand, value);
-    return (method_result_t) { .value = comparand, .exception = NULL };
+    return comparand;
 }
 
-static method_result_t interlocked_compare_exchange_u32(_Atomic(uint32_t)* location1, uint32_t value, uint32_t comparand) {
+static uint32_t interlocked_compare_exchange_u32(_Atomic(uint32_t)* location1, uint32_t value, uint32_t comparand) {
     atomic_compare_exchange_strong(location1, &comparand, value);
-    return (method_result_t) { .value = comparand, .exception = NULL };
+    return comparand;
 }
 
-static method_result_t interlocked_compare_exchange_i64(_Atomic(int64_t)* location1, int64_t value, int64_t comparand) {
+static int64_t interlocked_compare_exchange_i64(_Atomic(int64_t)* location1, int64_t value, int64_t comparand) {
     atomic_compare_exchange_strong(location1, &comparand, value);
-    return (method_result_t) { .value = comparand, .exception = NULL };
+    return comparand;
 }
 
-static method_result_t interlocked_compare_exchange_u64(_Atomic(uint64_t)* location1, uint64_t value, uint64_t comparand) {
+static uint64_t interlocked_compare_exchange_u64(_Atomic(uint64_t)* location1, uint64_t value, uint64_t comparand) {
     atomic_compare_exchange_strong(location1, &comparand, value);
-    return (method_result_t) { .value = comparand, .exception = NULL };
+    return comparand;
 }
 
-static method_result_t interlocked_compare_exchange_object(_Atomic(System_Object)* location1, System_Object value, System_Object comparand) {
-    return (method_result_t) { .value = (uintptr_t)gc_compare_exchange_ref(location1, value, comparand), .exception = NULL };
+static System_Object interlocked_compare_exchange_object(_Atomic(System_Object)* location1, System_Object value, System_Object comparand) {
+    return gc_compare_exchange_ref(location1, value, comparand);
 }
 
-static method_result_t interlocked_dec_i32(_Atomic(int32_t)* location1)     { return (method_result_t) { .value = atomic_fetch_sub(location1, 1), .exception = NULL }; }
-static method_result_t interlocked_dec_u32(_Atomic(uint32_t)* location1)    { return (method_result_t) { .value = atomic_fetch_sub(location1, 1), .exception = NULL }; }
-static method_result_t interlocked_dec_i64(_Atomic(int64_t)* location1)     { return (method_result_t) { .value = atomic_fetch_sub(location1, 1), .exception = NULL }; }
-static method_result_t interlocked_dec_u64(_Atomic(uint64_t)* location1)    { return (method_result_t) { .value = atomic_fetch_sub(location1, 1), .exception = NULL }; }
+static int32_t interlocked_dec_i32(_Atomic(int32_t)* location1) { return atomic_fetch_sub(location1, 1) - 1; }
+static uint32_t interlocked_dec_u32(_Atomic(uint32_t)* location1) { return atomic_fetch_sub(location1, 1) - 1; }
+static int64_t interlocked_dec_i64(_Atomic(int64_t)* location1) { return atomic_fetch_sub(location1, 1) - 1; }
+static uint64_t interlocked_dec_u64(_Atomic(uint64_t)* location1) { return atomic_fetch_sub(location1, 1) - 1; }
 
-static method_result_t interlocked_exchange_i32(_Atomic(int32_t)* location1, int32_t value) { return (method_result_t)      { .value = atomic_exchange(location1, value), .exception = NULL }; }
-static method_result_t interlocked_exchange_u32(_Atomic(uint32_t)* location1, uint32_t value) { return (method_result_t)    { .value = atomic_exchange(location1, value), .exception = NULL }; }
-static method_result_t interlocked_exchange_i64(_Atomic(int64_t)* location1, int64_t value) { return (method_result_t)      { .value = atomic_exchange(location1, value), .exception = NULL }; }
-static method_result_t interlocked_exchange_u64(_Atomic(uint64_t)* location1, uint64_t value) { return (method_result_t)    { .value = atomic_exchange(location1, value), .exception = NULL }; }
-static method_result_t interlocked_exchange_object(_Atomic(System_Object)* location1, System_Object value) {
-    return (method_result_t) { .value = (uintptr_t)gc_exchange_ref(location1, value), .exception = NULL };
+static int32_t interlocked_exchange_i32(_Atomic(int32_t)* location1, int32_t value) { return atomic_exchange(location1, value); }
+static uint32_t interlocked_exchange_u32(_Atomic(uint32_t)* location1, uint32_t value) { return atomic_exchange(location1, value); }
+static int64_t interlocked_exchange_i64(_Atomic(int64_t)* location1, int64_t value) { return atomic_exchange(location1, value); }
+static uint64_t interlocked_exchange_u64(_Atomic(uint64_t)* location1, uint64_t value) { return atomic_exchange(location1, value); }
+static System_Object interlocked_exchange_object(_Atomic(System_Object)* location1, System_Object value) {
+    return gc_exchange_ref(location1, value);
 }
 
-static method_result_t interlocked_inc_i32(_Atomic(int32_t)* location1)     { return (method_result_t) { .value = atomic_fetch_add(location1, 1), .exception = NULL }; }
-static method_result_t interlocked_inc_u32(_Atomic(uint32_t)* location1)    { return (method_result_t) { .value = atomic_fetch_add(location1, 1), .exception = NULL }; }
-static method_result_t interlocked_inc_i64(_Atomic(int64_t)* location1)     { return (method_result_t) { .value = atomic_fetch_add(location1, 1), .exception = NULL }; }
-static method_result_t interlocked_inc_u64(_Atomic(uint64_t)* location1)    { return (method_result_t) { .value = atomic_fetch_add(location1, 1), .exception = NULL }; }
+static int32_t interlocked_inc_i32(_Atomic(int32_t)* location1) { return atomic_fetch_add(location1, 1) + 1; }
+static uint32_t interlocked_inc_u32(_Atomic(uint32_t)* location1) { return atomic_fetch_add(location1, 1) + 1; }
+static int64_t interlocked_inc_i64(_Atomic(int64_t)* location1) { return atomic_fetch_add(location1, 1) + 1; }
+static uint64_t interlocked_inc_u64(_Atomic(uint64_t)* location1) { return atomic_fetch_add(location1, 1) + 1; }
 
-static System_Exception interlocked_memory_barrier() { return NULL; }
+static void interlocked_memory_barrier() { }
 
-static method_result_t interlocked_or_i32(_Atomic(int32_t)* location1, int32_t value)      { return (method_result_t) { .value = atomic_fetch_or(location1, value), .exception = NULL }; }
-static method_result_t interlocked_or_u32(_Atomic(uint32_t)* location1, uint32_t value)    { return (method_result_t) { .value = atomic_fetch_or(location1, value), .exception = NULL }; }
-static method_result_t interlocked_or_i64(_Atomic(int64_t)* location1, int64_t value)      { return (method_result_t) { .value = atomic_fetch_or(location1, value), .exception = NULL }; }
-static method_result_t interlocked_or_u64(_Atomic(uint64_t)* location1, uint64_t value)    { return (method_result_t) { .value = atomic_fetch_or(location1, value), .exception = NULL }; }
+static int32_t interlocked_or_i32(_Atomic(int32_t)* location1, int32_t value) { return atomic_fetch_or(location1, value); }
+static uint32_t interlocked_or_u32(_Atomic(uint32_t)* location1, uint32_t value) { return atomic_fetch_or(location1, value); }
+static int64_t interlocked_or_i64(_Atomic(int64_t)* location1, int64_t value) { return atomic_fetch_or(location1, value); }
+static uint64_t interlocked_or_u64(_Atomic(uint64_t)* location1, uint64_t value) { return atomic_fetch_or(location1, value); }
 
-static method_result_t interlocked_read_i64(_Atomic(int64_t)* location1)    { return (method_result_t) { .value = atomic_load(location1), .exception = NULL }; }
-static method_result_t interlocked_read_u64(_Atomic(uint64_t)* location1)   { return (method_result_t) { .value = atomic_load(location1), .exception = NULL }; }
+static int64_t interlocked_read_i64(_Atomic(int64_t)* location1) { return atomic_load(location1); }
+static uint64_t interlocked_read_u64(_Atomic(uint64_t)* location1) { return atomic_load(location1); }
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Reflection.Assembly
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t System_Reflection_Assembly_LoadInternal_raw(System_Byte_Array rawAssembly, System_Boolean reflection) {
+static System_Reflection_Assembly System_Reflection_Assembly_LoadInternal_raw(System_Byte_Array rawAssembly, System_Boolean reflection) {
     err_t err = NO_ERROR;
-    System_Exception exception = NULL;
 
     System_Reflection_Assembly assembly = NULL;
     CHECK_AND_RETHROW(loader_load_assembly(rawAssembly->Data, rawAssembly->Length, &assembly));
@@ -230,21 +224,19 @@ static method_result_t System_Reflection_Assembly_LoadInternal_raw(System_Byte_A
         CHECK_AND_RETHROW(jit_method(assembly->EntryPoint));
 
         // run it
-        exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
-        CHECK(exception == NULL);
+        ((void(*)())assembly->EntryPoint->MirFunc->addr)();
     }
 
 cleanup:
     if (IS_ERROR(err)) {
-        assembly = NULL;
+        exception_throw(activator_create_exception(tSystem_Exception));
     }
 
-    return (method_result_t) { .exception = exception, .value = (uintptr_t)assembly };
+    return assembly;
 }
 
-static method_result_t System_Reflection_Assembly_LoadInternal_string(System_Byte_Array rawAssembly, System_Boolean reflection) {
+static System_Reflection_Assembly System_Reflection_Assembly_LoadInternal_string(System_Byte_Array rawAssembly, System_Boolean reflection) {
     err_t err = NO_ERROR;
-    System_Exception exception = NULL;
 
     System_Reflection_Assembly assembly = NULL;
     // TODO: load by-name, will either
@@ -259,23 +251,22 @@ static method_result_t System_Reflection_Assembly_LoadInternal_string(System_Byt
         CHECK_AND_RETHROW(jit_method(assembly->EntryPoint));
 
         // run it
-        exception = ((System_Exception(*)())assembly->EntryPoint->MirFunc->addr)();
-        CHECK(exception == NULL);
+        ((void(*)())assembly->EntryPoint->MirFunc->addr)();
     }
 
 cleanup:
     if (IS_ERROR(err)) {
-        assembly = NULL;
+        exception_throw(activator_create_exception(tSystem_Exception));
     }
 
-    return (method_result_t) { .exception = exception, .value = (uintptr_t)assembly };
+    return assembly;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Activator
 //----------------------------------------------------------------------------------------------------------------------
 
-static method_result_t System_Activator_InternalCreateInstance(System_Type type, System_Object_Array args) {
+static System_Object System_Activator_InternalCreateInstance(System_Type type, System_Object_Array args) {
     System_Object obj = NULL;
 
     System_Object* argsPtr = NULL;
@@ -286,10 +277,10 @@ static method_result_t System_Activator_InternalCreateInstance(System_Type type,
     }
 
     switch (activator_create_instance(type, argsPtr, argsCount, &obj)) {
-        case NO_ERROR: return (method_result_t){ .exception = NULL, .value = (uintptr_t)obj };
-        case ERROR_OUT_OF_MEMORY: return (method_result_t){ .exception = activator_create_exception(tSystem_OutOfMemoryException), .value = 0 };
+        case NO_ERROR: return obj;
+        case ERROR_OUT_OF_MEMORY: exception_throw(activator_create_exception(tSystem_OutOfMemoryException));
         // TODO: handle nicely
-        default: return (method_result_t){ .exception = activator_create_exception(tSystem_Exception), .value = 0 };
+        default: exception_throw(activator_create_exception(tSystem_Exception));
     }
 }
 
@@ -297,8 +288,7 @@ static method_result_t System_Activator_InternalCreateInstance(System_Type type,
 // System.Array
 //----------------------------------------------------------------------------------------------------------------------
 
-static System_Exception
-do_array_copy(System_Array sourceArray, System_Array destinationArray, int64_t length) {
+static void do_array_copy(System_Array sourceArray, System_Array destinationArray, int64_t length) {
     System_Type elementType = OBJECT_TYPE(sourceArray)->ElementType;
     int elementSize = elementType->StackSize;
 
@@ -349,15 +339,13 @@ do_array_copy(System_Array sourceArray, System_Array destinationArray, int64_t l
         // normal memcpy, no need to do anything special
         memmove(dst_data, src_data, copy_size);
     }
-
-    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.GC
 //----------------------------------------------------------------------------------------------------------------------
 
-static System_Exception System_GC_Collect(int generations, int collectionMode, bool blocking) {
+static void System_GC_Collect(int generations, int collectionMode, bool blocking) {
     // turn Default to Forced
     if (collectionMode == 0) {
         collectionMode = 1;
@@ -373,19 +361,16 @@ static System_Exception System_GC_Collect(int generations, int collectionMode, b
     } else {
         gc_wake(full);
     }
-
-    return NULL;
 }
 
-static System_Exception System_GC_KeepAlive(void* obj) {
-    return NULL;
+static void System_GC_KeepAlive(void* obj) {
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // Attribute
 //----------------------------------------------------------------------------------------------------------------------
 
-method_result_t System_Attribute_GetCustomAttributeNative(System_Object element, System_Type attributeType, int* index) {
+static System_Object System_Attribute_GetCustomAttributeNative(System_Object element, System_Type attributeType, int* index) {
     // TODO: pass from the caller?
     System_Reflection_Assembly assembly = NULL;
     if (isinstance(element, tSystem_Reflection_MemberInfo)) {
@@ -405,12 +390,12 @@ method_result_t System_Attribute_GetCustomAttributeNative(System_Object element,
         System_Object* attributes = assembly->CustomAttributeMap[idx].value;
         for (; *index < arrlen(attributes); (*index)++) {
             if (OBJECT_TYPE(attributes[*index]) == attributeType) {
-                return (method_result_t){ .value = (uintptr_t) attributes[*index], .exception = NULL };
+                return attributes[*index];
             }
         }
     }
 
-    return (method_result_t){ .value = 0, .exception = NULL };
+    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -418,15 +403,15 @@ method_result_t System_Attribute_GetCustomAttributeNative(System_Object element,
 //----------------------------------------------------------------------------------------------------------------------
 
 // TODO: generate this instead
-static method_result_t object_GetType(System_Object this) {
+static System_Type object_GetType(System_Object this) {
     if (this == NULL) {
-        return (method_result_t){ .exception = activator_create_exception(tSystem_NullReferenceException), .value = 0 };
+        exception_throw(activator_create_exception(tSystem_NullReferenceException));
     } else {
-        return (method_result_t){ .exception = NULL, .value = (uintptr_t) OBJECT_TYPE(this) };
+        return OBJECT_TYPE(this);
     }
 }
 
-static method_result_t object_MemberwiseClone(System_Object this) {
+static System_Object object_MemberwiseClone(System_Object this) {
     System_Object newObject = NULL;
 
     System_Type type = OBJECT_TYPE(this);
@@ -443,29 +428,28 @@ static method_result_t object_MemberwiseClone(System_Object this) {
     } else {
         newObject = UNSAFE_GC_NEW(type);
         if (newObject == NULL) {
-            return (method_result_t){ .exception = activator_create_exception(tSystem_OutOfMemoryException), .value = 0 };
+            exception_throw(activator_create_exception(tSystem_OutOfMemoryException));
         }
 
         managed_memcpy(newObject, type, 0, this);
     }
 
-    return (method_result_t){ .exception = NULL, .value = (uintptr_t) newObject };
+    return newObject;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
 // System.Type
 //----------------------------------------------------------------------------------------------------------------------
 
-method_result_t System_Type_InternalMakeGenericType(System_Type type, System_Type_Array arguments) {
+static System_Type System_Type_InternalMakeGenericType(System_Type type, System_Type_Array arguments) {
     System_Type new_type = NULL;
-    System_Exception exception = NULL;
 
     // create the generic type
     err_t err = type_make_generic(type, arguments, &new_type);
     if (err != NO_ERROR) {
         switch (err) {
-            case ERROR_OUT_OF_MEMORY: exception = activator_create_exception(tSystem_OutOfMemoryException); break;
-            default: exception = activator_create_exception(tSystem_Exception); break;
+            case ERROR_OUT_OF_MEMORY: exception_throw(activator_create_exception(tSystem_OutOfMemoryException));
+            default: exception_throw(activator_create_exception(tSystem_Exception));
         }
     }
 
@@ -473,21 +457,20 @@ method_result_t System_Type_InternalMakeGenericType(System_Type type, System_Typ
     err = type_expand_generic(new_type);
     if (err != NO_ERROR) {
         switch (err) {
-            case ERROR_OUT_OF_MEMORY: exception = activator_create_exception(tSystem_OutOfMemoryException); break;
-            default: exception = activator_create_exception(tSystem_Exception); break;
+            case ERROR_OUT_OF_MEMORY: exception_throw(activator_create_exception(tSystem_OutOfMemoryException));
+            default: exception_throw(activator_create_exception(tSystem_Exception));
         }
     }
 
-    return (method_result_t){ .value = (uintptr_t) new_type, .exception = exception };
+    return new_type;
 }
 
-method_result_t System_Environment_GetProcessorCount() {
-    return (method_result_t){ .value = get_cpu_count() };
+static int32_t System_Environment_GetProcessorCount() {
+    return get_cpu_count();
 }
 
-System_Exception System_Diagnostic_DebugProvider_WriteInternal(System_String str) {
+static void System_Diagnostic_DebugProvider_WriteInternal(System_String str) {
     printf("%U", str);
-    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -508,33 +491,22 @@ static void monitor_enter(System_Object object) {
     ASSERT(object->lock_depth != 0); // TODO: overflow
 }
 
-static System_Exception System_Threading_Monitor_Enter(System_Object object) {
+static void System_Threading_Monitor_Enter(System_Object object) {
     if (object == NULL) {
-#ifdef THROW_TRACE
-        ERROR("Exception of type System.NullReferenceException thrown at %s (%s:%d)", __FUNCTION__, __FILE__, __LINE__);
-#endif
-        return activator_create_exception(tSystem_NullReferenceException);
+        exception_throw(activator_create_exception(tSystem_NullReferenceException));
     }
 
     monitor_enter(object);
-
-    return NULL;
 }
 
-static System_Exception System_Threading_Monitor_Exit(System_Object object) {
+static void System_Threading_Monitor_Exit(System_Object object) {
     if (object == NULL) {
-#ifdef THROW_TRACE
-        ERROR("Exception of type System.NullReferenceException thrown at %s (%s:%d)", __FUNCTION__ , __FILE__, __LINE__);
-#endif
-        return activator_create_exception(tSystem_NullReferenceException);
+        exception_throw(activator_create_exception(tSystem_NullReferenceException));
     }
 
     // verify this thread owns the lock
     if (object->lock_thread_id != get_current_thread()->id) {
-#ifdef THROW_TRACE
-        ERROR("Exception of type System.Threading.SynchronizationLockException thrown at %s (%s:%d)", __FUNCTION__, __FILE__, __LINE__);
-#endif
-        return activator_create_exception(tSystem_Threading_SynchronizationLockException);
+        exception_throw(activator_create_exception(tSystem_Threading_SynchronizationLockException));
     }
 
     // decrement the recursion, if reaches zero then this is
@@ -543,32 +515,22 @@ static System_Exception System_Threading_Monitor_Exit(System_Object object) {
         object->lock_thread_id = 0;
         mutex_unlock(&object->mutex);
     }
-
-    return NULL;
 }
 
-static method_result_t System_Threading_Monitor_IsEnteredNative(System_Object object) {
-    return (method_result_t){
-        .value = object->lock_thread_id == get_current_thread()->id,
-        .exception = NULL
-    };
+static bool System_Threading_Monitor_IsEnteredNative(System_Object object) {
+    return object->lock_thread_id == get_current_thread()->id;
 }
 
-static System_Exception System_Threading_Monitor_ReliableEnter(System_Object object, bool* lockTaken) {
+static void System_Threading_Monitor_ReliableEnter(System_Object object, bool* lockTaken) {
     if (object == NULL) {
-#ifdef THROW_TRACE
-        ERROR("Exception of type System.NullReferenceException thrown at %s (%s:%d)", __FUNCTION__, __FILE__, __LINE__);
-#endif
-        return activator_create_exception(tSystem_NullReferenceException);
+        exception_throw(activator_create_exception(tSystem_NullReferenceException));
     }
 
     monitor_enter(object);
     *lockTaken = true;
-
-    return NULL;
 }
 
-static method_result_t System_Threading_Monitor_ObjWait(int millisecondTimeout, System_Object object) {
+static bool System_Threading_Monitor_ObjWait(int millisecondTimeout, System_Object object) {
     // save the depth, and release the lock id so new threads can take it afterwards and see it
     // as not entered
     int lock_depth = object->lock_depth;
@@ -581,36 +543,27 @@ static method_result_t System_Threading_Monitor_ObjWait(int millisecondTimeout, 
     object->lock_thread_id = get_current_thread()->id;
     object->lock_depth = lock_depth;
 
-    return (method_result_t){ .value = result, .exception = NULL };
+    return result;
 }
 
-static System_Exception TinyDotNet_Sync_Mutex_Lock(mutex_t* mutex) {
+static void TinyDotNet_Sync_Mutex_Lock(mutex_t* mutex) {
     mutex_lock(mutex);
-    return NULL;
 }
 
-static System_Exception TinyDotNet_Sync_Mutex_Unlock(mutex_t* mutex) {
+static void TinyDotNet_Sync_Mutex_Unlock(mutex_t* mutex) {
     mutex_unlock(mutex);
-    return NULL;
 }
 
-static method_result_t TinyDotNet_Sync_Condition_Wait(condition_t* condition, mutex_t* mutex, int64_t timeoutMilliseconds) {
-    return (method_result_t) {
-        .value = condition_wait(condition, mutex, timeoutMilliseconds * TICKS_PER_MILLISECOND),
-        .exception = NULL
-    };
+static bool TinyDotNet_Sync_Condition_Wait(condition_t* condition, mutex_t* mutex, int64_t timeoutMilliseconds) {
+    return condition_wait(condition, mutex, timeoutMilliseconds * TICKS_PER_MILLISECOND);
 }
 
-static method_result_t TinyDotNet_Sync_Condition_NotifyOne(condition_t* condition) {
-    return (method_result_t) {
-        .value = condition_notify_one(condition),
-        .exception = NULL
-    };
+static bool TinyDotNet_Sync_Condition_NotifyOne(condition_t* condition) {
+    return condition_notify_one(condition);
 }
 
-static System_Exception TinyDotNet_Sync_Condition_NotifyAll(condition_t* condition) {
+static void TinyDotNet_Sync_Condition_NotifyAll(condition_t* condition) {
     condition_notify_all(condition);
-    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
