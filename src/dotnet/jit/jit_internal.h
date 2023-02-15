@@ -491,18 +491,18 @@ extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsRefere
 /**
  * Uncomment to make the jit trace the IL opcodes it is trying to figure out
  */
-//#define JIT_TRACE
+#define JIT_TRACE
 
 /**
  * Uncomment to make the jit trace the MIR generated from the IL
  */
-//#define JIT_TRACE_MIR
+#define JIT_TRACE_MIR
 
 /**
  * Uncomment to print the final MIR function, will not print
  * the IL code in between
  */
-//#define JIT_TRACE_FINAL
+#define JIT_TRACE_FINAL
 
 /**
  * Uncomment if you want debug symbols, note that this forces
@@ -517,10 +517,10 @@ static inline bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (method->DeclaringType->GenericTypeDefinition == NULL)
 //        return false;
 
-    if (!string_equals_cstr(method->DeclaringType->Name, "Utf8Utility"))
+    if (!string_equals_cstr(method->DeclaringType->Name, "ThreadSafeRandom"))
         return false;
 
-    if (!string_equals_cstr(method->Name, "TranscodeToUtf16"))
+    if (!string_equals_cstr(method->Name, "get_LocalRandom"))
         return false;
 
     return true;

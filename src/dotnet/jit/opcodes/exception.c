@@ -47,8 +47,8 @@ err_t jit_emit_try(jit_method_context_t* ctx, System_Reflection_ExceptionHandlin
     MIR_label_t no_exception = MIR_new_label(mir_ctx);
     MIR_append_insn(mir_ctx, mir_func,
                     MIR_new_insn(mir_ctx, MIR_BF,
-                                 MIR_new_reg_op(mir_ctx, frame),
-                                 MIR_new_label_op(mir_ctx, no_exception)));
+                                 MIR_new_label_op(mir_ctx, no_exception),
+                                 MIR_new_reg_op(mir_ctx, frame)));
 
     switch (clause->Flags) {
         case COR_ILEXCEPTION_CLAUSE_FAULT:
@@ -82,7 +82,7 @@ err_t jit_emit_try(jit_method_context_t* ctx, System_Reflection_ExceptionHandlin
                             MIR_new_call_insn(mir_ctx, 3,
                                               MIR_new_ref_op(mir_ctx, m_exception_get_proto),
                                               MIR_new_ref_op(mir_ctx, m_exception_get_func),
-                                              ctx->exception_reg));
+                                              MIR_new_reg_op(mir_ctx, ctx->exception_reg)));
 
             // check if the exception is something we want to handle or not
             MIR_reg_t result = jit_new_temp_reg(ctx, tSystem_Boolean);
