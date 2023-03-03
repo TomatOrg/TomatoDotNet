@@ -176,12 +176,7 @@ cleanup:
 
 err_t jit_emit_leave(jit_method_context_t* ctx) {
     err_t err = NO_ERROR;
-
-    // Clear the current exception and pop our frame
-    MIR_append_insn(mir_ctx, mir_func,
-                    MIR_new_call_insn(mir_ctx, 2,
-                                      MIR_new_ref_op(mir_ctx, m_exception_clear_proto),
-                                      MIR_new_ref_op(mir_ctx, m_exception_clear_func)));
+    bool cleared_exception = false;
 
     CHECK(ctx->filter_clause == NULL);
 
@@ -208,6 +203,16 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
 
     // make sure we found it
     CHECK(our_clause != -1);
+
+    if (body->ExceptionHandlingClauses->Data[our_clause]->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+        // Clear the current exception and pop our frame only if we use the leave to exit
+        // from a catch block, if we exit from a try block we don't care *yet*
+        cleared_exception = true;
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_call_insn(mir_ctx, 2,
+                                          MIR_new_ref_op(mir_ctx, m_exception_clear_proto),
+                                          MIR_new_ref_op(mir_ctx, m_exception_clear_func)));
+    }
 
     // resolve the label we are going to
     MIR_label_t label = NULL;
@@ -238,7 +243,7 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
 
         // not a finally, we don't care
         if (clause->Flags != COR_ILEXCEPTION_CLAUSE_FINALLY) {
-            break;
+            continue;
         }
 
         bool source_in_try = clause->TryOffset <= ctx->il_offset && ctx->il_offset < clause->TryOffset + clause->TryLength;
@@ -335,6 +340,13 @@ err_t jit_emit_leave(jit_method_context_t* ctx) {
         // now resolve the jump to the first clause instead
         // of going directly outside
         CHECK_AND_RETHROW(jit_resolve_address_raw(ctx, first_clause->HandlerOffset, &label));
+    } else if (!cleared_exception) {
+        // if we are jumping out of a try-block but we have no surrounding finally block
+        // then we do need to clear our own exception
+        MIR_append_insn(mir_ctx, mir_func,
+                        MIR_new_call_insn(mir_ctx, 2,
+                                          MIR_new_ref_op(mir_ctx, m_exception_clear_proto),
+                                          MIR_new_ref_op(mir_ctx, m_exception_clear_func)));
     }
 
     // finally jump to the label for the next clause/to

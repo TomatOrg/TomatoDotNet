@@ -213,6 +213,7 @@ static err_t fill_type_managed_size(System_Type type) {
                 // add the field size
                 current_size += fieldInfo->FieldType->StackSize;
                 CHECK(current_size >= prev_size);
+                CHECK(current_size <= SIZE_2GB); // TODO: is this fine
 
                 // set new type alignment
                 current_alignment = MAX(current_alignment, fieldInfo->FieldType->StackAlignment);

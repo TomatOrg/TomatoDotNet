@@ -538,12 +538,12 @@ err_t init_jit() {
     int count = 1;
     MIR_gen_init(m_mir_context, count);
     for (int i = 0; i < count; i++) {
-        MIR_gen_set_optimize_level(m_mir_context, i, 4);
+        MIR_gen_set_optimize_level(m_mir_context, i, 0);
     }
 
-#if 0
+#if JIT_DEBUG_MIR
     MIR_gen_set_debug_file(m_mir_context, 0, stdout);
-    MIR_gen_set_debug_level(m_mir_context, 0, 0);
+    MIR_gen_set_debug_level(m_mir_context, 0, JIT_DEBUG_MIR);
 #endif
 
 cleanup:
@@ -809,7 +809,9 @@ cleanup:
 static stack_t stack_snapshot(jit_method_context_t* ctx) {
     stack_t snapshot = { 0 };
     arrsetlen(snapshot.entries, arrlen(ctx->stack.entries));
-    memcpy(snapshot.entries, ctx->stack.entries, arrlen(ctx->stack.entries) * sizeof(ctx->stack.entries[0]));
+    if (snapshot.entries != NULL && ctx->stack.entries != NULL) {
+        memcpy(snapshot.entries, ctx->stack.entries, arrlen(ctx->stack.entries) * sizeof(ctx->stack.entries[0]));
+    }
     return snapshot;
 }
 
@@ -818,7 +820,9 @@ static stack_t stack_snapshot(jit_method_context_t* ctx) {
  */
 static void stack_copy(jit_method_context_t* ctx, stack_t* stack) {
     arrsetlen(ctx->stack.entries, arrlen(stack->entries));
-    memcpy(ctx->stack.entries, stack->entries, arrlen(stack->entries) * sizeof(stack->entries[0]));
+    if (ctx->stack.entries != NULL && stack->entries != NULL) {
+        memcpy(ctx->stack.entries, stack->entries, arrlen(stack->entries) * sizeof(stack->entries[0]));
+    }
 }
 
 /**
@@ -1137,7 +1141,7 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
         // this should just work, because if the value is a struct it is going to be allocated properly
         // in the stack push, and it is going to be passed by a pointer that we give, and everything will
         // just work out because of how we have the order of everything :)
-        arg_ops[3] = MIR_new_reg_op(ctx->ctx, return_reg);
+        arg_ops[2] = MIR_new_reg_op(ctx->ctx, return_reg);
     }
 
     //
@@ -1148,7 +1152,6 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
     MIR_append_insn(ctx->ctx, func, label_do_next_call);
 
     MIR_insn_t label_static_call = MIR_new_label(ctx->ctx);
-    MIR_insn_t label_check_exception = MIR_new_label(ctx->ctx);
 
     // check if we have a this parameter
     MIR_append_insn(ctx->ctx, func,
@@ -1164,10 +1167,6 @@ static err_t jit_multicast_delegate_invoke(jit_context_t* ctx, System_Reflection
                     MIR_new_insn_arr(ctx->ctx, MIR_CALL,
                                      other_args + arg_count,
                                      arg_ops));
-
-    MIR_append_insn(ctx->ctx, func,
-                    MIR_new_insn(ctx->ctx, MIR_JMP,
-                                 MIR_new_label_op(ctx->ctx, label_check_exception)));
 
     /***************************************/
     /*** Call without a `this` parameter ***/
@@ -6002,10 +6001,14 @@ static err_t jit_run_initializer(jit_context_t* ctx, System_Type type) {
 
     // now we are ready to run our initializer
     if (type->TypeInitializer != NULL) {
-        System_Exception(*cctor)() = type->TypeInitializer->MirFunc->addr;
-        System_Exception exception = cctor();
-        CHECK(exception == NULL, "Type initializer for %U: `%U`",
-              type->Name, exception->Message);
+        exception_frame_t frame;
+        if (exception_set_frame(&frame) == 0) {
+            void(*cctor)() = type->TypeInitializer->MirFunc->addr;
+            cctor();
+        } else {
+            TRACE("Type initializer for %U: `%U`", type->Name, exception_get()->Message);
+        }
+        exception_clear();
     }
 
 

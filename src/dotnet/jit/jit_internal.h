@@ -502,7 +502,12 @@ extern System_Reflection_MethodInfo m_RuntimeHelpers_IsReferenceOrContainsRefere
  * Uncomment to print the final MIR function, will not print
  * the IL code in between
  */
-#define JIT_TRACE_FINAL
+//#define JIT_TRACE_FINAL
+
+/**
+ * Uncomment to enable debug prints from mir, the number is the debug level
+ */
+//#define JIT_DEBUG_MIR 10
 
 /**
  * Uncomment if you want debug symbols, note that this forces
@@ -517,10 +522,10 @@ static inline bool trace_filter(System_Reflection_MethodInfo method) {
 //    if (method->DeclaringType->GenericTypeDefinition == NULL)
 //        return false;
 
-    if (!string_equals_cstr(method->DeclaringType->Name, "ThreadSafeRandom"))
+    if (!string_equals_cstr(method->DeclaringType->Name, "Ps2Keyboard"))
         return false;
 
-    if (!string_equals_cstr(method->Name, "get_LocalRandom"))
+    if (!string_equals_cstr(method->Name, "IrqThread"))
         return false;
 
     return true;

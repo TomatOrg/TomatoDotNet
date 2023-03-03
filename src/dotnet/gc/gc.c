@@ -510,11 +510,9 @@ static void gc_finalize_clear_objects(System_Object object) {
         object->suppress_finalizer = 1;
 
         // get the finalizer function and run it
-        System_Exception(*finalize)(System_Object this) = OBJECT_TYPE(object)->Finalize->MirFunc->addr;
-        System_Exception exception = finalize(object);
-        if (exception != NULL) {
-            WARN("Got exception in finalizer: `%U`", exception->Message);
-        }
+        // TODO: exception handling
+        void(*finalize)(System_Object this) = OBJECT_TYPE(object)->Finalize->MirFunc->addr;
+        finalize(object);
     }
 }
 

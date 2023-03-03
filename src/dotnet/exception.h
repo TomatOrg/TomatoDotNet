@@ -17,6 +17,11 @@ typedef struct exception_frame {
 System_Exception exception_get();
 
 /**
+ * Check if an exception handler currently exists
+ */
+bool exception_has_handler();
+
+/**
  * Clear the currently thrown exception, also pops
  * the current frame on the way, should be called
  * when you are done handling an exception

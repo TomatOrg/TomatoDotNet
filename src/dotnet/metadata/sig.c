@@ -5,6 +5,7 @@
 #include "dotnet/loader.h"
 #include "dotnet/jit/jit.h"
 #include "dotnet/encoding.h"
+#include "dotnet/exception.h"
 
 static int m_idx_to_table[] = {
     [0] = METADATA_TYPE_DEF,
@@ -769,9 +770,9 @@ cleanup:
     return err;
 }
 
-typedef System_Exception (*property_set_func_i_t)(void* obj, uintptr_t value);
-typedef System_Exception (*property_set_func_f_t)(void* obj, float value);
-typedef System_Exception (*property_set_func_d_t)(void* obj, double value);
+typedef void (*property_set_func_i_t)(void* obj, uintptr_t value);
+typedef void (*property_set_func_f_t)(void* obj, float value);
+typedef void (*property_set_func_d_t)(void* obj, double value);
 
 err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_Assembly reference, System_Reflection_MethodInfo ctor, System_Object *out) {
     err_t err = NO_ERROR;
@@ -807,17 +808,17 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_Assembly referenc
     fixed_args[0].a = obj;
 
     // call the ctor
-    MIR_context_t ctx = jit_get_mir_context();
-    MIR_val_t result = { .a = NULL };
-    MIR_interp_arr(ctx, ctor->MirFunc, &result, ctor->Parameters->Length + 1, fixed_args);
-    jit_release_mir_context();
-
-    // check the exception
-    if (result.a != NULL) {
-        System_Exception exception = result.a;
+    exception_frame_t frame;
+    if (exception_set_frame(&frame) == 0) {
+        MIR_context_t ctx = jit_get_mir_context();
+        MIR_interp_arr(ctx, ctor->MirFunc, NULL, ctor->Parameters->Length + 1, fixed_args);
+        jit_release_mir_context();
+    } else {
+        System_Exception exception = exception_get();
         CHECK_FAIL_ERROR(ERROR_TARGET_INVOCATION, "Got exception `%U` (of type `%U.%U`)", exception->Message,
-                                            OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name);
+                         OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name);
     }
+    exception_clear();
 
     //
     // named arguments
@@ -878,36 +879,37 @@ err_t parse_custom_attrib(blob_entry_t _sig, System_Reflection_Assembly referenc
             CHECK(setter->Parameters->Data[0]->ParameterType == arg_type);
 
             // call it
-            System_Exception exception = NULL;
-            switch (type_get_stack_type(arg_type)) {
-                case STACK_TYPE_O:
-                case STACK_TYPE_INT32:
-                case STACK_TYPE_INTPTR:
-                case STACK_TYPE_INT64: {
-                    property_set_func_i_t set_func = setter->MirFunc->addr;
-                    exception = set_func(obj, val.u);
-                } break;
+            if (exception_set_frame(&frame) == 0) {
+                switch (type_get_stack_type(arg_type)) {
+                    case STACK_TYPE_O:
+                    case STACK_TYPE_INT32:
+                    case STACK_TYPE_INTPTR:
+                    case STACK_TYPE_INT64: {
+                        property_set_func_i_t set_func = setter->MirFunc->addr;
+                        set_func(obj, val.u);
+                    } break;
 
-                case STACK_TYPE_FLOAT: {
-                    if (arg_type == tSystem_Single) {
-                        property_set_func_f_t set_func = setter->MirFunc->addr;
-                        exception = set_func(obj, val.f);
-                    } else {
-                        CHECK(arg_type == tSystem_Double);
-                        property_set_func_d_t set_func = setter->MirFunc->addr;
-                        exception = set_func(obj, val.d);
-                    }
-                } break;
+                    case STACK_TYPE_FLOAT: {
+                        if (arg_type == tSystem_Single) {
+                            property_set_func_f_t set_func = setter->MirFunc->addr;
+                            set_func(obj, val.f);
+                        } else {
+                            CHECK(arg_type == tSystem_Double);
+                            property_set_func_d_t set_func = setter->MirFunc->addr;
+                            set_func(obj, val.d);
+                        }
+                    } break;
 
-                case STACK_TYPE_VALUE_TYPE:
-                case STACK_TYPE_REF:
-                    CHECK_FAIL();
-            }
-
-            if (exception != NULL) {
+                    case STACK_TYPE_VALUE_TYPE:
+                    case STACK_TYPE_REF:
+                        CHECK_FAIL();
+                }
+            } else {
+                System_Exception exception = exception_get();
                 CHECK_FAIL_ERROR(ERROR_TARGET_INVOCATION, "Got exception `%U` (of type `%U.%U`)", exception->Message,
                                  OBJECT_TYPE(exception)->Namespace, OBJECT_TYPE(exception)->Name);
             }
+            exception_clear();
         }
     }
 
