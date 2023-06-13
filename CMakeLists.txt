@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.25)
+project(tinydotnet C)
+
+set(CMAKE_C_STANDARD 23)
+
+file(GLOB_RECURSE SOURCES ./src/*.c ./src/*.h)
+file(GLOB_RECURSE HOST_SOURCES ./host/linux/*.c ./host/linux/*.h)
+file(GLOB_RECURSE TEST_SOURCES ./test/*.c ./test/*.h)
+file(GLOB_RECURSE INCLUDE_HEADERS ./include/tinydotnet/*.h)
+
+set(CMAKE_C_COMPILER clang-16)
+set(GCCJIT_PATH /usr/lib/gcc/x86_64-linux-gnu/13)
+
+add_compile_options(-fms-extensions -Wno-microsoft)
+add_compile_options(-fsanitize=address)
+
+add_link_options(-fsanitize=address)
+
+include_directories(include)
+include_directories(src)
+
+add_executable(tinydotnet ${SOURCES} ${HOST_SOURCES} ${TEST_SOURCES} ${INCLUDE_HEADERS})
