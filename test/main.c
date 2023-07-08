@@ -14,7 +14,7 @@
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;
 
-    System_String str = *(System_String*)args[0];
+    String str = *(String*)args[0];
 
     if (str == NULL) {
         return fprintf(stream, "<NULL>");
@@ -37,21 +37,21 @@ static int string_arginf_sz(const struct printf_info* info, size_t n, int* argty
     return 1;
 }
 
-static void output_type_name(System_Type type, bool short_name) {
+static void output_type_name(RuntimeTypeInfo type, bool short_name) {
     if (short_name) {
-        if (type == tSystem_Void) { printf("void"); return; }
-        if (type == tSystem_Object) { printf("object"); return; }
-        if (type == tSystem_SByte) { printf("sbyte"); return; }
-        if (type == tSystem_Int16) { printf("short"); return; }
-        if (type == tSystem_Int32) { printf("int"); return; }
-        if (type == tSystem_Int64) { printf("long"); return; }
-        if (type == tSystem_Byte) { printf("byte"); return; }
-        if (type == tSystem_UInt16) { printf("ushort"); return; }
-        if (type == tSystem_UInt32) { printf("uint"); return; }
-        if (type == tSystem_UInt64) { printf("ulong"); return; }
-        if (type == tSystem_String) { printf("string"); return; }
-        if (type == tSystem_Boolean) { printf("bool"); return; }
-//    if (type == tSystem_Char) { printf("char"); return; }
+        if (type == tVoid) { printf("void"); return; }
+        if (type == tObject) { printf("object"); return; }
+        if (type == tSByte) { printf("sbyte"); return; }
+        if (type == tInt16) { printf("short"); return; }
+        if (type == tInt32) { printf("int"); return; }
+        if (type == tInt64) { printf("long"); return; }
+        if (type == tByte) { printf("byte"); return; }
+        if (type == tUInt16) { printf("ushort"); return; }
+        if (type == tUInt32) { printf("uint"); return; }
+        if (type == tUInt64) { printf("ulong"); return; }
+        if (type == tString) { printf("string"); return; }
+        if (type == tBoolean) { printf("bool"); return; }
+        if (type == tChar) { printf("char"); return; }
     }
 
     if (type->DeclaringType != NULL) {
@@ -77,18 +77,18 @@ static void output_type_name(System_Type type, bool short_name) {
     }
 }
 
-static tdn_err_t dump_type(System_Type type) {
+static tdn_err_t dump_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
     static const char* visibility_str[] = {
-            [TDN_TYPE_VISIBILITY_NOT_PUBLIC] = " ",
-            [TDN_TYPE_VISIBILITY_PUBLIC] = "public ",
-            [TDN_TYPE_VISIBILITY_NESTED_PUBLIC] = "public ",
-            [TDN_TYPE_VISIBILITY_NESTED_PRIVATE] = "private ",
-            [TDN_TYPE_VISIBILITY_NESTED_FAMILY] = "protected ",
-            [TDN_TYPE_VISIBILITY_NESTED_ASSEMBLY] = "internal ",
-            [TDN_TYPE_VISIBILITY_NESTED_FAMILY_AND_ASSEMBLY] = "private protected ",
-            [TDN_TYPE_VISIBILITY_NESTED_FAMILY_OR_ASSEMBLY] = "protected internal ",
+        [TDN_TYPE_VISIBILITY_NOT_PUBLIC] = " ",
+        [TDN_TYPE_VISIBILITY_PUBLIC] = "public ",
+        [TDN_TYPE_VISIBILITY_NESTED_PUBLIC] = "public ",
+        [TDN_TYPE_VISIBILITY_NESTED_PRIVATE] = "private ",
+        [TDN_TYPE_VISIBILITY_NESTED_FAMILY] = "protected ",
+        [TDN_TYPE_VISIBILITY_NESTED_ASSEMBLY] = "internal ",
+        [TDN_TYPE_VISIBILITY_NESTED_FAMILY_AND_ASSEMBLY] = "private protected ",
+        [TDN_TYPE_VISIBILITY_NESTED_FAMILY_OR_ASSEMBLY] = "protected internal ",
     };
 
     TRACE("");
@@ -115,22 +115,18 @@ static tdn_err_t dump_type(System_Type type) {
         output_type_name(type->BaseType, true);
     }
 
-    if (!tdn_type_is_generic(type)) {
-        tdn_fill_size(type);
-    }
-
     printf(" { // sizeof == 0x%x\n", type->HeapSize);
 
-    for (int j = 0; j < type->Fields->Length; j++) {
-        System_Reflection_FieldInfo fieldInfo = type->Fields->Elements[j];
+    for (int j = 0; j < type->DeclaredFields->Length; j++) {
+        RuntimeFieldInfo fieldInfo = type->DeclaredFields->Elements[j];
         static const char* visibility_str[] = {
-                [TDN_FIELD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
-                [TDN_FIELD_ACCESS_PRIVATE] = "private",
-                [TDN_FIELD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
-                [TDN_FIELD_ACCESS_ASSEMBLY] = "internal",
-                [TDN_FIELD_ACCESS_FAMILY] = "protected",
-                [TDN_FIELD_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
-                [TDN_FIELD_ACCESS_PUBLIC] = "public",
+            [TDN_FIELD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
+            [TDN_FIELD_ACCESS_PRIVATE] = "private",
+            [TDN_FIELD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
+            [TDN_FIELD_ACCESS_ASSEMBLY] = "internal",
+            [TDN_FIELD_ACCESS_FAMILY] = "protected",
+            [TDN_FIELD_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
+            [TDN_FIELD_ACCESS_PUBLIC] = "public",
         };
         printf("[*] \t%s %s",
                visibility_str[fieldInfo->Attributes.FieldAccess],
@@ -145,32 +141,37 @@ static tdn_err_t dump_type(System_Type type) {
         printf("\n");
     }
 
-    if (type->Fields->Length != 0 && type->Methods->Length != 0) {
+    if (type->DeclaredFields->Length != 0 && type->DeclaredMethods->Length != 0) {
         TRACE("");
     }
 
-    for (int j = 0; j < type->Methods->Length; j++) {
-        System_Reflection_MethodInfo methodInfo = type->Methods->Elements[j];
+    for (int j = 0; j < type->DeclaredConstructors->Length + type->DeclaredMethods->Length; j++) {
+        RuntimeMethodBase method = NULL;
+        if (j >= type->DeclaredConstructors->Length) {
+            method = (RuntimeMethodBase) type->DeclaredMethods->Elements[j - type->DeclaredConstructors->Length];
+        } else {
+            method = (RuntimeMethodBase) type->DeclaredConstructors->Elements[j];
+        }
         static const char* visibility_str[] = {
-                [TDN_METHOD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
-                [TDN_METHOD_ACCESS_PRIVATE] = "private",
-                [TDN_METHOD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
-                [TDN_METHOD_ACCESS_ASSEMBLY] = "internal",
-                [TDN_METHOD_ACCESS_FAMILY] = "protected",
-                [TDN_METHOD_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
-                [TDN_METHOD_ACCESS_PUBLIC] = "public",
+            [TDN_METHOD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
+            [TDN_METHOD_ACCESS_PRIVATE] = "private",
+            [TDN_METHOD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
+            [TDN_METHOD_ACCESS_ASSEMBLY] = "internal",
+            [TDN_METHOD_ACCESS_FAMILY] = "protected",
+            [TDN_METHOD_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
+            [TDN_METHOD_ACCESS_PUBLIC] = "public",
         };
         printf("[*] \t%s %s",
-               visibility_str[methodInfo->Attributes.MemberAccess],
-               methodInfo->Attributes.Static ? "static " : "");
-        output_type_name(methodInfo->ReturnParameter->ParameterType, true);
-        printf(" %U(", methodInfo->Name);
-        for (int p = 0; p < methodInfo->Parameters->Length; p++) {
+               visibility_str[method->Attributes.MemberAccess],
+               method->Attributes.Static ? "static " : "");
+        output_type_name(method->ReturnParameter->ParameterType, true);
+        printf(" %U(", method->Name);
+        for (int p = 0; p < method->Parameters->Length; p++) {
             if (p != 0) {
                 printf(", ");
             }
 
-            System_Reflection_ParameterInfo parameter = methodInfo->Parameters->Elements[p];
+            ParameterInfo parameter = method->Parameters->Elements[p];
             printf("%s%s",
                    parameter->Attributes.In ? "in " : "",
                    parameter->Attributes.Out ? "out " : "");
@@ -181,9 +182,9 @@ static tdn_err_t dump_type(System_Type type) {
         }
         printf(")");
 
-        if (methodInfo->MethodBody != NULL) {
+        if (method->MethodBody != NULL) {
             printf(" {\n");
-            CHECK_AND_RETHROW(tdn_disasm_il(methodInfo));
+            CHECK_AND_RETHROW(tdn_disasm_il(method));
             TRACE("\t}");
             TRACE("");
         } else {
@@ -217,10 +218,11 @@ int main() {
     file = NULL;
 
     // load the corelib
-    System_Reflection_Assembly assembly;
+    RuntimeAssembly assembly;
     CHECK_AND_RETHROW(tdn_load_assembly_from_memory(image, size, &assembly));
 
-    System_Type type = tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test");
+    RuntimeTypeInfo type;
+    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test", &type));
     CHECK(type != NULL);
     CHECK_AND_RETHROW(dump_type(type));
 

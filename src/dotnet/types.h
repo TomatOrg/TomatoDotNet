@@ -3,39 +3,35 @@
 #include "tinydotnet/types/type.h"
 
 // base types that can be used
-extern System_Type tSystem_Object;
-extern System_Type tSystem_ValueType;
-extern System_Type tSystem_Enum;
+extern RuntimeTypeInfo tObject;
+extern RuntimeTypeInfo tValueType;
+extern RuntimeTypeInfo tEnum;
 
-extern System_Type tSystem_Void;
-extern System_Type tSystem_Boolean;
-extern System_Type tSystem_Char;
+extern RuntimeTypeInfo tVoid;
+extern RuntimeTypeInfo tBoolean;
+extern RuntimeTypeInfo tChar;
 
-extern System_Type tSystem_SByte;
-extern System_Type tSystem_Int16;
-extern System_Type tSystem_Int32;
-extern System_Type tSystem_Int64;
-extern System_Type tSystem_IntPtr;
+extern RuntimeTypeInfo tSByte;
+extern RuntimeTypeInfo tInt16;
+extern RuntimeTypeInfo tInt32;
+extern RuntimeTypeInfo tInt64;
+extern RuntimeTypeInfo tIntPtr;
 
-extern System_Type tSystem_Byte;
-extern System_Type tSystem_UInt16;
-extern System_Type tSystem_UInt32;
-extern System_Type tSystem_UInt64;
-extern System_Type tSystem_UIntPtr;
+extern RuntimeTypeInfo tByte;
+extern RuntimeTypeInfo tUInt16;
+extern RuntimeTypeInfo tUInt32;
+extern RuntimeTypeInfo tUInt64;
+extern RuntimeTypeInfo tUIntPtr;
 
-extern System_Type tSystem_Array;
-extern System_Type tSystem_String;
+extern RuntimeTypeInfo tArray;
+extern RuntimeTypeInfo tString;
 
-extern System_Type tSystem_Type;
-extern System_Type tSystem_Reflection_Assembly;
-extern System_Type tSystem_Reflection_Module;
-extern System_Type tSystem_Reflection_FieldInfo;
-extern System_Type tSystem_Reflection_MethodBody;
-extern System_Type tSystem_Reflection_MethodInfo;
-extern System_Type tSystem_Reflection_ParameterInfo;
-extern System_Type tSystem_Reflection_MemberInfo;
-
-extern System_Type tModule;
-
-extern System_Type tTinyDotNet_Reflection_MemberReference;
-extern System_Type tTinyDotNet_Reflection_TypeSpecification;
+extern RuntimeTypeInfo tMethodBase;
+extern RuntimeTypeInfo tRuntimeAssembly;
+extern RuntimeTypeInfo tRuntimeModule;
+extern RuntimeTypeInfo tRuntimeFieldInfo;
+extern RuntimeTypeInfo tRuntimeMethodBody;
+extern RuntimeTypeInfo tRuntimeMethodInfo;
+extern RuntimeTypeInfo tRuntimeConstructorInfo;
+extern RuntimeTypeInfo tRuntimeTypeInfo;
+extern RuntimeTypeInfo tParameterInfo;

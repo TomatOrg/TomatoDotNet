@@ -75,21 +75,21 @@ static disasm_opcode_t m_opcodes[] = {
     })
 
 
-static void output_type_name(System_Type type, bool short_name) {
+static void output_type_name(RuntimeTypeInfo type, bool short_name) {
     if (short_name) {
-        if (type == tSystem_Void) { tdn_host_printf("void"); return; }
-        if (type == tSystem_Object) { tdn_host_printf("object"); return; }
-        if (type == tSystem_SByte) { tdn_host_printf("sbyte"); return; }
-        if (type == tSystem_Int16) { tdn_host_printf("short"); return; }
-        if (type == tSystem_Int32) { tdn_host_printf("int"); return; }
-        if (type == tSystem_Int64) { tdn_host_printf("long"); return; }
-        if (type == tSystem_Byte) { tdn_host_printf("byte"); return; }
-        if (type == tSystem_UInt16) { tdn_host_printf("ushort"); return; }
-        if (type == tSystem_UInt32) { tdn_host_printf("uint"); return; }
-        if (type == tSystem_UInt64) { tdn_host_printf("ulong"); return; }
-        if (type == tSystem_String) { tdn_host_printf("string"); return; }
-        if (type == tSystem_Boolean) { tdn_host_printf("bool"); return; }
-//    if (type == tSystem_Char) { printf("char"); return; }
+        if (type == tVoid) { tdn_host_printf("void"); return; }
+        if (type == tObject) { tdn_host_printf("object"); return; }
+        if (type == tSByte) { tdn_host_printf("sbyte"); return; }
+        if (type == tInt16) { tdn_host_printf("short"); return; }
+        if (type == tInt32) { tdn_host_printf("int"); return; }
+        if (type == tInt64) { tdn_host_printf("long"); return; }
+        if (type == tByte) { tdn_host_printf("byte"); return; }
+        if (type == tUInt16) { tdn_host_printf("ushort"); return; }
+        if (type == tUInt32) { tdn_host_printf("uint"); return; }
+        if (type == tUInt64) { tdn_host_printf("ulong"); return; }
+        if (type == tString) { tdn_host_printf("string"); return; }
+        if (type == tBoolean) { tdn_host_printf("bool"); return; }
+        if (type == tChar) { tdn_host_printf("char"); return; }
     }
 
     if (type->DeclaringType != NULL) {
@@ -98,7 +98,7 @@ static void output_type_name(System_Type type, bool short_name) {
     }
 
     if (type->Namespace != NULL) {
-        tdn_host_printf("[%U]", type->Assembly->Module->Name);
+//        tdn_host_printf("[%U]", type->Module->Name);
         tdn_host_printf("%U.", type->Namespace);
     }
 
@@ -116,16 +116,16 @@ static void output_type_name(System_Type type, bool short_name) {
     }
 }
 
-tdn_err_t tdn_disasm_il(System_Reflection_MethodInfo method) {
+tdn_err_t tdn_disasm_il(RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    System_Reflection_MethodBody body = method->MethodBody;
-    System_Reflection_Assembly assembly = method->Module->Assembly;
+    RuntimeMethodBody body = method->MethodBody;
+    RuntimeAssembly assembly = method->Module->Assembly;
 
-    size_t left = body->IL->Length;
-    uint8_t* opcodes = body->IL->Elements;
+    size_t left = body->ILSize;
+    uint8_t* opcodes = body->IL;
     while (left != 0) {
-        uint32_t current_ip = opcodes - body->IL->Elements;
+        uint32_t current_ip = opcodes - body->IL;
 
         // get the opcode as an index
         left--;
@@ -158,17 +158,17 @@ tdn_err_t tdn_disasm_il(System_Reflection_MethodInfo method) {
 
             case ShortInlineBrTarget: {
                 uint32_t target = (uint32_t)FETCH_I1();
-                target += opcodes - body->IL->Elements;
+                target += opcodes - body->IL;
                 tdn_host_printf(" IL_%04x", target);
             } break;
 
             case InlineMethod: {
-                System_Reflection_MethodInfo m = NULL;
+                RuntimeMethodBase m = NULL;
                 CHECK_AND_RETHROW(tdn_assembly_lookup_method(
                         assembly, FETCH_U4(),
                         method->DeclaringType->GenericArguments,
-                        method->GenericArguments,
-                        &m));
+//                        method->GenericArguments,
+                        NULL, &m));
 
                 if (!m->Attributes.Static) {
                     tdn_host_printf(" instance");
@@ -180,14 +180,14 @@ tdn_err_t tdn_disasm_il(System_Reflection_MethodInfo method) {
                 tdn_host_printf("::%U(", m->Name);
                 for (int i = 0; i < m->Parameters->Length; i++) {
                     if (i != 0) tdn_host_printf(", ");
-                    System_Reflection_ParameterInfo p = m->Parameters->Elements[i];
+                    ParameterInfo p = m->Parameters->Elements[i];
                     output_type_name(p->ParameterType, true);
                 }
                 tdn_host_printf(")");
             } break;
 
             case InlineField: {
-                System_Reflection_FieldInfo field;
+                RuntimeFieldInfo field;
                 CHECK_AND_RETHROW(tdn_assembly_lookup_field(assembly, FETCH_U4(), &field));
 
                 tdn_host_printf(" ");
@@ -198,11 +198,12 @@ tdn_err_t tdn_disasm_il(System_Reflection_MethodInfo method) {
             } break;
 
             case InlineType: {
-                System_Type type = NULL;
+                RuntimeTypeInfo type = NULL;
                 CHECK_AND_RETHROW(tdn_assembly_lookup_type(
                         assembly, FETCH_U4(),
                         method->DeclaringType->GenericArguments,
-                        method->GenericArguments,
+                        NULL,
+//                        method->GenericArguments,
                         &type));
 
                 tdn_host_printf(" ");

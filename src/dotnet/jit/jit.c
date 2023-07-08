@@ -19,7 +19,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t tdn_jit_method(System_Reflection_MethodInfo methodInfo) {
+tdn_err_t tdn_jit_method(RuntimeMethodInfo methodInfo) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK_AND_RETHROW(tdn_jit_init());
@@ -30,7 +30,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t tdn_jit_type(System_Type type) {
+tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK_AND_RETHROW(tdn_jit_init());

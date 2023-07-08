@@ -23,7 +23,7 @@
 #define TDN_TYPE_STRING_FORMAT_AUTO 2
 #define TDN_TYPE_STRING_FORMAT_CUSTOM 3
 
-typedef union System_Reflection_TypeAttributes {
+typedef union TypeAttributes {
     struct {
         uint32_t Visibility : 3;
         uint32_t Layout : 2;
@@ -44,10 +44,9 @@ typedef union System_Reflection_TypeAttributes {
         uint32_t BeforeFieldInit : 1;
         uint32_t : 1;
         uint32_t CustomFormat : 2;
-        uint32_t : 8;
     };
     uint32_t Value;
-} System_Reflection_TypeAttributes;
+} TypeAttributes;
 
 #define TDN_GENERIC_PARAM_VARIANCE_COVARIANT                    1
 #define TDN_GENERIC_PARAM_VARIANCE_CONTRAVARIANT                2
@@ -56,70 +55,80 @@ typedef union System_Reflection_TypeAttributes {
 #define TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE    2
 #define TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR        3
 
-typedef union System_Reflection_GenericParameterAttributes {
+typedef union GenericParameterAttributes {
     struct {
-        uint16_t Variance : 2;
-        uint16_t SpecialConstraint : 3;
-        uint16_t : 11;
+        uint32_t Variance : 2;
+        uint32_t SpecialConstraint : 3;
     };
-    uint16_t value;
-} System_Reflection_GenericParameterAttributes;
+    uint32_t value;
+} GenericParameterAttributes;
 
-typedef struct tdn_generic_type_instance {
-    uint64_t key;
-    System_Type value;
-} tdn_generic_type_instance_t;
+typedef struct RuntimeTypeInfo {
+    struct RuntimeMemberInfo;
 
-typedef struct System_Type {
-    struct System_Reflection_MemberInfo;
+    // the subtypes that can be created from this
+    _Atomic(RuntimeTypeInfo) ArrayType;
+    _Atomic(RuntimeTypeInfo) ByRefType;
+    _Atomic(RuntimeTypeInfo) PointerType;
 
-    // cached
-    _Atomic(System_Type) ArrayType;
-    _Atomic(System_Type) ByRefType;
-    _Atomic(System_Type) PointerType;
+    // The namespace of the type
+    String Namespace;
+    TypeAttributes Attributes;
 
-    System_Reflection_Assembly Assembly;
-    System_String Namespace;
-    System_Type BaseType;
-    System_Type ElementType;
-    System_Type EnumUnderlyingType;
+    // The base of the type
+    RuntimeTypeInfo BaseType;
 
-    System_Reflection_FieldInfo_Array Fields;
-    System_Reflection_MethodInfo_Array Methods;
+    // the declared stuff
+    RuntimeConstructorInfo_Array DeclaredConstructors;
+    RuntimeMethodInfo_Array DeclaredMethods;
+    RuntimeFieldInfo_Array DeclaredFields;
 
-    System_Type_Array GenericArguments;
-    System_Type GenericTypeDefinition;
-    System_Reflection_MethodInfo DeclaringMethod;
+    // elements
+    RuntimeTypeInfo ElementType;
+    RuntimeTypeInfo EnumUnderlyingType;
 
-    tdn_generic_type_instance_t* GenericTypeInstances;
-
-    System_Reflection_TypeAttributes Attributes;
+    // size related
     uint32_t StackSize;
     uint32_t StackAlignment;
     uint32_t HeapSize;
     uint32_t HeapAlignment;
     uint32_t Packing;
 
-    uint32_t StartedFillingSize : 1;
-    uint32_t FinishedFillingSize : 1;
-    uint32_t : 30;
-
+    // Generics related
+    RuntimeMethodBase DeclaringMethod;
+    RuntimeTypeInfo_Array GenericArguments;
+    RuntimeTypeInfo GenericTypeDefinition;
+    GenericParameterAttributes GenericParameterAttributes;
     int GenericParameterPosition;
-    System_Reflection_GenericParameterAttributes GenericParameterAttributes;
-}* System_Type;
 
-static inline bool tdn_type_is_generic(System_Type type) { return type->GenericArguments != NULL; }
-static inline bool tdn_is_generic_type_definition(System_Type type) { return type->GenericTypeDefinition == type; }
-static inline bool tdn_is_generic_parameter(System_Type type) { return type->GenericParameterPosition != -1; }
-static inline bool tdn_is_generic_method_parameter(System_Type type) { return type->DeclaringMethod != NULL; }
-static inline bool tdn_is_generic_type_parameter(System_Type type) { return  type->DeclaringType != NULL; }
+    // initialization stage
+    uint32_t FillingStackSize : 1;
+    uint32_t EndFillingStackSize : 1;
+    uint32_t FillingHeapSize : 1;
+    uint32_t EndFillingHeapSize : 1;
+    uint32_t QueuedTypeInit : 1;
+    uint32_t IsGenericParameter : 1;
+}* RuntimeTypeInfo;
 
-bool tdn_type_is_valuetype(System_Type type);
+static inline bool tdn_type_is_generic(RuntimeTypeInfo type) { return type->GenericArguments != NULL; }
+static inline bool tdn_is_generic_type_definition(RuntimeTypeInfo type) { return type->GenericTypeDefinition == type; }
+static inline bool tdn_is_generic_parameter(RuntimeTypeInfo type) { return type->GenericParameterPosition != -1; }
+static inline bool tdn_is_generic_method_parameter(RuntimeTypeInfo type) { return type->DeclaringMethod != NULL; }
+static inline bool tdn_is_generic_type_parameter(RuntimeTypeInfo type) { return  type->DeclaringType != NULL; }
 
-tdn_err_t tdn_get_array_type(System_Type type, System_Type* out_type);
+bool tdn_type_contains_generic_parameters(RuntimeTypeInfo type);
 
-tdn_err_t tdn_get_byref_type(System_Type type, System_Type* out_type);
+bool tdn_type_is_valuetype(RuntimeTypeInfo type);
 
-tdn_err_t tdn_get_pointer_type(System_Type type, System_Type* out_type);
+tdn_err_t tdn_get_array_type(RuntimeTypeInfo type,
+                             RuntimeTypeInfo* out_type);
 
-tdn_err_t tdn_type_make_generic(System_Type type, System_Type_Array arguments, System_Type* instance);
+tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type,
+                             RuntimeTypeInfo* out_type);
+
+tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type,
+                               RuntimeTypeInfo* out_type);
+
+tdn_err_t tdn_type_make_generic(RuntimeTypeInfo type,
+                                RuntimeTypeInfo_Array arguments,
+                                RuntimeTypeInfo* instance);

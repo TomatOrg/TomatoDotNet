@@ -5,7 +5,7 @@
 #include "dotnet/gc/gc.h"
 #include "util/except.h"
 
-tdn_err_t tdn_create_string_from_cstr(const char* cstr, System_String* out_str) {
+tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // count how many chars it has
@@ -13,7 +13,7 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, System_String* out_str) 
     CHECK(len <= INT32_MAX);
 
     // allocate it
-    System_String new_str = gc_new(tSystem_String, sizeof(struct System_String) + len * 2);
+    String new_str = gc_new(tString, sizeof(struct String) + len * 2);
     CHECK_ERROR(new_str, TDN_ERROR_OUT_OF_MEMORY);
     new_str->Length = (int)len;
 
@@ -22,7 +22,7 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, System_String* out_str) 
 
     // and finally fill it
     for (int i = 0; i < len; i++) {
-        new_str->Chars[i] = (System_Char)cstr[i];
+        new_str->Chars[i] = (Char)cstr[i];
     }
 
     // output it
@@ -32,7 +32,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t tdn_append_cstr_to_string(System_String str, const char* cstr, System_String* out_str) {
+tdn_err_t tdn_append_cstr_to_string(String str, const char* cstr, String* out_str) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // count how many chars it has
@@ -46,16 +46,16 @@ tdn_err_t tdn_append_cstr_to_string(System_String str, const char* cstr, System_
     }
 
     // allocate it
-    System_String new_str = gc_new(tSystem_String, sizeof(struct System_String) + (str->Length + len) * 2);
+    String new_str = gc_new(tString, sizeof(struct String) + (str->Length + len) * 2);
     CHECK_ERROR(new_str, TDN_ERROR_OUT_OF_MEMORY);
     new_str->Length = str->Length + (int)len;
 
     // copy the old data
-    memcpy(new_str->Chars, str->Chars, str->Length * sizeof(System_Char));
+    memcpy(new_str->Chars, str->Chars, str->Length * sizeof(Char));
 
     // and finally fill it
     for (int i = 0; i < len; i++) {
-        new_str->Chars[str->Length + i] = (System_Char)cstr[i];
+        new_str->Chars[str->Length + i] = (Char)cstr[i];
     }
 
     // output it
@@ -65,7 +65,7 @@ cleanup:
     return err;
 }
 
-bool tdn_compare_string_to_cstr(System_String str, const char* cstr) {
+bool tdn_compare_string_to_cstr(String str, const char* cstr) {
     if (cstr == NULL && str == NULL) {
         return true;
     }

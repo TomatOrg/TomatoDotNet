@@ -17,7 +17,7 @@ typedef struct IMAGE_DOS_HEADER {
     uint16_t e_csum; // Checksum
     uint16_t e_ip; // Initial IP value
     uint16_t e_cs; // Initial (relative) CS value
-    uint16_t e_lfarlc; // File address of relocation table
+    uint16_t e_lfarlc; // Metadata address of relocation table
     uint16_t e_ovno; // Overlay number
     uint64_t e_res; // Reserved words
     uint16_t e_oemid; // OEM identifier (for e_oeminfo)
@@ -25,7 +25,7 @@ typedef struct IMAGE_DOS_HEADER {
     uint64_t e_res2_0; // Reserved words
     uint64_t e_res2_1; // Reserved words
     uint32_t e_res2_2; // Reserved words
-    uint32_t e_lfanew; // File address of new exe header
+    uint32_t e_lfanew; // Metadata address of new exe header
 } PACKED IMAGE_DOS_HEADER;
 
 typedef struct IMAGE_FILE_HEADER {

@@ -1,24 +1,37 @@
 #include "gc.h"
 #include "tinydotnet/host.h"
 #include "util/except.h"
+#include "dotnet/metadata/metadata.h"
 
-static System_Object m_gc_first;
+static Object m_gc_first;
 
 void gc_free_all() {
-    System_Object obj = m_gc_first;
+    Object obj = m_gc_first;
     while (obj != NULL) {
-        System_Object next = obj->next;
+        Object next = obj->next;
+
+        if (obj->ObjectType == tRuntimeAssembly) {
+            RuntimeAssembly assembly = (RuntimeAssembly)obj;
+            assembly->Metadata->file.close_handle(assembly->Metadata->file.handle);
+            dotnet_free_file(assembly->Metadata);
+            tdn_host_free(assembly->Metadata);
+        }
+
         tdn_host_free(obj);
         obj = next;
     }
 }
 
-void* gc_new(System_Type type, size_t size) {
+void* gc_new(RuntimeTypeInfo type, size_t size) {
     if (type == NULL) {
         ERROR("Tried to allocate object with null type?");
     }
 
-    System_Object object = tdn_host_mallocz(size);
+    Object object = tdn_host_mallocz(size);
+    if (object == NULL) {
+        return NULL;
+    }
+
     object->ObjectType = type;
     object->next = m_gc_first;
     m_gc_first = object;
@@ -26,7 +39,11 @@ void* gc_new(System_Type type, size_t size) {
 }
 
 void* gc_raw_alloc(size_t size) {
-    System_Object object = tdn_host_mallocz(size);
+    Object object = tdn_host_mallocz(size);
+    if (object == NULL) {
+        return NULL;
+    }
+
     object->next = m_gc_first;
     m_gc_first = object;
     return object;

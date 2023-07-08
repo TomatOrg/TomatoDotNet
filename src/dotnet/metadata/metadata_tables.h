@@ -32,9 +32,9 @@ typedef struct blob_entry {
 typedef struct metadata_module {
     uint16_t generation;
     const char* name;
-    System_Guid* mvid;
-    System_Guid* enc_id;
-    System_Guid* enc_base_id;
+    Guid* mvid;
+    Guid* enc_id;
+    Guid* enc_base_id;
 } PACKED metadata_module_t;
 
 #define METADATA_TYPE_REF 0x01

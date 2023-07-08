@@ -58,10 +58,10 @@ class ArrayPrinter:
 
 def my_pp_func(val):
     s = str(val.type)
-    if s == 'System_String':
+    if s == 'String':
         if int(val) != 0:
             return StringPrinter(val)
-    elif s.startswith('struct System_') and s.endswith('_Array'):
+    elif s.startswith('struct ') and s.endswith('_Array'):
         return ArrayPrinter(val)
     return None
 

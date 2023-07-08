@@ -68,7 +68,7 @@
         *blob->data; \
     })
 
-static tdn_err_t sig_get_next_custom_mod(blob_entry_t* blob, System_Type* type, bool* required) {
+static tdn_err_t sig_get_next_custom_mod(blob_entry_t* blob, RuntimeTypeInfo* type, bool* required) {
     tdn_err_t err = TDN_NO_ERROR;
 
     uint8_t byte = PEEK_BYTE;
@@ -118,9 +118,9 @@ static int m_idx_to_table[] = {
 };
 
 static tdn_err_t sig_parse_type_def_or_ref_or_spec_encoded(
-    blob_entry_t* blob, System_Reflection_Assembly assembly,
-    System_Type_Array typeArgs, System_Type_Array methodArgs,
-    System_Type* type
+    blob_entry_t* blob, RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo* type
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -148,14 +148,14 @@ cleanup:
 
 static tdn_err_t sig_parse_type(
     blob_entry_t* blob,
-    System_Reflection_Assembly assembly, System_Type_Array typeArgs, System_Type_Array methodArgs,
-    System_Type* type
+    RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo* type
 );
 
 static tdn_err_t sig_parse_genericinst(
     blob_entry_t* blob,
-    System_Reflection_Assembly assembly, System_Type_Array typeArgs, System_Type_Array methodArgs,
-    System_Type* type
+    RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo* type
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -163,7 +163,7 @@ static tdn_err_t sig_parse_genericinst(
     CHECK(value == ELEMENT_TYPE_CLASS || value == ELEMENT_TYPE_VALUETYPE);
 
     // get the base type
-    System_Type base = NULL;
+    RuntimeTypeInfo base = NULL;
     CHECK_AND_RETHROW(sig_parse_type_def_or_ref_or_spec_encoded(blob, assembly, typeArgs, methodArgs, &base));
 
     // get how many arguments we need
@@ -171,9 +171,9 @@ static tdn_err_t sig_parse_genericinst(
     CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &gen_arg_count));
 
     // get the arguments
-    System_Type_Array args = GC_NEW_ARRAY(System_Type, gen_arg_count);
+    RuntimeTypeInfo_Array args = GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
     for (size_t i = 0; i < gen_arg_count; i++) {
-        System_Type arg = NULL;
+        RuntimeTypeInfo arg = NULL;
         CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &arg));
         args->Elements[i] = arg;
     }
@@ -187,27 +187,27 @@ cleanup:
 
 static tdn_err_t sig_parse_type(
     blob_entry_t* blob,
-    System_Reflection_Assembly assembly, System_Type_Array typeArgs, System_Type_Array methodArgs,
-    System_Type* type
+    RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo* type
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
     uint8_t value = FETCH_BYTE;
     switch (value) {
-        case ELEMENT_TYPE_BOOLEAN: *type = tSystem_Boolean; break;
-        case ELEMENT_TYPE_CHAR: *type = tSystem_Char; break;
-        case ELEMENT_TYPE_I1: *type = tSystem_SByte; break;
-        case ELEMENT_TYPE_U1: *type = tSystem_Byte; break;
-        case ELEMENT_TYPE_I2: *type = tSystem_Int16; break;
-        case ELEMENT_TYPE_U2: *type = tSystem_UInt16; break;
-        case ELEMENT_TYPE_I4: *type = tSystem_Int32; break;
-        case ELEMENT_TYPE_U4: *type = tSystem_UInt32; break;
-        case ELEMENT_TYPE_I8: *type = tSystem_Int64; break;
-        case ELEMENT_TYPE_U8: *type = tSystem_UInt64; break;
+        case ELEMENT_TYPE_BOOLEAN: *type = tBoolean; break;
+        case ELEMENT_TYPE_CHAR: *type = tChar; break;
+        case ELEMENT_TYPE_I1: *type = tSByte; break;
+        case ELEMENT_TYPE_U1: *type = tByte; break;
+        case ELEMENT_TYPE_I2: *type = tInt16; break;
+        case ELEMENT_TYPE_U2: *type = tUInt16; break;
+        case ELEMENT_TYPE_I4: *type = tInt32; break;
+        case ELEMENT_TYPE_U4: *type = tUInt32; break;
+        case ELEMENT_TYPE_I8: *type = tInt64; break;
+        case ELEMENT_TYPE_U8: *type = tUInt64; break;
         // TODO: case ELEMENT_TYPE_R4: *type = tSystem_Single; break;
         // TODO: case ELEMENT_TYPE_R8: *type = tSystem_Double; break;
-         case ELEMENT_TYPE_I: *type = tSystem_IntPtr; break;
-         case ELEMENT_TYPE_U: *type = tSystem_UIntPtr; break;
+         case ELEMENT_TYPE_I: *type = tIntPtr; break;
+         case ELEMENT_TYPE_U: *type = tUIntPtr; break;
         // TODO: case ELEMENT_TYPE_ARRAY: break;
 
         case ELEMENT_TYPE_VALUETYPE:
@@ -231,11 +231,11 @@ static tdn_err_t sig_parse_type(
             *type = methodArgs->Elements[number];
         } break;
 
-        case ELEMENT_TYPE_OBJECT: *type = tSystem_Object; break;
+        case ELEMENT_TYPE_OBJECT: *type = tObject; break;
 
         case ELEMENT_TYPE_PTR: {
             // Parse custom modifiers
-            System_Type cmod_type = NULL;
+            RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
             CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
             while(cmod_type != NULL) {
@@ -244,10 +244,10 @@ static tdn_err_t sig_parse_type(
             }
 
             // Get the element type
-            System_Type element_type = NULL;
+            RuntimeTypeInfo element_type = NULL;
             if (PEEK_BYTE == ELEMENT_TYPE_VOID) {
                 FETCH_BYTE;
-                element_type = tSystem_Void;
+                element_type = tVoid;
             } else {
                 CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &element_type));
             }
@@ -255,10 +255,10 @@ static tdn_err_t sig_parse_type(
             // Get the pointer
             CHECK_AND_RETHROW(tdn_get_pointer_type(element_type, type));
         } break;
-        case ELEMENT_TYPE_STRING: *type = tSystem_String; break;
+        case ELEMENT_TYPE_STRING: *type = tString; break;
         case ELEMENT_TYPE_SZARRAY: {
             // Parse custom modifiers
-            System_Type cmod_type = NULL;
+            RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
             CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
             while(cmod_type != NULL) {
@@ -267,7 +267,7 @@ static tdn_err_t sig_parse_type(
             }
 
             // Get the element type
-            System_Type element_type = NULL;
+            RuntimeTypeInfo element_type = NULL;
             CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &element_type));
 
             // Get as array
@@ -297,17 +297,17 @@ cleanup:
 
 static tdn_err_t sig_parse_ret_type(
     blob_entry_t* blob,
-    System_Reflection_Assembly assembly,
-    System_Type_Array typeArgs, System_Type_Array methodArgs,
-    System_Reflection_ParameterInfo* out_param
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    ParameterInfo* out_param
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    System_Reflection_ParameterInfo parameter_info = GC_NEW(System_Reflection_ParameterInfo);
+    ParameterInfo parameter_info = GC_NEW(ParameterInfo);
     parameter_info->Position = -1;
 
     // Parse custom modifiers
-    System_Type cmod_type = NULL;
+    RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
     CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
     while(cmod_type != NULL) {
@@ -319,7 +319,7 @@ static tdn_err_t sig_parse_ret_type(
     switch (PEEK_BYTE) {
         case ELEMENT_TYPE_BYREF: {
             FETCH_BYTE;
-            System_Type type = NULL;
+            RuntimeTypeInfo type = NULL;
             CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
             CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
             parameter_info->ParameterType = type;
@@ -332,11 +332,11 @@ static tdn_err_t sig_parse_ret_type(
 
         case ELEMENT_TYPE_VOID: {
             FETCH_BYTE;
-            parameter_info->ParameterType = tSystem_Void;
+            parameter_info->ParameterType = tVoid;
         } break;
 
         default: {
-            System_Type type = NULL;
+            RuntimeTypeInfo type = NULL;
             CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
             parameter_info->ParameterType = type;
         } break;
@@ -350,14 +350,14 @@ cleanup:
 
 static tdn_err_t sig_parse_param(
     blob_entry_t* blob,
-    System_Reflection_Assembly assembly,
-    System_Type_Array typeArgs, System_Type_Array methodArgs,
-    System_Reflection_ParameterInfo parameter_info
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    ParameterInfo parameter_info
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // Parse custom modifiers
-    System_Type cmod_type = NULL;
+    RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
     CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
     while(cmod_type != NULL) {
@@ -369,7 +369,7 @@ static tdn_err_t sig_parse_param(
     switch(PEEK_BYTE) {
         case ELEMENT_TYPE_BYREF: {
             FETCH_BYTE;
-            System_Type type = NULL;
+            RuntimeTypeInfo type = NULL;
             CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
             CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
             parameter_info->ParameterType = type;
@@ -381,7 +381,7 @@ static tdn_err_t sig_parse_param(
         } break;
 
         default: {
-            System_Type type = NULL;
+            RuntimeTypeInfo type = NULL;
             CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
             parameter_info->ParameterType = type;
         } break;
@@ -392,14 +392,14 @@ cleanup:
     return err;
 }
 
-tdn_err_t sig_parse_field(blob_entry_t _blob, System_Reflection_FieldInfo field_info) {
+tdn_err_t sig_parse_field(blob_entry_t _blob, RuntimeFieldInfo field_info) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;
 
     CHECK(FETCH_BYTE == FIELD);
 
     // Parse custom modifiers
-    System_Type cmod_type = NULL;
+    RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
     CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
     while(cmod_type != NULL) {
@@ -414,7 +414,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t sig_parse_type_spec(blob_entry_t _blob, System_Reflection_Assembly assembly, System_Type_Array typeArgs, System_Type_Array methodArgs, System_Type* type) {
+tdn_err_t sig_parse_type_spec(blob_entry_t _blob, RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs, RuntimeTypeInfo* type) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;
 
@@ -422,7 +422,7 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, System_Reflection_Assembly ass
     switch (value) {
         case ELEMENT_TYPE_PTR: {
             // Parse custom modifiers
-            System_Type cmod_type = NULL;
+            RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
             CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
             while(cmod_type != NULL) {
@@ -432,7 +432,7 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, System_Reflection_Assembly ass
 
             // can either be a VOID or Type
             if (PEEK_BYTE == ELEMENT_TYPE_VOID) {
-                CHECK_AND_RETHROW(tdn_get_pointer_type(tSystem_Void, type));
+                CHECK_AND_RETHROW(tdn_get_pointer_type(tVoid, type));
             } else {
                 CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, type));
             }
@@ -448,7 +448,7 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, System_Reflection_Assembly ass
 
         case ELEMENT_TYPE_SZARRAY: {
             // Parse custom modifiers
-            System_Type cmod_type = NULL;
+            RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
             CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
             while(cmod_type != NULL) {
@@ -456,7 +456,7 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, System_Reflection_Assembly ass
                 CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
             }
 
-            System_Type elementType = NULL;
+            RuntimeTypeInfo elementType = NULL;
             CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &elementType));
             CHECK_AND_RETHROW(tdn_get_array_type(elementType, type));
         } break;
@@ -473,7 +473,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t sig_parse_method_def(blob_entry_t _blob, System_Reflection_Assembly assembly, System_Type_Array typeArgs, System_Type_Array methodArgs, method_signature_t* signature) {
+tdn_err_t sig_parse_method_def(blob_entry_t _blob, RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs, method_signature_t* signature) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;
 
@@ -493,9 +493,9 @@ tdn_err_t sig_parse_method_def(blob_entry_t _blob, System_Reflection_Assembly as
     CHECK_AND_RETHROW(sig_parse_ret_type(blob, assembly, typeArgs, methodArgs, &signature->return_parameter));
 
     // Get the Params
-    signature->parameters = GC_NEW_ARRAY(System_Reflection_ParameterInfo, param_count);
+    signature->parameters = GC_NEW_ARRAY(ParameterInfo, param_count);
     for (int i = 0; i < param_count; i++) {
-        System_Reflection_ParameterInfo parameter_info = GC_NEW(System_Reflection_ParameterInfo);
+        ParameterInfo parameter_info = GC_NEW(ParameterInfo);
         parameter_info->Position = i;
         CHECK_AND_RETHROW(sig_parse_param(blob, assembly, typeArgs, methodArgs, parameter_info));
         signature->parameters->Elements[i] = parameter_info;

@@ -137,12 +137,6 @@ typedef struct dotnet_file {
         };
     };
 
-    // the assembly of this file
-    System_Reflection_Assembly assembly;
-
-    // if set to one this is a dll and not an exe
-    bool dll;
-
     const char* strings;
     size_t strings_size;
 
@@ -152,7 +146,7 @@ typedef struct dotnet_file {
     const uint8_t* blob;
     size_t blob_size;
 
-    System_Guid* guids;
+    Guid* guids;
     size_t guids_count;
 } dotnet_file_t;
 

@@ -4,24 +4,28 @@
 #include <stdbool.h>
 #include "tinydotnet/except.h"
 
-typedef uint8_t System_Byte;
-typedef uint16_t System_UInt16;
-typedef uint32_t System_UInt32;
-typedef uint64_t System_UInt64;
-typedef uintptr_t System_UIntPtr;
+typedef uint8_t Byte;
+typedef uint16_t UInt16;
+typedef uint32_t UInt32;
+typedef uint64_t UInt64;
+typedef uintptr_t UIntPtr;
 
-typedef int8_t System_SByte;
-typedef int16_t System_Int16;
-typedef int32_t System_Int32;
-typedef int64_t System_Int64;
-typedef intptr_t System_IntPtr;
+typedef int8_t SByte;
+typedef int16_t Int16;
+typedef int32_t Int32;
+typedef int64_t Int64;
+typedef intptr_t IntPtr;
 
-typedef bool System_Boolean;
-typedef uint16_t System_Char;
+typedef bool Boolean;
+typedef uint16_t Char;
 
-typedef struct System_Type* System_Type;
+typedef struct RuntimeTypeInfo* RuntimeTypeInfo;
 
-typedef struct System_Object {
+typedef struct {} ValueType;
+typedef struct {} Enum;
+typedef struct {} Void;
+
+typedef struct Object {
     uint32_t VTable;
     uint32_t ITable;
     uint8_t MonitorLock;
@@ -29,50 +33,39 @@ typedef struct System_Object {
     uint16_t MonitorOwnerThreadId;
     uint32_t MonitorDepth : 24;
     uint32_t GcFlags : 8;
-    System_Type ObjectType;
-    struct System_Object* next;
-}* System_Object;
+    RuntimeTypeInfo ObjectType;
+    struct Object* next;
+}* Object;
 //_Static_assert(sizeof(struct System_Object) <= 8 * 3, "Object size too big");
 
-typedef struct System_String {
-    struct System_Object;
+typedef struct String {
+    struct Object;
     int Length;
     uint8_t _padding[4];
-    System_Char Chars[];
-}* System_String;
+    Char Chars[];
+}* String;
 
-typedef struct System_Array {
-    struct System_Object;
+typedef struct Array {
+    struct Object;
     int Length;
     uint8_t _padding[12];
-}* System_Array;
+}* Array;
 
 #define DEFINE_ARRAY(Type) \
     typedef struct __attribute__((packed)) Type##_Array { \
-        struct System_Array; \
+        struct Array; \
         Type Elements[]; \
     }* Type##_Array;
 
-typedef struct System_ValueType {} System_ValueType;
-typedef struct System_Enum {} System_Enum;
-
-typedef struct System_Guid {
+typedef struct Guid {
     uint8_t Data[16];
-} System_Guid;
+} Guid;
 
-typedef struct System_Version {
-    struct System_Object;
-    int Major;
-    int Minor;
-    int Build;
-    int Revision;
-}* System_Version;
+DEFINE_ARRAY(Byte);
+DEFINE_ARRAY(RuntimeTypeInfo);
 
-DEFINE_ARRAY(System_Byte);
-DEFINE_ARRAY(System_Type);
+tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str);
 
-tdn_err_t tdn_create_string_from_cstr(const char* cstr, System_String* out_str);
+tdn_err_t tdn_append_cstr_to_string(String str, const char* cstr, String* out_str);
 
-tdn_err_t tdn_append_cstr_to_string(System_String str, const char* cstr, System_String* out_str);
-
-bool tdn_compare_string_to_cstr(System_String str, const char* cstr);
+bool tdn_compare_string_to_cstr(String str, const char* cstr);

@@ -398,7 +398,7 @@ static tdn_err_t expand_metadata_table(metadata_loader_context_t* context, int t
             case GET_UINT32: in_file += 4; in_memory += sizeof(uint32_t); break;
             case GET_STRING: in_file += context->string_index_big ? 4 : 2; in_memory += sizeof(const char*); break;
             case GET_BLOB: in_file += context->blog_index_big ? 4 : 2; in_memory += sizeof(blob_entry_t); break;
-            case GET_GUID: in_file += context->guid_index_big ? 4 : 2; in_memory += sizeof(System_Guid*); break;
+            case GET_GUID: in_file += context->guid_index_big ? 4 : 2; in_memory += sizeof(Guid*); break;
 
             default: return -1;
         }
@@ -521,8 +521,8 @@ static tdn_err_t expand_metadata_table(metadata_loader_context_t* context, int t
                 }; break;
 
                 case GET_GUID: {
-                    System_Guid** new_value = entry;
-                    entry += sizeof(System_Guid*);
+                    Guid** new_value = entry;
+                    entry += sizeof(Guid*);
                     uint32_t index = GET_INDEX(context->guid_index_big);
                     if (index == 0) {
                         *new_value = NULL;
@@ -629,7 +629,7 @@ tdn_err_t dotnet_load_file(dotnet_file_t* file) {
     CHECK((characteristics & IMAGE_FILE_RELOCS_STRIPPED) == 0);
     CHECK(characteristics & IMAGE_FILE_EXECUTABLE_IMAGE);
     CHECK((characteristics & IMAGE_FILE_32BIT_MACHINE) == 0);
-    file->dll = characteristics & IMAGE_FILE_DLL;
+//    file->dll = characteristics & IMAGE_FILE_DLL;
 
     // II.25.2.3.3 CLI Header
     IMAGE_DATA_DIRECTORY* com_descriptor = &file->file.header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR];
@@ -702,9 +702,8 @@ tdn_err_t dotnet_load_file(dotnet_file_t* file) {
         stream = (void*)(stream + 1) + ALIGN_UP(len, 4);
     }
 
-    if (md_stream_start) {
-        CHECK_AND_RETHROW(dotnet_parse_metadata_tables(file, md_stream_start, md_stream_size));
-    }
+    CHECK(md_stream_start != NULL);
+    CHECK_AND_RETHROW(dotnet_parse_metadata_tables(file, md_stream_start, md_stream_size));
 
 cleanup:
     return err;

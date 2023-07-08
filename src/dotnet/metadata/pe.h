@@ -9,6 +9,7 @@
 typedef struct pe_file {
     // used to abstract loading of files
     tdn_err_t (*read_file)(void* file, size_t offset, size_t size, void* buffer);
+    void (*close_handle)(void* handle);
     void* handle;
 
     // the loaded image
