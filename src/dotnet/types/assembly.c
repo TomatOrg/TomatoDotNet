@@ -22,14 +22,9 @@ tdn_err_t tdn_assembly_lookup_type(
         } break;
 
         case METADATA_TYPE_SPEC: {
-//            CHECK(token.index != 0 && token.index <= assembly->TypeSpecs->Length);
-//            System_Byte_Array sig = assembly->TypeSpecs->Elements[token.index - 1].Signature;
-//            blob_entry_t entry = {
-//                .data = sig->Elements,
-//                .size = sig->Length
-//            };
-//            CHECK_AND_RETHROW(sig_parse_type_spec(entry, assembly, typeArgs, methodArgs, type));
-            CHECK_FAIL();
+            CHECK(token.index != 0 && token.index <= assembly->Metadata->type_specs_count);
+            blob_entry_t entry = assembly->Metadata->type_specs[token.index - 1].signature;
+            CHECK_AND_RETHROW(sig_parse_type_spec(entry, assembly, typeArgs, methodArgs, type));
         } break;
 
         default:
@@ -37,7 +32,7 @@ tdn_err_t tdn_assembly_lookup_type(
     }
 
     // make sure the type is fully initialized
-//    CHECK_AND_RETHROW(tdn_queue_type_init(*type));
+    // TODO: initialize the size properly
 
 cleanup:
     return err;
@@ -59,51 +54,55 @@ tdn_err_t tdn_assembly_lookup_method(
         } break;
 
         case METADATA_MEMBER_REF: {
-//            CHECK(token.index != 0 && token.index <= assembly->MemberRefs->Length);
-//            TinyDotNet_Reflection_MemberReference ref = assembly->MemberRefs->Elements[token.index - 1];
-//
-//            // get the enclosing type
-//            System_Type parent = NULL;
-//            CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, ref.ParentToken, typeArgs, methodArgs, &parent));
-//
-//            // get the expected field
-//            method_signature_t signature = {0};
-//            blob_entry_t blob = {
-//                .data = ref.Signature->Elements,
-//                .size = ref.Signature->Length
-//            };
-//            CHECK_AND_RETHROW(sig_parse_method_def(blob, assembly, parent->GenericArguments, NULL, &signature));
-//
-//            // now search for a method with that signature
-//            for (int i = 0; i < parent->Methods->Length; i++) {
-//                System_Reflection_MethodInfo m = parent->Methods->Elements[i];
-//
-//                // compare the generic and argument count
-//                if (m->GenericArguments->Length != signature.generic_param_count) continue;
-//                if (m->Parameters->Length != signature.parameters->Length) continue;
-//
-//                // compare the return parameter
-//                if (m->ReturnParameter != signature.return_parameter) continue;
-//
-//                // compare the parameter types
-//                for (int pi = 0; pi < m->Parameters->Length; pi++) {
-//                    System_Reflection_ParameterInfo p1 = m->Parameters->Elements[pi];
-//                    System_Reflection_ParameterInfo p2 = signature.parameters->Elements[pi];
-//                    if (p1->ParameterType != p2->ParameterType) goto next;
-//                }
-//
-//                // found it!
-//                *method = m;
-//
-//            next:
-//                continue;
-//            }
+            CHECK(token.index != 0 && token.index <= assembly->Metadata->member_refs_count);
+            metadata_member_ref_t* ref = &assembly->Metadata->member_refs[token.index - 1];
+
+            // get the enclosing type
+            RuntimeTypeInfo parent = NULL;
+            CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, ref->class.token, typeArgs, methodArgs, &parent));
+
+            // get the expected field
+            method_signature_t signature = {0};
+            blob_entry_t blob = ref->signature;
+            CHECK_AND_RETHROW(sig_parse_method_def(blob, assembly, parent->GenericArguments, NULL, &signature));
+
+            // now search for a method with that signature
+            bool found = false;
+            int method_count = parent->DeclaredMethods->Length;
+            int ctor_count = parent->DeclaredConstructors->Length;
+            for (int i = 0; i < method_count + ctor_count; i++) {
+                RuntimeMethodBase m = NULL;
+                if (i >= ctor_count) {
+                    m = (RuntimeMethodBase)parent->DeclaredMethods->Elements[i - ctor_count];
+                } else {
+                    m = (RuntimeMethodBase)parent->DeclaredConstructors->Elements[i];
+                }
+
+                if (!tdn_compare_string_to_cstr(m->Name, ref->name)) continue;
+                if (m->Parameters->Length != signature.parameters->Length) continue;
+                if (m->ReturnParameter->ParameterType != signature.return_parameter->ParameterType) continue;
+
+                // compare the parameter types
+                bool valid = true;
+                for (int pi = 0; pi < m->Parameters->Length; pi++) {
+                    ParameterInfo p1 = m->Parameters->Elements[pi];
+                    ParameterInfo p2 = signature.parameters->Elements[pi];
+                    if (p1->ParameterType != p2->ParameterType) {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (!valid) continue;
+
+                // found it!
+                *method = m;
+                found = true;
+                break;
+            }
 
             // we didn't find it
-            CHECK_FAIL();
+            CHECK(found);
         } break;
-
-        // TODO: other options
 
         default:
             CHECK_FAIL("tdn_assembly_lookup_method: called with invalid table %02x", token.table);
@@ -140,7 +139,6 @@ tdn_err_t tdn_assembly_lookup_type_by_cstr(RuntimeAssembly assembly, const char*
             tdn_compare_string_to_cstr(type->Namespace, namespace) &&
             tdn_compare_string_to_cstr(type->Name, name)
         ) {
-//            CHECK_AND_RETHROW(tdn_queue_type_init(type));
             *out_type = type;
             goto cleanup;
         }

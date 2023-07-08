@@ -583,27 +583,6 @@ cleanup:
     return err;
 }
 
-static tdn_err_t corelib_fill_types() {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    //
-    // fill in all the init and load types
-    //
-
-//    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
-//        init_type_t* init_type = &m_init_types[i];
-//        CHECK_AND_RETHROW(tdn_fill_type(*init_type->dest));
-//    }
-//
-//    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
-//        load_type_t* load_type = &m_load_types[i];
-//        CHECK_AND_RETHROW(tdn_fill_type(*load_type->dest));
-//    }
-
-cleanup:
-    return err;
-}
-
 static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
@@ -627,7 +606,7 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
         CHECK(!(attributes.Abstract && attributes.PinvokeImpl));
         if (attributes.Abstract) CHECK(attributes.Virtual);
         if (attributes.RTSpecialName) CHECK(attributes.SpecialName);
-        if (attributes.Final || attributes.VtableNewSlot) /* TODO: Strict? */ CHECK(attributes.Virtual);
+        if (attributes.Final || attributes.VtableNewSlot || attributes.Strict) CHECK(attributes.Virtual);
         if (attributes.PinvokeImpl) CHECK(!attributes.Virtual);
         if (!attributes.Abstract) CHECK(method_def->rva != 0 || attributes.PinvokeImpl || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME);
         if (method_def->rva == 0) CHECK(attributes.Abstract || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME || attributes.PinvokeImpl);
@@ -1125,10 +1104,8 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     // finish up with bootstrapping if this is the corelib
     if (mCoreAssembly == NULL) {
-        CHECK_AND_RETHROW(corelib_fill_types());
         mCoreAssembly = assembly;
     }
-
 
     // we are success
     *out_assembly = assembly;

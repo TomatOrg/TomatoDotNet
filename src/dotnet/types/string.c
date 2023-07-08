@@ -12,6 +12,11 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {
     size_t len = strlen(cstr);
     CHECK(len <= INT32_MAX);
 
+    if (len == 0) {
+        *out_str = NULL;
+        goto cleanup;
+    }
+
     // allocate it
     String new_str = gc_new(tString, sizeof(struct String) + len * 2);
     CHECK_ERROR(new_str, TDN_ERROR_OUT_OF_MEMORY);

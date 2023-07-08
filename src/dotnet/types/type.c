@@ -5,6 +5,8 @@
 #include "dotnet/metadata/metadata_tables.h"
 #include "dotnet/types.h"
 #include "util/stb_ds.h"
+#include "dotnet/metadata/sig.h"
+#include "dotnet/metadata/metadata.h"
 #include <stdatomic.h>
 
 bool tdn_type_is_valuetype(RuntimeTypeInfo type) {
@@ -191,67 +193,119 @@ bool tdn_type_contains_generic_parameters(RuntimeTypeInfo type) {
     }
 }
 
-//static void type_replace_generic_parameter(RuntimeTypeInfo type, RuntimeTypeInfo_Array args) {
-//
-//}
-//
-//static tdn_err_t expand_generic_type(RuntimeTypeInfo base, RuntimeTypeInfo_Array args, RuntimeTypeInfo* new_type) {
-//    tdn_err_t err = TDN_NO_ERROR;
-//
-//    // make sure it is actually a generic type
-//    if (!tdn_type_contains_generic_parameters(base)) {
-//        *new_type = base;
-//        goto cleanup;
-//    }
-//
-//    // it is, create it
-//    CHECK_AND_RETHROW(tdn_type_make_generic(base, args, new_type));
-//
-//cleanup:
-//    return err;
-//}
-//
-//static tdn_err_t expand_generic_parameter(System_Reflection_ParameterInfo base, RuntimeTypeInfo_Array args, System_Reflection_ParameterInfo* out_parameter) {
-//    tdn_err_t err = TDN_NO_ERROR;
-//
-//    System_Reflection_ParameterInfo new = GC_NEW(System_Reflection_ParameterInfo);
-//    new->Name = base->Name;
-//    CHECK_AND_RETHROW(expand_generic_type(base->ParameterType, args, &new->ParameterType));
-//    new->Position = base->Position;
-//    new->MetadataToken = base->MetadataToken;
-//    new->Attributes = base->Attributes;
-//
-//cleanup:
-//    return err;
-//}
-//
-//static tdn_err_t expand_generic_method(System_Reflection_MethodInfo base, RuntimeTypeInfo_Array args, System_Reflection_MethodInfo* out_method) {
-//    tdn_err_t err = TDN_NO_ERROR;
-//
-//    // the basics
-//    System_Reflection_MethodInfo new_method = GC_NEW(System_Reflection_MethodInfo);
-//    new_method->Name = base->Name;
-//    new_method->ImplementationFlags = base->ImplementationFlags;
-//    new_method->Attributes = base->Attributes;
-//
-//    // TODO: expand the body
-//
-//    // TODO: how do generic methods play out with this
-//
-//    // expand the return parameter
-//    CHECK_AND_RETHROW(expand_generic_parameter(base->ReturnParameter, args, &new_method->ReturnParameter));
-//    new_method->ReturnParameter->Member = (System_Reflection_MemberInfo)new_method;
-//
-//    // expand method parameters
-//    new_method->Parameters = GC_NEW_ARRAY(System_Reflection_ParameterInfo, base->Parameters->Length);
-//    for (int i = 0; i < base->Parameters->Length; i++) {
-//        CHECK_AND_RETHROW(expand_generic_parameter(base->Parameters->Elements[i], args, &new_method->Parameters->Elements[i]));
-//        new_method->Parameters->Elements[i]->Member = (System_Reflection_MemberInfo)new_method;
-//    }
-//
-//cleanup:
-//    return err;
-//}
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Expand TypeDef based types
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static bool is_module_type(RuntimeTypeInfo type) {
+    return tdn_compare_string_to_cstr(type->Name, "<Module>") && type->Namespace == NULL;
+}
+
+static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+    token_t token = { .token = type->MetadataToken };
+    RuntimeAssembly assembly = type->Module->Assembly;
+    metadata_type_def_t* type_def = &assembly->Metadata->type_defs[token.index - 1];
+
+    // resolve it
+    CHECK_AND_RETHROW(tdn_assembly_lookup_type(
+            assembly, type_def->extends.token, type->GenericArguments, NULL, &type->BaseType));
+
+    // make sure the array is built correctly
+    if (token.index != 1) {
+        CHECK(type_def[-1].field_list.index <= type_def->field_list.index);
+        CHECK(type_def[-1].method_list.index <= type_def->method_list.index);
+    }
+
+    // get the fields and methods count for later access
+    size_t fields_count = (token.index == assembly->Metadata->type_defs_count ?
+                           assembly->Metadata->fields_count :
+                           type_def[1].field_list.index - 1) - (type_def->field_list.index - 1);
+    size_t methods_count = (token.index == assembly->Metadata->type_defs_count ?
+                            assembly->Metadata->method_defs_count :
+                            type_def[1].method_list.index - 1) - (type_def->method_list.index - 1);
+
+    // initialize all the fields, we just need the stack size from them for now
+    type->DeclaredFields = GC_NEW_ARRAY(RuntimeFieldInfo, fields_count);
+    for (int i = 0; i < fields_count; i++) {
+        metadata_field_t* field = &assembly->Metadata->fields[type_def->field_list.index - 1 + i];
+        RuntimeFieldInfo field_info = GC_NEW(RuntimeFieldInfo);
+        field_info->DeclaringType = type;
+        CHECK_AND_RETHROW(tdn_create_string_from_cstr(field->name, &field_info->Name));
+        field_info->Attributes = (FieldAttributes){ .Attributes = field->flags };
+        field_info->Module = type->Module;
+        field_info->MetadataToken = ((token_t){ .table = METADATA_FIELD, .index = i + 1 }).token;
+        CHECK_AND_RETHROW(sig_parse_field(field->signature, field_info));
+        type->DeclaredFields->Elements[i] = field_info;
+    }
+
+    //
+    // setup the methods
+    //
+
+    // count the ctors, we already verified the attributes properly
+    int ctors = 0;
+    int methods = 0;
+    for (int i = 0; i < methods_count; i++) {
+        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
+        MethodAttributes attributes = { .Attributes = method_def->flags };
+        if (attributes.RTSpecialName) {
+            ctors++;
+        } else {
+            methods++;
+        }
+    }
+
+    // now we can allocate and init all of them
+    type->DeclaredConstructors = GC_NEW_ARRAY(RuntimeConstructorInfo, ctors);
+    type->DeclaredMethods = GC_NEW_ARRAY(RuntimeMethodInfo, methods);
+    ctors = 0;
+    methods = 0;
+    bool found_static_ctor = false;
+    for (int i = 0; i < methods_count; i++) {
+        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
+        MethodAttributes attributes = { .Attributes = method_def->flags };
+
+        // get the correct version
+        RuntimeMethodBase base = NULL;
+        if (attributes.RTSpecialName) {
+            base = (RuntimeMethodBase)GC_NEW(RuntimeConstructorInfo);
+            type->DeclaredConstructors->Elements[ctors++] = (RuntimeConstructorInfo)base;
+        } else {
+            base = (RuntimeMethodBase)GC_NEW(RuntimeMethodInfo);
+            type->DeclaredMethods->Elements[methods++] = (RuntimeMethodInfo)base;
+        }
+
+        // setup most of the type
+        base->DeclaringType = type;
+        base->MetadataToken = ((token_t){ .table = METADATA_METHOD_DEF, .index = i + 1 }).token;
+        base->Attributes = attributes;
+        base->MethodImplFlags = (MethodImplAttributes){ .Attributes = method_def->impl_flags };
+        base->Module = type->Module;
+        CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
+
+        if (method_def->rva != 0) {
+            // TODO: parse the body
+//            CHECK_AND_RETHROW(tdn_parser_method_body(&assembly->Metadata->file, method_def, base));
+        }
+
+        // and finally get the signature
+        method_signature_t signature = {};
+        CHECK_AND_RETHROW(sig_parse_method_def(
+                method_def->signature, assembly,
+                type->GenericArguments, NULL,
+                &signature));
+        base->Parameters = signature.parameters;
+        base->ReturnParameter = signature.return_parameter;
+    }
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Create generic type
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static tdn_err_t create_generic_type(RuntimeTypeInfo base, RuntimeTypeInfo_Array args, RuntimeTypeInfo new_type) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -267,18 +321,10 @@ static tdn_err_t create_generic_type(RuntimeTypeInfo base, RuntimeTypeInfo_Array
     new_type->GenericTypeDefinition = base;
     new_type->GenericArguments = args;
 
-//    // expand the base
-//    if (base->BaseType != NULL) {
-//        CHECK_AND_RETHROW(expand_generic_type(base->BaseType, args, &new_type->BaseType));
-//    }
-//
-//    // TODO: expand the fields
-//
-//    for (int i = 0; i < ) {
-//
-//    }
-
-    CHECK_FAIL();
+    // get all the other stuff
+    token_t token = { .token = base->MetadataToken };
+    CHECK(token.table == METADATA_TYPE_DEF && token.index != 0);
+    CHECK_AND_RETHROW(expand_type_from_typedef(new_type));
 
 cleanup:
     return err;
@@ -291,29 +337,59 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
 
     // check if already has one
     size_t hash = stbds_hash_bytes(args->Elements, sizeof(RuntimeTypeInfo) * args->Length, 0);
-    CHECK_FAIL();
-//    int idx = hmgeti(base->GenericTypeInstances, hash);
-//    if (idx == -1) {
-//        // create it and set it incase we need it again
-//        // for expansion
-//        RuntimeTypeInfo new_type = GC_NEW(RuntimeTypeInfo);
-//
-//        // TODO: validate the arguments are valid
-//        hmput(base->GenericTypeInstances, hash, new_type);
-//
-//        // and now fill it up
-//        CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
-//
-//        // and out it goes
-//        *type = new_type;
-//    } else {
-//        // found it! check we don't have a collision by accident
-//        RuntimeTypeInfo instance = base->GenericTypeInstances[idx].value;
-//        for (int i = 0; i < args->Length; i++) {
-//            CHECK(instance->GenericArguments->Elements[i] == args->Elements[i]);
-//        }
-//        *type = instance;
-//    }
+    int idx = hmgeti(base->GenericTypeInstances, hash);
+    if (idx == -1) {
+        // create it and set it incase we need it again
+        // for expansion
+        RuntimeTypeInfo new_type = GC_NEW(RuntimeTypeInfo);
+
+        // TODO: validate the arguments are valid
+        hmput(base->GenericTypeInstances, hash, new_type);
+
+        // validate the make generic
+        CHECK(base->GenericArguments->Length == args->Length);
+        for (int i = 0; i < args->Length; i++) {
+            GenericParameterAttributes attributes = base->GenericArguments->Elements[i]->GenericParameterAttributes;
+            RuntimeTypeInfo arg_type = args->Elements[i];
+
+            // special constraints
+            if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE) {
+                CHECK(!tdn_type_is_valuetype(arg_type));
+            }
+
+            if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
+                CHECK(tdn_type_is_valuetype(arg_type));
+            }
+
+            if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR) {
+                bool found = false;
+                for (int j = 0; j < base->DeclaredConstructors->Length; j++) {
+                    RuntimeConstructorInfo ctor = base->DeclaredConstructors->Elements[j];
+                    if (ctor->Attributes.Static) continue;
+                    if (ctor->Parameters->Length != 0) continue;
+                    found = true;
+                    break;
+                }
+                CHECK(found);
+            }
+
+            // TODO: other type constraints
+        }
+
+        // and now fill it up
+        CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
+        CHECK_AND_RETHROW(tdn_size_init(new_type));
+
+        // and out it goes
+        *type = new_type;
+    } else {
+        // found it! check we don't have a collision by accident
+        RuntimeTypeInfo instance = base->GenericTypeInstances[idx].value;
+        for (int i = 0; i < args->Length; i++) {
+            CHECK(instance->GenericArguments->Elements[i] == args->Elements[i]);
+        }
+        *type = instance;
+    }
 
 cleanup:
     return err;

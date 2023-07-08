@@ -99,17 +99,6 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
            type->Attributes.Interface ? "interface" : "class");
     output_type_name(type, false);
 
-    if (type->GenericArguments != NULL) {
-        printf("<");
-        for (int j = 0; j < type->GenericArguments->Length; j++) {
-            if (j != 0) {
-                printf(", ");
-            }
-            printf("%U", type->GenericArguments->Elements[j]->Name);
-        }
-        printf(">");
-    }
-
     if (type->BaseType != NULL) {
         printf(" : ");
         output_type_name(type->BaseType, true);
@@ -224,7 +213,11 @@ int main() {
     RuntimeTypeInfo type;
     CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test", &type));
     CHECK(type != NULL);
+
+    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
     CHECK_AND_RETHROW(dump_type(type));
+
+
 
 cleanup:
     free(image);

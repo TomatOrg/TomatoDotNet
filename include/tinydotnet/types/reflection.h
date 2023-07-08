@@ -127,7 +127,7 @@ typedef union MethodAttributes {
         uint32_t Virtual : 1;
         uint32_t HideBySig : 1;
         uint32_t VtableNewSlot : 1;
-        uint32_t CheckAccessOnOverride : 1;
+        uint32_t Strict : 1;
         uint32_t Abstract : 1;
         uint32_t SpecialName : 1;
         uint32_t RTSpecialName : 1;

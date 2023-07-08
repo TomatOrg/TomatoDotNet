@@ -51,9 +51,9 @@ typedef union TypeAttributes {
 #define TDN_GENERIC_PARAM_VARIANCE_COVARIANT                    1
 #define TDN_GENERIC_PARAM_VARIANCE_CONTRAVARIANT                2
 
-#define TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE             1
-#define TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE    2
-#define TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR        3
+#define TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE             BIT0
+#define TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE    BIT1
+#define TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR        BIT3
 
 typedef union GenericParameterAttributes {
     struct {
@@ -62,6 +62,11 @@ typedef union GenericParameterAttributes {
     };
     uint32_t value;
 } GenericParameterAttributes;
+
+typedef struct generic_type_instance {
+    size_t key;
+    RuntimeTypeInfo value;
+} generic_type_instance_t;
 
 typedef struct RuntimeTypeInfo {
     struct RuntimeMemberInfo;
@@ -77,6 +82,7 @@ typedef struct RuntimeTypeInfo {
 
     // The base of the type
     RuntimeTypeInfo BaseType;
+    generic_type_instance_t* GenericTypeInstances;
 
     // the declared stuff
     RuntimeConstructorInfo_Array DeclaredConstructors;

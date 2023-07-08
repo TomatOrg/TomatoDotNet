@@ -2,6 +2,7 @@
 #include "tinydotnet/host.h"
 #include "util/except.h"
 #include "dotnet/metadata/metadata.h"
+#include "util/stb_ds.h"
 
 static Object m_gc_first;
 
@@ -15,6 +16,9 @@ void gc_free_all() {
             assembly->Metadata->file.close_handle(assembly->Metadata->file.handle);
             dotnet_free_file(assembly->Metadata);
             tdn_host_free(assembly->Metadata);
+        } else if (obj->ObjectType == tRuntimeTypeInfo) {
+            RuntimeTypeInfo type = (RuntimeTypeInfo)obj;
+            hmfree(type->GenericTypeInstances);
         }
 
         tdn_host_free(obj);
