@@ -285,8 +285,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
 
         if (method_def->rva != 0) {
-            // TODO: parse the body
-//            CHECK_AND_RETHROW(tdn_parser_method_body(&assembly->Metadata->file, method_def, base));
+            CHECK_AND_RETHROW(tdn_parser_method_body(assembly, method_def, base));
         }
 
         // and finally get the signature

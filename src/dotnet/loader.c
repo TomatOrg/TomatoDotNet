@@ -406,7 +406,7 @@ typedef struct coril_method_fat {
     uint32_t local_var_sig_tok;
 } coril_method_fat_t;
 
-static tdn_err_t tdn_parser_method_body(
+tdn_err_t tdn_parser_method_body(
     RuntimeAssembly assembly,
     metadata_method_def_t* method_def,
     RuntimeMethodBase methodBase
