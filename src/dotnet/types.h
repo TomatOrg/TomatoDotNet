@@ -33,5 +33,6 @@ extern RuntimeTypeInfo tRuntimeFieldInfo;
 extern RuntimeTypeInfo tRuntimeMethodBody;
 extern RuntimeTypeInfo tRuntimeMethodInfo;
 extern RuntimeTypeInfo tRuntimeConstructorInfo;
+extern RuntimeTypeInfo tRuntimeLocalVariableInfo;
 extern RuntimeTypeInfo tRuntimeTypeInfo;
 extern RuntimeTypeInfo tParameterInfo;

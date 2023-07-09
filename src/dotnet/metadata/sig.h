@@ -26,6 +26,12 @@ tdn_err_t sig_parse_type_spec(
         RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
         RuntimeTypeInfo* type);
 
+tdn_err_t sig_parse_local_var_sig(
+        blob_entry_t _blob,
+        RuntimeAssembly assembly,
+        RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+        RuntimeMethodBody body);
+
 tdn_err_t sig_parse_compressed_int(
         blob_entry_t* blob,
         uint32_t* value);

@@ -105,14 +105,14 @@ static void output_type_name(RuntimeTypeInfo type, bool short_name) {
     tdn_host_printf("%U", type->Name);
 
     if (type->GenericArguments != NULL) {
-        tdn_host_printf("[");
+        tdn_host_printf("<");
         for (int i = 0; i < type->GenericArguments->Length; i++) {
             if (i != 0) {
                 tdn_host_printf(", ");
             }
             output_type_name(type->GenericArguments->Elements[i], short_name);
         }
-        tdn_host_printf("]");
+        tdn_host_printf(">");
     }
 }
 
@@ -121,6 +121,18 @@ tdn_err_t tdn_disasm_il(RuntimeMethodBase method) {
 
     RuntimeMethodBody body = method->MethodBody;
     RuntimeAssembly assembly = method->Module->Assembly;
+
+    TRACE("\t\t.maxstacksize %d", body->MaxStackSize);
+
+    if (body->LocalVariables != NULL) {
+        TRACE("\t\t.locals %s(", body->InitLocals ? "init " : "");
+        for (int i = 0; i < body->LocalVariables->Length; i++) {
+            tdn_host_printf("[*] \t\t\t[%d] ", i);
+            output_type_name(body->LocalVariables->Elements[i]->LocalType, true);
+            tdn_host_printf("\n");
+        }
+        TRACE("\t\t)");
+    }
 
     size_t left = body->ILSize;
     uint8_t* opcodes = body->IL;

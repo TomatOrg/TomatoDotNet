@@ -99,10 +99,20 @@ DEFINE_ARRAY(RuntimeFieldInfo);
 // The method body
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct RuntimeLocalVariableInfo {
+    struct Object Object;
+    RuntimeTypeInfo LocalType;
+    int LocalIndex;
+    bool IsPinned;
+}* RuntimeLocalVariableInfo;
+DEFINE_ARRAY(RuntimeLocalVariableInfo);
+
 typedef struct RuntimeMethodBody {
     struct Object Object;
+    RuntimeLocalVariableInfo_Array LocalVariables;
     uint8_t* IL;
     int ILSize;
+    int LocalSignatureMetadataToken;
     int MaxStackSize;
     bool InitLocals;
 }* RuntimeMethodBody;

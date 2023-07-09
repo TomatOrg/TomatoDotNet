@@ -30,6 +30,7 @@ RuntimeTypeInfo tRuntimeFieldInfo = NULL;
 RuntimeTypeInfo tRuntimeMethodBody = NULL;
 RuntimeTypeInfo tRuntimeMethodInfo = NULL;
 RuntimeTypeInfo tRuntimeConstructorInfo = NULL;
+RuntimeTypeInfo tRuntimeLocalVariableInfo = NULL;
 RuntimeTypeInfo tRuntimeTypeInfo = NULL;
 RuntimeTypeInfo tParameterInfo = NULL;
 

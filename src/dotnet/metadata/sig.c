@@ -5,6 +5,8 @@
 #include "util/stb_ds.h"
 
 #define FIELD 0x6
+#define LOCAL_SIG 0x7
+
 #define HASTHIS 0x20
 #define EXPLICITTHIS 0x40
 #define DEFAULT 0x0
@@ -500,6 +502,73 @@ tdn_err_t sig_parse_method_def(blob_entry_t _blob, RuntimeAssembly assembly, Run
         CHECK_AND_RETHROW(sig_parse_param(blob, assembly, typeArgs, methodArgs, parameter_info));
         signature->parameters->Elements[i] = parameter_info;
     }
+
+cleanup:
+    return err;
+}
+
+tdn_err_t sig_parse_local_var_sig(
+    blob_entry_t _blob,
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeMethodBody body
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+    blob_entry_t* blob = &_blob;
+
+    CHECK(FETCH_BYTE == LOCAL_SIG);
+
+    uint32_t count = 0;
+    CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &count));
+    CHECK(1 <= count && count <= 0xFFFE);
+
+    RuntimeLocalVariableInfo_Array arr = GC_NEW_ARRAY(RuntimeLocalVariableInfo, count);
+    for (size_t i = 0; i < count; i++) {
+        RuntimeLocalVariableInfo variable = GC_NEW(RuntimeLocalVariableInfo);
+        arr->Elements[i] = variable;
+        variable->LocalIndex = (int)i;
+
+        // we don't support this
+        if (PEEK_BYTE == ELEMENT_TYPE_TYPEDBYREF) {
+            CHECK_FAIL();
+        }
+
+        // Parse custom modifiers
+        RuntimeTypeInfo cmod_type = NULL;
+        bool required = false;
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        while(cmod_type != NULL) {
+            CHECK(!required);
+            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        }
+
+        // check the Constraint
+        if (PEEK_BYTE == ELEMENT_TYPE_PINNED) {
+            FETCH_BYTE;
+            variable->IsPinned = true;
+        }
+
+        // remember if its a byref
+        bool byref = false;
+        if (PEEK_BYTE == ELEMENT_TYPE_BYREF) {
+            FETCH_BYTE;
+            byref = true;
+        }
+
+        // parse it properly
+        RuntimeTypeInfo type = NULL;
+        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
+
+        // if it was byref actually get the byref type
+        if (byref) {
+            CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+        }
+
+        variable->LocalType = type;
+
+    }
+
+    body->LocalVariables = arr;
 
 cleanup:
     return err;

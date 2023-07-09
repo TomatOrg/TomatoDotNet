@@ -118,6 +118,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Reflection, RuntimeMethodBody),
     LOAD_TYPE(System.Reflection, RuntimeMethodInfo),
     LOAD_TYPE(System.Reflection, RuntimeConstructorInfo),
+    LOAD_TYPE(System.Reflection, RuntimeLocalVariableInfo),
     LOAD_TYPE(System.Reflection, RuntimeTypeInfo),
     LOAD_TYPE(System.Reflection, ParameterInfo),
 };
@@ -405,14 +406,18 @@ typedef struct coril_method_fat {
     uint32_t local_var_sig_tok;
 } coril_method_fat_t;
 
-static tdn_err_t tdn_parser_method_body(pe_file_t* file, metadata_method_def_t* method_def, RuntimeMethodBase methodBase) {
+static tdn_err_t tdn_parser_method_body(
+    RuntimeAssembly assembly,
+    metadata_method_def_t* method_def,
+    RuntimeMethodBase methodBase
+) {
     tdn_err_t err = TDN_NO_ERROR;
 
     RuntimeMethodBody body = GC_NEW(RuntimeMethodBody);
 
     // get the tiny header for the start
-    uint8_t* start = pe_image_address(file, method_def->rva);
-    void* end = pe_image_address(file, method_def->rva + 1);
+    uint8_t* start = pe_image_address(&assembly->Metadata->file, method_def->rva);
+    void* end = pe_image_address(&assembly->Metadata->file, method_def->rva + 1);
     CHECK(start != NULL && end != NULL);
 
     // parse the header
@@ -429,7 +434,7 @@ static tdn_err_t tdn_parser_method_body(pe_file_t* file, metadata_method_def_t* 
 
     } else if (flags == CorILMethod_FatFormat) {
         // this is a big header, recalculate the end
-        end = pe_image_address(file, method_def->rva + 12);
+        end = pe_image_address(&assembly->Metadata->file, method_def->rva + 12);
         CHECK(end != NULL);
 
         coril_method_fat_t* fat = (coril_method_fat_t*)start;
@@ -440,7 +445,22 @@ static tdn_err_t tdn_parser_method_body(pe_file_t* file, metadata_method_def_t* 
         body->MaxStackSize = fat->max_stack;
         body->InitLocals = fat->flags & CorILMethod_InitLocals;
 
+        // for now verify no more sections
         CHECK((fat->flags & CorILMethod_MoreSects) == 0);
+
+        // parse the local variables
+        body->LocalSignatureMetadataToken = (int)fat->local_var_sig_tok;
+        if (fat->local_var_sig_tok != 0) {
+            token_t token = { .token = body->LocalSignatureMetadataToken };
+            CHECK(token.table == METADATA_STAND_ALONE_SIG);
+            CHECK(token.index != 0 && token.index <= assembly->Metadata->stand_alone_sigs_count);
+            metadata_stand_alone_sig_t* sig = &assembly->Metadata->stand_alone_sigs[token.index - 1];
+            CHECK_AND_RETHROW(sig_parse_local_var_sig(
+                    sig->signature,
+                    assembly,
+                    methodBase->DeclaringType->GenericArguments, NULL,
+                    body));
+        }
 
         code_size = fat->code_size;
     } else {
@@ -450,7 +470,7 @@ static tdn_err_t tdn_parser_method_body(pe_file_t* file, metadata_method_def_t* 
     // get the code end and start
     // TODO: more sections
     uint8_t* code_start = end;
-    uint8_t* code_end = pe_image_address(file, method_def->rva + header_size + code_size);
+    uint8_t* code_end = pe_image_address(&assembly->Metadata->file, method_def->rva + header_size + code_size);
     CHECK(code_end != NULL);
     CHECK(code_size <= INT32_MAX);
 
@@ -576,8 +596,31 @@ static tdn_err_t corelib_bootstrap_types(RuntimeAssembly assembly) {
     }
 
     // make sure we loaded all the required types
-    CHECK(m_loaded_types == ARRAY_LENGTH(m_load_types));
-    CHECK(m_inited_types == ARRAY_LENGTH(m_init_types));
+    bool loaded_everything = true;
+    if (m_loaded_types != ARRAY_LENGTH(m_load_types)) {
+        ERROR("Failed to load some types:");
+
+        for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
+            if (*m_load_types[i].dest == NULL) {
+                ERROR("\t- %s.%s", m_load_types[i].namespace, m_load_types[i].name);
+            }
+        }
+        loaded_everything = false;
+    }
+
+    if (m_inited_types != ARRAY_LENGTH(m_init_types)) {
+        if (loaded_everything)
+            ERROR("Failed to load some types:");
+
+        for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
+            if (*m_init_types[i].dest == NULL) {
+                ERROR("\t- %s.%s", m_init_types[i].namespace, m_init_types[i].name);
+            }
+        }
+        loaded_everything = false;
+    }
+
+    CHECK(loaded_everything);
 
 cleanup:
     return err;
@@ -844,7 +887,7 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
 
         // parse the body
         if (method_def->rva != 0) {
-            CHECK_AND_RETHROW(tdn_parser_method_body(&assembly->Metadata->file, method_def, base));
+            CHECK_AND_RETHROW(tdn_parser_method_body(assembly, method_def, base));
         }
 
         // and finally get the signature

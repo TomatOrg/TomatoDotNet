@@ -66,14 +66,14 @@ static void output_type_name(RuntimeTypeInfo type, bool short_name) {
     printf("%U", type->Name);
 
     if (type->GenericArguments != NULL) {
-        printf("[");
+        printf("<");
         for (int i = 0; i < type->GenericArguments->Length; i++) {
             if (i != 0) {
                 printf(", ");
             }
             output_type_name(type->GenericArguments->Elements[i], short_name);
         }
-        printf("]");
+        printf(">");
     }
 }
 
@@ -213,8 +213,7 @@ int main() {
     RuntimeTypeInfo type;
     CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test", &type));
     CHECK(type != NULL);
-
-    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
+//    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
     CHECK_AND_RETHROW(dump_type(type));
 
 
