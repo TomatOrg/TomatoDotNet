@@ -458,7 +458,7 @@ static tdn_err_t tdn_parser_method_body(
             CHECK_AND_RETHROW(sig_parse_local_var_sig(
                     sig->signature,
                     assembly,
-                    methodBase->DeclaringType->GenericArguments, NULL,
+                    methodBase->DeclaringType->GenericArguments, methodBase->GenericArguments,
                     body));
         }
 
@@ -894,7 +894,7 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
         method_signature_t signature = {};
         CHECK_AND_RETHROW(sig_parse_method_def(
                 method_def->signature, assembly,
-                type->GenericArguments, NULL,
+                type->GenericArguments, base->GenericArguments,
                 &signature));
         base->Parameters = signature.parameters;
         base->ReturnParameter = signature.return_parameter;
@@ -959,11 +959,15 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         if (last_object != NULL && current_object != last_object) {
             RuntimeTypeInfo_Array arr = GC_NEW_ARRAY(RuntimeTypeInfo, count);
             if (last_table == METADATA_TYPE_DEF) {
+                CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
                 ((RuntimeTypeInfo)last_object)->GenericArguments = arr;
                 ((RuntimeTypeInfo)last_object)->GenericTypeDefinition = last_object;
             } else {
-                // TODO: generic methods
-                CHECK_FAIL();
+                // only valid on methods, not on ctors
+                CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
+                CHECK(((Object)last_object)->ObjectType == tRuntimeMethodInfo);
+                ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
+                ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
             }
 
             // reset it
@@ -980,11 +984,15 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
     if (count != 0) {
         RuntimeTypeInfo_Array arr = GC_NEW_ARRAY(RuntimeTypeInfo, count);
         if (last_table == METADATA_TYPE_DEF) {
+            CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
             ((RuntimeTypeInfo)last_object)->GenericArguments = arr;
             ((RuntimeTypeInfo)last_object)->GenericTypeDefinition = last_object;
         } else {
-            // TODO: generic methods
-            CHECK_FAIL();
+            // only valid on methods, not on ctors
+            CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
+            CHECK(((Object)last_object)->ObjectType == tRuntimeMethodInfo);
+            ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
+            ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
         }
     }
 
@@ -1003,6 +1011,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         } else {
             param->BaseType = tObject;
         }
+        CHECK_AND_RETHROW(tdn_create_string_from_cstr(generic_param->name, &param->Name));
 
         // resolve it
         if (owner.table == METADATA_TYPE_DEF) {
@@ -1012,7 +1021,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         } else if (owner.table == METADATA_METHOD_DEF) {
             CHECK(owner.index != 0 && owner.index <= assembly->MethodDefs->Length);
             param->DeclaringMethod = assembly->MethodDefs->Elements[owner.index - 1];
-            CHECK_FAIL(); // TODO: method generic params
+            param->DeclaringMethod->GenericArguments->Elements[generic_param->number] = param;
         } else {
             CHECK_FAIL();
         }
@@ -1117,12 +1126,12 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         type->Attributes.Value = (int)type_def->flags;
     }
 
-    // load all the generics type information
-    CHECK_AND_RETHROW(assembly_load_generics(assembly));
-
     // load all the methods and fields
     CHECK_AND_RETHROW(assembly_load_methods(assembly));
     CHECK_AND_RETHROW(assembly_load_fields(assembly));
+
+    // load all the generics type information
+    CHECK_AND_RETHROW(assembly_load_generics(assembly));
 
     push_type_queue();
     pushed_type_queue = true;

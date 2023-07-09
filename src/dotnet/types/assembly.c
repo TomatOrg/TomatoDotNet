@@ -80,6 +80,7 @@ tdn_err_t tdn_assembly_lookup_method(
 
                 if (!tdn_compare_string_to_cstr(m->Name, ref->name)) continue;
                 if (m->Parameters->Length != signature.parameters->Length) continue;
+                if (m->GenericArguments->Length != signature.generic_param_count) continue;
                 if (m->ReturnParameter->ParameterType != signature.return_parameter->ParameterType) continue;
 
                 // compare the parameter types

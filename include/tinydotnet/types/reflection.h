@@ -1,6 +1,7 @@
 #pragma once
 
 #include "basic.h"
+#include <stddef.h>
 
 typedef struct RuntimeAssembly* RuntimeAssembly;
 
@@ -176,6 +177,13 @@ typedef struct MethodBase {
 }* MethodBase;
 DEFINE_ARRAY(MethodBase)
 
+typedef struct RuntimeMethodInfo* RuntimeMethodInfo;
+
+typedef struct generic_method_instance {
+    size_t key;
+    RuntimeMethodInfo value;
+} generic_method_instance_t;
+
 // NOTE: does not exists, just used as a common type
 //       for our classes
 typedef struct RuntimeMethodBase {
@@ -185,18 +193,27 @@ typedef struct RuntimeMethodBase {
     MethodImplAttributes MethodImplFlags;
     RuntimeMethodBody MethodBody;
     ParameterInfo ReturnParameter;
+
+    // TODO: can we move this to be in RuntimeMethodInfo? do we want to?
+    RuntimeTypeInfo_Array GenericArguments;
+    RuntimeMethodInfo GenericMethodDefinition;
+    generic_method_instance_t* GenericMethodInstances;
 }* RuntimeMethodBase;
 DEFINE_ARRAY(RuntimeMethodBase);
 
-typedef struct RuntimeMethodInfo {
+struct RuntimeMethodInfo {
     struct RuntimeMethodBase;
-}* RuntimeMethodInfo;
+};
 DEFINE_ARRAY(RuntimeMethodInfo);
 
 typedef struct RuntimeConstructorInfo {
     struct RuntimeMethodBase;
 }* RuntimeConstructorInfo;
 DEFINE_ARRAY(RuntimeConstructorInfo);
+
+tdn_err_t tdn_make_generic_method(RuntimeMethodInfo type,
+                                  RuntimeTypeInfo_Array arguments,
+                                  RuntimeMethodInfo* instance);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The assembly information we have

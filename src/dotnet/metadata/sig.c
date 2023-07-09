@@ -492,7 +492,9 @@ tdn_err_t sig_parse_method_def(blob_entry_t _blob, RuntimeAssembly assembly, Run
     CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &param_count));
 
     // Get the RetType
-    CHECK_AND_RETHROW(sig_parse_ret_type(blob, assembly, typeArgs, methodArgs, &signature->return_parameter));
+    CHECK_AND_RETHROW(sig_parse_ret_type(blob, assembly,
+                                         typeArgs, methodArgs,
+                                         &signature->return_parameter));
 
     // Get the Params
     signature->parameters = GC_NEW_ARRAY(ParameterInfo, param_count);

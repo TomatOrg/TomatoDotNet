@@ -178,9 +178,8 @@ tdn_err_t tdn_disasm_il(RuntimeMethodBase method) {
                 RuntimeMethodBase m = NULL;
                 CHECK_AND_RETHROW(tdn_assembly_lookup_method(
                         assembly, FETCH_U4(),
-                        method->DeclaringType->GenericArguments,
-//                        method->GenericArguments,
-                        NULL, &m));
+                        method->DeclaringType->GenericArguments, method->GenericArguments,
+                        &m));
 
                 if (!m->Attributes.Static) {
                     tdn_host_printf(" instance");

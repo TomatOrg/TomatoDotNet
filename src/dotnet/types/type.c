@@ -343,7 +343,6 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
         // for expansion
         RuntimeTypeInfo new_type = GC_NEW(RuntimeTypeInfo);
 
-        // TODO: validate the arguments are valid
         hmput(base->GenericTypeInstances, hash, new_type);
 
         // validate the make generic
