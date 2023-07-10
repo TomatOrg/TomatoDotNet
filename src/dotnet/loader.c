@@ -857,8 +857,9 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
     methods = 0;
     bool found_static_ctor = false;
     for (int i = 0; i < methods_count; i++) {
-        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
-        RuntimeMethodBase base = assembly->MethodDefs->Elements[type_def->method_list.index - 1 + i];
+        int idx = type_def->method_list.index + i;
+        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[idx - 1];
+        RuntimeMethodBase base = assembly->MethodDefs->Elements[idx - 1];
         MethodAttributes attributes = { .Attributes = method_def->flags };
 
         // get the correct version
@@ -898,6 +899,19 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                 &signature));
         base->Parameters = signature.parameters;
         base->ReturnParameter = signature.return_parameter;
+
+        // get parameter information from the params table
+        size_t params_count = (idx == assembly->Metadata->method_defs_count ?
+                               assembly->Metadata->params_count :
+                               method_def[1].param_list.index - 1) - (method_def->param_list.index - 1);
+        CHECK(params_count <= base->Parameters->Length + 1);
+        for (int pi = 0; pi < params_count; pi++) {
+            metadata_param_t* param = &assembly->Metadata->params[method_def->param_list.index - 1 + pi];
+            CHECK(param->sequence < base->Parameters->Length + 1);
+            ParameterInfo info = param->sequence == 0 ? base->ReturnParameter : base->Parameters->Elements[param->sequence - 1];
+            info->Attributes = (ParameterAttributes){ .Attributes = param->flags };
+            CHECK_AND_RETHROW(tdn_create_string_from_cstr(param->name, &info->Name));
+        }
 
         // validate the signatures of ctor and cctor
         if (base->Attributes.RTSpecialName) {
@@ -1035,7 +1049,14 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect nested classes
-    // TODO: this
+    for (int i = 0; i < assembly->Metadata->nested_classes_count; i++) {
+        metadata_nested_class_t* nest = &assembly->Metadata->nested_classes[i];
+        RuntimeTypeInfo nested, enclosing;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, nest->enclosing_class.token, NULL, NULL, &enclosing));
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, nest->nested_class.token, NULL, NULL, &nested));
+        nested->DeclaringType = enclosing;
+        // TODO: append to the correct class
+    }
 
     // connect class layout
     for (int i = 0; i < assembly->Metadata->class_layout_count; i++) {
