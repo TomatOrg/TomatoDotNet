@@ -1,6 +1,4 @@
-#include <tinydotnet/disasm.h>
-#include "util/except.h"
-#include "dotnet/types.h"
+#include "disasm.h"
 
 typedef enum opcode_operand {
     InlineNone,
@@ -33,7 +31,8 @@ typedef struct disasm_opcode {
 static disasm_opcode_t m_opcodes[] = {
 #define OPDEF_REAL_OPCODES_ONLY
 #define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) (disasm_opcode_t){ s, args, l, s1, s2 },
-#include "opcode.def"
+#include "tinydotnet/opcode.def"
+
 #undef OPDEF
 #undef OPDEF_REAL_OPCODES_ONLY
 };

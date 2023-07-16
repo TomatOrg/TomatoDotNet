@@ -214,7 +214,7 @@ int main() {
     CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test", &type));
     CHECK(type != NULL);
 //    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
-    CHECK_AND_RETHROW(dump_type(type));
+//    CHECK_AND_RETHROW(dump_type(type));
 
 
 

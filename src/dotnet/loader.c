@@ -10,6 +10,7 @@
 #include "dotnet/metadata/sig.h"
 #include "util/stb_ds.h"
 #include "tinydotnet/jit/jit.h"
+#include "dotnet/jit/jit_internal.h"
 #include <tinydotnet/types/type.h>
 
 typedef struct memory_file_handle {
@@ -626,6 +627,23 @@ cleanup:
     return err;
 }
 
+static tdn_err_t corelib_jit_types(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK_AND_RETHROW(tdn_jit_init());
+
+    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
+        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
+    }
+
+    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
+        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
@@ -1177,6 +1195,10 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     // finish up with bootstrapping if this is the corelib
     if (mCoreAssembly == NULL) {
+        // jit all the types required
+        // for the runtime to work
+        CHECK_AND_RETHROW(corelib_jit_types(assembly));
+
         mCoreAssembly = assembly;
     }
 
