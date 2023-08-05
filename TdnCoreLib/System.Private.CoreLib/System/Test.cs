@@ -3,14 +3,14 @@ namespace System;
 public class Test
 {
     
-    public T Do<T>(T a)
+    public int Do(int a, int b)
     {
-        return a;
+        if (a == b)
+        {
+            return -1;
+        }
+
+        return a > b ? b : a;
     }
-    
-    // public int Do()
-    // {
-    //     return Do<int>(123);
-    // }
     
 }

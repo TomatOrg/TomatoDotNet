@@ -56,7 +56,7 @@ static tdn_err_t pe_get_header(pe_loader_context_t* context, IMAGE_NT_HEADERS32*
     // check each section
     uint32_t number_of_sections = header->FileHeader.NumberOfSections;
 
-    for (int i = 0; i < number_of_sections; i++) {
+    for (size_t i = 0; i < number_of_sections; i++) {
         IMAGE_SECTION_HEADER section_header;
         CHECK_AND_RETHROW(context->read_file(context->handle, section_header_offset, sizeof(section_header), &section_header));
 
@@ -89,11 +89,11 @@ cleanup:
     return err;
 }
 
-static bool pe_is_in_image(pe_loader_context_t* context, void* ptr, size_t size) {
-    if (ptr <= context->image_address) return false;
-    uintptr_t rva = (uintptr_t)ptr - (uintptr_t)context->image_address;
-    return rva + size <= context->image_size;
-}
+//static bool pe_is_in_image(pe_loader_context_t* context, void* ptr, size_t size) {
+//    if (ptr <= context->image_address) return false;
+//    uintptr_t rva = (uintptr_t)ptr - (uintptr_t)context->image_address;
+//    return rva + size <= context->image_size;
+//}
 
 static void* loader_image_address(pe_loader_context_t* context, uintptr_t address) {
     if (address >= context->image_size) {
@@ -129,7 +129,7 @@ tdn_err_t pe_load_image(pe_file_t* pe_file) {
 
     // load each section of the image
     IMAGE_SECTION_HEADER* section = first_section;
-    for (int i = 0; i < number_of_sections; i++) {
+    for (size_t i = 0; i < number_of_sections; i++) {
         // read the section
         size_t size = section->Misc.VirtualSize;
         if (size == 0 || size > section->SizeOfRawData) {

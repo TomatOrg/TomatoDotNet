@@ -41,7 +41,14 @@ void tdn_host_printf(const char* format, ...) {
 }
 
 void* tdn_host_mallocz(size_t size) {
-    return calloc(1, size);
+    void* ptr = malloc(size);
+    if (ptr == NULL) return NULL;
+    memset(ptr, 0, size);
+    return ptr;
+}
+
+void* tdn_host_realloc(void* ptr, size_t size) {
+    return realloc(ptr, size);
 }
 
 void tdn_host_free(void* ptr) {

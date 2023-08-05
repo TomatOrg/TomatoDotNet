@@ -26,7 +26,7 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {
     //       stuff like namespace will arrive alot
 
     // and finally fill it
-    for (int i = 0; i < len; i++) {
+    for (size_t i = 0; i < len; i++) {
         new_str->Chars[i] = (Char)cstr[i];
     }
 
@@ -59,7 +59,7 @@ tdn_err_t tdn_append_cstr_to_string(String str, const char* cstr, String* out_st
     memcpy(new_str->Chars, str->Chars, str->Length * sizeof(Char));
 
     // and finally fill it
-    for (int i = 0; i < len; i++) {
+    for (size_t i = 0; i < len; i++) {
         new_str->Chars[str->Length + i] = (Char)cstr[i];
     }
 

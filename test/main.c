@@ -7,6 +7,8 @@
 #include "dotnet/gc/gc.h"
 #include "dotnet/loader.h"
 #include "tinydotnet/disasm.h"
+#include "tinydotnet/jit/jit.h"
+#include "dotnet/jit/jit_internal.h"
 
 #include <tinydotnet/tdn.h>
 #include <printf.h>
@@ -173,7 +175,7 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
 
         if (method->MethodBody != NULL) {
             printf(" {\n");
-            CHECK_AND_RETHROW(tdn_disasm_il(method));
+//            CHECK_AND_RETHROW(tdn_disasm_il(method, ));
             TRACE("\t}");
             TRACE("");
         } else {
@@ -195,7 +197,7 @@ int main() {
     register_printf_specifier('U', string_output, string_arginf_sz);
 
     // load the test image
-    file = fopen("/home/tomato/RiderProjects/TdnCoreLib/System.Private.CoreLib/bin/Debug/net7.0/System.Private.CoreLib.dll", "rb");
+    file = fopen("TdnCoreLib/System.Private.CoreLib/bin/Release/net7.0/System.Private.CoreLib.dll", "rb");
     CHECK_ERROR(file != NULL, -errno);
     fseek(file, 0, SEEK_END);
     size_t size = ftell(file);
@@ -213,6 +215,9 @@ int main() {
     RuntimeTypeInfo type;
     CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test", &type));
     CHECK(type != NULL);
+
+    CHECK_AND_RETHROW(tdn_jit_method((RuntimeMethodBase)type->DeclaredMethods->Elements[0]));
+
 //    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
 //    CHECK_AND_RETHROW(dump_type(type));
 

@@ -112,7 +112,7 @@ typedef struct RuntimeMethodBody {
     struct Object Object;
     RuntimeLocalVariableInfo_Array LocalVariables;
     uint8_t* IL;
-    int ILSize;
+    uint32_t ILSize;
     int LocalSignatureMetadataToken;
     int MaxStackSize;
     bool InitLocals;

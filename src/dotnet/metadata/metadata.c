@@ -434,7 +434,7 @@ static tdn_err_t expand_metadata_table(metadata_loader_context_t* context, int t
     void* entry = entries;
     void* entry_current = entry;
     void* stream_current = stream;
-    for (int e = 0; e < context->tables[table].row_count; e++) {
+    for (size_t e = 0; e < context->tables[table].row_count; e++) {
         for (int i = 0; ops[i] != DONE; i++) {
             switch (ops[i]) {
                 case GET_TABLE_START ... GET_TABLE_END: {
@@ -710,7 +710,7 @@ cleanup:
 }
 
 void dotnet_free_file(dotnet_file_t* file) {
-    for (int i = 0; i < ARRAY_LENGTH(file->tables); i++) {
+    for (size_t i = 0; i < ARRAY_LENGTH(file->tables); i++) {
         tdn_host_free(file->tables[i].entries);
         file->tables[i].entries = NULL;
     }

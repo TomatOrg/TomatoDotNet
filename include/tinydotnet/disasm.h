@@ -10,6 +10,7 @@
 typedef enum tdn_il_operand {
     TDN_IL_NO_OPERAND,
     TDN_IL_VARIABLE,
+    TDN_IL_INT8,
     TDN_IL_INT32,
     TDN_IL_INT64,
     TDN_IL_FLOAT32,
@@ -30,11 +31,12 @@ typedef enum tdn_il_control_flow {
     TDN_IL_BRANCH,
     TDN_IL_COND_BRANCH,
     TDN_IL_THROW,
+    TDN_IL_META,
 } tdn_il_control_flow_t;
 
 typedef enum tdn_il_opcode {
 #define OPDEF_REAL_OPCODES_ONLY
-#define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) c = (((0xff - (s1)) << 16) + (s2)),
+#define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) c = (((REFPRE - (s1)) << 8) + (s2)),
 #include "tinydotnet/opcode.def"
 #undef OPDEF
 #undef OPDEF_REAL_OPCODES_ONLY
@@ -48,8 +50,10 @@ typedef struct tdn_il_inst {
     tdn_il_operand_t operand_type;
     union {
         uint16_t variable;
+        int32_t int8;
         int32_t int32;
         int64_t int64;
+        uint32_t uint8;
         uint32_t uint32;
         uint64_t uint64;
         float float32;
@@ -61,8 +65,13 @@ typedef struct tdn_il_inst {
         String string;
     } operand;
 
+    // the length of the current instruction
+    size_t length;
+
     // the operand control flow
     tdn_il_control_flow_t control_flow;
 } tdn_il_inst_t;
 
-tdn_err_t tdn_disasm_inst(tdn_il_inst_t* );
+const char* tdn_get_opcode_name(tdn_il_opcode_t opcode);
+
+tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* inst);

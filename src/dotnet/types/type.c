@@ -246,7 +246,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
     // count the ctors, we already verified the attributes properly
     int ctors = 0;
     int methods = 0;
-    for (int i = 0; i < methods_count; i++) {
+    for (size_t i = 0; i < methods_count; i++) {
         metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
         MethodAttributes attributes = { .Attributes = method_def->flags };
         if (attributes.RTSpecialName) {
@@ -261,8 +261,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
     type->DeclaredMethods = GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
     methods = 0;
-    bool found_static_ctor = false;
-    for (int i = 0; i < methods_count; i++) {
+    for (size_t i = 0; i < methods_count; i++) {
         metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
         MethodAttributes attributes = { .Attributes = method_def->flags };
 
