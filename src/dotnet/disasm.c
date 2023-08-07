@@ -181,3 +181,51 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
 cleanup:
     return err;
 }
+
+void tdn_normalize_inst(tdn_il_inst_t* inst) {
+    switch (inst->opcode) {
+        case CEE_LDARG_0: inst->opcode = CEE_LDARG; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 0; break;
+        case CEE_LDARG_1: inst->opcode = CEE_LDARG; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 1; break;
+        case CEE_LDARG_2: inst->opcode = CEE_LDARG; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 2; break;
+        case CEE_LDARG_3: inst->opcode = CEE_LDARG; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 3; break;
+        case CEE_LDLOC_0: inst->opcode = CEE_LDLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 0; break;
+        case CEE_LDLOC_1: inst->opcode = CEE_LDLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 1; break;
+        case CEE_LDLOC_2: inst->opcode = CEE_LDLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 2; break;
+        case CEE_LDLOC_3: inst->opcode = CEE_LDLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 3; break;
+        case CEE_STLOC_0: inst->opcode = CEE_STLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 0; break;
+        case CEE_STLOC_1: inst->opcode = CEE_STLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 1; break;
+        case CEE_STLOC_2: inst->opcode = CEE_STLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 2; break;
+        case CEE_STLOC_3: inst->opcode = CEE_STLOC; inst->operand_type = TDN_IL_VARIABLE; inst->operand.variable = 3; break;
+        case CEE_LDARG_S: inst->opcode = CEE_LDARG; break;
+        case CEE_LDARGA_S: inst->opcode = CEE_LDARGA; break;
+        case CEE_STARG_S: inst->opcode = CEE_STARG; break;
+        case CEE_LDLOC_S: inst->opcode = CEE_LDLOC; break;
+        case CEE_LDLOCA_S: inst->opcode = CEE_LDLOCA; break;
+        case CEE_STLOC_S: inst->opcode = CEE_STLOC; break;
+        case CEE_LDC_I4_M1: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = -1; break;
+        case CEE_LDC_I4_0: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 0; break;
+        case CEE_LDC_I4_1: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 1; break;
+        case CEE_LDC_I4_2: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 2; break;
+        case CEE_LDC_I4_3: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 3; break;
+        case CEE_LDC_I4_4: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 4; break;
+        case CEE_LDC_I4_5: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 5; break;
+        case CEE_LDC_I4_6: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 6; break;
+        case CEE_LDC_I4_7: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 7; break;
+        case CEE_LDC_I4_8: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = 8; break;
+        case CEE_LDC_I4_S: inst->opcode = CEE_LDC_I4; inst->operand_type = TDN_IL_INT32; inst->operand.int32 = inst->operand.int8; break;
+        case CEE_BR_S: inst->opcode = CEE_BR; break;
+        case CEE_BRFALSE_S: inst->opcode = CEE_BRFALSE; break;
+        case CEE_BRTRUE_S: inst->opcode = CEE_BRTRUE; break;
+        case CEE_BEQ_S: inst->opcode = CEE_BEQ; break;
+        case CEE_BGE_S: inst->opcode = CEE_BGE; break;
+        case CEE_BGT_S: inst->opcode = CEE_BGT; break;
+        case CEE_BLE_S: inst->opcode = CEE_BLE; break;
+        case CEE_BLT_S: inst->opcode = CEE_BLT; break;
+        case CEE_BNE_UN_S: inst->opcode = CEE_BNE_UN; break;
+        case CEE_BGE_UN_S: inst->opcode = CEE_BGE_UN; break;
+        case CEE_BGT_UN_S: inst->opcode = CEE_BGT_UN; break;
+        case CEE_BLE_UN_S: inst->opcode = CEE_BLE_UN; break;
+        case CEE_BLT_UN_S: inst->opcode = CEE_BLT_UN; break;
+        default: break;
+    }
+}

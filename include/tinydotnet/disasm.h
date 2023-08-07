@@ -75,3 +75,8 @@ typedef struct tdn_il_inst {
 const char* tdn_get_opcode_name(tdn_il_opcode_t opcode);
 
 tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* inst);
+
+/**
+ * Convert to a more generic version for easier processing
+ */
+void tdn_normalize_inst(tdn_il_inst_t* inst);

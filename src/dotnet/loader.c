@@ -632,13 +632,13 @@ static tdn_err_t corelib_jit_types(RuntimeAssembly assembly) {
 
     CHECK_AND_RETHROW(tdn_jit_init());
 
-    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
-    }
-
-    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
-    }
+//    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
+//        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
+//    }
+//
+//    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
+//        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
+//    }
 
 cleanup:
     return err;

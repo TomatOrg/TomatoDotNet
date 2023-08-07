@@ -15,6 +15,10 @@ bool tdn_type_is_valuetype(RuntimeTypeInfo type) {
             type->BaseType == tEnum;
 }
 
+bool tdn_type_is_referencetype(RuntimeTypeInfo type) {
+    return !tdn_type_is_valuetype(type);
+}
+
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -109,6 +113,7 @@ tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     new_type->EndFillingHeapSize = 1;
     new_type->FillingStackSize = 1;
     new_type->EndFillingStackSize = 1;
+    new_type->IsByRef = 1;
 
     // set the array type, because in the mean time someone could
     // have created the instance already, we are going to just let

@@ -217,6 +217,7 @@ int main() {
     CHECK(type != NULL);
 
     CHECK_AND_RETHROW(tdn_jit_method((RuntimeMethodBase)type->DeclaredMethods->Elements[0]));
+    tdn_jit_dump();
 
 //    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
 //    CHECK_AND_RETHROW(dump_type(type));

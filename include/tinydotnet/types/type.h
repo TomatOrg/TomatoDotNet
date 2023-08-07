@@ -114,6 +114,7 @@ typedef struct RuntimeTypeInfo {
     uint32_t EndFillingHeapSize : 1;
     uint32_t QueuedTypeInit : 1;
     uint32_t IsGenericParameter : 1;
+    uint32_t IsByRef : 1;
 }* RuntimeTypeInfo;
 
 static inline bool tdn_type_is_generic(RuntimeTypeInfo type) { return type->GenericArguments != NULL; }
@@ -125,6 +126,7 @@ static inline bool tdn_is_generic_type_parameter(RuntimeTypeInfo type) { return 
 bool tdn_type_contains_generic_parameters(RuntimeTypeInfo type);
 
 bool tdn_type_is_valuetype(RuntimeTypeInfo type);
+bool tdn_type_is_referencetype(RuntimeTypeInfo type);
 
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type,
                              RuntimeTypeInfo* out_type);
