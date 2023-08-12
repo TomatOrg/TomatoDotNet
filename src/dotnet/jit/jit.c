@@ -114,31 +114,42 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
     // get the rest of the blocks by creating the labels
     uint32_t pc = 0;
+    tdn_il_control_flow_t flow_control = TDN_IL_NEXT;
     while (pc != ctx->method->MethodBody->ILSize) {
         // decode instruction
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
-        pc += inst.length;
-
-        // check it, we already verify the target is inside of the current function
-        // TODO: switch
+        // check the operand if it has any target, if it has we need to create all
+        // the related labels
+        // TODO: do switch
         if (inst.operand_type == TDN_IL_BRANCH_TARGET) {
             // add label for the destination
             jit_label_t* label = jit_add_label(&labels, inst.operand.branch_target);
             if (label != NULL) {
                 label->block = spidir_builder_create_block(builder);
             }
+        } else if (inst.operand_type == TDN_IL_SWITCH) {
+            CHECK_FAIL();
+        }
 
-            // if this is a conditional branch then we need
-            // to set the label for the next opcode as well
-            if (inst.control_flow == TDN_IL_COND_BRANCH) {
-                label = jit_add_label(&labels, pc);
-                if (label != NULL) {
-                    label->block = spidir_builder_create_block(builder);
-                }
+        // check how we got here, if we got here from one
+        // of the following control flows we need to add
+        // a label onto ourselves
+        if (
+            flow_control == TDN_IL_RETURN ||
+            flow_control == TDN_IL_BRANCH ||
+            flow_control == TDN_IL_COND_BRANCH ||
+            flow_control == TDN_IL_THROW
+        ) {
+            jit_label_t* label = jit_add_label(&labels, pc);
+            if (label != NULL) {
+                label->block = spidir_builder_create_block(builder);
             }
         }
+
+        pc += inst.length;
+        flow_control = inst.control_flow;
     }
 
     // TODO: support protected blocks properly
@@ -148,9 +159,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     //
 
     pc = 0;
+    flow_control = TDN_IL_NEXT;
     int label_idx = 1; // skip the entry label,
                        // since its a special case
-    tdn_il_control_flow_t flow_control = TDN_IL_NEXT;
     while (pc != ctx->method->MethodBody->ILSize) {
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
@@ -171,6 +182,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             case TDN_IL_FIELD: tdn_host_printf(" %U:%U", inst.operand.field->DeclaringType->Name, inst.operand.field->Name); break; // TODO: better name printing
             case TDN_IL_TYPE: tdn_host_printf(" %U", inst.operand.type->Name); break; // TODO: better name printing
             case TDN_IL_STRING: tdn_host_printf(" %U", inst.operand.string); break;
+            case TDN_IL_SWITCH: CHECK_FAIL();
         }
         tdn_host_printf("\n");
 
@@ -179,8 +191,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
         // if we are coming from an instruction that can not jump to us
         // then we must first clear our stack
+        // TODO: if we already got a jump to here then we need to take that stack
         if (
-            flow_control == TDN_IL_BREAK ||
             flow_control == TDN_IL_RETURN ||
             flow_control == TDN_IL_BRANCH ||
             flow_control == TDN_IL_THROW
@@ -199,13 +211,15 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 has_label = true;
 
                 // can't have a label between a
-                // prefix and instruction
+                // prefix and instruction, it must jump
+                // to the first prefix
                 CHECK(flow_control != TDN_IL_META);
 
                 // check the last opcode to see how we got to this
                 // new label
                 if (
                     flow_control == TDN_IL_NEXT ||
+                    flow_control == TDN_IL_BREAK ||
                     flow_control == TDN_IL_CALL
                 ) {
                     CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
@@ -229,18 +243,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             }
         }
 
-        // if the previous instruction is one that does not
-        // fall through, make sure we have a label that gets
-        // to us
-        if (
-            flow_control == TDN_IL_BREAK ||
-            flow_control == TDN_IL_RETURN ||
-            flow_control == TDN_IL_BRANCH ||
-            flow_control == TDN_IL_THROW
-        ) {
-            CHECK(has_label);
-        }
-
         // TODO: control flow handling
 
         //
@@ -257,12 +259,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         jit_label_t* target_label = NULL;
         jit_label_t* next_label = NULL;
 
+        // if we have a branch target make sure we have the target label
         if (inst.operand_type == TDN_IL_BRANCH_TARGET) {
             target_label = jit_get_label(labels, inst.operand.branch_target);
             CHECK(target_label != NULL);
             // TODO: verify the stack consistency
         }
 
+        // if this is a cond branch make sure we have a next label
         if (inst.control_flow == TDN_IL_COND_BRANCH) {
             next_label = jit_get_label(labels, next_pc);
             CHECK(next_label != NULL);
@@ -274,6 +278,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         // TODO: split this to multiple functions in different places
         //
         switch (inst.opcode) {
+            // load an argument
             case CEE_LDARG: {
                 uint16_t arg = inst.operand.variable;
 
@@ -291,6 +296,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     arg_type = ctx->method->Parameters->Elements[param_arg]->ParameterType;
                 }
 
+                // TODO: how do we handle by-value struct types
+
                 // push the value
                 eval_stack_push(ctx->stack, arg_type, spidir_builder_build_param_ref(builder, arg));
             } break;
@@ -299,6 +306,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // Control flow
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            // unconditional branch
             case CEE_BR: {
                 CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
 
@@ -306,6 +314,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 spidir_builder_build_branch(builder, target_label->block);
             } break;
 
+            // conditional branches
             case CEE_BRFALSE:
             case CEE_BRTRUE: {
                 // pop the item
@@ -335,6 +344,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 spidir_builder_build_brcond(builder, cmp, target_label->block, next_label->block);
             } break;
 
+            // all the different compare and compare-and-branches
+            // that we have
             case CEE_BEQ:
             case CEE_BGE:
             case CEE_BGT:
@@ -427,6 +438,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 }
             } break;
 
+            // return value from the function
             case CEE_RET: {
                 RuntimeTypeInfo wanted_ret_type = method->ReturnParameter->ParameterType;
                 if (wanted_ret_type == tVoid) {
@@ -436,16 +448,20 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     spidir_value_t ret_value;
                     eval_stack_pop(&stack, builder, &ret_type, &ret_value);
 
-                    // TODO: type check we can return this type;
+                    // TODO: handle structs properly
+
+                    // make sure the type is a valid return target
+                    CHECK(tdn_type_verified_assignable_to(ret_type, wanted_ret_type));
 
                     spidir_builder_build_return(builder, ret_value);
                 }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Math related
+            // Stack manipulation
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            // Push an int32 to the stack
             case CEE_LDC_I4: {
                 // NOTE: we are treating the value as a uint32 so it will not sign extend it
                 eval_stack_push(&stack, tInt32,
@@ -453,7 +469,61 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                             SPIDIR_TYPE_I32, inst.operand.uint32));
             } break;
 
-            case CEE_ADD: {
+            // Push an int64
+            case CEE_LDC_I8: {
+                eval_stack_push(&stack, tInt64,
+                                spidir_builder_build_iconst(builder,
+                                                            SPIDIR_TYPE_I64, inst.operand.uint64));
+            } break;
+
+            // Pop a value and ignore it
+            case CEE_POP: {
+                // pop the value and ignore it
+                spidir_value_t value;
+                RuntimeTypeInfo value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value));
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Math related
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            // shifts
+            case CEE_SHL:
+            case CEE_SHR:
+            case CEE_SHR_UN: {
+                // pop the items
+                spidir_value_t value, shift_amount;
+                RuntimeTypeInfo value_type, shift_amount_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &shift_amount_type, &shift_amount));
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value));
+
+                // type check
+                CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
+                CHECK(shift_amount_type == tInt32 || shift_amount_type == tIntPtr);
+
+                // perform the operation
+                spidir_value_t result_value;
+                switch (inst.opcode) {
+                    case CEE_SHL: result_value = spidir_builder_build_shl(builder, value, shift_amount); break;
+                    case CEE_SHR: result_value = spidir_builder_build_ashr(builder, value, shift_amount); break;
+                    case CEE_SHR_UN: result_value = spidir_builder_build_lshr(builder, value, shift_amount); break;
+                    default: CHECK_FAIL();
+                }
+
+                // push it to the stack
+                CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, result_value));
+            } break;
+
+            // binary operations on either integers or floats
+            case CEE_ADD:
+            case CEE_SUB:
+            case CEE_AND:
+            case CEE_OR:
+            case CEE_XOR:
+            case CEE_MUL:
+            case CEE_DIV:
+            case CEE_DIV_UN: {
                 // pop the items
                 spidir_value_t value1, value2;
                 RuntimeTypeInfo value1_type, value2_type;
@@ -500,7 +570,68 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 }
 
                 // push it to the stack
-                eval_stack_push(&stack, result, result_value);
+                CHECK_AND_RETHROW(eval_stack_push(&stack, result, result_value));
+            } break;
+
+            // bitwise not, emulate with value ^ ~0
+            case CEE_NOT: {
+                // pop the item
+                spidir_value_t value;
+                RuntimeTypeInfo value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value));
+
+                // type check, also get the ones value for the width
+                // for the xor operation
+                spidir_value_t ones;
+                if (value_type == tInt32) {
+                    ones = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (uint32_t)~0u);
+                } else if (value_type == tInt64 || value_type == tIntPtr) {
+                    ones = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, (uint64_t)~0ull);
+                } else {
+                    CHECK_FAIL();
+                }
+
+                // create the operation
+                spidir_value_t result_value = spidir_builder_build_xor(builder, value, ones);
+
+                // push it to the stack
+                CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, result_value));
+            } break;
+
+            // negation, emulate with 0 - value
+            case CEE_NEG: {
+                // pop the item
+                spidir_value_t value;
+                RuntimeTypeInfo value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value));
+
+                // type check, also get the ones value for the width
+                // for the xor operation
+                spidir_value_type_t type;
+                if (value_type == tInt32) {
+                    type = SPIDIR_TYPE_I32;
+                } else if (value_type == tInt64 || value_type == tIntPtr) {
+                    type = SPIDIR_TYPE_I64;
+                } else {
+                    CHECK_FAIL();
+                }
+
+                // TODO: floating point
+
+                // create the operation
+                spidir_value_t zero = spidir_builder_build_iconst(builder, type, 0);
+                spidir_value_t result_value = spidir_builder_build_isub(builder, zero, value);
+
+                // push it to the stack
+                CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, result_value));
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Misc operations
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_NOP: {
+                // do nothing
             } break;
 
             default:

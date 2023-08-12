@@ -41,3 +41,13 @@ RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_reduced_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_verification_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_intermediate_type(RuntimeTypeInfo type);
+
+RuntimeTypeInfo tdn_get_direct_base_class(RuntimeTypeInfo T);
+
+bool tdn_type_array_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
+bool tdn_type_pointer_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
+
+bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
+bool tdn_type_compatible_with_location(RuntimeTypeInfo T, RuntimeTypeInfo U);
+bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U);
+bool tdn_type_verified_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R);

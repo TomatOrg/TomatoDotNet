@@ -20,6 +20,7 @@ typedef enum tdn_il_operand {
     TDN_IL_FIELD,
     TDN_IL_TYPE,
     TDN_IL_STRING,
+    TDN_IL_SWITCH,
     // TODO: some others
 } tdn_il_operand_t;
 

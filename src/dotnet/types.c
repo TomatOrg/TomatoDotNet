@@ -81,3 +81,153 @@ RuntimeTypeInfo tdn_get_intermediate_type(RuntimeTypeInfo type) {
     if (type == tSByte || type == tInt16) return tInt32;
     return type;
 }
+
+RuntimeTypeInfo tdn_get_direct_base_class(RuntimeTypeInfo T) {
+    // 1.
+    if (T->IsArray) {
+        return tArray;
+    }
+
+    // 2.
+    if (T->Attributes.Interface) {
+        return tObject;
+    }
+
+    // TODO: 3.
+
+    // 4.
+    return NULL;
+}
+
+bool tdn_type_array_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+    RuntimeTypeInfo V = tdn_get_underlying_type(T);
+    RuntimeTypeInfo W = tdn_get_underlying_type(U);
+
+    if (tdn_type_compatible_with(V, W)) {
+        return true;
+    }
+
+    if (tdn_get_reduced_type(V) == tdn_get_reduced_type(W)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+    // 1.
+    if (T == U) {
+        return true;
+    }
+
+    // TODO: 2.
+
+    // 3.
+    if (tdn_type_is_referencetype(T) && U == tdn_get_direct_base_class(T)) {
+        return true;
+    }
+
+    // TODO: 4.
+
+    // 5.
+    if (T->IsArray && U->IsArray) {
+        RuntimeTypeInfo V = T->ElementType;
+        RuntimeTypeInfo W = U->ElementType;
+        if (tdn_type_array_element_compatible_with(V, W)) {
+            return true;
+        }
+    }
+
+    // TODO: 6.
+
+    // TODO: 7.
+
+    // TODO: 8.
+
+    // TODO: 9.
+
+    return false;
+}
+
+bool tdn_type_pointer_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+    RuntimeTypeInfo V = tdn_get_verification_type(T);
+    RuntimeTypeInfo W = tdn_get_verification_type(U);
+    return V == W;
+}
+
+bool tdn_type_compatible_with_location(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+    if ((!T->IsByRef || !U->IsByRef) && tdn_type_compatible_with(T, U)) {
+        return true;
+    }
+
+    if (T->IsByRef && U->IsByRef && tdn_type_pointer_element_compatible_with(T, U)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+    // 1.
+    if (T == U) {
+        return true;
+    }
+
+    // TODO: 2
+
+    // 3.
+    RuntimeTypeInfo V = tdn_get_intermediate_type(T);
+    RuntimeTypeInfo W = tdn_get_intermediate_type(U);
+    if (V == W) {
+        return true;
+    }
+
+    // 4.
+    if (
+        (V == tIntPtr && W == tInt32) ||
+        (W == tIntPtr && V == tInt32)
+    ) {
+        return true;
+    }
+
+    // 5.
+    if (tdn_type_compatible_with(T, U)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool tdn_type_verified_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
+    RuntimeTypeInfo T = tdn_get_verification_type(Q);
+    RuntimeTypeInfo U = tdn_get_verification_type(R);
+
+    // 1.
+    if (T == U) {
+        return true;
+    }
+
+    // TODO: 2
+
+    // 3.
+    if (tdn_type_assignable_to(T, U)) {
+        return true;
+    }
+
+    // TODO: 4 need controlled-mutability
+
+    // TODO: 5 need controlled-mutability
+
+    // TODO: 6 need boxed
+
+    // TODO: 7 need boxed
+
+    // TODO: 8 need boxed
+
+    // 9.
+    if (T == NULL && tdn_type_is_referencetype(U)) {
+        return true;
+    }
+
+    return false;
+}
