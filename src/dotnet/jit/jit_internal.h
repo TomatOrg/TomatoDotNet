@@ -21,6 +21,12 @@ typedef struct eval_stack_item {
     bool stack_slot;
 } eval_stack_item_t;
 
+typedef struct eval_stack_alloc {
+    RuntimeTypeInfo key;
+    spidir_value_t* stack;
+    int depth;
+} eval_stack_alloc_t;
+
 typedef struct eval_stack {
     eval_stack_item_t* stack;
 
@@ -31,6 +37,8 @@ typedef struct eval_stack {
     spidir_value_t* ptrstack;
     int ptrdepth;
 
+    eval_stack_alloc_t* allocs;
+
     int max_depth;
 } eval_stack_t;
 
@@ -38,6 +46,11 @@ typedef struct eval_stack {
  * Push a new value to the eval stack
  */
 tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value);
+
+/**
+ * Pushes a new struct to the stack, giving
+ */
+tdn_err_t eval_stack_alloc(eval_stack_t* stack, spidir_builder_handle_t builder, RuntimeTypeInfo type, spidir_value_t* out_value);
 
 /**
  * Pop a value from the stack
@@ -54,6 +67,11 @@ tdn_err_t eval_stack_move_to_slots(eval_stack_t* stack, spidir_builder_handle_t 
  * Clear the eval stack
  */
 void eval_stack_clear(eval_stack_t* stack);
+
+/**
+ * Free the eval stack
+ */
+void eval_stack_free(eval_stack_t* stack);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit labels/blocks
@@ -115,25 +133,3 @@ typedef struct jit_context {
     // the next PC of the instruction
     uint32_t next_pc;
 } jit_context_t;
-
-static tdn_err_t jit_get_this_type(jit_context_t* ctx, RuntimeTypeInfo* out_type) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    if (ctx->method->Attributes.Static) {
-        *out_type = NULL;
-    } else if (tdn_type_is_valuetype(ctx->method->DeclaringType)) {
-        CHECK_AND_RETHROW(tdn_get_byref_type(ctx->method->DeclaringType, out_type));
-    } else {
-        *out_type = ctx->method->DeclaringType;
-    }
-
-cleanup:
-    return err;
-}
-
-#define JIT_THIS_TYPE \
-    ({ \
-        RuntimeTypeInfo __type; \
-        CHECK_AND_RETHROW(jit_get_this_type(ctx, &__type)); \
-        __type; \
-    })

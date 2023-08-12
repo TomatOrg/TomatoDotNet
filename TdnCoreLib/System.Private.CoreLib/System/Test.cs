@@ -2,10 +2,16 @@ namespace System;
 
 public class Test
 {
-    
-    public int Do(bool a)
+
+    public struct Lol
     {
-        return (a ? 1 : 0) + 1;
+        public int a;
+        public int b;
+    }
+    
+    public int Do(Lol a)
+    {
+        return a.b;
     }
     
 }

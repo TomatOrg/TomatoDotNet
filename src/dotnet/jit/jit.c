@@ -13,10 +13,32 @@
 
 static spidir_module_handle_t m_spidir_module;
 
+// buildin functions
+static spidir_function_t m_builtin_memset;
+static spidir_function_t m_builtin_memcpy;
+
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
 
     m_spidir_module = spidir_module_create();
+
+    //
+    // Create built-in types
+    //
+    m_builtin_memset = spidir_module_create_extern_function(m_spidir_module,
+                                         "memset",
+                                         SPIDIR_TYPE_PTR,
+                                         3, (spidir_value_type_t[]){
+                                                SPIDIR_TYPE_PTR,
+                                                SPIDIR_TYPE_I32,
+                                                SPIDIR_TYPE_I64 });
+    m_builtin_memcpy = spidir_module_create_extern_function(m_spidir_module,
+                                                            "memcpy",
+                                                            SPIDIR_TYPE_PTR,
+                                                            3, (spidir_value_type_t[]){
+                                                SPIDIR_TYPE_PTR,
+                                                SPIDIR_TYPE_PTR,
+                                                SPIDIR_TYPE_I64 });
 
 cleanup:
     return err;
@@ -36,7 +58,7 @@ void tdn_jit_dump() {
 // SPIDIR helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static spidir_value_type_t get_spidir_value_type(RuntimeTypeInfo type) {
+static spidir_value_type_t get_spidir_argument_type(RuntimeTypeInfo type) {
     if (
         type == tSByte || type == tByte ||
         type == tInt16 || type == tUInt16 ||
@@ -44,12 +66,8 @@ static spidir_value_type_t get_spidir_value_type(RuntimeTypeInfo type) {
         type == tBoolean
     ) {
         return SPIDIR_TYPE_I32;
-//    } else if (type == tSingle) {
-//
-//    } else if (type == tDouble) {
-
     } else if (type->BaseType == tEnum) {
-        return get_spidir_value_type(type->EnumUnderlyingType);
+        return get_spidir_argument_type(type->EnumUnderlyingType);
     } else if (
         type == tInt64 || type == tUInt64 ||
         type == tIntPtr || type == tUIntPtr
@@ -58,14 +76,40 @@ static spidir_value_type_t get_spidir_value_type(RuntimeTypeInfo type) {
     } else if (type == tVoid) {
         return SPIDIR_TYPE_NONE;
     } else if (tdn_type_is_valuetype(type)) {
-        // TODO: handle value types
-        __builtin_trap();
+        // pass by-reference, copied by the caller
+        return SPIDIR_TYPE_PTR;
     } else {
         // this is def a pointer
         return SPIDIR_TYPE_PTR;
     }
 }
 
+
+static spidir_value_type_t get_spidir_return_type(RuntimeTypeInfo type) {
+    if (
+        type == tSByte || type == tByte ||
+        type == tInt16 || type == tUInt16 ||
+        type == tInt32 || type == tUInt32 ||
+        type == tBoolean
+    ) {
+        return SPIDIR_TYPE_I32;
+    } else if (type->BaseType == tEnum) {
+        return get_spidir_return_type(type->EnumUnderlyingType);
+    } else if (
+        type == tInt64 || type == tUInt64 ||
+        type == tIntPtr || type == tUIntPtr
+    ) {
+        return SPIDIR_TYPE_I64;
+    } else if (type == tVoid) {
+        return SPIDIR_TYPE_NONE;
+    } else if (tdn_type_is_valuetype(type)) {
+        // argument is passed by reference
+        return SPIDIR_TYPE_NONE;
+    } else {
+        // this is def a pointer
+        return SPIDIR_TYPE_PTR;
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The jitter itself
@@ -78,14 +122,80 @@ static spidir_value_type_t get_spidir_value_type(RuntimeTypeInfo type) {
         b = __temp; \
     } while (0)
 
+/**
+ * Helper to check if a type is a struct type and not any other type
+ */
+static bool jit_is_struct_type(RuntimeTypeInfo type) {
+    type = tdn_get_intermediate_type(type);
+    return
+        tdn_type_is_valuetype(type) &&
+        type != tInt32 &&
+        type != tInt64 &&
+        type != tIntPtr;
+}
+
+/**
+ * Emit a memcpy with a known size
+ */
+static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
+    spidir_builder_build_call(builder, SPIDIR_TYPE_NONE, m_builtin_memcpy, 3,
+                              (spidir_value_t[]){
+                                        ptr1, ptr2,
+                                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, size)
+                                    });
+}
+
+static tdn_err_t jit_resolve_parameter_type(RuntimeMethodBase method, int arg, RuntimeTypeInfo* type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // resolve the argument type
+    RuntimeTypeInfo arg_type = NULL;
+    if (arg == 0 && !method->Attributes.Static) {
+        // non-static method's first arg is the this
+        if (tdn_type_is_valuetype(method->DeclaringType)) {
+            CHECK_AND_RETHROW(tdn_get_byref_type(method->DeclaringType, &arg_type));
+        } else {
+            arg_type = method->DeclaringType;
+        }
+
+    } else {
+        // this is not included in Parameters list
+        uint16_t param_arg = arg - (method->Attributes.Static ? 0 : 1);
+
+        // get the correct argument
+        CHECK(param_arg < method->Parameters->Length);
+        arg_type = method->Parameters->Elements[param_arg]->ParameterType;
+    }
+
+    // return it
+    *type = arg_type;
+
+cleanup:
+    return err;
+}
+
 static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     jit_context_t* ctx = _ctx;
     tdn_err_t err = TDN_NO_ERROR;
     jit_label_t* labels = NULL;
     RuntimeMethodBase method = ctx->method;
+    struct {
+        spidir_value_t value;
+        RuntimeTypeInfo type;
+        bool spilled;
+    }* args = NULL;
     eval_stack_t stack = {
         .max_depth = method->MethodBody->MaxStackSize
     };
+
+    // take into account the first parameter might be an implicit
+    // struct return pointer, we will just check if the stack size
+    // is larger than 64bit, which can't be anything other than a
+    // struct
+    int args_offset = 0;
+    if (method->ReturnParameter->ParameterType->StackSize > sizeof(uint64_t)) {
+        args_offset = 1;
+    }
 
     TRACE("%U::%U", ctx->method->DeclaringType->Name, ctx->method->Name);
 
@@ -97,6 +207,21 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // this is a valuetype, the this is a reference
             CHECK_AND_RETHROW(tdn_get_byref_type(this_type, &this_type));
         }
+    }
+
+    // prepare table that will either save an argument reference or a spill,
+    // fill with invalid entries
+    int arg_count = (method->Parameters->Length + (this_type == NULL ? 0 : 1));
+    args = tdn_host_mallocz(sizeof(*args) * arg_count);
+    CHECK(args != NULL);
+    for (int i = 0; i < arg_count; i++) {
+        // resolve the parameter type
+        RuntimeTypeInfo type;
+        CHECK_AND_RETHROW(jit_resolve_parameter_type(method, i, &type));
+
+        args[i].value = SPIDIR_VALUE_INVALID;
+        args[i].type = type;
+        args[i].spilled = false;
     }
 
     //
@@ -113,12 +238,40 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     spidir_builder_set_block(builder, entry_label->block);
 
     // get the rest of the blocks by creating the labels
+    bool spilled = false;
     uint32_t pc = 0;
     tdn_il_control_flow_t flow_control = TDN_IL_NEXT;
     while (pc != ctx->method->MethodBody->ILSize) {
         // decode instruction
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
+
+        // check if we need to spill an argument
+        if (inst.opcode == CEE_LDARGA || inst.opcode == CEE_STARG) {
+            int arg = inst.operand.variable;
+            CHECK(arg < arg_count);
+            RuntimeTypeInfo type = args[arg].type;
+
+            // create a stackslot for the spill
+            if (!args[arg].spilled) {
+                args[arg].value = spidir_builder_build_stackslot(builder, type->StackSize, type->StackAlignment);
+                args[arg].spilled = true;
+
+                // store it, if its a value-type we need to copy it instead
+                spidir_value_t param_ref = spidir_builder_build_param_ref(builder, args_offset + arg);
+                if (jit_is_struct_type(type)) {
+                    jit_emit_memcpy(builder,
+                                    args[arg].value,
+                                    param_ref,
+                                    type->StackSize);
+                } else {
+                    spidir_builder_build_store(builder, param_ref, args[arg].value);
+                }
+            }
+
+            // mark that we had a spill
+            spilled = true;
+        }
 
         // check the operand if it has any target, if it has we need to create all
         // the related labels
@@ -150,6 +303,16 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
         pc += inst.length;
         flow_control = inst.control_flow;
+    }
+
+    // if we had a spill, the label at the start is no longer
+    // actually at the start since it has spills, it should be
+    // right after that
+    if (spilled) {
+        spidir_block_t entry = entry_label->block;
+        entry_label->block = spidir_builder_create_block(builder);
+        spidir_builder_build_branch(builder, entry_label->block);
+        spidir_builder_set_block(builder, entry_label->block);
     }
 
     // TODO: support protected blocks properly
@@ -281,25 +444,112 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // load an argument
             case CEE_LDARG: {
                 uint16_t arg = inst.operand.variable;
+                CHECK(arg < arg_count);
 
-                // resolve the argument type
-                RuntimeTypeInfo arg_type = NULL;
-                if (arg == 0 && !ctx->method->Attributes.Static) {
-                    // non-static method's first arg is the this
-                    arg_type = JIT_THIS_TYPE;
+                // get the argument we are loading
+                RuntimeTypeInfo arg_type = tdn_get_intermediate_type(args[arg].type);
+
+                if (args[arg].spilled) {
+                    // was spilled, this is a stack slot
+                    if (jit_is_struct_type(arg_type)) {
+                        // use memcpy
+                        spidir_value_t location;
+                        CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, arg_type, &location));
+                        jit_emit_memcpy(builder, location, args[arg].value, arg_type->StackSize);
+                    } else if (arg_type == tInt32) {
+                        // use a 32bit load
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, arg_type,
+                                                          spidir_builder_build_load(builder, SPIDIR_TYPE_I32, args[arg].value)));
+                    } else if (arg_type == tInt64 || arg_type == tIntPtr) {
+                        // use a 64bit load
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, arg_type,
+                                                          spidir_builder_build_load(builder, SPIDIR_TYPE_I64, args[arg].value)));
+                    } else {
+                        // use a pointer load
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, arg_type,
+                                                          spidir_builder_build_load(builder, SPIDIR_TYPE_PTR, args[arg].value)));
+                    }
                 } else {
-                    // this is not included in Parameters list
-                    uint16_t param_arg = arg - (ctx->method->Attributes.Static ? 0 : 1);
+                    spidir_value_t param_ref = spidir_builder_build_param_ref(builder, args_offset + arg);
 
-                    // get the correct argument
-                    CHECK(param_arg < ctx->method->Parameters->Length);
-                    arg_type = ctx->method->Parameters->Elements[param_arg]->ParameterType;
+                    // was not spilled, this is a param-ref
+                    if (jit_is_struct_type(arg_type)) {
+                        // passed by pointer, memcpy to the stack
+                        spidir_value_t location;
+                        CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, arg_type, &location));
+                        jit_emit_memcpy(builder, location, param_ref, arg_type->StackSize);
+                    } else {
+                        // just push it
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, arg_type, param_ref));
+                    }
+                }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Object related
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+
+                // pop the item
+                spidir_value_t obj;
+                RuntimeTypeInfo obj_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &obj_type, &obj));
+
+                // check this is either an object or a managed pointer
+                CHECK(
+                    obj_type->IsByRef ||
+                    tdn_type_is_referencetype(obj_type) ||
+                    jit_is_struct_type(obj_type)
+                );
+
+                // TODO: verify the field is contained within the given object
+
+                // get the stack type of the field
+                RuntimeTypeInfo field_type = inst.operand.field->FieldType;
+                RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
+
+                // figure the pointer to the field itself
+                spidir_value_t field_ptr;
+                if (field->Attributes.Static) {
+                    // static field
+                    // TODO: emit a null-check?
+                    CHECK_FAIL();
+                } else {
+                    // instance field
+                    if (field->FieldOffset == 0) {
+                        // field is at offset zero, just load it
+                        field_ptr = obj;
+                    } else {
+                        // build an offset to the field
+                        field_ptr = spidir_builder_build_ptroff(builder, obj,
+                                                          spidir_builder_build_iconst(builder,
+                                                                                      SPIDIR_TYPE_I32,
+                                                                                      field->FieldOffset));
+                    }
                 }
 
-                // TODO: how do we handle by-value struct types
-
-                // push the value
-                eval_stack_push(ctx->stack, arg_type, spidir_builder_build_param_ref(builder, arg));
+                // perform the actual load
+                if (jit_is_struct_type(field_type)) {
+                    // we are copying a struct to the stack
+                    spidir_value_t value;
+                    CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, value_type, &value));
+                    jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
+                } else {
+                    // we are copying a simpler value
+                    // TODO: once supported set the load size
+                    spidir_value_type_t type;
+                    if (value_type == tInt32) {
+                        type = SPIDIR_TYPE_I32;
+                    } else if (value_type == tInt64 || value_type == tIntPtr) {
+                        type = SPIDIR_TYPE_I64;
+                    } else {
+                        type = SPIDIR_TYPE_PTR;
+                    }
+                    spidir_value_t value = spidir_builder_build_load(builder, type, field_ptr);
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
+                }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -479,9 +729,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // Pop a value and ignore it
             case CEE_POP: {
                 // pop the value and ignore it
-                spidir_value_t value;
-                RuntimeTypeInfo value_type;
-                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value));
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, NULL, NULL));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -648,9 +896,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
 cleanup:
     arrfree(labels);
-    arrfree(stack.stack);
-
-    return;
+    eval_stack_free(&stack);
+    tdn_host_free(args);
 }
 
 static tdn_err_t jit_method(jit_context_t* ctx) {
@@ -662,23 +909,22 @@ static tdn_err_t jit_method(jit_context_t* ctx) {
     // create the spidir function
     //
 
-    // handle the return value
-    spidir_value_type_t ret_type = get_spidir_value_type(method->ReturnParameter->ParameterType);
+    // handle the return value, we have a special case of returning a struct, if it can't be returned
+    // by value then it will be returned by passing an implicit pointer
+    spidir_value_type_t ret_type = get_spidir_return_type(method->ReturnParameter->ParameterType);
+    if (ret_type == SPIDIR_TYPE_NONE && method->ReturnParameter->ParameterType != tVoid) {
+        arrpush(params, SPIDIR_TYPE_PTR);
+    }
 
-    // handle the this argument
-    RuntimeTypeInfo this_type = NULL;
+    // handle the `this` argument, its always a
+    // pointer (byref for struct types)
     if (!method->Attributes.Static) {
-        this_type = method->DeclaringType;
-        if (tdn_type_is_valuetype(this_type)) {
-            // this is a valuetype, the this is a reference
-            CHECK_AND_RETHROW(tdn_get_byref_type(this_type, &this_type));
-        }
-        arrpush(params, get_spidir_value_type(this_type));
+        arrpush(params, SPIDIR_TYPE_PTR);
     }
 
     // handle the arguments
     for (size_t i = 0; i < method->Parameters->Length; i++) {
-        arrpush(params, get_spidir_value_type(method->Parameters->Elements[i]->ParameterType));
+        arrpush(params, get_spidir_argument_type(method->Parameters->Elements[i]->ParameterType));
     }
 
     // generate the name
@@ -694,8 +940,8 @@ static tdn_err_t jit_method(jit_context_t* ctx) {
 
     // create the function itself
     spidir_function_t func = spidir_module_create_function(
-            m_spidir_module,
-            test, ret_type, arrlen(params), params
+        m_spidir_module,
+        test, ret_type, arrlen(params), params
     );
 
     spidir_module_build_function(m_spidir_module, func, jit_method_callback, ctx);

@@ -120,12 +120,11 @@ tdn_err_t tdn_assembly_lookup_field(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
-//    token_t token = { .token = metadata_token };
-//    CHECK(token.table == METADATA_FIELD, "tdn_assembly_lookup_field: called with invalid table %02x", token.table);
-//    CHECK(token.index != 0 && token.index <= assembly->Fields->Length);
+    token_t token = { .token = metadata_token };
+    CHECK(token.table == METADATA_FIELD, "tdn_assembly_lookup_field: called with invalid table %02x", token.table);
+    CHECK(token.index != 0 && token.index <= assembly->Fields->Length);
 
-//    *field = assembly->Fields->Elements[token.index - 1];
-    CHECK_FAIL();
+    *field = assembly->Fields->Elements[token.index - 1];
 
 cleanup:
     return err;
