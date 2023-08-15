@@ -9,9 +9,9 @@ public class Test
         public int b;
     }
     
-    public int Do(Lol a)
+    public Lol Do(Lol[] a)
     {
-        return a.b;
+        return a[0];
     }
     
 }

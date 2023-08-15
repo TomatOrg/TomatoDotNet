@@ -518,8 +518,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // Object related
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_LDFLD: {
+            // load a field
+            case CEE_LDFLD:
+            case CEE_LDFLDA: {
                 RuntimeFieldInfo field = inst.operand.field;
+                bool ldarga = inst.opcode == CEE_LDFLDA;
 
                 // pop the item
                 spidir_value_t obj;
@@ -530,7 +533,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 CHECK(
                     obj_type->IsByRef ||
                     tdn_type_is_referencetype(obj_type) ||
-                    jit_is_struct_type(obj_type)
+                    (jit_is_struct_type(obj_type) && !ldarga)
                 );
 
                 // TODO: verify the field is contained within the given object
@@ -543,7 +546,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 spidir_value_t field_ptr;
                 if (field->Attributes.Static) {
                     // static field
-                    // TODO: emit a null-check?
+                    // TODO: get a pointer to the static field
                     CHECK_FAIL();
                 } else {
                     // instance field
@@ -554,30 +557,104 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                         // build an offset to the field
                         field_ptr = spidir_builder_build_ptroff(builder, obj,
                                                           spidir_builder_build_iconst(builder,
-                                                                                      SPIDIR_TYPE_I32,
+                                                                                      SPIDIR_TYPE_I64,
                                                                                       field->FieldOffset));
                     }
                 }
 
-                // perform the actual load
-                if (jit_is_struct_type(field_type)) {
-                    // we are copying a struct to the stack
-                    spidir_value_t value;
-                    CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, value_type, &value));
-                    jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
+                if (ldarga) {
+                    // TODO: emit null check
+
+                    // for reference to field we don't need the load
+                    CHECK_AND_RETHROW(tdn_get_byref_type(value_type, &value_type));
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, field_ptr));
                 } else {
-                    // we are copying a simpler value
-                    // TODO: once supported set the load size
-                    spidir_value_type_t type;
-                    if (value_type == tInt32) {
-                        type = SPIDIR_TYPE_I32;
-                    } else if (value_type == tInt64 || value_type == tIntPtr) {
-                        type = SPIDIR_TYPE_I64;
+                    // perform the actual load
+                    if (jit_is_struct_type(field_type)) {
+                        // we are copying a struct to the stack
+                        spidir_value_t value;
+                        CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, value_type, &value));
+                        jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
                     } else {
-                        type = SPIDIR_TYPE_PTR;
+                        // we are copying a simpler value
+                        // TODO: once supported set the load size
+                        spidir_value_type_t type;
+                        if (value_type == tInt32) {
+                            type = SPIDIR_TYPE_I32;
+                        } else if (value_type == tInt64 || value_type == tIntPtr) {
+                            type = SPIDIR_TYPE_I64;
+                        } else {
+                            type = SPIDIR_TYPE_PTR;
+                        }
+                        spidir_value_t value = spidir_builder_build_load(builder, type, field_ptr);
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
                     }
-                    spidir_value_t value = spidir_builder_build_load(builder, type, field_ptr);
-                    CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
+                }
+
+            } break;
+
+            // load an element from an array
+            case CEE_LDELEMA:
+            case CEE_LDELEM:
+            case CEE_LDELEM_REF: {
+                // pop the items
+                spidir_value_t index, array;
+                RuntimeTypeInfo index_type, array_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &index_type, &index));
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &array_type, &array));
+
+                // verify the types
+                CHECK(array_type->IsArray);
+                CHECK(index_type == tInt32 || index_type == tIntPtr);
+
+                // figure the element type
+                RuntimeTypeInfo type = inst.operand.type;
+                if (inst.opcode == CEE_LDELEM_REF) {
+                    // figure from the array, must be a pointer type
+                    type = array_type->ElementType;
+                    CHECK(tdn_type_is_referencetype(type));
+                } else {
+                    // make sure the wanted type matches the array type
+                    CHECK(tdn_type_array_element_compatible_with(array_type->ElementType, type));
+                }
+                RuntimeTypeInfo tracked = tdn_get_verification_type(type);
+
+                // TODO: length check
+
+                // build an offset to the element
+                spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tracked->StackSize);
+                spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tArray->HeapSize);
+                spidir_value_t byte_offset = spidir_builder_build_imul(builder, element_size, index);
+                spidir_value_t abs_offset = spidir_builder_build_iadd(builder, array_size, byte_offset);
+                spidir_value_t element_ptr = spidir_builder_build_ptroff(builder, array, abs_offset);
+
+                if (inst.opcode == CEE_LDELEMA) {
+                    // just need the address, we don't need an explicit null check
+                    // since we are going to get a fault on the length check if
+                    // the array is null
+                    CHECK_AND_RETHROW(tdn_get_byref_type(tracked, &tracked));
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, tracked, element_ptr));
+                } else {
+                    // perform the actual load
+                    if (jit_is_struct_type(tracked)) {
+                        // we are copying a struct to the stack
+                        spidir_value_t value;
+                        CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, tracked, &value));
+                        jit_emit_memcpy(builder, value, element_ptr, tracked->StackSize);
+                    } else {
+                        // we are copying a simpler value
+                        // TODO: once supported set the load size
+                        spidir_value_type_t spidir_type;
+                        if (tracked == tInt32) {
+                            spidir_type = SPIDIR_TYPE_I32;
+                        } else if (tracked == tInt64 || tracked == tIntPtr) {
+                            spidir_type = SPIDIR_TYPE_I64;
+                        } else {
+                            spidir_type = SPIDIR_TYPE_PTR;
+                        }
+                        spidir_value_t value = spidir_builder_build_load(builder, spidir_type, element_ptr);
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, tracked, value));
+                    }
                 }
             } break;
 
@@ -727,12 +804,23 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     spidir_value_t ret_value;
                     eval_stack_pop(&stack, builder, &ret_type, &ret_value);
 
-                    // TODO: handle structs properly
-
                     // make sure the type is a valid return target
                     CHECK(tdn_type_verified_assignable_to(ret_type, wanted_ret_type));
 
-                    spidir_builder_build_return(builder, ret_value);
+                    if (jit_is_struct_type(ret_type)) {
+                        // returning a struct, need to use the implicit
+                        // ret pointer
+                        jit_emit_memcpy(builder,
+                                        spidir_builder_build_param_ref(builder, 0),
+                                        ret_value,
+                                        ret_type->StackSize);
+
+                        // and return without a ret value
+                        spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
+                    } else {
+                        // returning a normal pointer sized thing
+                        spidir_builder_build_return(builder, ret_value);
+                    }
                 }
             } break;
 
