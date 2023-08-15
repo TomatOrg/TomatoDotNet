@@ -33,11 +33,11 @@ tdn_err_t eval_stack_alloc(eval_stack_t* stack, spidir_builder_handle_t builder,
     CHECK(arrlen(stack->stack) + 1 <= stack->max_depth);
 
     // get the type allocation
-    eval_stack_alloc_t* alloc = hmgetp_null(stack->allocs, type);
+    eval_stack_value_instance_t* alloc = hmgetp_null(stack->instance_stacks, type);
     if (alloc == NULL) {
-        eval_stack_alloc_t temp = { .key = type };
-        hmputs(stack->allocs, temp);
-        alloc = hmgetp_null(stack->allocs, type);
+        eval_stack_value_instance_t temp = { .key = type };
+        hmputs(stack->instance_stacks, temp);
+        alloc = hmgetp_null(stack->instance_stacks, type);
         CHECK(alloc != NULL);
     }
 
@@ -88,7 +88,7 @@ tdn_err_t eval_stack_pop(eval_stack_t* stack, spidir_builder_handle_t builder, R
             stack->ptrdepth--;
             type = SPIDIR_TYPE_PTR;
         } else {
-            eval_stack_alloc_t* alloc = hmgetp_null(stack->allocs, item.type);
+            eval_stack_value_instance_t* alloc = hmgetp_null(stack->instance_stacks, item.type);
             CHECK(alloc != NULL);
             alloc->depth--;
         }
@@ -184,6 +184,55 @@ cleanup:
     return err;
 }
 
+tdn_err_t eval_stack_snapshot(eval_stack_t* stack, eval_stack_snapshot_t* out) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    arrsetlen(out->stack, arrlen(stack->stack));
+    for (int i = 0; i < arrlen(stack->stack); i++) {
+        out->stack[i].type = stack->stack[i].type;
+    }
+
+    out->initialized = true;
+
+cleanup:
+    return err;
+}
+
+static RuntimeTypeInfo eval_stack_compare(RuntimeTypeInfo S, RuntimeTypeInfo T) {
+    // 1.
+    if (tdn_type_verified_assignable_to(T, S)) {
+        return S;
+    }
+
+    // 2.
+    if (tdn_type_verified_assignable_to(S, T)) {
+        return T;
+    }
+
+    // TODO: 3.
+
+    return NULL;
+}
+
+tdn_err_t eval_stack_merge(eval_stack_t* stack, eval_stack_snapshot_t* snapshot, bool modify) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(arrlen(stack->stack) == arrlen(snapshot->stack));
+
+    for (int i = 0; i < arrlen(stack->stack); i++) {
+        RuntimeTypeInfo S = eval_stack_compare(stack->stack[i].type, snapshot->stack[i].type);
+        if (stack->stack[i].type != S) {
+            CHECK(modify);
+            stack->stack[i].type = S;
+            snapshot->stack[i].type = S;
+        }
+    }
+
+cleanup:
+    return err;
+
+}
+
 void eval_stack_clear(eval_stack_t* stack) {
     // free the current stack
     arrfree(stack->stack);
@@ -192,8 +241,8 @@ void eval_stack_clear(eval_stack_t* stack) {
     stack->i32depth = 0;
     stack->i64depth = 0;
     stack->ptrdepth = 0;
-    for (int i = 0; i < hmlen(stack->allocs); i++) {
-        stack->allocs[i].depth = 0;
+    for (int i = 0; i < hmlen(stack->instance_stacks); i++) {
+        stack->instance_stacks[i].depth = 0;
     }
 }
 
@@ -202,8 +251,8 @@ void eval_stack_free(eval_stack_t* stack) {
     arrfree(stack->i32stack);
     arrfree(stack->i64stack);
     arrfree(stack->ptrstack);
-    for (int i = 0; i < hmlen(stack->allocs); i++) {
-        arrfree(stack->allocs[i].stack);
+    for (int i = 0; i < hmlen(stack->instance_stacks); i++) {
+        arrfree(stack->instance_stacks[i].stack);
     }
-    hmfree(stack->allocs);
+    hmfree(stack->instance_stacks);
 }

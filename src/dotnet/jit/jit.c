@@ -352,17 +352,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         // normalize the instruction for easier processing now that we printed it
         tdn_normalize_inst(&inst);
 
-        // if we are coming from an instruction that can not jump to us
-        // then we must first clear our stack
-        // TODO: if we already got a jump to here then we need to take that stack
-        if (
-            flow_control == TDN_IL_RETURN ||
-            flow_control == TDN_IL_BRANCH ||
-            flow_control == TDN_IL_THROW
-        ) {
-            eval_stack_clear(&stack);
-        }
-
         // check if there are more labels, if we are at a label we
         // need to properly switch to it
         bool has_label = false;
@@ -371,12 +360,34 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // found the current label
                 jit_label_t* label = &labels[label_idx];
                 spidir_block_t block = label->block;
+                label->visited = true;
                 has_label = true;
 
                 // can't have a label between a
                 // prefix and instruction, it must jump
                 // to the first prefix
                 CHECK(flow_control != TDN_IL_META);
+
+                // check if we already have a stack slot at this location
+                if (label->snapshot.initialized) {
+                    // we do, perform a merge of the stack
+                    CHECK_AND_RETHROW(eval_stack_merge(&stack, &label->snapshot, true));
+                } else {
+                    // first we need to clear the stack if required
+                    // if we are coming from an instruction that can not jump to us
+                    // then we must first clear our stack
+                    // TODO: if we already got a jump to here then we need to take that stack
+                    if (
+                        flow_control == TDN_IL_RETURN ||
+                        flow_control == TDN_IL_BRANCH ||
+                        flow_control == TDN_IL_THROW
+                    ) {
+                        eval_stack_clear(&stack);
+                    }
+
+                    // and now take a snapshot of it
+                    CHECK_AND_RETHROW(eval_stack_snapshot(&stack, &label->snapshot));
+                }
 
                 // check the last opcode to see how we got to this
                 // new label
@@ -422,18 +433,36 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         jit_label_t* target_label = NULL;
         jit_label_t* next_label = NULL;
 
+        // TODO: do I have a way to not copy-paste this easily?
+
         // if we have a branch target make sure we have the target label
         if (inst.operand_type == TDN_IL_BRANCH_TARGET) {
             target_label = jit_get_label(labels, inst.operand.branch_target);
             CHECK(target_label != NULL);
-            // TODO: verify the stack consistency
+
+            // stack consistency check
+            if (target_label->snapshot.initialized) {
+                // we have a snapshot, perform a merge as needed, only modify if we have not visited it yet
+                CHECK_AND_RETHROW(eval_stack_merge(&stack, &target_label->snapshot, !target_label->visited));
+            } else {
+                // otherwise create a snapshot of our stack
+                CHECK_AND_RETHROW(eval_stack_snapshot(&stack, &target_label->snapshot));
+            }
         }
 
         // if this is a cond branch make sure we have a next label
         if (inst.control_flow == TDN_IL_COND_BRANCH) {
             next_label = jit_get_label(labels, next_pc);
             CHECK(next_label != NULL);
-            // TODO: verify the stack consistency
+
+            // stack consistency check
+            if (next_label->snapshot.initialized) {
+                // we have a snapshot, perform a merge as needed, only modify if we have not visited it yet
+                CHECK_AND_RETHROW(eval_stack_merge(&stack, &next_label->snapshot, !next_label->visited));
+            } else {
+                // otherwise create a snapshot of our stack
+                CHECK_AND_RETHROW(eval_stack_snapshot(&stack, &next_label->snapshot));
+            }
         }
 
         //
@@ -895,6 +924,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     CHECK(label_idx == arrlen(labels));
 
 cleanup:
+    for (int i = 0; i < arrlen(labels); i++) {
+        arrfree(labels->snapshot.stack);
+    }
     arrfree(labels);
     eval_stack_free(&stack);
     tdn_host_free(args);

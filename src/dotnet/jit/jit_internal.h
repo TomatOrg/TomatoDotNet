@@ -21,11 +21,11 @@ typedef struct eval_stack_item {
     bool stack_slot;
 } eval_stack_item_t;
 
-typedef struct eval_stack_alloc {
+typedef struct eval_stack_value_instance {
     RuntimeTypeInfo key;
     spidir_value_t* stack;
     int depth;
-} eval_stack_alloc_t;
+} eval_stack_value_instance_t;
 
 typedef struct eval_stack {
     eval_stack_item_t* stack;
@@ -37,10 +37,19 @@ typedef struct eval_stack {
     spidir_value_t* ptrstack;
     int ptrdepth;
 
-    eval_stack_alloc_t* allocs;
+    eval_stack_value_instance_t* instance_stacks;
 
     int max_depth;
 } eval_stack_t;
+
+typedef struct eval_stack_snapshot_item {
+    RuntimeTypeInfo type;
+} eval_stack_snapshot_item_t;
+
+typedef struct eval_stack_snapshot {
+    eval_stack_snapshot_item_t* stack;
+    bool initialized;
+} eval_stack_snapshot_t;
 
 /**
  * Push a new value to the eval stack
@@ -64,6 +73,21 @@ tdn_err_t eval_stack_pop(eval_stack_t* stack, spidir_builder_handle_t builder, R
 tdn_err_t eval_stack_move_to_slots(eval_stack_t* stack, spidir_builder_handle_t builder);
 
 /**
+ * Create a snapshot of the current eval stack, allowing
+ * to save it for a label
+ */
+tdn_err_t eval_stack_snapshot(eval_stack_t* stack, eval_stack_snapshot_t* out);
+
+/**
+ * Merge an eval-stack with a snapshot of the eval stack.
+ *
+ * if modify is false then the merge will only do a check, and if the check fails
+ * we will return an error, this is used whenever there is a backwards jump to a location
+ * we already jitted.
+ */
+tdn_err_t eval_stack_merge(eval_stack_t* stack, eval_stack_snapshot_t* snapshot, bool modify);
+
+/**
  * Clear the eval stack
  */
 void eval_stack_clear(eval_stack_t* stack);
@@ -78,8 +102,17 @@ void eval_stack_free(eval_stack_t* stack);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct jit_label {
+    // the address of the label
     uint32_t address;
+
+    // the spidir block of the label
     spidir_block_t block;
+
+    // the stack snapshot at the label's location
+    eval_stack_snapshot_t snapshot;
+
+    // did we visit this label already?
+    bool visited;
 } jit_label_t;
 
 // TODO: non-linear search
