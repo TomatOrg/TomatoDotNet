@@ -10,7 +10,7 @@
 #include "tinydotnet/jit/jit.h"
 #include "dotnet/jit/jit_internal.h"
 
-#include <tinydotnet/tdn.h>
+#include "tinydotnet/tdn.h"
 #include <printf.h>
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {

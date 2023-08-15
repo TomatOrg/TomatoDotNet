@@ -5,7 +5,6 @@ set(CMAKE_C_STANDARD 23)
 
 file(GLOB_RECURSE SOURCES ./src/*.c ./src/*.h)
 file(GLOB_RECURSE HOST_SOURCES ./host/linux/*.c ./host/linux/*.h)
-file(GLOB_RECURSE TEST_SOURCES ./test/*.c ./test/*.h)
 file(GLOB_RECURSE INCLUDE_HEADERS ./include/tinydotnet/*.h)
 
 set(CMAKE_C_COMPILER clang-16)
