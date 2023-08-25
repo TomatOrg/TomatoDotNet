@@ -2,6 +2,10 @@
 #include "util/except.h"
 #include "tinydotnet/types/type.h"
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Evaluation stack
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -255,4 +259,39 @@ void eval_stack_free(eval_stack_t* stack) {
         arrfree(stack->instance_stacks[i].stack);
     }
     hmfree(stack->instance_stacks);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit labels/blocks
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// TODO: non-linear search
+
+jit_label_t* jit_get_label(jit_label_t* labels, uint32_t address) {
+    for (int i = 0; i < arrlen(labels); i++) {
+        if (labels[i].address == address) {
+            // already has a label in here
+            return &labels[i];
+        }
+    }
+    return NULL;
+}
+
+jit_label_t* jit_add_label(jit_label_t** labels, uint32_t address) {
+    int i;
+    for (i = 0; i < arrlen(*labels); i++) {
+        if ((*labels)[i].address > address) {
+            break;
+        } else if ((*labels)[i].address == address) {
+            // already has a label in here, we will signal
+            // that we need to move to a stack slot
+            return NULL;
+        }
+    }
+
+    jit_label_t label = {
+        .address = address
+    };
+    arrins(*labels, i, label);
+    return &((*labels)[i]);
 }

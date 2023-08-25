@@ -115,36 +115,8 @@ typedef struct jit_label {
     bool visited;
 } jit_label_t;
 
-// TODO: non-linear search
-
-static jit_label_t* jit_get_label(jit_label_t* labels, uint32_t address) {
-    for (int i = 0; i < arrlen(labels); i++) {
-        if (labels[i].address == address) {
-            // already has a label in here
-            return &labels[i];
-        }
-    }
-    return NULL;
-}
-
-static jit_label_t* jit_add_label(jit_label_t** labels, uint32_t address) {
-    int i;
-    for (i = 0; i < arrlen(*labels); i++) {
-        if ((*labels)[i].address > address) {
-            break;
-        } else if ((*labels)[i].address == address) {
-            // already has a label in here, we will signal
-            // that we need to move to a stack slot
-            return NULL;
-        }
-    }
-
-    jit_label_t label = {
-        .address = address
-    };
-    arrins(*labels, i, label);
-    return &((*labels)[i]);
-}
+jit_label_t* jit_get_label(jit_label_t* labels, uint32_t address);
+jit_label_t* jit_add_label(jit_label_t** labels, uint32_t address);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Context
