@@ -10,8 +10,7 @@
 #include <stdatomic.h>
 
 bool tdn_type_is_valuetype(RuntimeTypeInfo type) {
-    return type == tValueType ||
-            type->BaseType == tValueType ||
+    return type->BaseType == tValueType ||
             type->BaseType == tEnum;
 }
 

@@ -9,9 +9,16 @@ public class Test
         public int b;
     }
     
-    public Lol Do(Lol[] a)
+    public int Do(int a, int b)
     {
-        return a[5];
+        if (a > b)
+        {
+            return a;
+        }
+        else
+        {
+            return b;
+        }
     }
     
 }

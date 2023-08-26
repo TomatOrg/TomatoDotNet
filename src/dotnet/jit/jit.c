@@ -454,7 +454,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             case TDN_IL_STRING: tdn_host_printf(" %U", inst.operand.string); break;
             case TDN_IL_SWITCH: CHECK_FAIL();
         }
-        tdn_host_printf(" // %d -> ", arrlen(stack.stack));
+        tdn_host_printf("\n");
 
         // normalize the instruction for easier processing now that we printed it
         tdn_normalize_inst(&inst);
@@ -1239,9 +1239,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             default:
                 CHECK_FAIL();
         }
-
-        // update the length
-        tdn_host_printf("%d\n", arrlen(stack.stack));
 
         // move the pc forward
         pc = next_pc;

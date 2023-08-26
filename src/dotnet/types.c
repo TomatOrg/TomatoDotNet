@@ -89,6 +89,9 @@ RuntimeTypeInfo tdn_get_verification_type(RuntimeTypeInfo type) {
             tdn_get_byref_type(tInt16, &type);
             return type;
         }
+
+        tdn_get_byref_type(type, &type);
+        return type;
     }
 
     return type;
