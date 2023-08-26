@@ -11,7 +11,7 @@ public class Test
     
     public Lol Do(Lol[] a)
     {
-        return a[0];
+        return a[5];
     }
     
 }

@@ -34,6 +34,25 @@ RuntimeTypeInfo tRuntimeLocalVariableInfo = NULL;
 RuntimeTypeInfo tRuntimeTypeInfo = NULL;
 RuntimeTypeInfo tParameterInfo = NULL;
 
+RuntimeTypeInfo tIndexOutOfRangeException;
+RuntimeTypeInfo tNullReferenceException;
+
+static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+    if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
+        return false;
+    }
+
+    RuntimeTypeInfo V = T;
+    while (V != NULL) {
+        if (V == U) {
+            return true;
+        }
+        V = V->BaseType;
+    }
+
+    return false;
+}
+
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type) {
     if (type->BaseType == tEnum) {
         return type->EnumUnderlyingType;
@@ -120,7 +139,11 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
         return true;
     }
 
-    // TODO: 2.
+    // 2.
+    // TODO: is this even correct?
+    if (T->BaseType != NULL && tdn_type_compatible_with(T->BaseType, U)) {
+        return true;
+    }
 
     // 3.
     if (tdn_type_is_referencetype(T) && U == tdn_get_direct_base_class(T)) {
@@ -173,7 +196,11 @@ bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
         return true;
     }
 
-    // TODO: 2
+    // 2.
+    // TODO: is this even correct?
+    if (T->BaseType != NULL && tdn_type_assignable_to(T->BaseType, U)) {
+        return true;
+    }
 
     // 3.
     RuntimeTypeInfo V = tdn_get_intermediate_type(T);
@@ -207,7 +234,11 @@ bool tdn_type_verified_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
         return true;
     }
 
-    // TODO: 2
+    // 2.
+    // TODO: is this even correct?
+    if (T->BaseType != NULL && tdn_type_verified_assignable_to(T->BaseType, U)) {
+        return true;
+    }
 
     // 3.
     if (tdn_type_assignable_to(T, U)) {

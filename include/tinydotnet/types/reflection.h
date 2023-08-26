@@ -198,6 +198,13 @@ typedef struct RuntimeMethodBase {
     RuntimeTypeInfo_Array GenericArguments;
     RuntimeMethodInfo GenericMethodDefinition;
     generic_method_instance_t* GenericMethodInstances;
+
+    // The jitted method
+    uint64_t JitMethodId;
+
+    // flags
+    uint32_t JitPrepared : 1;
+    uint32_t JitStarted : 1;
 }* RuntimeMethodBase;
 DEFINE_ARRAY(RuntimeMethodBase);
 

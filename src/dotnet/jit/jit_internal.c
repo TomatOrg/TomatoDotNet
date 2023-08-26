@@ -7,6 +7,10 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value) {
+    return eval_stack_push_with_meta(stack, type, value, (stack_meta_t){});
+}
+
+tdn_err_t eval_stack_push_with_meta(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value, stack_meta_t meta) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the intermediate type, if the type is not an integer one
@@ -22,6 +26,7 @@ tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_valu
     // push it
     eval_stack_item_t item = {
         .type = type,
+        .meta = meta,
         .value = value
     };
     arrpush(stack->stack, item);
@@ -67,7 +72,13 @@ cleanup:
     return err;
 }
 
-tdn_err_t eval_stack_pop(eval_stack_t* stack, spidir_builder_handle_t builder, RuntimeTypeInfo* out_type, spidir_value_t* out_value) {
+tdn_err_t eval_stack_pop(
+    eval_stack_t* stack,
+    spidir_builder_handle_t builder,
+    RuntimeTypeInfo* out_type,
+    spidir_value_t* out_value,
+    stack_meta_t* meta
+) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK(arrlen(stack->stack) >= 1);
@@ -75,6 +86,10 @@ tdn_err_t eval_stack_pop(eval_stack_t* stack, spidir_builder_handle_t builder, R
 
     if (out_type != NULL) {
         *out_type = item.type;
+    }
+
+    if (meta != NULL) {
+        *meta = item.meta;
     }
 
     if (item.stack_slot) {

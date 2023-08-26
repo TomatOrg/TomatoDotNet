@@ -15,9 +15,14 @@ void tdn_jit_dump();
 // Evaluation stack
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef struct stack_meta {
+    bool came_from_ldarg0;
+} stack_meta_t;
+
 typedef struct eval_stack_item {
     RuntimeTypeInfo type;
     spidir_value_t value;
+    stack_meta_t meta;
     bool stack_slot;
 } eval_stack_item_t;
 
@@ -54,17 +59,34 @@ typedef struct eval_stack_snapshot {
 /**
  * Push a new value to the eval stack
  */
-tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value);
+tdn_err_t eval_stack_push(eval_stack_t* stack,
+                          RuntimeTypeInfo type,
+                          spidir_value_t value);
+
+/**
+ * Push a new value to the eval stack, also adding metadata to the stack slot
+ */
+tdn_err_t eval_stack_push_with_meta(eval_stack_t* stack,
+                                    RuntimeTypeInfo type,
+                                    spidir_value_t value,
+                                    stack_meta_t meta);
 
 /**
  * Pushes a new struct to the stack, giving
  */
-tdn_err_t eval_stack_alloc(eval_stack_t* stack, spidir_builder_handle_t builder, RuntimeTypeInfo type, spidir_value_t* out_value);
+tdn_err_t eval_stack_alloc(eval_stack_t* stack,
+                           spidir_builder_handle_t builder,
+                           RuntimeTypeInfo type,
+                           spidir_value_t* out_value);
 
 /**
  * Pop a value from the stack
  */
-tdn_err_t eval_stack_pop(eval_stack_t* stack, spidir_builder_handle_t builder, RuntimeTypeInfo* out_type, spidir_value_t* out_value);
+tdn_err_t eval_stack_pop(eval_stack_t* stack,
+                         spidir_builder_handle_t builder,
+                         RuntimeTypeInfo* out_type,
+                         spidir_value_t* out_value,
+                         stack_meta_t* meta);
 
 /**
  * Move all the values on the stack to a stackslot, this is needed whenever we

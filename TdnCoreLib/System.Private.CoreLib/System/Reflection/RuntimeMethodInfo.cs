@@ -10,6 +10,13 @@ internal sealed class RuntimeMethodInfo : MethodInfo
     private MethodAttributes _attributes;
     private MethodImplAttributes _methodImplFlags;
     private RuntimeMethodBody _methodBody;
-    private ParameterInfo ReturnParameter;
+    private ParameterInfo _returnParameter;
+
+    private RuntimeTypeInfo[] _genericArguments;
+    private RuntimeMethodInfo _genericMethodDefinition;
+    private unsafe void* _genericMethodInstances;
+
+    private ulong _jitMethod;
+    private uint _flags;
 
 }

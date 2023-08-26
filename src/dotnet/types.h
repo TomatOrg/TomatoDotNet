@@ -37,6 +37,9 @@ extern RuntimeTypeInfo tRuntimeLocalVariableInfo;
 extern RuntimeTypeInfo tRuntimeTypeInfo;
 extern RuntimeTypeInfo tParameterInfo;
 
+extern RuntimeTypeInfo tIndexOutOfRangeException;
+extern RuntimeTypeInfo tNullReferenceException;
+
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_reduced_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_verification_type(RuntimeTypeInfo type);
