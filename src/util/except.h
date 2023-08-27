@@ -3,6 +3,8 @@
 #include <tinydotnet/except.h>
 #include "defs.h"
 
+#include "cpp_magic.h"
+
 #define TRACE(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
 #define WARN(fmt, ...) tdn_host_log_warn(fmt, ## __VA_ARGS__)
 #define ERROR(fmt, ...) tdn_host_log_error(fmt, ## __VA_ARGS__)
@@ -18,6 +20,7 @@ void dump_hex(const void* data, size_t size);
     do { \
         if (!(expr)) { \
             err = error; \
+            IF(HAS_ARGS(__VA_ARGS__))(ERROR(__VA_ARGS__)); \
             ERROR("Check `%s` failed with error `%s` at %s (%s:%d)", #expr, tdn_get_error_string(err), __FUNCTION__, __FILE__, __LINE__); \
             __builtin_debugtrap(); \
             goto label; \

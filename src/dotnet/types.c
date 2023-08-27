@@ -33,9 +33,10 @@ RuntimeTypeInfo tRuntimeConstructorInfo = NULL;
 RuntimeTypeInfo tRuntimeLocalVariableInfo = NULL;
 RuntimeTypeInfo tRuntimeTypeInfo = NULL;
 RuntimeTypeInfo tParameterInfo = NULL;
+RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
 
-RuntimeTypeInfo tIndexOutOfRangeException;
-RuntimeTypeInfo tNullReferenceException;
+RuntimeTypeInfo tIndexOutOfRangeException = NULL;
+RuntimeTypeInfo tNullReferenceException = NULL;
 
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
@@ -228,7 +229,7 @@ bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     return false;
 }
 
-bool tdn_type_verified_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
+bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
     RuntimeTypeInfo T = tdn_get_verification_type(Q);
     RuntimeTypeInfo U = tdn_get_verification_type(R);
 
@@ -239,7 +240,7 @@ bool tdn_type_verified_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
 
     // 2.
     // TODO: is this even correct?
-    if (T->BaseType != NULL && tdn_type_verified_assignable_to(T->BaseType, U)) {
+    if (T->BaseType != NULL && tdn_type_verifier_assignable_to(T->BaseType, U)) {
         return true;
     }
 

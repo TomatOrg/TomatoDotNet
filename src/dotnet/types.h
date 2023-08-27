@@ -36,6 +36,7 @@ extern RuntimeTypeInfo tRuntimeConstructorInfo;
 extern RuntimeTypeInfo tRuntimeLocalVariableInfo;
 extern RuntimeTypeInfo tRuntimeTypeInfo;
 extern RuntimeTypeInfo tParameterInfo;
+extern RuntimeTypeInfo tRuntimeExceptionHandlingClause;
 
 extern RuntimeTypeInfo tIndexOutOfRangeException;
 extern RuntimeTypeInfo tNullReferenceException;
@@ -53,4 +54,4 @@ bool tdn_type_pointer_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo
 bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_compatible_with_location(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U);
-bool tdn_type_verified_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R);
+bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R);

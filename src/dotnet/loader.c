@@ -122,6 +122,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Reflection, RuntimeLocalVariableInfo),
     LOAD_TYPE(System.Reflection, RuntimeTypeInfo),
     LOAD_TYPE(System.Reflection, ParameterInfo),
+    LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
     LOAD_TYPE(System, IndexOutOfRangeException),
     LOAD_TYPE(System, NullReferenceException),
 };
@@ -407,7 +408,136 @@ typedef struct coril_method_fat {
     uint16_t max_stack;
     uint32_t code_size;
     uint32_t local_var_sig_tok;
-} coril_method_fat_t;
+} PACKED coril_method_fat_t;
+
+#define CorILMethod_Sect_EHTable 0x1
+#define CorILMethod_Sect_OptILTable 0x2
+#define CorILMethod_Sect_FatFormat 0x40
+#define CorILMethod_Sect_MoreSects 0x80
+
+typedef struct coril_method_sect_small {
+    uint8_t kind;
+    uint8_t data_size;
+    uint16_t _reserved;
+} PACKED coril_method_sect_small_t;
+
+typedef struct coril_method_sect_fat {
+    uint32_t kind : 8;
+    uint32_t data_size : 24;
+} PACKED coril_method_sect_fat_t;
+
+typedef struct coril_exception_clause_small {
+    int16_t flags;
+    int16_t try_offset;
+    int8_t try_length;
+    int16_t handler_offset;
+    int8_t handler_length;
+    union {
+        int32_t class_token;
+        int32_t filter_offset;
+    };
+} PACKED coril_exception_clause_small_t;
+
+typedef struct coril_exception_clause_fat {
+    int32_t flags;
+    int32_t try_offset;
+    int32_t try_length;
+    int32_t handler_offset;
+    int32_t handler_length;
+    union {
+        int32_t class_token;
+        int32_t filter_offset;
+    };
+} PACKED coril_exception_clause_fat_t;
+
+static tdn_err_t tdn_parse_method_exception_handling_clauses(
+    RuntimeMethodBase method_base,
+    bool fat, void* data, size_t size,
+    size_t code_size
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // figure the count before hand
+    size_t count = size / (fat ? sizeof(coril_exception_clause_fat_t) : sizeof(coril_exception_clause_small_t));
+
+    RuntimeExceptionHandlingClause_Array clauses = GC_NEW_ARRAY(RuntimeExceptionHandlingClause, count);
+    method_base->MethodBody->ExceptionHandlingClauses = clauses;
+
+    // iterate all the clauses
+    size_t i = 0;
+    while (size != 0) {
+        // get the clause, expand from a small one if needed
+        coril_exception_clause_fat_t clause;
+        if (!fat) {
+            CHECK(size >= sizeof(coril_exception_clause_small_t));
+            coril_exception_clause_small_t header = *(coril_exception_clause_small_t*)data;
+            clause.flags = header.flags;
+            clause.try_offset = header.try_offset;
+            clause.try_length = header.try_length;
+            clause.handler_offset = header.handler_offset;
+            clause.handler_length = header.handler_length;
+            clause.class_token = header.class_token;
+            clause.filter_offset = header.filter_offset;
+            data += sizeof(coril_exception_clause_small_t);
+            size -= sizeof(coril_exception_clause_small_t);
+        } else {
+            CHECK(size >= sizeof(coril_exception_clause_fat_t));
+            clause = *(coril_exception_clause_fat_t*)data;
+            data += sizeof(coril_exception_clause_fat_t);
+            size -= sizeof(coril_exception_clause_fat_t);
+        }
+
+        // make sure it is only a valid set of flags
+        // TODO: is this actually correct?
+        CHECK(
+            clause.flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION ||
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FINALLY
+        );
+
+        // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT
+        // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
+
+        // verify the offsets
+        CHECK(clause.handler_length >= 0);
+        CHECK(clause.handler_offset >= 0);
+        CHECK(clause.try_length >= 0);
+        CHECK(clause.try_offset >= 0);
+        CHECK(clause.handler_length >= 0);
+
+        CHECK(clause.handler_offset < code_size);
+        CHECK((int64_t)clause.handler_offset + clause.handler_length <= code_size);
+
+        CHECK(clause.try_offset < code_size);
+        CHECK((int64_t)clause.try_offset + clause.try_length <= code_size);
+
+        if (clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+            CHECK(clause.filter_offset >= 0);
+            CHECK(clause.filter_offset < code_size);
+        }
+
+        // and now create it and fill it
+        RuntimeExceptionHandlingClause c = GC_NEW(RuntimeExceptionHandlingClause);
+        c->Flags = clause.flags;
+        c->TryOffset = clause.try_offset;
+        c->TryLength = clause.try_length;
+        c->HandlerOffset = clause.handler_offset;
+        c->HandlerLength = clause.handler_length;
+        if (clause.flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+            CHECK_AND_RETHROW(tdn_assembly_lookup_type(
+                    method_base->Module->Assembly,
+                    clause.class_token,
+                    method_base->DeclaringType->GenericArguments,
+                    method_base->GenericArguments,
+                    &c->CatchType));
+        } else if (clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+            c->FilterOffset = clause.filter_offset;
+        }
+        clauses->Elements[i++] = c;
+    }
+
+cleanup:
+    return err;
+}
 
 tdn_err_t tdn_parser_method_body(
     RuntimeAssembly assembly,
@@ -417,10 +547,11 @@ tdn_err_t tdn_parser_method_body(
     tdn_err_t err = TDN_NO_ERROR;
 
     RuntimeMethodBody body = GC_NEW(RuntimeMethodBody);
+    methodBase->MethodBody = body;
 
     // get the tiny header for the start
     uint8_t* start = pe_image_address(&assembly->Metadata->file, method_def->rva);
-    void* end = pe_image_address(&assembly->Metadata->file, method_def->rva + 1);
+    uint8_t* end = pe_image_address(&assembly->Metadata->file, method_def->rva + 1);
     CHECK(start != NULL && end != NULL);
 
     // parse the header
@@ -437,19 +568,20 @@ tdn_err_t tdn_parser_method_body(
 
     } else if (flags == CorILMethod_FatFormat) {
         // this is a big header, recalculate the end
-        end = pe_image_address(&assembly->Metadata->file, method_def->rva + 12);
+        end = pe_image_address(&assembly->Metadata->file, method_def->rva + sizeof(coril_method_fat_t));
         CHECK(end != NULL);
 
+        // take the new header size and check it
         coril_method_fat_t* fat = (coril_method_fat_t*)start;
-        CHECK(fat->size >= 3);
+        CHECK(fat->size == 3);
         header_size = fat->size * 4;
+
+        // update the flags with the fat ones
+        flags = fat->flags;
 
         // get the main attributes
         body->MaxStackSize = fat->max_stack;
         body->InitLocals = fat->flags & CorILMethod_InitLocals;
-
-        // for now verify no more sections
-        CHECK((fat->flags & CorILMethod_MoreSects) == 0);
 
         // parse the local variables
         body->LocalSignatureMetadataToken = (int)fat->local_var_sig_tok;
@@ -470,19 +602,47 @@ tdn_err_t tdn_parser_method_body(
         CHECK_FAIL();
     }
 
-    // get the code end and start
-    // TODO: more sections
+    // now that we are done we have the full sizes
     uint8_t* code_start = end;
     uint8_t* code_end = pe_image_address(&assembly->Metadata->file, method_def->rva + header_size + code_size);
     CHECK(code_end != NULL);
     CHECK(code_size <= INT32_MAX);
 
-    // copy the code
+    // set the code
     body->ILSize = (int)code_size;
     body->IL = code_start;
 
-    // we are done
-    methodBase->MethodBody = body;
+    // there are more sections, process them
+    if (flags & CorILMethod_MoreSects) {
+        // make sure we can access the header
+        uint32_t data_offset = method_def->rva + header_size + ALIGN_UP(code_size, sizeof(uint32_t));
+        CHECK(pe_image_address(&assembly->Metadata->file, data_offset + sizeof(uint32_t)) != NULL);
+
+        // take one byte, we are going to make sure this is exception handling table
+        // and that there are no more sections after it
+        uint8_t kind = *code_end;
+        CHECK(kind & CorILMethod_Sect_EHTable);
+        CHECK((kind & CorILMethod_Sect_MoreSects) == 0);
+
+        // if not the fat format then extend the size
+        size_t size;
+        if (kind & CorILMethod_Sect_FatFormat) {
+            coril_method_sect_fat_t* header = (coril_method_sect_fat_t*)code_end;
+            size = header->data_size;
+        } else {
+            coril_method_sect_small_t* header = (coril_method_sect_small_t*)code_end;
+            size = header->data_size;
+        }
+
+        // check the size beyond the header
+        CHECK(pe_image_address(&assembly->Metadata->file, data_offset + size) != NULL);
+        end += sizeof(uint32_t);
+
+        // handle the extra data correctly
+        CHECK_AND_RETHROW(tdn_parse_method_exception_handling_clauses(
+                methodBase, kind & CorILMethod_Sect_FatFormat,
+                code_end + sizeof(uint32_t), size - sizeof(uint32_t), code_size));
+    }
 
 cleanup:
     return err;
@@ -634,13 +794,13 @@ static tdn_err_t corelib_jit_types(RuntimeAssembly assembly) {
 
     CHECK_AND_RETHROW(tdn_jit_init());
 
-    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
-    }
-
-    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
-    }
+//    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
+//        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
+//    }
+//
+//    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
+//        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
+//    }
 
 cleanup:
     return err;

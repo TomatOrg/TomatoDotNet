@@ -236,6 +236,7 @@ void tdn_normalize_inst(tdn_il_inst_t* inst) {
         case CEE_LDELEM_R4: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
         case CEE_LDELEM_R8: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
         case CEE_LDELEM_I: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
+        case CEE_LEAVE_S: inst->opcode = CEE_LEAVE; break;
         default: break;
     }
 }

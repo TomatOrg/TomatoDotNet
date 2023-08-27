@@ -148,6 +148,9 @@ typedef struct jit_context {
     // the method we are jitting
     RuntimeMethodBase method;
 
+    // the labels list
+    jit_label_t* labels;
+
     // the eval stack we have currently
     eval_stack_t* stack;
 
@@ -159,4 +162,7 @@ typedef struct jit_context {
 
     // the next PC of the instruction
     uint32_t next_pc;
+
+    // the builder used right now
+    spidir_builder_handle_t builder;
 } jit_context_t;

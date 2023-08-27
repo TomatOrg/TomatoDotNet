@@ -108,9 +108,26 @@ typedef struct RuntimeLocalVariableInfo {
 }* RuntimeLocalVariableInfo;
 DEFINE_ARRAY(RuntimeLocalVariableInfo);
 
+typedef struct RuntimeExceptionHandlingClause {
+    struct Object Object;
+    RuntimeTypeInfo CatchType;
+    int Flags;
+#define COR_ILEXCEPTION_CLAUSE_EXCEPTION    0x0000
+#define COR_ILEXCEPTION_CLAUSE_FILTER       0x0001
+#define COR_ILEXCEPTION_CLAUSE_FINALLY      0x0002
+#define COR_ILEXCEPTION_CLAUSE_FAULT        0x0004
+    int FilterOffset;
+    int HandlerLength;
+    int HandlerOffset;
+    int TryLength;
+    int TryOffset;
+}* RuntimeExceptionHandlingClause;
+DEFINE_ARRAY(RuntimeExceptionHandlingClause);
+
 typedef struct RuntimeMethodBody {
     struct Object Object;
     RuntimeLocalVariableInfo_Array LocalVariables;
+    RuntimeExceptionHandlingClause_Array ExceptionHandlingClauses;
     uint8_t* IL;
     uint32_t ILSize;
     int LocalSignatureMetadataToken;

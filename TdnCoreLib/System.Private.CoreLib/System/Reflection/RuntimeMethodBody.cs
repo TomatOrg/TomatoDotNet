@@ -7,6 +7,7 @@ namespace System.Reflection;
 internal sealed class RuntimeMethodBody : MethodBody
 {
 
+    private RuntimeExceptionHandlingClause[] _exceptionHandlingClauses;
     private RuntimeLocalVariableInfo[] _localVariables;
     private unsafe void* _il;
     private int _localSignatureMetadataToken;

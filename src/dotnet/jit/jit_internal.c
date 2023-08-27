@@ -206,6 +206,8 @@ cleanup:
 tdn_err_t eval_stack_snapshot(eval_stack_t* stack, eval_stack_snapshot_t* out) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK(!out->initialized);
+
     arrsetlen(out->stack, arrlen(stack->stack));
     for (int i = 0; i < arrlen(stack->stack); i++) {
         out->stack[i].type = stack->stack[i].type;
@@ -219,12 +221,12 @@ cleanup:
 
 static RuntimeTypeInfo eval_stack_compare(RuntimeTypeInfo S, RuntimeTypeInfo T) {
     // 1.
-    if (tdn_type_verified_assignable_to(T, S)) {
+    if (tdn_type_verifier_assignable_to(T, S)) {
         return S;
     }
 
     // 2.
-    if (tdn_type_verified_assignable_to(S, T)) {
+    if (tdn_type_verifier_assignable_to(S, T)) {
         return T;
     }
 
@@ -236,7 +238,8 @@ static RuntimeTypeInfo eval_stack_compare(RuntimeTypeInfo S, RuntimeTypeInfo T) 
 tdn_err_t eval_stack_merge(eval_stack_t* stack, eval_stack_snapshot_t* snapshot, bool modify) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK(arrlen(stack->stack) == arrlen(snapshot->stack));
+    CHECK(arrlen(stack->stack) == arrlen(snapshot->stack),
+          "%d == %d", arrlen(stack->stack), arrlen(snapshot->stack));
 
     for (int i = 0; i < arrlen(stack->stack); i++) {
         RuntimeTypeInfo S = eval_stack_compare(stack->stack[i].type, snapshot->stack[i].type);

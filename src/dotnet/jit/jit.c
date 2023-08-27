@@ -187,6 +187,25 @@ static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t ptr1
 }
 
 /**
+ * Search for the exception clause that the current PC is in
+ */
+static RuntimeExceptionHandlingClause find_exception_clause_for_pc(RuntimeMethodBase method, uint32_t pc) {
+    RuntimeExceptionHandlingClause_Array arr = method->MethodBody->ExceptionHandlingClauses;
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause c = arr->Elements[i];
+        if (c->TryOffset <= pc && pc < c->TryOffset + c->TryLength) {
+            return c;
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * Throw a new exception
  */
 static tdn_err_t jit_emit_throw_new(spidir_builder_handle_t builder, RuntimeTypeInfo type) {
@@ -200,6 +219,7 @@ static tdn_err_t jit_emit_throw_new(spidir_builder_handle_t builder, RuntimeType
                               });
 
     // find the default ctor
+    // TODO: in the future we might have certain opcodes for this instead
     RuntimeConstructorInfo ctor;
     if (type == tIndexOutOfRangeException) {
         ctor = m_IndexOutOfBoundsException_ctor;
@@ -280,11 +300,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     RuntimeTypeInfo* call_args_types = NULL;
     spidir_value_t* call_args_values = NULL;
     RuntimeMethodBase method = ctx->method;
+    RuntimeExceptionHandlingClause_Array clauses = method->MethodBody->ExceptionHandlingClauses;
     struct {
         spidir_value_t value;
         RuntimeTypeInfo type;
         bool spilled;
     }* args = NULL;
+    spidir_value_t* locals = NULL;
     eval_stack_t stack = {
         .max_depth = method->MethodBody->MaxStackSize
     };
@@ -323,6 +345,15 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         args[i].value = SPIDIR_VALUE_INVALID;
         args[i].type = type;
         args[i].spilled = false;
+    }
+
+    // prepare the locals by allocating their stack slots already
+    if (method->MethodBody->LocalVariables != NULL) {
+        locals = tdn_host_mallocz(sizeof(spidir_value_t) * method->MethodBody->LocalVariables->Length);
+        for (int i = 0; i < method->MethodBody->LocalVariables->Length; i++) {
+            RuntimeLocalVariableInfo var = method->MethodBody->LocalVariables->Elements[i];
+            locals[i] = spidir_builder_build_stackslot(builder, var->LocalType->StackSize, var->LocalType->StackAlignment);
+        }
     }
 
     //
@@ -427,7 +458,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     //
     // the main jit function
     //
-
+    int indent = 0;
+    RuntimeExceptionHandlingClause current_clause = NULL;
+    bool is_handler_clause = false;
     pc = 0;
     flow_control = TDN_IL_NEXT;
     int label_idx = 1; // skip the entry label,
@@ -437,8 +470,33 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
         uint32_t next_pc = pc + inst.length;
 
+        if (clauses != NULL) {
+            for (int i = 0; i < clauses->Length; i++) {
+                RuntimeExceptionHandlingClause c = clauses->Elements[i];
+                if (c->TryOffset == pc) {
+                    tdn_host_printf("[*] \t\t\t%*s.try\n", indent, "");
+                    tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
+                    indent += 4;
+
+                } else if (c->HandlerOffset == pc) {
+                    if (c->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                        string_builder_t temp_builder = {};
+                        string_builder_push_type_signature(&temp_builder, c->CatchType);
+                        tdn_host_printf("[*] \t\t\t%*scatch %s\n", indent, "", string_builder_build(&temp_builder));
+                        string_builder_free(&temp_builder);
+                    } else if (c->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+                        tdn_host_printf("[*] \t\t\t%*sfinally\n", indent, "");
+                    } else {
+                        CHECK_FAIL();
+                    }
+                    tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
+                    indent += 4;
+                }
+            }
+        }
+
         // For debug, print the instruction
-        tdn_host_printf("[*] \t\t\tIL_%04x: %s", pc, tdn_get_opcode_name(inst.opcode));
+        tdn_host_printf("[*] \t\t\t%*sIL_%04x: %s", indent, "", pc, tdn_get_opcode_name(inst.opcode));
         switch (inst.operand_type) {
             case TDN_IL_BRANCH_TARGET: tdn_host_printf(" IL_%04x", inst.operand.branch_target); break;
             case TDN_IL_NO_OPERAND: break;
@@ -448,9 +506,28 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             case TDN_IL_INT64: tdn_host_printf(" %lld", (long long int)inst.operand.int64); break;
             case TDN_IL_FLOAT32: tdn_host_printf(" %f", inst.operand.float32); break;
             case TDN_IL_FLOAT64: tdn_host_printf(" %f", inst.operand.float64); break;
-            case TDN_IL_METHOD: tdn_host_printf(" %U:%U", inst.operand.method->DeclaringType->Name, inst.operand.method->Name); break; // TODO: better name printing
-            case TDN_IL_FIELD: tdn_host_printf(" %U:%U", inst.operand.field->DeclaringType->Name, inst.operand.field->Name); break; // TODO: better name printing
-            case TDN_IL_TYPE: tdn_host_printf(" %U", inst.operand.type->Name); break; // TODO: better name printing
+
+            case TDN_IL_METHOD: {
+                string_builder_t tmp_builder = {};
+                string_builder_push_method_signature(&tmp_builder, inst.operand.method, true);
+                tdn_host_printf(" %s", string_builder_build(&tmp_builder));
+                string_builder_free(&tmp_builder);
+            } break;
+
+            case TDN_IL_FIELD: {
+                string_builder_t tmp_builder = {};
+                string_builder_push_type_signature(&tmp_builder, inst.operand.field->DeclaringType);
+                tdn_host_printf(" %s::%U", string_builder_build(&tmp_builder), inst.operand.field->Name);
+                string_builder_free(&tmp_builder);
+            } break;
+
+            case TDN_IL_TYPE: {
+                string_builder_t tmp_builder = {};
+                string_builder_push_type_signature(&tmp_builder, inst.operand.field->DeclaringType);
+                tdn_host_printf(" %s", string_builder_build(&tmp_builder));
+                string_builder_free(&tmp_builder);
+            } break;
+
             case TDN_IL_STRING: tdn_host_printf(" %U", inst.operand.string); break;
             case TDN_IL_SWITCH: CHECK_FAIL();
         }
@@ -477,19 +554,25 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
                 // check if we already have a stack slot at this location
                 if (label->snapshot.initialized) {
-                    // we do, perform a merge of the stack
-                    CHECK_AND_RETHROW(eval_stack_merge(&stack, &label->snapshot, true));
+                    // we do, perform a merge of the stack, only need the merge if we got
+                    // to here via normal control flow
+                    if (
+                        flow_control == TDN_IL_NEXT ||
+                        flow_control == TDN_IL_BREAK ||
+                        flow_control == TDN_IL_CALL ||
+                        flow_control == TDN_IL_COND_BRANCH
+                    ) {
+                        CHECK_AND_RETHROW(eval_stack_merge(&stack, &label->snapshot, true));
+                    }
                 } else {
-                    // first we need to clear the stack if required
-                    // if we are coming from an instruction that can not jump to us
-                    // then we must first clear our stack
-                    // TODO: if we already got a jump to here then we need to take that stack
+                    // for verification, if we got to here via an instruction that can't jump
+                    // to us make sure the stack got cleared correctly
                     if (
                         flow_control == TDN_IL_RETURN ||
                         flow_control == TDN_IL_BRANCH ||
                         flow_control == TDN_IL_THROW
                     ) {
-                        eval_stack_clear(&stack);
+                        CHECK(arrlen(stack.stack) == 0);
                     }
 
                     // and now take a snapshot of it
@@ -583,6 +666,67 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                         };
                         CHECK_AND_RETHROW(eval_stack_push_with_meta(&stack, arg_type, param_ref, meta));
                     }
+                }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Locals
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            // load a local variable
+            case CEE_LDLOC: {
+                // verify the argument and get the stack type
+                int var = inst.operand.variable;
+                CHECK(var < method->MethodBody->LocalVariables->Length);
+
+                RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
+                type = tdn_get_intermediate_type(type);
+
+                if (jit_is_struct_type(type)) {
+                    // struct type, copy the stack slot to the eval stack
+                    spidir_value_t loc;
+                    CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, type, &loc));
+                    jit_emit_memcpy(builder, loc, locals[var], type->StackSize);
+                } else {
+                    // not a struct type, load it from the stack slot
+                    spidir_value_t value = spidir_builder_build_load(builder, get_spidir_return_type(type), locals[var]);
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, type, value));
+                }
+            } break;
+
+            // load the pointer to a local variable
+            case CEE_LDLOCA: {
+                int var = inst.operand.variable;
+                CHECK(var < method->MethodBody->LocalVariables->Length);
+
+                RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
+                type = tdn_get_verification_type(type);
+                CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+
+                CHECK_AND_RETHROW(eval_stack_push(&stack, type, locals[var]));
+            } break;
+
+            // store to a local variable
+            case CEE_STLOC: {
+                // verify the argument and get the stack type
+                int var = inst.operand.variable;
+                CHECK(var < method->MethodBody->LocalVariables->Length);
+
+                spidir_value_t value;
+                RuntimeTypeInfo value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &value_type, &value, NULL));
+
+                // check the type
+                CHECK(tdn_type_verifier_assignable_to(
+                        value_type,
+                        method->MethodBody->LocalVariables->Elements[var]->LocalType));
+
+                if (jit_is_struct_type(value_type)) {
+                    // struct type, copy the stack slot to the eval stack
+                    jit_emit_memcpy(builder, locals[var], value, value_type->StackSize);
+                } else {
+                    // not a struct type, just store it
+                    spidir_builder_build_store(builder, value, locals[var]);
                 }
             } break;
 
@@ -835,7 +979,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     }
 
                     // check that we can do the assignment
-                    CHECK(tdn_type_verified_assignable_to(call_args_types[i], target_type));
+                    CHECK(tdn_type_verifier_assignable_to(call_args_types[i], target_type));
                 }
 
                 // TODO: indirect calls, de-virt
@@ -871,11 +1015,16 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             case CEE_BR: {
                 CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
 
+                // get and validate the label
                 jit_label_t* target_label = NULL;
                 CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, inst.operand.branch_target, &target_label));
+                CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
 
                 // a branch, emit the branch
                 spidir_builder_build_branch(builder, target_label->block);
+
+                // because we don't fall-through we clear the stack
+                eval_stack_clear(&stack);
             } break;
 
             // conditional branches
@@ -907,8 +1056,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // get the jump locations
                 jit_label_t* target_label = NULL;
                 CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, inst.operand.branch_target, &target_label));
+                CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
+
                 jit_label_t* next_label = NULL;
                 CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, next_pc, &next_label));
+                CHECK(find_exception_clause_for_pc(method, next_label->address) == current_clause);
 
                 // a branch, emit the branch
                 spidir_builder_build_brcond(builder, cmp, target_label->block, next_label->block);
@@ -1004,8 +1156,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     // get the jump locations
                     jit_label_t* target_label = NULL;
                     CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, inst.operand.branch_target, &target_label));
+                    CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
+
                     jit_label_t* next_label = NULL;
                     CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, next_pc, &next_label));
+                    CHECK(find_exception_clause_for_pc(method, next_label->address) == current_clause);
 
                     // move to slots before we jump
                     CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
@@ -1017,6 +1172,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // return value from the function
             case CEE_RET: {
+                // make sure we are not trying to return from within a protected block
+                CHECK(current_clause == NULL);
+
                 RuntimeTypeInfo wanted_ret_type = method->ReturnParameter->ParameterType;
                 if (wanted_ret_type == tVoid) {
                     spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
@@ -1026,7 +1184,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     eval_stack_pop(&stack, builder, &ret_type, &ret_value, NULL);
 
                     // make sure the type is a valid return target
-                    CHECK(tdn_type_verified_assignable_to(ret_type, wanted_ret_type));
+                    CHECK(tdn_type_verifier_assignable_to(ret_type, wanted_ret_type));
 
                     if (jit_is_struct_type(ret_type)) {
                         // returning a struct, need to use the implicit
@@ -1043,6 +1201,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                         spidir_builder_build_return(builder, ret_value);
                     }
                 }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Exception control flow
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LEAVE: {
+                CHECK_FAIL();
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1243,6 +1409,19 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         // move the pc forward
         pc = next_pc;
         flow_control = inst.control_flow;
+
+        if (clauses != NULL) {
+            for (int i = 0; i < clauses->Length; i++) {
+                RuntimeExceptionHandlingClause c = clauses->Elements[i];
+                if (c->TryOffset + c->TryLength == pc) {
+                    indent -= 4;
+                    tdn_host_printf("[*] \t\t\t%*s} // end .try\n", indent, "");
+                } else if (c->HandlerOffset + c->HandlerLength == pc) {
+                    indent -= 4;
+                    tdn_host_printf("[*] \t\t\t%*s} // end handler\n", indent, "");
+                }
+            }
+        }
     }
 
     // make sure we went over all of the labels
@@ -1250,12 +1429,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
 cleanup:
     for (int i = 0; i < arrlen(labels); i++) {
-        arrfree(labels->snapshot.stack);
+        arrfree(labels[i].snapshot.stack);
     }
     arrfree(labels);
     arrfree(call_args_values);
     arrfree(call_args_types);
     eval_stack_free(&stack);
+    tdn_host_free(locals);
     tdn_host_free(args);
 }
 
