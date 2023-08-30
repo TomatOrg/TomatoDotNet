@@ -11,6 +11,8 @@
 #include <spidir/spidir.h>
 #include <stdbool.h>
 
+#include "spidir/spidir_debug.h"
+
 static spidir_module_handle_t m_spidir_module;
 
 // buildin functions
@@ -164,18 +166,6 @@ static spidir_value_type_t get_spidir_return_type(RuntimeTypeInfo type) {
     } while (0)
 
 /**
- * Helper to check if a type is a struct type and not any other type
- */
-static bool jit_is_struct_type(RuntimeTypeInfo type) {
-    type = tdn_get_intermediate_type(type);
-    return
-        tdn_type_is_valuetype(type) &&
-        type != tInt32 &&
-        type != tInt64 &&
-        type != tIntPtr;
-}
-
-/**
  * Emit a memcpy with a known size
  */
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
@@ -270,20 +260,20 @@ cleanup:
     return err;
 }
 
-static tdn_err_t resolve_and_verify_branch_target(eval_stack_t* stack, jit_label_t* labels, uint32_t target, jit_label_t** out_label) {
+static tdn_err_t resolve_and_verify_branch_target(jit_context_t* ctx, uint32_t target, jit_label_t** out_label) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // if we have a branch target make sure we have the target label
-    jit_label_t* target_label = jit_get_label(labels, target);
+    jit_label_t* target_label = jit_get_label(ctx->labels, target);
     CHECK(target_label != NULL);
 
     // stack consistency check
     if (target_label->snapshot.initialized) {
         // we have a snapshot, perform a merge as needed, only modify if we have not visited it yet
-        CHECK_AND_RETHROW(eval_stack_merge(stack, &target_label->snapshot, !target_label->visited));
+        CHECK_AND_RETHROW(eval_stack_merge(ctx->builder, ctx->stack, target_label, !target_label->visited));
     } else {
         // otherwise create a snapshot of our stack
-        CHECK_AND_RETHROW(eval_stack_snapshot(stack, &target_label->snapshot));
+        CHECK_AND_RETHROW(eval_stack_snapshot(ctx->builder, ctx->stack, target_label, ctx->current_label));
     }
 
     // give it back
@@ -310,6 +300,10 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     eval_stack_t stack = {
         .max_depth = method->MethodBody->MaxStackSize
     };
+
+    // so we can more easily pass it to callers
+    ctx->builder = builder;
+    ctx->stack = &stack;
 
     // take into account the first parameter might be an implicit
     // struct return pointer, we will just check if the stack size
@@ -356,34 +350,42 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         }
     }
 
-    //
+    //------------------------------------------------------------------------------------------------------------------
     // first pass, find all of the labels, this will
     // also create all the different basic blocks on
     // the way
-    //
+    //------------------------------------------------------------------------------------------------------------------
 
-    // entry block
-    jit_label_t* entry_label = jit_add_label(&labels, 0);
-    CHECK(entry_label != NULL);
-    entry_label->block = spidir_builder_create_block(builder);
-    spidir_builder_set_entry_block(builder, entry_label->block);
-    spidir_builder_set_block(builder, entry_label->block);
+    // block used for spilling, if any
+    spidir_block_t entry_block;
+    bool spilled = false;
 
     // get the rest of the blocks by creating the labels
-    bool spilled = false;
     bool has_starg0_or_ldarga0 = false;
     uint32_t pc = 0;
-    tdn_il_control_flow_t flow_control = TDN_IL_NEXT;
+    tdn_il_control_flow_t flow_control = TDN_IL_FIRST;
     while (pc != ctx->method->MethodBody->ILSize) {
         // decode instruction
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
+        // don't support break for now
+        CHECK(inst.control_flow != TDN_IL_BREAK);
+
+        //
         // check if we need to spill an argument
+        //
         if (inst.opcode == CEE_LDARGA || inst.opcode == CEE_STARG) {
             int arg = inst.operand.variable;
             CHECK(arg < arg_count);
             RuntimeTypeInfo type = args[arg].type;
+
+            // first spill, create the block
+            if (!spilled) {
+                entry_block = spidir_builder_create_block(builder);
+                spidir_builder_set_block(builder, entry_block);
+                spidir_builder_set_entry_block(builder, entry_block);
+            }
 
             // create a stackslot for the spill
             if (!args[arg].spilled) {
@@ -411,49 +413,82 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             spilled = true;
         }
 
-        // check the operand if it has any target, if it has we need to create all
-        // the related labels
-        // TODO: do switch
+        //
+        // Handle label creation
+        //
+
+        // we have a branch target, create the label at that location
         if (inst.operand_type == TDN_IL_BRANCH_TARGET) {
-            // add label for the destination
             jit_label_t* label = jit_add_label(&labels, inst.operand.branch_target);
             if (label != NULL) {
                 label->block = spidir_builder_create_block(builder);
             }
-        } else if (inst.operand_type == TDN_IL_SWITCH) {
-            CHECK_FAIL();
         }
 
-        // check how we got here, if we got here from one
-        // of the following control flows we need to add
-        // a label onto ourselves
-        if (
-            flow_control == TDN_IL_RETURN ||
-            flow_control == TDN_IL_BRANCH ||
-            flow_control == TDN_IL_COND_BRANCH ||
-            flow_control == TDN_IL_THROW
-        ) {
+        // if we are coming from a conditional branch then we can get to here
+        // as well, so mark as a label
+        if (flow_control == TDN_IL_COND_BRANCH) {
             jit_label_t* label = jit_add_label(&labels, pc);
             if (label != NULL) {
                 label->block = spidir_builder_create_block(builder);
             }
         }
 
+        // check if we already have a label at this location and the last opcode
+        // can flow into this location
+        bool has_label = jit_get_label(labels, pc) != NULL;
+        if (
+            has_label &&
+            (
+                flow_control == TDN_IL_NEXT ||
+                flow_control == TDN_IL_CALL ||
+                flow_control == TDN_IL_BREAK
+            )
+        ) {
+            CHECK(jit_add_label(&labels, pc) == NULL);
+        }
+
         pc += inst.length;
         flow_control = inst.control_flow;
     }
 
-    // if we had a spill, the label at the start is no longer
-    // actually at the start since it has spills, it should be
-    // right after that
+    // we can now store it
+    ctx->labels = labels;
+
+    // we need to linked the spill block to the first block or actually create
+    // a first block in the case we did not spill
+    jit_label_t* first_label = jit_get_label(labels, 0);
     if (spilled) {
-        spidir_block_t entry = entry_label->block;
-        entry_label->block = spidir_builder_create_block(builder);
-        spidir_builder_build_branch(builder, entry_label->block);
-        spidir_builder_set_block(builder, entry_label->block);
+        // we have an entry block, either create the first block
+        // or use the one of PC zero (in the case we have a label
+        // in there)
+        if (first_label == NULL) {
+            entry_block = spidir_builder_create_block(builder);
+        } else {
+            entry_block = first_label->block;
+        }
+
+        // jump from the entry block to the first block
+        spidir_builder_build_branch(builder, entry_block);
+    } else {
+        // we did not spill, either create or get the first block
+        // as an entry block
+        if (first_label == NULL) {
+            entry_block = spidir_builder_create_block(builder);
+        } else {
+            entry_block = first_label->block;
+        }
+
+        // set as the entry
+        spidir_builder_set_entry_block(builder, entry_block);
     }
 
-    // TODO: support protected blocks properly
+    // we have the first block
+    spidir_builder_set_block(builder, entry_block);
+
+    //------------------------------------------------------------------------------------------------------------------
+    // The second pass
+    //------------------------------------------------------------------------------------------------------------------
 
     //
     // the main jit function
@@ -462,13 +497,110 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     RuntimeExceptionHandlingClause current_clause = NULL;
     bool is_handler_clause = false;
     pc = 0;
-    flow_control = TDN_IL_NEXT;
-    int label_idx = 1; // skip the entry label,
-                       // since its a special case
+    flow_control = TDN_IL_FIRST;
+    int label_idx = 0;
     while (pc != ctx->method->MethodBody->ILSize) {
+        tdn_il_inst_t original_inst;
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
         uint32_t next_pc = pc + inst.length;
+
+        // normalize the instruction for easier processing now that we printed it
+        original_inst = inst;
+        tdn_normalize_inst(&inst);
+
+        //--------------------------------------------------------------------------------------------------------------
+        // Label handling
+        //--------------------------------------------------------------------------------------------------------------
+
+        // check if there are more labels, if we are at a label we
+        // need to properly switch to it
+        bool has_label = false;
+        if (label_idx < arrlen(labels)) {
+            if (pc == labels[label_idx].address) {
+                // found the current label
+                jit_label_t* label = &labels[label_idx];
+                spidir_block_t block = label->block;
+                label->visited = true;
+                has_label = true;
+
+                // this is the new current label
+                ctx->current_label = label;
+
+                // can't have a label between a
+                // prefix and instruction, it must jump
+                // to the first prefix
+                CHECK(flow_control != TDN_IL_META);
+
+                // check if we already have a stack slot at this location
+                if (label->snapshot.initialized) {
+                    // we do, perform a merge of the stack, only need the merge if we got
+                    // to here via normal control flow, we exclude COND_BRANCH because it
+                    // handles this merge on its own
+                    if (
+                        flow_control == TDN_IL_NEXT ||
+                        flow_control == TDN_IL_BREAK ||
+                        flow_control == TDN_IL_CALL
+                    ) {
+                        CHECK_AND_RETHROW(eval_stack_merge(builder, &stack, label, true));
+                    }
+                } else {
+                    // for verification, if we got to here via an instruction that can't jump
+                    // to us make sure the stack got cleared correctly
+                    if (
+                        flow_control == TDN_IL_RETURN ||
+                        flow_control == TDN_IL_BRANCH ||
+                        flow_control == TDN_IL_THROW
+                    ) {
+                        CHECK(arrlen(stack.stack) == 0);
+                    }
+
+                    // and now take a snapshot of it, we are not doing anything
+                    // technically and are keeping the same position
+                    CHECK_AND_RETHROW(eval_stack_snapshot(builder, &stack, label, label));
+                }
+
+                // check the last opcode to see how we got to this
+                // new label
+                if (
+                    flow_control == TDN_IL_NEXT ||
+                    flow_control == TDN_IL_BREAK ||
+                    flow_control == TDN_IL_CALL
+                ) {
+                    // we got from a normal instruction, insert a jump
+                    spidir_builder_build_branch(builder, block);
+                }
+
+                // we are now at this block
+                spidir_builder_set_block(builder, block);
+
+                // update the phis if we need to
+                if (label->needs_phi) {
+                    CHECK_AND_RETHROW(eval_stack_update_phis(&stack, label));
+                }
+
+                // and increment so we will check
+                // against the next label
+                label_idx++;
+            }
+
+            // make sure the label is always after or is at
+            // the next pc, if there is another label
+            if (label_idx < arrlen(labels)) {
+                CHECK(labels[label_idx].address >= pc);
+            }
+        }
+
+        //
+        // Update the context for the jitting function
+        //
+        ctx->next_pc = next_pc;
+        ctx->pc = pc;
+        ctx->inst = &inst;
+
+        //--------------------------------------------------------------------------------------------------------------
+        // Debug printing
+        //--------------------------------------------------------------------------------------------------------------
 
         if (clauses != NULL) {
             for (int i = 0; i < clauses->Length; i++) {
@@ -533,95 +665,19 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         }
         tdn_host_printf("\n");
 
-        // normalize the instruction for easier processing now that we printed it
-        tdn_normalize_inst(&inst);
-
-        // check if there are more labels, if we are at a label we
-        // need to properly switch to it
-        bool has_label = false;
-        if (label_idx < arrlen(labels)) {
-            if (pc == labels[label_idx].address) {
-                // found the current label
-                jit_label_t* label = &labels[label_idx];
-                spidir_block_t block = label->block;
-                label->visited = true;
-                has_label = true;
-
-                // can't have a label between a
-                // prefix and instruction, it must jump
-                // to the first prefix
-                CHECK(flow_control != TDN_IL_META);
-
-                // check if we already have a stack slot at this location
-                if (label->snapshot.initialized) {
-                    // we do, perform a merge of the stack, only need the merge if we got
-                    // to here via normal control flow
-                    if (
-                        flow_control == TDN_IL_NEXT ||
-                        flow_control == TDN_IL_BREAK ||
-                        flow_control == TDN_IL_CALL ||
-                        flow_control == TDN_IL_COND_BRANCH
-                    ) {
-                        CHECK_AND_RETHROW(eval_stack_merge(&stack, &label->snapshot, true));
-                    }
-                } else {
-                    // for verification, if we got to here via an instruction that can't jump
-                    // to us make sure the stack got cleared correctly
-                    if (
-                        flow_control == TDN_IL_RETURN ||
-                        flow_control == TDN_IL_BRANCH ||
-                        flow_control == TDN_IL_THROW
-                    ) {
-                        CHECK(arrlen(stack.stack) == 0);
-                    }
-
-                    // and now take a snapshot of it
-                    CHECK_AND_RETHROW(eval_stack_snapshot(&stack, &label->snapshot));
-                }
-
-                // check the last opcode to see how we got to this
-                // new label
-                if (
-                    flow_control == TDN_IL_NEXT ||
-                    flow_control == TDN_IL_BREAK ||
-                    flow_control == TDN_IL_CALL
-                ) {
-                    CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
-
-                    // we got from a normal instruction, insert a jump
-                    spidir_builder_build_branch(builder, block);
-                }
-
-                // we are now at this block
-                spidir_builder_set_block(builder, block);
-
-                // and increment so we will check
-                // against the next label
-                label_idx++;
-            }
-
-            // make sure the label is always after or is at
-            // the next pc, if there is another label
-            if (label_idx < arrlen(labels)) {
-                CHECK(labels[label_idx].address >= pc);
-            }
-        }
-
-        // TODO: control flow handling
-
-        //
-        // Update the context for the jitting function
-        //
-        ctx->next_pc = next_pc;
-        ctx->pc = pc;
-        ctx->inst = &inst;
-        ctx->stack = &stack;
+        //--------------------------------------------------------------------------------------------------------------
+        // Main jitting
+        //--------------------------------------------------------------------------------------------------------------
 
         //
         // the main instruction jitting
         // TODO: split this to multiple functions in different places
         //
         switch (inst.opcode) {
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Arguments
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
             // load an argument
             case CEE_LDARG: {
                 uint16_t arg = inst.operand.variable;
@@ -1013,11 +1069,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // unconditional branch
             case CEE_BR: {
-                CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
-
                 // get and validate the label
                 jit_label_t* target_label = NULL;
-                CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, inst.operand.branch_target, &target_label));
+                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, inst.operand.branch_target, &target_label));
                 CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
 
                 // a branch, emit the branch
@@ -1050,16 +1104,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                             spidir_builder_build_iconst(
                                                     builder, get_spidir_argument_type(value_type), 0));
 
-                // check if one of the blocks needs to have the stack in stack slots
-                CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
-
                 // get the jump locations
                 jit_label_t* target_label = NULL;
-                CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, inst.operand.branch_target, &target_label));
+                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, inst.operand.branch_target, &target_label));
                 CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
 
                 jit_label_t* next_label = NULL;
-                CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, next_pc, &next_label));
+                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, next_pc, &next_label));
                 CHECK(find_exception_clause_for_pc(method, next_label->address) == current_clause);
 
                 // a branch, emit the branch
@@ -1155,15 +1206,12 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 } else {
                     // get the jump locations
                     jit_label_t* target_label = NULL;
-                    CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, inst.operand.branch_target, &target_label));
+                    CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, inst.operand.branch_target, &target_label));
                     CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
 
                     jit_label_t* next_label = NULL;
-                    CHECK_AND_RETHROW(resolve_and_verify_branch_target(&stack, labels, next_pc, &next_label));
+                    CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, next_pc, &next_label));
                     CHECK(find_exception_clause_for_pc(method, next_label->address) == current_clause);
-
-                    // move to slots before we jump
-                    CHECK_AND_RETHROW(eval_stack_move_to_slots(&stack, builder));
 
                     // a branch, emit the branch
                     spidir_builder_build_brcond(builder, cmp, target_label->block, next_label->block);

@@ -25,6 +25,7 @@ typedef enum tdn_il_operand {
 } tdn_il_operand_t;
 
 typedef enum tdn_il_control_flow {
+    TDN_IL_FIRST,
     TDN_IL_NEXT,
     TDN_IL_BREAK,
     TDN_IL_CALL,
