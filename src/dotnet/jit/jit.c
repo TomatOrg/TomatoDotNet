@@ -192,7 +192,7 @@ static spidir_value_type_t get_spidir_mem_type(RuntimeTypeInfo info) {
  * Emit a memcpy with a known size
  */
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
-    spidir_builder_build_call(builder, SPIDIR_TYPE_NONE, m_builtin_memcpy, 3,
+    spidir_builder_build_call(builder, SPIDIR_TYPE_PTR, m_builtin_memcpy, 3,
                               (spidir_value_t[]){
                                         ptr1, ptr2,
                                         spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, size)
@@ -785,8 +785,10 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                                      get_spidir_mem_size(type),
                                                                      get_spidir_mem_type(type),
                                                                      locals[var]);
-                    if (type == tSByte || type == tInt16) {
-                        // TODO: sign extend
+                    if (type == tSByte) {
+                        value = spidir_builder_build_sfill(builder, 8, value);
+                    } else if (type == tInt16) {
+                        value = spidir_builder_build_sfill(builder, 16, value);
                     }
                     CHECK_AND_RETHROW(eval_stack_push(&stack, tracked_type, value));
                 }
@@ -906,8 +908,10 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                                          get_spidir_mem_size(field_type),
                                                                          get_spidir_mem_type(field_type),
                                                                          field_ptr);
-                        if (field_type == tSByte || field_type == tInt16) {
-                            // TODO: sign extend
+                        if (field_type == tSByte) {
+                            value = spidir_builder_build_sfill(builder, 8, value);
+                        } else if (field_type == tInt16) {
+                            value = spidir_builder_build_sfill(builder, 16, value);
                         }
                         CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
                     }
@@ -1015,8 +1019,10 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                                          get_spidir_mem_size(field_type),
                                                                          get_spidir_mem_type(field_type),
                                                                          field_ptr);
-                        if (field_type == tSByte || field_type == tInt16) {
-                            // TODO: sign extend
+                        if (field_type == tSByte) {
+                            value = spidir_builder_build_sfill(builder, 8, value);
+                        } else if (field_type == tInt16) {
+                            value = spidir_builder_build_sfill(builder, 16, value);
                         }
                         CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
                     }
@@ -1104,7 +1110,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // sign extend the index to a 64bit value
                 if (index_type == tInt32) {
                     index = spidir_builder_build_iext(builder, index);
-                    // TODO: sign extend the index
+                    index = spidir_builder_build_sfill(builder, 32, index);
                 }
 
                 spidir_block_t length_is_valid = spidir_builder_create_block(builder);
@@ -1155,8 +1161,10 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                                          get_spidir_mem_size(type),
                                                                          get_spidir_mem_type(type),
                                                                          element_ptr);
-                        if (type == tSByte || type == tInt16) {
-                            // TODO: sign extend
+                        if (type == tSByte) {
+                            value = spidir_builder_build_sfill(builder, 8, value);
+                        } else if (type == tInt16) {
+                            value = spidir_builder_build_sfill(builder, 16, value);
                         }
                         CHECK_AND_RETHROW(eval_stack_push(&stack, tracked, value));
                     }
@@ -1191,7 +1199,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // sign extend the index to a 64bit value
                 if (index_type == tInt32) {
                     index = spidir_builder_build_iext(builder, index);
-                    // TODO: sign extend the index
+                    index = spidir_builder_build_sfill(builder, 32, index);
                 }
 
                 spidir_block_t length_is_valid = spidir_builder_create_block(builder);
@@ -1593,13 +1601,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, NULL, NULL, NULL));
             } break;
 
-            // push the size in bytes of the given type
-            case CEE_SIZEOF: {
-                CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32,
-                                                  spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32,
-                                                                              inst.operand.type->StackSize)));
-            } break;
-
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Math related
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1767,7 +1768,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 }
 
                 switch (inst.opcode) {
-                    // perform a zero extension first
+                    // perform a zero extension
                     case CEE_CONV_U1: {
                         value = spidir_builder_build_and(builder, value,
                                                          spidir_builder_build_iconst(builder,
@@ -1782,7 +1783,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                                                      0xFFFF));
                     } break;
 
-                    // TODO: sign extend
+                    // perform a sign extension
+                    case CEE_CONV_I1: {
+                        value = spidir_builder_build_sfill(builder, 8, value);
+                    } break;
+
+                    case CEE_CONV_I2: {
+                        value = spidir_builder_build_sfill(builder, 16, value);
+                    } break;
 
                     default: CHECK_FAIL();
                 }
@@ -1822,7 +1830,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     // comes from a 32bit integer, first extend to a 64bit integer
                     // and then sign extend it
                     value = spidir_builder_build_iext(builder, value);
-                    CHECK_FAIL(); // TODO: sign extend
+                    value = spidir_builder_build_sfill(builder, 32, value);
                     CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
                 } else if (value_type == tInt64 || value_type == tIntPtr) {
                     // nothing to do, push it again
@@ -1863,6 +1871,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc operations
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            // push the size in bytes of the given type
+            case CEE_SIZEOF: {
+                CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32,
+                                                  spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32,
+                                                                              inst.operand.type->StackSize)));
+            } break;
 
             case CEE_NOP: {
                 // do nothing
