@@ -136,7 +136,7 @@ tdn_err_t eval_stack_snapshot(
     spidir_builder_handle_t builder,
     eval_stack_t* stack,
     jit_label_t* target,
-    jit_label_t* current
+    spidir_block_t current
 );
 
 /**
@@ -221,7 +221,7 @@ typedef struct jit_context {
     tdn_il_inst_t* inst;
 
     // the label going into the current block
-    jit_label_t* current_label;
+    spidir_block_t current_block;
 
     // the start pc of the current instruction
     uint32_t pc;

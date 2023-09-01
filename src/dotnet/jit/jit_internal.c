@@ -105,11 +105,11 @@ tdn_err_t eval_stack_snapshot(
     spidir_builder_handle_t builder,
     eval_stack_t* stack,
     jit_label_t* target,
-    jit_label_t* current
+    spidir_block_t current
 ) {
     tdn_err_t err = TDN_NO_ERROR;
     eval_stack_snapshot_t* snapshot = &target->snapshot;
-    bool target_is_current = target == current;
+    bool target_is_current = target->block.id == current.id;
 
     CHECK(!snapshot->initialized);
 
@@ -148,7 +148,7 @@ tdn_err_t eval_stack_snapshot(
 
     // return to the current block
     if (!target_is_current && target->needs_phi) {
-        spidir_builder_set_block(builder, current->block);
+        spidir_builder_set_block(builder, current);
     }
 
     // mark this as initialized
@@ -205,9 +205,19 @@ tdn_err_t eval_stack_merge(
     tdn_err_t err = TDN_NO_ERROR;
     eval_stack_snapshot_t* snapshot = &target->snapshot;
 
-    // if we are merging it must mean that we need a phi
-    // because we had a snapshot already in this location
-    CHECK(target->needs_phi);
+    //
+    // we only ever merge when we go to a location which is already initialized
+    // which can happen on two reasons:
+    // - jump to a location we already went to
+    // - back jump to a previous location with an empty stack
+    //
+    // in the second case we don't need a phi, but we will still
+    // go to the merge path, so make sure that case is happening if we
+    // didn't mark that we need a phi
+    //
+    if (!target->needs_phi) {
+        CHECK(arrlen(stack->stack) == 0);
+    }
 
     // make sure we have the same amount of items
     CHECK(arrlen(stack->stack) == arrlen(snapshot->stack));
