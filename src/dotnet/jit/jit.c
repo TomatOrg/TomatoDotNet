@@ -933,6 +933,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     }
                 }
 
+                // TODO: perform write barrier as needed
+
                 // perform the actual store
                 if (jit_is_struct_type(field_type)) {
                     // we are copying a struct to the stack
@@ -1043,23 +1045,23 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &index_type, &index, NULL));
                 CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &array_type, &array, NULL));
 
-                // verify the types
+                // verify the element type
                 CHECK(array_type->IsArray);
-                CHECK(index_type == tInt32 || index_type == tIntPtr);
-
-                // TODO: extend the index to 64bit for the length check
-
-                // figure the element type
+                RuntimeTypeInfo T = array_type->ElementType;
                 RuntimeTypeInfo type = inst.operand.type;
                 if (inst.opcode == CEE_LDELEM_REF) {
                     // figure from the array, must be a pointer type
-                    type = array_type->ElementType;
-                    CHECK(tdn_type_is_referencetype(type));
+                    CHECK(tdn_type_is_referencetype(T));
+                    type = T;
                 } else {
                     // make sure the wanted type matches the array type
                     CHECK(tdn_type_array_element_compatible_with(array_type->ElementType, type));
                 }
-                RuntimeTypeInfo tracked = tdn_get_verification_type(type);
+
+                // verify the index type
+                CHECK(index_type == tInt32 || index_type == tIntPtr);
+
+                // TODO: extend the index to 64bit for the length check
 
                 spidir_block_t length_is_valid = spidir_builder_create_block(builder);
                 spidir_block_t length_is_invalid = spidir_builder_create_block(builder);
@@ -1081,19 +1083,23 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
                 // perform the valid length branch, load the value from the array
                 spidir_builder_set_block(builder, length_is_valid);
-                spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tracked->StackSize);
+                spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, type->StackSize);
                 spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tArray->HeapSize);
                 spidir_value_t byte_offset = spidir_builder_build_imul(builder, element_size, index);
                 spidir_value_t abs_offset = spidir_builder_build_iadd(builder, array_size, byte_offset);
                 spidir_value_t element_ptr = spidir_builder_build_ptroff(builder, array, abs_offset);
 
                 if (inst.opcode == CEE_LDELEMA) {
+                    RuntimeTypeInfo tracked = tdn_get_verification_type(type);
+                    CHECK_AND_RETHROW(tdn_get_byref_type(tracked, &tracked));
+
                     // just need the address, we don't need an explicit null check
                     // since we are going to get a fault on the length check if
                     // the array is null
-                    CHECK_AND_RETHROW(tdn_get_byref_type(tracked, &tracked));
                     CHECK_AND_RETHROW(eval_stack_push(&stack, tracked, element_ptr));
                 } else {
+                    RuntimeTypeInfo tracked = tdn_get_intermediate_type(type);
+
                     // perform the actual load
                     if (jit_is_struct_type(tracked)) {
                         // we are copying a struct to the stack
@@ -1114,6 +1120,71 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                         spidir_value_t value = spidir_builder_build_load(builder, spidir_type, element_ptr);
                         CHECK_AND_RETHROW(eval_stack_push(&stack, tracked, value));
                     }
+                }
+            } break;
+
+            // load an element from an array
+            case CEE_STELEM:
+            case CEE_STELEM_REF: {
+                // pop the items
+                spidir_value_t value, index, array;
+                RuntimeTypeInfo value_type, index_type, array_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value, NULL));
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &index_type, &index, NULL));
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &array_type, &array, NULL));
+
+                // verify the array type
+                CHECK(array_type->IsArray);
+                RuntimeTypeInfo T = array_type->ElementType;
+                if (inst.opcode == CEE_LDELEM_REF) {
+                    // figure from the array, must be a pointer type
+                    CHECK(tdn_type_is_referencetype(T));
+                    CHECK(tdn_type_array_element_compatible_with(value_type, T));
+                } else {
+                    CHECK(tdn_type_array_element_compatible_with(value_type, inst.operand.type));
+                    CHECK(tdn_type_array_element_compatible_with(inst.operand.type, T));
+                }
+
+                // verify the index type
+                CHECK(index_type == tInt32 || index_type == tIntPtr);
+
+                // TODO: extend the index to 64bit for the length check
+
+                spidir_block_t length_is_valid = spidir_builder_create_block(builder);
+                spidir_block_t length_is_invalid = spidir_builder_create_block(builder);
+
+                // length check, this will also take care of the NULL check since if
+                // we have a null value we will just fault in here
+                spidir_value_t length_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length));
+                spidir_value_t length_ptr = spidir_builder_build_ptroff(builder, array, length_offset);
+                spidir_value_t length = spidir_builder_build_load(builder, SPIDIR_TYPE_I32, length_ptr);
+                // TODO: extend the length to a 64bit number for the comparison
+
+                // make sure the index < length
+                spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I32, index, length);
+                spidir_builder_build_brcond(builder, length_check, length_is_valid, length_is_invalid);
+
+                // perform the invalid length branch, throw an exception
+                spidir_builder_set_block(builder, length_is_invalid);
+                jit_emit_throw_new(builder, tIndexOutOfRangeException);
+
+                // perform the valid length branch, load the value from the array
+                spidir_builder_set_block(builder, length_is_valid);
+                spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, value_type->StackSize);
+                spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tArray->HeapSize);
+                spidir_value_t byte_offset = spidir_builder_build_imul(builder, element_size, index);
+                spidir_value_t abs_offset = spidir_builder_build_iadd(builder, array_size, byte_offset);
+                spidir_value_t element_ptr = spidir_builder_build_ptroff(builder, array, abs_offset);
+
+                // TODO: perform write barrier as needed
+
+                // perform the actual store
+                if (jit_is_struct_type(value_type)) {
+                    // we are copying a struct to the stack
+                    jit_emit_memcpy(builder, element_ptr, value, value_type->StackSize);
+                } else {
+                    // we are copying a simpler value
+                    spidir_builder_build_store(builder, value, element_ptr);
                 }
             } break;
 
@@ -1431,10 +1502,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // Exception control flow
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_LEAVE: {
-                CHECK_FAIL();
-            } break;
-
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Stack manipulation
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1454,6 +1521,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                             SPIDIR_TYPE_I64, inst.operand.uint64)));
             } break;
 
+            // Push a null object
+            case CEE_LDNULL: {
+                CHECK_AND_RETHROW(eval_stack_push(&stack, NULL,
+                                                  spidir_builder_build_iconst(builder,
+                                                                              SPIDIR_TYPE_PTR, 0)));
+            } break;
+
             // Pop a value and dup it
             case CEE_DUP: {
                 // pop the value and ignore it
@@ -1470,6 +1544,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             case CEE_POP: {
                 // pop the value and ignore it
                 CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, NULL, NULL, NULL));
+            } break;
+
+            // push the size in bytes of the given type
+            case CEE_SIZEOF: {
+                CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32,
+                                                  spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32,
+                                                                              inst.operand.type->StackSize)));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1758,7 +1839,8 @@ static tdn_err_t jit_method(jit_context_t* ctx) {
             // these have an explicit length-check
             CHECK_AND_RETHROW(jit_prepare_method((RuntimeMethodBase)m_IndexOutOfBoundsException_ctor));
         } else if (
-            inst.opcode == CEE_CALLVIRT
+            inst.opcode == CEE_CALLVIRT ||
+            inst.opcode == CEE_LDFLDA
         ) {
             // these have an explicit null check
             CHECK_AND_RETHROW(jit_prepare_method((RuntimeMethodBase)m_NullReferenceException_ctor));

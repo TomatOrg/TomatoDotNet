@@ -273,13 +273,11 @@ jit_label_t* jit_add_label(jit_label_t** labels, uint32_t address) {
         } else if ((*labels)[i].address == address) {
             // already has a label in here, we will signal
             // that we need to move to a stack slot
-            TRACE("NODE AT %04x NEEDS PHI", address);
             (*labels)[i].needs_phi = true;
             return NULL;
         }
     }
 
-    TRACE("CREATED LABEL TO %04x", address);
     jit_label_t label = {
         .address = address,
     };
