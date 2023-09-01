@@ -1035,6 +1035,21 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // Array related
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            // load the length of an array
+            case CEE_LDLEN: {
+                // pop the items
+                spidir_value_t array;
+                RuntimeTypeInfo array_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &array_type, &array, NULL));
+
+                // push the length
+                spidir_value_t length_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length));
+                spidir_value_t length_ptr = spidir_builder_build_ptroff(builder, array, length_offset);
+                spidir_value_t length = spidir_builder_build_load(builder, SPIDIR_TYPE_I32, length_ptr);
+                // TODO: extend to uint64 (as the length should be native unsigned int)
+                CHECK_AND_RETHROW(eval_stack_push(&stack, tIntPtr, length));
+            } break;
+
             // load an element from an array
             case CEE_LDELEMA:
             case CEE_LDELEM:
