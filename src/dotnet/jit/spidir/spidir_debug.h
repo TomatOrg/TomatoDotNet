@@ -1,6 +1,6 @@
 #pragma once
 
-#if 1
+#if 0
 
 #define spidir_builder_set_block(builder, block) \
     ({ \

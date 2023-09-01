@@ -494,8 +494,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     // the main jit function
     //
     int indent = 0;
-    RuntimeExceptionHandlingClause current_clause = NULL;
-    bool is_handler_clause = false;
     pc = 0;
     flow_control = TDN_IL_FIRST;
     int label_idx = 0;
@@ -588,6 +586,24 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // the next pc, if there is another label
             if (label_idx < arrlen(labels)) {
                 CHECK(labels[label_idx].address >= pc);
+            }
+        }
+
+        // validate control flow of clauses
+        if (clauses != NULL) {
+            bool found_handler = false;
+            for (int i = 0; i < clauses->Length; i++) {
+                RuntimeExceptionHandlingClause c = clauses->Elements[i];
+
+                // if we are entering a handler region then make sure
+                // we did not fall-through
+                if (pc == c->HandlerOffset) {
+                    CHECK(
+                        flow_control == TDN_IL_RETURN ||
+                        flow_control == TDN_IL_BRANCH ||
+                        flow_control == TDN_IL_THROW
+                    );
+                }
             }
         }
 
@@ -794,7 +810,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             case CEE_LDFLD:
             case CEE_LDFLDA: {
                 RuntimeFieldInfo field = inst.operand.field;
-                bool ldarga = inst.opcode == CEE_LDFLDA;
+                bool ldsfld = inst.opcode == CEE_LDFLDA;
 
                 // TODO: check field accessibility
 
@@ -807,14 +823,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 CHECK(
                     obj_type->IsByRef ||
                     tdn_type_is_referencetype(obj_type) ||
-                    (jit_is_struct_type(obj_type) && !ldarga)
+                    (jit_is_struct_type(obj_type) && !ldsfld)
                 );
 
                 // TODO: verify the field is contained within the given object
 
                 // get the stack type of the field
                 RuntimeTypeInfo field_type = inst.operand.field->FieldType;
-                RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
 
                 // figure the pointer to the field itself
                 spidir_value_t field_ptr;
@@ -836,13 +851,21 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     }
                 }
 
-                if (ldarga) {
-                    // TODO: emit null check
+                if (ldsfld) {
+                    if (!field->Attributes.Static) {
+                        // TODO: emit null check
+                    }
+
+                    // tracks as a managed pointer to the verification type
+                    RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
+                    CHECK_AND_RETHROW(tdn_get_byref_type(value_type, &value_type));
 
                     // for reference to field we don't need the load
-                    CHECK_AND_RETHROW(tdn_get_byref_type(value_type, &value_type));
                     CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, field_ptr));
                 } else {
+                    // tracks as the intermediate type
+                    RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
+
                     // perform the actual load
                     if (jit_is_struct_type(field_type)) {
                         // we are copying a struct to the stack
@@ -864,8 +887,151 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                         CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
                     }
                 }
-
             } break;
+
+            // store to a field
+            case CEE_STFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+
+                // TODO: check field accessibility
+
+                // pop the item
+                spidir_value_t obj, value;
+                RuntimeTypeInfo obj_type, value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value, NULL));
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &obj_type, &obj, NULL));
+
+                // check this is either an object or a managed pointer
+                CHECK(
+                    obj_type->IsByRef ||
+                    tdn_type_is_referencetype(obj_type)
+                );
+
+                // TODO: verify the field is contained within the given object
+
+                // get the stack type of the field
+                RuntimeTypeInfo field_type = inst.operand.field->FieldType;
+                CHECK_AND_RETHROW(tdn_type_verifier_assignable_to(value_type, field_type));
+
+                // figure the pointer to the field itself
+                spidir_value_t field_ptr;
+                if (field->Attributes.Static) {
+                    // static field
+                    // TODO: get a pointer to the static field
+                    CHECK_FAIL();
+                } else {
+                    // instance field
+                    if (field->FieldOffset == 0) {
+                        // field is at offset zero, just load it
+                        field_ptr = obj;
+                    } else {
+                        // build an offset to the field
+                        field_ptr = spidir_builder_build_ptroff(builder, obj,
+                                                                spidir_builder_build_iconst(builder,
+                                                                                            SPIDIR_TYPE_I64,
+                                                                                            field->FieldOffset));
+                    }
+                }
+
+                // perform the actual store
+                if (jit_is_struct_type(field_type)) {
+                    // we are copying a struct to the stack
+                    jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
+                } else {
+                    // we are copying a simpler value
+                    // TODO: once supported set the load size
+                    spidir_builder_build_store(builder, value, field_ptr);
+                }
+            } break;
+
+            //----------------------------------------------------------------------------------------------------------
+
+            // load a static field
+            case CEE_LDSFLD:
+            case CEE_LDSFLDA: {
+                RuntimeFieldInfo field = inst.operand.field;
+                CHECK(field->Attributes.Static);
+                bool ldsflda = inst.opcode == CEE_LDSFLDA;
+
+                // TODO: check field accessibility
+
+                // get the stack type of the field
+                RuntimeTypeInfo field_type = inst.operand.field->FieldType;
+
+                // figure the pointer to the field itself
+                // TODO: get a pointer to the static field
+                spidir_value_t field_ptr;
+                CHECK_FAIL();
+
+                if (ldsflda) {
+                    // tracks as a managed pointer to the verification type
+                    RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
+                    CHECK_AND_RETHROW(tdn_get_byref_type(value_type, &value_type));
+
+                    // for reference to field we don't need the load
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, field_ptr));
+                } else {
+                    // tracks as the intermediate type
+                    RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
+
+                    // perform the actual load
+                    if (jit_is_struct_type(field_type)) {
+                        // we are copying a struct to the stack
+                        spidir_value_t value;
+                        CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, value_type, &value));
+                        jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
+                    } else {
+                        // we are copying a simpler value
+                        // TODO: once supported set the load size
+                        spidir_value_type_t type;
+                        if (value_type == tInt32) {
+                            type = SPIDIR_TYPE_I32;
+                        } else if (value_type == tInt64 || value_type == tIntPtr) {
+                            type = SPIDIR_TYPE_I64;
+                        } else {
+                            type = SPIDIR_TYPE_PTR;
+                        }
+                        spidir_value_t value = spidir_builder_build_load(builder, type, field_ptr);
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, value_type, value));
+                    }
+                }
+            } break;
+
+            // store to a static field
+            case CEE_STSFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+                CHECK(field->Attributes.Static);
+
+                // TODO: check field accessibility
+
+                // pop the item
+                spidir_value_t value;
+                RuntimeTypeInfo value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(ctx->stack, builder, &value_type, &value, NULL));
+
+                // get the stack type of the field
+                RuntimeTypeInfo field_type = inst.operand.field->FieldType;
+                CHECK(tdn_type_verifier_assignable_to(value_type, field_type));
+
+                // figure the pointer to the field itself
+                // TODO: get a pointer to the static field
+                spidir_value_t field_ptr;
+                CHECK_FAIL();
+
+                // perform the actual store
+                if (jit_is_struct_type(field_type)) {
+                    // we are copying a struct to the stack
+                    jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
+                } else {
+                    // we are copying a simpler value
+                    // TODO: once supported set the load size
+                    spidir_builder_build_store(builder, value, field_ptr);
+                }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Array related
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
             // load an element from an array
             case CEE_LDELEMA:
@@ -1072,7 +1238,10 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // get and validate the label
                 jit_label_t* target_label = NULL;
                 CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, inst.operand.branch_target, &target_label));
-                CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
+
+                // TODO: verify not branching out of a protected block, filter or handler
+                // TODO: do allow for jumping from outside of a block to the first instruction
+                //       of a protected block
 
                 // a branch, emit the branch
                 spidir_builder_build_branch(builder, target_label->block);
@@ -1107,11 +1276,15 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // get the jump locations
                 jit_label_t* target_label = NULL;
                 CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, inst.operand.branch_target, &target_label));
-                CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
+
+                // TODO: verify not branching out of a protected block, filter or handler
+                // TODO: do allow for jumping from outside of a block to the first instruction
+                //       of a protected block
 
                 jit_label_t* next_label = NULL;
                 CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, next_pc, &next_label));
-                CHECK(find_exception_clause_for_pc(method, next_label->address) == current_clause);
+
+                // TODO: verify fallthrough rules
 
                 // a branch, emit the branch
                 spidir_builder_build_brcond(builder, cmp, target_label->block, next_label->block);
@@ -1207,11 +1380,15 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     // get the jump locations
                     jit_label_t* target_label = NULL;
                     CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, inst.operand.branch_target, &target_label));
-                    CHECK(find_exception_clause_for_pc(method, target_label->address) == current_clause);
+
+                    // TODO: verify not branching out of a protected block, filter or handler
+                    // TODO: do allow for jumping from outside of a block to the first instruction
+                    //       of a protected block
 
                     jit_label_t* next_label = NULL;
                     CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, next_pc, &next_label));
-                    CHECK(find_exception_clause_for_pc(method, next_label->address) == current_clause);
+
+                    // TODO: verify fallthrough rules
 
                     // a branch, emit the branch
                     spidir_builder_build_brcond(builder, cmp, target_label->block, next_label->block);
@@ -1220,8 +1397,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // return value from the function
             case CEE_RET: {
-                // make sure we are not trying to return from within a protected block
-                CHECK(current_clause == NULL);
+                // TODO: make sure not in a protected block, filter or handler
 
                 RuntimeTypeInfo wanted_ret_type = method->ReturnParameter->ParameterType;
                 if (wanted_ret_type == tVoid) {

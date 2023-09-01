@@ -427,26 +427,26 @@ typedef struct coril_method_sect_fat {
 } PACKED coril_method_sect_fat_t;
 
 typedef struct coril_exception_clause_small {
-    int16_t flags;
-    int16_t try_offset;
-    int8_t try_length;
-    int16_t handler_offset;
-    int8_t handler_length;
+    uint16_t flags;
+    uint16_t try_offset;
+    uint8_t try_length;
+    uint16_t handler_offset;
+    uint8_t handler_length;
     union {
-        int32_t class_token;
-        int32_t filter_offset;
+        uint32_t class_token;
+        uint32_t filter_offset;
     };
 } PACKED coril_exception_clause_small_t;
 
 typedef struct coril_exception_clause_fat {
-    int32_t flags;
-    int32_t try_offset;
-    int32_t try_length;
-    int32_t handler_offset;
-    int32_t handler_length;
+    uint32_t flags;
+    uint32_t try_offset;
+    uint32_t try_length;
+    uint32_t handler_offset;
+    uint32_t handler_length;
     union {
-        int32_t class_token;
-        int32_t filter_offset;
+        uint32_t class_token;
+        uint32_t filter_offset;
     };
 } PACKED coril_exception_clause_fat_t;
 
@@ -477,7 +477,6 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
             clause.handler_offset = header.handler_offset;
             clause.handler_length = header.handler_length;
             clause.class_token = header.class_token;
-            clause.filter_offset = header.filter_offset;
             data += sizeof(coril_exception_clause_small_t);
             size -= sizeof(coril_exception_clause_small_t);
         } else {
@@ -488,14 +487,12 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
         }
 
         // make sure it is only a valid set of flags
-        // TODO: is this actually correct?
         CHECK(
             clause.flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION ||
-            clause.flags == COR_ILEXCEPTION_CLAUSE_FINALLY
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT ||
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
         );
-
-        // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT
-        // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
 
         // verify the offsets
         CHECK(clause.handler_length >= 0);
@@ -573,8 +570,8 @@ tdn_err_t tdn_parser_method_body(
 
         // take the new header size and check it
         coril_method_fat_t* fat = (coril_method_fat_t*)start;
-        CHECK(fat->size == 3);
-        header_size = fat->size * 4;
+        CHECK(fat->size == sizeof(coril_method_fat_t) / sizeof(uint32_t));
+        header_size = sizeof(coril_method_fat_t);
 
         // update the flags with the fat ones
         flags = fat->flags;
@@ -616,21 +613,23 @@ tdn_err_t tdn_parser_method_body(
     if (flags & CorILMethod_MoreSects) {
         // make sure we can access the header
         uint32_t data_offset = method_def->rva + header_size + ALIGN_UP(code_size, sizeof(uint32_t));
+        uint8_t* sect_start = pe_image_address(&assembly->Metadata->file, data_offset);
+        CHECK(sect_start != NULL);
         CHECK(pe_image_address(&assembly->Metadata->file, data_offset + sizeof(uint32_t)) != NULL);
 
         // take one byte, we are going to make sure this is exception handling table
         // and that there are no more sections after it
-        uint8_t kind = *code_end;
+        uint8_t kind = *sect_start;
         CHECK(kind & CorILMethod_Sect_EHTable);
         CHECK((kind & CorILMethod_Sect_MoreSects) == 0);
 
         // if not the fat format then extend the size
         size_t size;
         if (kind & CorILMethod_Sect_FatFormat) {
-            coril_method_sect_fat_t* header = (coril_method_sect_fat_t*)code_end;
+            coril_method_sect_fat_t* header = (coril_method_sect_fat_t*)sect_start;
             size = header->data_size;
         } else {
-            coril_method_sect_small_t* header = (coril_method_sect_small_t*)code_end;
+            coril_method_sect_small_t* header = (coril_method_sect_small_t*)sect_start;
             size = header->data_size;
         }
 
@@ -641,7 +640,7 @@ tdn_err_t tdn_parser_method_body(
         // handle the extra data correctly
         CHECK_AND_RETHROW(tdn_parse_method_exception_handling_clauses(
                 methodBase, kind & CorILMethod_Sect_FatFormat,
-                code_end + sizeof(uint32_t), size - sizeof(uint32_t), code_size));
+                sect_start + sizeof(uint32_t), size - sizeof(uint32_t), code_size));
     }
 
 cleanup:
