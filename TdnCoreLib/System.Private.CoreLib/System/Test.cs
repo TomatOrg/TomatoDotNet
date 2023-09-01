@@ -11,10 +11,10 @@ public class Test
     
     public bool Do(Lol[] arr, int[] arr2)
     {
-        // if (arr.Length != arr2.Length * 2)
-        // {
-        //     return false;
-        // }
+        if (arr.Length * 2 != arr2.Length)
+        {
+            return false;
+        }
         
         for (var i = 0; i < 10; i++)
         {

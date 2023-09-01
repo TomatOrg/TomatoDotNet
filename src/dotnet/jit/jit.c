@@ -1101,11 +1101,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // verify the index type
                 CHECK(index_type == tInt32 || index_type == tIntPtr);
 
+                // sign extend the index to a 64bit value
                 if (index_type == tInt32) {
+                    index = spidir_builder_build_iext(builder, index);
                     // TODO: sign extend the index
                 }
-
-                // TODO: extend the index to 64bit for the length check
 
                 spidir_block_t length_is_valid = spidir_builder_create_block(builder);
                 spidir_block_t length_is_invalid = spidir_builder_create_block(builder);
@@ -1188,7 +1188,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // verify the index type
                 CHECK(index_type == tInt32 || index_type == tIntPtr);
 
+                // sign extend the index to a 64bit value
                 if (index_type == tInt32) {
+                    index = spidir_builder_build_iext(builder, index);
                     // TODO: sign extend the index
                 }
 
@@ -1759,10 +1761,30 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // make sure it is an integer type
                 CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
 
-                // TODO: truncate
-
                 if (value_type != tInt32) {
-                    // TODO: convert to a SPIDIR_TYPE_I32
+                    // truncate to a 32bit value
+                    value = spidir_builder_build_itrunc(builder, value);
+                }
+
+                switch (inst.opcode) {
+                    // perform a zero extension first
+                    case CEE_CONV_U1: {
+                        value = spidir_builder_build_and(builder, value,
+                                                         spidir_builder_build_iconst(builder,
+                                                                                     SPIDIR_TYPE_I32,
+                                                                                     0xFF));
+                    } break;
+
+                    case CEE_CONV_U2: {
+                        value = spidir_builder_build_and(builder, value,
+                                                         spidir_builder_build_iconst(builder,
+                                                                                     SPIDIR_TYPE_I32,
+                                                                                     0xFFFF));
+                    } break;
+
+                    // TODO: sign extend
+
+                    default: CHECK_FAIL();
                 }
 
                 CHECK_FAIL();
@@ -1778,9 +1800,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                     // nothing to do, push it again
                     CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32, value));
                 } else if (value_type == tInt64 || value_type == tIntPtr) {
-                    // TODO: truncate
-                    // TODO: convert it to a SPIDIR_TYPE_I32
-                    CHECK_FAIL();
+                    // truncate to a 32bit value
+                    value = spidir_builder_build_itrunc(builder, value);
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32, value));
                 } else {
                     // invalid type
                     CHECK_FAIL();
@@ -1797,10 +1819,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_I ? tIntPtr : tInt64;
 
                 if (value_type == tInt32) {
-                    // nothing to do, push it again
-                    // TODO: sign extend
-                    // TODO: convert to a SPIDIR_TYPE_I64
-                    CHECK_FAIL();
+                    // comes from a 32bit integer, first extend to a 64bit integer
+                    // and then sign extend it
+                    value = spidir_builder_build_iext(builder, value);
+                    CHECK_FAIL(); // TODO: sign extend
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
                 } else if (value_type == tInt64 || value_type == tIntPtr) {
                     // nothing to do, push it again
                     CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
@@ -1820,10 +1843,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_I ? tIntPtr : tInt64;
 
                 if (value_type == tInt32) {
-                    // nothing to do, push it again
-                    // TODO: zero extend
-                    // TODO: convert to a SPIDIR_TYPE_I64
-                    CHECK_FAIL();
+                    // comes from a 32bit integer, first extend to a 64bit integer
+                    // and then zero extend it
+                    value = spidir_builder_build_iext(builder, value);
+                    value = spidir_builder_build_and(builder, value,
+                                                     spidir_builder_build_iconst(builder,
+                                                                                 SPIDIR_TYPE_I64,
+                                                                                 0xFFFFFFFF));
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
                 } else if (value_type == tInt64 || value_type == tIntPtr) {
                     // nothing to do, push it again
                     CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
