@@ -3,7 +3,7 @@ namespace System;
 public class Test
 {
 
-    public uint Do(ulong a)
+    public uint Do(int a)
     {
         return checked((uint)a);
     }

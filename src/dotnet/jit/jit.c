@@ -1762,7 +1762,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Memory conversions
+            // Type conversions
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
             case CEE_CONV_I1:
@@ -1838,19 +1838,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 }
             } break;
 
-            // we can also handle in here the overflow versions because converting
-            // a signed i32/i64 to a signed i64 can never fail
             case CEE_CONV_I:
-            case CEE_CONV_I8:
-            case CEE_CONV_OVF_I8:
-            case CEE_CONV_OVF_I: {
+            case CEE_CONV_I8: {
                 spidir_value_t value;
                 RuntimeTypeInfo value_type;
                 CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &value_type, &value, NULL));
 
                 // choose based on the opcode
-                RuntimeTypeInfo push_type = (inst.opcode == CEE_CONV_I || inst.opcode == CEE_CONV_OVF_I)
-                                                ? tIntPtr : tInt64;
+                RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_I ? tIntPtr : tInt64;
 
                 if (value_type == tInt32) {
                     // comes from a 32bit integer, first extend to a 64bit integer
@@ -1870,15 +1865,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // we can also handle in here the overflow versions because
             // converting an unsigned i32/i64 to an unsigned i64 can never fail
             case CEE_CONV_U:
-            case CEE_CONV_U8:
-            case CEE_CONV_OVF_U8_UN:
-            case CEE_CONV_OVF_U_UN: {
+            case CEE_CONV_U8: {
                 spidir_value_t value;
                 RuntimeTypeInfo value_type;
                 CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &value_type, &value, NULL));
 
                 // choose based on the opcode
-                RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_I ? tIntPtr : tInt64;
+                RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_U ? tIntPtr : tInt64;
 
                 if (value_type == tInt32) {
                     // comes from a 32bit integer, first extend to a 64bit integer
@@ -1898,90 +1891,239 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 }
             } break;
 
-            // unsigned -> uint8 - lshr & branch zero
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Type conversions with overflow checking
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            //
+            // | to / from | uint32            | uint64                | int32                    | int64                    |
+            // |-----------|-------------------|-----------------------|--------------------------|--------------------------|
+            // | uint8     | value ult 0x100   | value ult 0x100       | value ult 0x100          | value ult 0x100          |
+            // | uint16    | value ult 0x10000 | value ult 0x10000     | value ult 0x10000        | value ult 0x10000        |
+            // | uint32    | nop               | value ult 0x100000000 | -1 slt value             | value ult 0x100000000    |
+            // | uint64    | nop               | nop                   | -1 slt value             | -1 slt value             |
+            // | int8      | value ult 0x80    | value ult 0x80        | sfill 8 and eq original  | sfill 8 and eq original  |
+            // | int16     | value ult 0x8000  | value ult 0x8000      | sfill 16 and eq original | sfill 16 and eq original |
+            // | int32     | -1 slt value      | -1 slt value          | nop                      | sfill 32 and eq original |
+            // | int64     | nop               | -1 slt value          | nop                      | nop                      |
+            //
+
+            case CEE_CONV_OVF_U1:
+            case CEE_CONV_OVF_I1:
             case CEE_CONV_OVF_U1_UN:
-            case CEE_CONV_OVF_U2_UN: {
+            case CEE_CONV_OVF_I1_UN:
+            case CEE_CONV_OVF_U2:
+            case CEE_CONV_OVF_I2:
+            case CEE_CONV_OVF_U2_UN:
+            case CEE_CONV_OVF_I2_UN:
+            case CEE_CONV_OVF_U4:
+            case CEE_CONV_OVF_I4:
+            case CEE_CONV_OVF_U4_UN:
+            case CEE_CONV_OVF_I4_UN: {
                 spidir_value_t value;
                 RuntimeTypeInfo value_type;
                 CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &value_type, &value, NULL));
 
-                // choose the type we need to perform the math on
-                spidir_value_type_t spidir_type;
+                // type check
+                spidir_value_type_t type;
+                uint64_t minus_one;
                 if (value_type == tInt32) {
-                    spidir_type = SPIDIR_TYPE_I32;
+                    // special case of nop
+                    //      uint32 -> uint32
+                    //      int32 -> int32
+                    if (inst.opcode == CEE_CONV_OVF_U4_UN || inst.opcode == CEE_CONV_OVF_I4) {
+                        CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32, value));
+                        break;
+                    }
+
+                    type = SPIDIR_TYPE_I32;
+                    minus_one = (uint32_t)-1;
                 } else if (value_type == tInt64 || value_type == tIntPtr) {
-                    spidir_type = SPIDIR_TYPE_I64;
+                    type = SPIDIR_TYPE_I64;
+                    minus_one = (uint64_t)-1;
                 } else {
                     CHECK_FAIL();
                 }
 
-                // choose the count
-                int shift_count = 8;
-                if (inst.opcode == CEE_CONV_OVF_U2_UN) {
-                    shift_count = 16;
+                spidir_value_t cond;
+                if (
+                    (value_type == tInt32 && inst.opcode == CEE_CONV_OVF_U4) ||
+                    (inst.opcode == CEE_CONV_OVF_I4_UN)
+                ) {
+                    // special case:
+                    //      int32 -> uint32
+                    //      uint32/uint64 -> int32
+                    // perform a signed positive check
+                    cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I32,
+                                                     spidir_builder_build_iconst(builder, type, minus_one),
+                                                     value);
+                } else if (
+                    inst.opcode == CEE_CONV_OVF_I1 ||
+                    inst.opcode == CEE_CONV_OVF_I2 ||
+                    inst.opcode == CEE_CONV_OVF_I4
+                ) {
+                    // int32/int64 -> int8
+                    // int32/int64 -> int16
+                    // int64 -> int32
+
+                    // get the correct bit count
+                    uint64_t bit_width;
+                    if (inst.opcode == CEE_CONV_OVF_I1) {
+                        bit_width = 8;
+                    } else if (inst.opcode == CEE_CONV_OVF_I2) {
+                        bit_width = 16;
+                    } else if (inst.opcode == CEE_CONV_OVF_I4) {
+                        bit_width = 32;
+                    }
+
+                    // sign extend and check they are still the same
+                    spidir_value_t signed_value = spidir_builder_build_sfill(builder, bit_width, value);
+                    cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32,
+                                                     value, signed_value);
+                } else {
+                    // get the correct max value
+                    uint64_t max_value;
+                    if (inst.opcode == CEE_CONV_OVF_U1 || inst.opcode == CEE_CONV_OVF_U1_UN) {
+                        max_value = 0x100;
+                    } else if (inst.opcode == CEE_CONV_OVF_U2 || inst.opcode == CEE_CONV_OVF_U2_UN) {
+                        max_value = 0x10000;
+                    } else if (inst.opcode == CEE_CONV_OVF_U4 || inst.opcode == CEE_CONV_OVF_U4_UN) {
+                        max_value = 0x100000000;
+                    } else if (inst.opcode == CEE_CONV_OVF_I1_UN) {
+                        max_value = 0x80;
+                    } else if (inst.opcode == CEE_CONV_OVF_I2_UN) {
+                        max_value = 0x8000;
+                    } else {
+                        CHECK_FAIL();
+                    }
+
+                    // perform an unsigned less than check, this is fine for both the signed and unsigned
+                    // input because we are using twos complement
+                    cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_ULT, SPIDIR_TYPE_I32, value,
+                                                                     spidir_builder_build_iconst(builder, type,
+                                                                                                 max_value));
                 }
 
-                // perform the check
-                spidir_value_t shifted = spidir_builder_build_lshr(builder, value,
-                                                                   spidir_builder_build_iconst(builder,
-                                                                                               spidir_type,
-                                                                                               shift_count));
-
-                // create the branch, if non-zero then its invalid otherwise it is valid
+                // perform the branch
                 spidir_block_t valid = spidir_builder_create_block(builder);
                 spidir_block_t invalid = spidir_builder_create_block(builder);
-                spidir_builder_build_brcond(builder, shifted, invalid, valid);
+                spidir_builder_build_brcond(builder, cond, valid, invalid);
 
-                // perform the invalid path
+                // invalid path, throw
                 spidir_builder_set_block(builder, invalid);
                 CHECK_AND_RETHROW(jit_emit_throw_new(builder, tOverflowException));
 
-                // perform the valid path
-                spidir_builder_set_block(builder, valid); ctx->current_block = valid;
+                // valid path, push the new valid
+                spidir_builder_set_block(builder, valid);
+                ctx->current_block = valid;
 
-                // convert to the target
+                // truncate if came from a bigger value
                 if (value_type != tInt32) {
                     value = spidir_builder_build_itrunc(builder, value);
                 }
-
                 CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32, value));
             } break;
 
-            // unsigned -> uint32 - lshr & branch zero
-            case CEE_CONV_OVF_U4_UN: {
+            case CEE_CONV_OVF_I8:
+            case CEE_CONV_OVF_I:
+            case CEE_CONV_OVF_U8_UN:
+            case CEE_CONV_OVF_U_UN: {
                 spidir_value_t value;
                 RuntimeTypeInfo value_type;
                 CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &value_type, &value, NULL));
 
-                // choose the type we need to perform the math on
-                if (value_type == tInt32) {
-                    // unsigned -> uint32 will never overflow
-                    CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32, value));
-                    break;
+                // choose the type to push
+                RuntimeTypeInfo push_type;
+                if (inst.opcode == CEE_CONV_OVF_U_UN || inst.opcode == CEE_CONV_OVF_I) {
+                    push_type = tIntPtr;
+                } else {
+                    push_type = tInt64;
                 }
 
-                CHECK(value_type == tInt64 || value_type == tIntPtr);
+                // type check
+                CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
 
-                // perform the check
-                spidir_value_t shifted = spidir_builder_build_lshr(builder, value,
-                                                                   spidir_builder_build_iconst(builder,
-                                                                                               SPIDIR_TYPE_I64,
-                                                                                               32));
+                // if the input was 32bit zero/sign extend it,
+                // based on the signed -> signed or the unsigned -> unsigned
+                if (value_type == tInt32) {
+                    value = spidir_builder_build_iext(builder, value);
+                    if (inst.opcode == CEE_CONV_OVF_I8 || inst.opcode == CEE_CONV_OVF_I) {
+                        value = spidir_builder_build_sfill(builder, 32, value);
+                    } else {
+                        value = spidir_builder_build_and(builder, value,
+                                                         spidir_builder_build_iconst(builder,
+                                                                                     SPIDIR_TYPE_I64, 0xFFFFFFFF));
+                    }
+                }
 
-                // create the branch, if non-zero then its invalid otherwise it is valid
+                // just push the same as the wanted type
+                CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
+            } break;
+
+            case CEE_CONV_OVF_I8_UN:
+            case CEE_CONV_OVF_I_UN:
+            case CEE_CONV_OVF_U8:
+            case CEE_CONV_OVF_U: {
+                spidir_value_t value;
+                RuntimeTypeInfo value_type;
+                CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &value_type, &value, NULL));
+
+                // choose the type to push
+                RuntimeTypeInfo push_type;
+                if (inst.opcode == CEE_CONV_OVF_U || inst.opcode == CEE_CONV_OVF_I_UN) {
+                    push_type = tIntPtr;
+                } else {
+                    push_type = tInt64;
+                }
+
+                // type check
+                spidir_value_type_t type;
+                uint64_t minus_one;
+                if (value_type == tInt32) {
+                    if (inst.opcode == CEE_CONV_OVF_I8_UN || inst.opcode == CEE_CONV_OVF_I_UN) {
+                        // special case, uint32 -> int64 is always valid
+                        goto skip_positive_check;
+                    }
+
+                    type = SPIDIR_TYPE_I32;
+                    minus_one = (uint32_t)-1;
+                } else if (value_type == tInt64 || value_type == tIntPtr) {
+                    type = SPIDIR_TYPE_I64;
+                    minus_one = (uint64_t)-1;
+                } else {
+                    CHECK_FAIL();
+                }
+
+                // make sure is positive by doing a sign check
+                spidir_value_t cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I32,
+                                                 spidir_builder_build_iconst(builder, type, minus_one),
+                                                 value);
+
+                // perform the branch
                 spidir_block_t valid = spidir_builder_create_block(builder);
                 spidir_block_t invalid = spidir_builder_create_block(builder);
-                spidir_builder_build_brcond(builder, shifted, invalid, valid);
+                spidir_builder_build_brcond(builder, cond, valid, invalid);
 
-                // perform the invalid path
+                // invalid path, throw
                 spidir_builder_set_block(builder, invalid);
                 CHECK_AND_RETHROW(jit_emit_throw_new(builder, tOverflowException));
 
-                // perform the valid path
-                spidir_builder_set_block(builder, valid); ctx->current_block = valid;
+                // valid path, push the new valid
+                spidir_builder_set_block(builder, valid);
+                ctx->current_block = valid;
 
-                // convert to the target
-                CHECK_AND_RETHROW(eval_stack_push(&stack, tInt32, spidir_builder_build_itrunc(builder, value)));
+            skip_positive_check:
+                // if the input was 32bit,
+                // in this case we only either have unsigned -> signed or signed -> unsigned, in both
+                // cases we make sure that the value is positive, so we can just do a normal zero extension
+                if (value_type == tInt32) {
+                    value = spidir_builder_build_iext(builder, value);
+                    value = spidir_builder_build_and(builder, value,
+                                                     spidir_builder_build_iconst(builder,
+                                                                                 SPIDIR_TYPE_I64, 0xFFFFFFFF));
+                }
+
+                // just push the same as the wanted type
+                CHECK_AND_RETHROW(eval_stack_push(&stack, push_type, value));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
