@@ -13,7 +13,16 @@
 
 #include "spidir/spidir_debug.h"
 
+/**
+ * The spidir module, DON'T USE FROM WITHIN THE BUILDER
+ */
 static spidir_module_handle_t m_spidir_module;
+
+/**
+ * Stack of methods that we need to jit and are already
+ * prepared
+ */
+static RuntimeMethodBase* m_methods_to_jit = NULL;
 
 // buildin functions
 static spidir_function_t m_builtin_memset;
@@ -21,6 +30,7 @@ static spidir_function_t m_builtin_memcpy;
 static spidir_function_t m_builtin_gc_new;
 static spidir_function_t m_builtin_throw;
 
+// runtime called ctors
 static RuntimeConstructorInfo m_IndexOutOfBoundsException_ctor;
 static RuntimeConstructorInfo m_NullReferenceException_ctor;
 static RuntimeConstructorInfo m_OverflowException_ctor;
@@ -1345,9 +1355,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
                 // handle the return type
                 RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
-                if (jit_is_struct_type(ret_type)) {
+                if (ret_type != tVoid && jit_is_struct_type(ret_type)) {
                     // need to allocate the space in the caller
-                    CHECK_FAIL();
+                    CHECK_FAIL("%U", ret_type->Name);
                 } else {
                     // emit the actual call
                     spidir_value_t value = spidir_builder_build_call(builder,
@@ -1588,6 +1598,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 CHECK_AND_RETHROW(eval_stack_push(&stack, tInt64,
                                 spidir_builder_build_iconst(builder,
                                                             SPIDIR_TYPE_I64, inst.operand.uint64)));
+            } break;
+
+            // push a string
+            case CEE_LDSTR: {
+                // TODO: actually create the string or something
+                CHECK_AND_RETHROW(eval_stack_push(&stack, tString,
+                                                  spidir_builder_build_iconst(builder,
+                                                                              SPIDIR_TYPE_PTR, 0)));
             } break;
 
             // Push a null object
@@ -1973,6 +1991,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                         bit_width = 16;
                     } else if (inst.opcode == CEE_CONV_OVF_I4) {
                         bit_width = 32;
+                    } else {
+                        CHECK_FAIL();
                     }
 
                     // sign extend and check they are still the same
@@ -2224,7 +2244,10 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, spidir_module_hand
     );
     method->JitMethodId = func.id;
 
-    // TODO: queue for actual jitting
+    // queue to methods to jit if we didn't start with this already
+    if (!method->JitStarted) {
+        arrpush(m_methods_to_jit, method);
+    }
 
 cleanup:
     string_builder_free(&builder);
@@ -2236,9 +2259,8 @@ cleanup:
 /**
  * Actually jits a method, prepares it if needed
  */
-static tdn_err_t jit_method(jit_context_t* ctx) {
+static tdn_err_t jit_method(RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
-    RuntimeMethodBase method = ctx->method;
 
     // check if already jitted
     if (method->JitStarted) {
@@ -2246,13 +2268,16 @@ static tdn_err_t jit_method(jit_context_t* ctx) {
     }
     method->JitStarted = 1;
 
-    // prepare the method
-    CHECK_AND_RETHROW(jit_prepare_method(method, m_spidir_module));
+    // make sure the method is already prepared at this point
+    CHECK(method->JitPrepared);
 
     // now call the builder so we can actually build it
+    jit_context_t ctx = {
+        .method = method
+    };
     spidir_module_build_function(m_spidir_module,
                                  (spidir_function_t){ method->JitMethodId },
-                                 jit_method_callback, ctx);
+                                 jit_method_callback, &ctx);
 
 cleanup:
     return err;
@@ -2265,10 +2290,14 @@ cleanup:
 tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    jit_context_t ctx = {
-        .method = methodInfo
-    };
-    CHECK_AND_RETHROW(jit_method(&ctx));
+    // prepare it, this should queue the method
+    CHECK_AND_RETHROW(jit_prepare_method(methodInfo, m_spidir_module));
+
+    // and now dequeue all the methods we need to jit
+    while (arrlen(m_methods_to_jit) != 0) {
+        RuntimeMethodBase method = arrpop(m_methods_to_jit);
+        CHECK_AND_RETHROW(jit_method(method));
+    }
 
 cleanup:
     return err;

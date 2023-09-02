@@ -127,8 +127,12 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
         case InlineSig:
             CHECK_FAIL("TODO: InlineSig");
 
-        case InlineString:
-            CHECK_FAIL("TODO: InlineString");
+        case InlineString: {
+            uint32_t user_string_token = FETCH(uint32_t);
+            inst->operand_type = TDN_IL_STRING;
+            inst->operand.string = NULL;
+            WARN("TODO: InlineString");
+        } break;
 
         case InlineSwitch:
             CHECK_FAIL("TODO: InlineSwitch");
