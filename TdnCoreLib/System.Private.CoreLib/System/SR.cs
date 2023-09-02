@@ -10,6 +10,8 @@ internal class SR
     internal const string Arg_NotSupportedException = "Specified method is not supported.";
     internal const string Arg_IndexOutOfRangeException = "Index was outside the bounds of the array.";
     internal const string Arg_NullReferenceException = "Object reference not set to an instance of an object.";
+    internal const string Arg_ArithmeticException = "Overflow or underflow in the arithmetic operation.";
+    internal const string Arg_OverflowException = "Arithmetic operation resulted in an overflow.";
     
     internal const string ArgumentNull_Generic = "Value cannot be null.";
 

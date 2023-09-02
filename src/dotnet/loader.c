@@ -125,6 +125,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
     LOAD_TYPE(System, IndexOutOfRangeException),
     LOAD_TYPE(System, NullReferenceException),
+    LOAD_TYPE(System, OverflowException),
 };
 static int m_loaded_types = 0;
 

@@ -3,9 +3,9 @@ namespace System;
 public class Test
 {
 
-    public long Do(int a)
+    public uint Do(ulong a)
     {
-        return a;
+        return checked((uint)a);
     }
     
 }

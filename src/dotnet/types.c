@@ -37,6 +37,7 @@ RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
 
 RuntimeTypeInfo tIndexOutOfRangeException = NULL;
 RuntimeTypeInfo tNullReferenceException = NULL;
+RuntimeTypeInfo tOverflowException = NULL;
 
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
