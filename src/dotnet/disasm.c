@@ -131,7 +131,7 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
             uint32_t user_string_token = FETCH(uint32_t);
             inst->operand_type = TDN_IL_STRING;
             inst->operand.string = NULL;
-            WARN("TODO: InlineString");
+            WARN("TODO: InlineString(%u)", user_string_token);
         } break;
 
         case InlineSwitch:

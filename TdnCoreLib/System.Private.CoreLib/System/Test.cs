@@ -3,9 +3,9 @@ namespace System;
 public class Test
 {
 
-    public uint Do(int a)
+    public object Do()
     {
-        return checked((uint)a);
+        return new object[10];
     }
     
 }

@@ -86,11 +86,10 @@ tdn_err_t tdn_jit_init() {
                                                 SPIDIR_TYPE_PTR,
                                                 SPIDIR_TYPE_I64 });
 
-    // TODO: change to have a ptr parameter
     m_builtin_gc_new = spidir_module_create_extern_function(m_spidir_module,
                                                             "gc_new",
                                                             SPIDIR_TYPE_PTR,
-                                                            2, (spidir_value_type_t[]){ SPIDIR_TYPE_I64, SPIDIR_TYPE_I64 });
+                                                            2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
 
     m_builtin_throw = spidir_module_create_extern_function(m_spidir_module,
                                                               "throw",
@@ -243,7 +242,7 @@ static tdn_err_t jit_emit_throw_new(spidir_builder_handle_t builder, RuntimeType
     // create the new exception object
     spidir_value_t new = spidir_builder_build_call(builder, m_builtin_gc_new, 2,
                               (spidir_value_t[]){
-                                      spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, (uint64_t)type),
+                                      spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)type),
                                       spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, type->StackSize)
                               });
 
@@ -537,6 +536,15 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     //------------------------------------------------------------------------------------------------------------------
     // The second pass
     //------------------------------------------------------------------------------------------------------------------
+
+    // delegate sequence
+    enum {
+        DELEGATE_SEQ_START,
+        DELEGATE_SEQ_FOUND_DUP,
+        DELEGATE_SEQ_FOUND_LDFTN,
+    } delegate_sequence = DELEGATE_SEQ_START;
+
+    bool reset_delegate_sequence = false;
 
     //
     // the main jit function
@@ -1267,24 +1275,60 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             // Control flow
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_NEWOBJ:
             case CEE_CALL:
             case CEE_CALLVIRT: {
                 RuntimeMethodBase target = inst.operand.method;
                 bool is_static = target->Attributes.Static;
                 bool is_call = inst.opcode == CEE_CALL;
                 bool is_callvirt = inst.opcode == CEE_CALLVIRT;
+                bool is_newobj = inst.opcode == CEE_NEWOBJ;
+                size_t object_size = 0;
 
                 // TODO: check method accessibility
 
                 // verify we can call it
                 CHECK(!target->Attributes.Abstract);
-                if (is_callvirt) CHECK(!target->Attributes.Static);
+                if (is_newobj) {
+                    CHECK(!target->Attributes.Static);
+                    CHECK(target->Attributes.RTSpecialName);
+
+                    // TODO: for strings we need to calculate the string size
+                    object_size = target->DeclaringType->HeapSize;
+
+                } else if (is_callvirt) {
+                    CHECK(!target->Attributes.Static);
+                }
 
                 // get all the arguments
                 int call_args_count = target->Parameters->Length + (is_static ? 0 : 1);
                 arrsetlen(call_args_types, call_args_count);
                 arrsetlen(call_args_values, call_args_count);
                 for (int i = call_args_count - 1; i >= 0; i--) {
+                    if (is_newobj && i == 0) {
+                        // special case for the first argument for newobj, we need to allocate it, either
+                        // on the stack if its a value type or on the heap if its a reference type
+                        RuntimeTypeInfo target_this_type;
+                        spidir_value_t obj = SPIDIR_VALUE_INVALID;
+                        if (tdn_type_is_referencetype(target->DeclaringType)) {
+                            // call gc_new to allocate it
+                            target_this_type = target->DeclaringType;
+                            obj = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
+                                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)target_this_type),
+                                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, object_size)
+                            });
+                            CHECK_AND_RETHROW(eval_stack_push(&stack, target->DeclaringType, obj));
+                        } else {
+                            // allocate it on the stack
+                            CHECK_AND_RETHROW(tdn_get_byref_type(target->DeclaringType, &target_this_type));
+                            CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, target->DeclaringType, &obj));
+                        }
+
+                        call_args_types[i] = target_this_type;
+                        call_args_values[i] = obj;
+                        break;
+                    }
+
                     // pop it
                     stack_meta_t meta;
                     CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &call_args_types[i], &call_args_values[i], &meta));
@@ -1353,21 +1397,27 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // make sure that we can actually call the target
                 CHECK_AND_RETHROW(jit_prepare_method(target, spidir_builder_get_module(builder)));
 
-                // handle the return type
                 RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
-                if (ret_type != tVoid && jit_is_struct_type(ret_type)) {
-                    // need to allocate the space in the caller
-                    CHECK_FAIL("%U", ret_type->Name);
-                } else {
-                    // emit the actual call
-                    spidir_value_t value = spidir_builder_build_call(builder,
-                                                                     (spidir_function_t){ target->JitMethodId },
-                                                                     call_args_count, call_args_values);
 
-                    // if has a return type then push it
-                    if (ret_type != tVoid) {
-                        CHECK_AND_RETHROW(eval_stack_push(&stack, ret_type, value));
-                    }
+                // for struct instances allocate and push it beforehand
+                if (ret_type != tVoid && jit_is_struct_type(ret_type)) {
+                    // need to allocate the space in the caller, insert it as the first argument, already pushed
+                    // to the stack
+                    CHECK(!is_newobj);
+                    spidir_value_t ret_buffer;
+                    CHECK_AND_RETHROW(eval_stack_alloc(&stack, builder, ret_type, &ret_buffer));
+                    arrins(call_args_values, 0, ret_buffer);
+                }
+
+                // emit the actual call
+                spidir_value_t value = spidir_builder_build_call(builder,
+                                                                 (spidir_function_t){ target->JitMethodId },
+                                                                 arrlen(call_args_values), call_args_values);
+
+                // for primitive types push it now
+                if (ret_type != tVoid && !jit_is_struct_type(ret_type)) {
+                    CHECK(!is_newobj);
+                    CHECK_AND_RETHROW(eval_stack_push(&stack, ret_type, value));
                 }
 
                 // cleanup everything
@@ -1625,6 +1675,12 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // and now push it twice
                 CHECK_AND_RETHROW(eval_stack_push(&stack, type, value));
                 CHECK_AND_RETHROW(eval_stack_push(&stack, type, value));
+
+                // check for delegate sequence
+                if (delegate_sequence == DELEGATE_SEQ_START) {
+                    reset_delegate_sequence = false;
+                    delegate_sequence = DELEGATE_SEQ_FOUND_DUP;
+                }
             } break;
 
             // Pop a value and ignore it
@@ -2147,6 +2203,53 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Allocation
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_NEWARR: {
+                spidir_value_t num_elems;
+                RuntimeTypeInfo num_elems_type;
+                CHECK_AND_RETHROW(eval_stack_pop(&stack, builder, &num_elems_type, &num_elems, NULL));
+
+                // type check
+                CHECK(num_elems_type == tInt32 || num_elems_type == tIntPtr);
+
+                // extend to 64bit if needed
+                if (num_elems_type == tInt32) {
+                    num_elems = spidir_builder_build_iext(builder, num_elems);
+                    num_elems = spidir_builder_build_sfill(builder, 32, num_elems);
+                }
+
+                // get the array type we are allocating
+                RuntimeTypeInfo array_type = NULL;
+                CHECK_AND_RETHROW(tdn_get_array_type(inst.operand.type, &array_type));
+
+                // calculate the array size we will need
+                spidir_value_t array_size = spidir_builder_build_imul(builder, num_elems,
+                                                                      spidir_builder_build_iconst(builder,
+                                                                                                  SPIDIR_TYPE_I64,
+                                                                                                  inst.operand.type->StackSize));
+                array_size = spidir_builder_build_iadd(builder, array_size, spidir_builder_build_iconst(builder,
+                                                                                                        SPIDIR_TYPE_I64,
+                                                                                                        sizeof(struct Array)));
+
+                // call the gc_new to allocate the new object
+                spidir_value_t array = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)array_type), array_size
+                });
+
+                // and finally set the length of the array
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4, num_elems,
+                                           spidir_builder_build_ptroff(builder, array,
+                                                                       spidir_builder_build_iconst(builder,
+                                                                                                   SPIDIR_TYPE_I64,
+                                                                                                   offsetof(struct Array, Length))));
+
+                // push the array pointer
+                CHECK_AND_RETHROW(eval_stack_push(&stack, array_type, array));
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc operations
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2181,6 +2284,12 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 }
             }
         }
+
+        // check if the delegate sequence should be reset
+        if (reset_delegate_sequence) {
+            delegate_sequence = DELEGATE_SEQ_START;
+        }
+        reset_delegate_sequence = true;
     }
 
     // make sure we went over all of the labels
