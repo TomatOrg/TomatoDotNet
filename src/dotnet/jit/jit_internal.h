@@ -275,6 +275,9 @@ typedef struct jit_context {
 
     // the eval stack, it is the same no matter where we are
     eval_stack_t stack;
+
+    // the stack of regions we are nested in
+    jit_region_t** regions;
 } jit_context_t;
 
 /**

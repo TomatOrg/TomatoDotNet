@@ -491,9 +491,10 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
         CHECK(
             clause.flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION ||
             clause.flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
-            clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT ||
-            clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT
         );
+
+        // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
 
         // verify the offsets
         CHECK(clause.handler_length >= 0);

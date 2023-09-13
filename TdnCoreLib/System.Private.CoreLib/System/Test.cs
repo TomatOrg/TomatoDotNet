@@ -3,14 +3,21 @@ namespace System;
 public class Test
 {
 
-    public int Do(int[] arr)
+    public bool Do(long a)
     {
-        var sum = 0;
-        for (var i = 0; i < arr.Length; i++)
+        try
         {
-            sum += arr[i];
+            checked
+            {
+                _ = (int)a;
+            }
         }
-        return sum;
+        catch (OverflowException e)
+        {
+            return false;
+        }
+
+        return true;
     }
     
 }
