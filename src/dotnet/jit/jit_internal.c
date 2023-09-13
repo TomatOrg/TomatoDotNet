@@ -15,6 +15,8 @@ tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_valu
 tdn_err_t eval_stack_push_with_meta(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value, stack_meta_t meta) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK(type != NULL);
+
     // get the intermediate type, if the type is not an integer one
     // make sure it is not a value type
     type = tdn_get_intermediate_type(type);
@@ -104,12 +106,15 @@ cleanup:
 tdn_err_t eval_stack_snapshot(
     spidir_builder_handle_t builder,
     eval_stack_t* stack,
-    jit_label_t* target,
-    spidir_block_t current
+    jit_label_t* target
 ) {
     tdn_err_t err = TDN_NO_ERROR;
     eval_stack_snapshot_t* snapshot = &target->snapshot;
-    bool target_is_current = target->block.id == current.id;
+
+    // get the current block if we need to modify the target one 
+    spidir_block_t current_block;
+    CHECK(spidir_builder_cur_block(builder, &current_block));
+    bool target_is_current = target->block.id == current_block.id;
 
     CHECK(!snapshot->initialized);
 
@@ -148,7 +153,7 @@ tdn_err_t eval_stack_snapshot(
 
     // return to the current block
     if (!target_is_current && target->needs_phi) {
-        spidir_builder_set_block(builder, current);
+        spidir_builder_set_block(builder, current_block);
     }
 
     // mark this as initialized
@@ -263,34 +268,78 @@ void eval_stack_free(eval_stack_t* stack) {
 // Jit labels/blocks
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// TODO: non-linear search
-
-jit_label_t* jit_get_label(jit_label_t* labels, uint32_t address) {
-    for (int i = 0; i < arrlen(labels); i++) {
-        if (labels[i].address == address) {
-            // already has a label in here
-            return &labels[i];
-        }
+void jit_region_free(jit_region_t* region) {
+    for (int i = 0; i < arrlen(region->labels); i++) {
+        arrfree(region->labels[i].snapshot.stack);
     }
-    return NULL;
+    arrfree(region->labels);
 }
 
-jit_label_t* jit_add_label(jit_label_t** labels, uint32_t address) {
-    int i;
-    for (i = 0; i < arrlen(*labels); i++) {
-        if ((*labels)[i].address > address) {
-            break;
-        } else if ((*labels)[i].address == address) {
-            // already has a label in here, we will signal
-            // that we need to move to a stack slot
-            (*labels)[i].needs_phi = true;
-            return NULL;
+static int jit_get_label_index(jit_region_t* ctx, uint32_t address) {
+    int low = 0;
+    int high = arrlen(ctx->labels);
+
+    while (low < high) {
+        int mid = (low + high) / 2;
+        if (ctx->labels[mid].address < address) {
+            low = mid + 1;
+        } else {
+            high = mid;
         }
     }
 
-    jit_label_t label = {
-        .address = address,
-    };
-    arrins(*labels, i, label);
-    return &((*labels)[i]);
+    return low;
+}
+
+jit_label_t* jit_get_label(jit_region_t* ctx, uint32_t address) {
+    int idx = jit_get_label_index(ctx, address);
+    if (idx >= arrlen(ctx->labels)) return NULL;
+    jit_label_t* label = &ctx->labels[idx];
+    if (label->address != address) return NULL;
+    return label;
+}
+
+int jit_get_label_location_index(jit_context_t* ctx, uint32_t address, bool exact) {
+    int low = 0;
+    int high = arrlen(ctx->labels);
+
+    while (low < high) {
+        int mid = (low + high) / 2;
+        if (ctx->labels[mid].pc < address) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+
+    if (exact) {
+        return (low < arrlen(ctx->labels) && ctx->labels[low].pc == address) ? low : -1;
+    } else {
+        return low;
+    }
+}
+
+void jit_add_label_location(jit_context_t* ctx, uint32_t address) {
+    int index = jit_get_label_location_index(ctx, address, false);
+    if (index < arrlen(ctx->labels)) {
+        // adding inside the array, check if we already have this entry or not
+        if (ctx->labels[index].pc == address) {
+            // yes, set we need the phi and return NULL to show it was already set
+            ctx->labels[index].needs_phi = true;
+        } else {
+            // no, insert it
+            jit_label_location_t location = {
+                .pc = address
+            };
+            arrins(ctx->labels, index, location);
+        }
+    } else {
+        // adding outside the array, make sure its the last
+        // entry and insert it
+        ASSERT(index == arrlen(ctx->labels));
+        jit_label_location_t location = {
+            .pc = address
+        };
+        arrpush(ctx->labels, location);
+    }
 }

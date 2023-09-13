@@ -3,9 +3,14 @@ namespace System;
 public class Test
 {
 
-    public object Do()
+    public int Do(int[] arr)
     {
-        return new object[10];
+        var sum = 0;
+        for (var i = 0; i < arr.Length; i++)
+        {
+            sum += arr[i];
+        }
+        return sum;
     }
     
 }

@@ -42,6 +42,8 @@ extern RuntimeTypeInfo tIndexOutOfRangeException;
 extern RuntimeTypeInfo tNullReferenceException;
 extern RuntimeTypeInfo tOverflowException;
 
+extern RuntimeTypeInfo tNull;
+
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_reduced_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_verification_type(RuntimeTypeInfo type);

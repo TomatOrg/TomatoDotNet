@@ -25,15 +25,15 @@ typedef enum tdn_il_operand {
 } tdn_il_operand_t;
 
 typedef enum tdn_il_control_flow {
-    TDN_IL_FIRST,
-    TDN_IL_NEXT,
-    TDN_IL_BREAK,
-    TDN_IL_CALL,
-    TDN_IL_RETURN,
-    TDN_IL_BRANCH,
-    TDN_IL_COND_BRANCH,
-    TDN_IL_THROW,
-    TDN_IL_META,
+    TDN_IL_CF_FIRST,
+    TDN_IL_CF_NEXT,
+    TDN_IL_CF_BREAK,
+    TDN_IL_CF_CALL,
+    TDN_IL_CF_RETURN,
+    TDN_IL_CF_BRANCH,
+    TDN_IL_CF_COND_BRANCH,
+    TDN_IL_CF_THROW,
+    TDN_IL_CF_META,
 } tdn_il_control_flow_t;
 
 typedef enum tdn_il_opcode {

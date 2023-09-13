@@ -11,7 +11,6 @@ tdn_err_t tdn_jit_init();
 
 void tdn_jit_dump();
 
-
 /**
  * Helper to check if a type is a struct type and not any other type
  */
@@ -135,8 +134,7 @@ tdn_err_t eval_stack_pop(
 tdn_err_t eval_stack_snapshot(
     spidir_builder_handle_t builder,
     eval_stack_t* stack,
-    jit_label_t* target,
-    spidir_block_t current
+    jit_label_t* target
 );
 
 /**
@@ -172,7 +170,7 @@ void eval_stack_clear(eval_stack_t* stack);
 void eval_stack_free(eval_stack_t* stack);
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Jit labels/blocks
+// Jit contexts
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct jit_label {
@@ -185,50 +183,106 @@ typedef struct jit_label {
     // the stack snapshot at the label's location
     eval_stack_snapshot_t snapshot;
 
-    // do we need a phi? set to true if there is more
-    // than a single flow going into the label
-    bool needs_phi;
-
     // did we visit this label already?
     bool visited;
+
+    // copied from the label location
+    bool needs_phi;
 } jit_label_t;
 
 /**
- * Get a label, returning null if not found
+ * Gives the context for a single region pass, this is needed because
+ * in some cases we will have multiple passes over the same region
  */
-jit_label_t* jit_get_label(jit_label_t* labels, uint32_t address);
+typedef struct jit_region {
+    // the labels within the region for this pass
+    jit_label_t* labels;
+
+    // the current label we are on
+    int label_index;
+
+    // the clause we are inside of
+    RuntimeExceptionHandlingClause clause;
+
+    // the index of the clause we are in
+    int clause_index;
+
+    // the end of this region
+    uint32_t pc_start;
+    uint32_t pc_end;
+
+    // the block to use when entering the region
+    spidir_block_t entry_block;
+
+    // is this the handler part of the clause
+    bool is_handler;
+
+    // do we have a current block to use
+    bool has_block;
+} jit_region_t;
 
 /**
- * Add a new label
+ * Free the resources related to a region
  */
-jit_label_t* jit_add_label(jit_label_t** labels, uint32_t address);
+void jit_region_free(jit_region_t* region);
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Context
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/**
+ * Get the index of a label location by its address
+ */
+jit_label_t* jit_get_label(jit_region_t* ctx, uint32_t address);
+
+typedef struct jit_label_location {
+    // the location of the label
+    uint32_t pc;
+
+    // do we need a phi at that location becuase
+    // multiple people will jump into it
+    bool needs_phi;
+
+    // did we create this label yet?
+    bool created;
+} jit_label_location_t;
+
+typedef struct jit_arg {
+    // the value to get the argument, either a param-ref
+    // or a stackslot, depending on spilled
+    spidir_value_t value;
+
+    // the type of the argument
+    RuntimeTypeInfo type;
+
+    // did we spill this argument
+    bool spilled;
+} jit_arg_t;
 
 typedef struct jit_context {
     // the method we are jitting
     RuntimeMethodBase method;
 
-    // the labels list
-    jit_label_t* labels;
-
-    // the eval stack we have currently
-    eval_stack_t* stack;
-
-    // the currently looked at opcode
-    tdn_il_inst_t* inst;
-
-    // the label going into the current block
-    spidir_block_t current_block;
-
-    // the start pc of the current instruction
-    uint32_t pc;
-
-    // the next PC of the instruction
-    uint32_t next_pc;
-
-    // the builder used right now
+    // the current builder
     spidir_builder_handle_t builder;
+
+    // the locations where labels reside, only used
+    // as a reference from the first global pass
+    jit_label_location_t* labels;
+
+    // the argument of the currently jitted function
+    jit_arg_t* args;
+
+    // the stack-slots for each of the local variables
+    // of this function
+    spidir_value_t* locals;
+
+    // the eval stack, it is the same no matter where we are
+    eval_stack_t stack;
 } jit_context_t;
+
+/**
+ * Get the index of a label location by its address
+ */
+int jit_get_label_location_index(jit_context_t* ctx, uint32_t address, bool exact);
+
+/**
+ * Create a new label location
+ */
+void jit_add_label_location(jit_context_t* ctx, uint32_t address);
