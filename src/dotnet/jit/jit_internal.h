@@ -190,6 +190,26 @@ typedef struct jit_label {
     bool needs_phi;
 } jit_label_t;
 
+typedef struct jit_region jit_region_t;
+
+typedef struct finally_handler {
+    // the location this finally goes to
+    uint32_t key;
+
+    // the region this finally handler uses
+    jit_region_t* region;
+
+    // the block this path goes to
+    spidir_block_t next_block;
+
+    // did we set the next block already
+    bool has_next_block;
+} finally_handler_t;
+
+typedef struct finally_handlers {
+    finally_handler_t* finally_paths;
+} finally_handlers_t;
+
 /**
  * Gives the context for a single region pass, this is needed because
  * in some cases we will have multiple passes over the same region
@@ -219,6 +239,16 @@ typedef struct jit_region {
 
     // do we have a current block to use
     bool has_block;
+
+    // the finally handlers of this region
+    finally_handlers_t* finally_handlers;
+
+    // is this a non-faulting finally path
+    bool is_finally_path;
+
+    // if this is a finally path then this is the next
+    // block we need to go to after this finally
+    spidir_block_t next_block;
 } jit_region_t;
 
 /**
@@ -275,6 +305,10 @@ typedef struct jit_context {
 
     // the eval stack, it is the same no matter where we are
     eval_stack_t stack;
+
+    // the protected and handler regions we have
+    jit_region_t* protected_regions;
+    jit_region_t* handler_regions;
 
     // the stack of regions we are nested in
     jit_region_t** regions;

@@ -38,11 +38,16 @@ static spidir_function_t m_builtin_memcpy;
 static spidir_function_t m_builtin_gc_new;
 
 // throwing related
-static spidir_function_t m_builtin_throw_null_reference_exception;
 static spidir_function_t m_builtin_throw_index_out_of_range_exception;
 static spidir_function_t m_builtin_throw_overflow_exception;
 static spidir_function_t m_builtin_throw;
+
+// exception control flow related
+static spidir_function_t m_builtin_rethrow;
 static spidir_function_t m_builtin_get_exception;
+
+// creates a null check by doing a deref without other side effects
+static spidir_function_t m_builtin_null_check;
 
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
@@ -78,9 +83,6 @@ tdn_err_t tdn_jit_init() {
                                                             SPIDIR_TYPE_PTR,
                                                             2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
 
-    m_builtin_throw_null_reference_exception = spidir_module_create_extern_function(
-            m_spidir_module, "throw_null_reference_exception", SPIDIR_TYPE_NONE, 0, NULL);
-
     m_builtin_throw_index_out_of_range_exception = spidir_module_create_extern_function(
             m_spidir_module, "throw_index_out_of_range_exception", SPIDIR_TYPE_NONE, 0, NULL);
 
@@ -91,8 +93,15 @@ tdn_err_t tdn_jit_init() {
             m_spidir_module, "throw", SPIDIR_TYPE_NONE,
             1, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR });
 
+    m_builtin_rethrow = spidir_module_create_extern_function(
+            m_spidir_module, "rethrow", SPIDIR_TYPE_NONE, 0, NULL);
+
     m_builtin_get_exception = spidir_module_create_extern_function(
             m_spidir_module, "get_exception", SPIDIR_TYPE_PTR, 0, NULL);
+
+    m_builtin_null_check = spidir_module_create_extern_function(
+            m_spidir_module, "null_check", SPIDIR_TYPE_NONE,
+            1, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR });
 
 cleanup:
     return err;
@@ -965,23 +974,8 @@ static tdn_err_t jit_instruction(
                                 (target->Attributes.Virtual && target->Attributes.Final) // the method is final
                             )
                         ) {
-                            // we are doing a direct call, so we need to emit an explicit null check
-                            spidir_block_t null_ptr = spidir_builder_create_block(builder);
-                            spidir_block_t non_null_ptr = spidir_builder_create_block(builder);
-
-                            // make sure the ptr != NULL
-                            spidir_value_t null_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_NE, SPIDIR_TYPE_I32,
-                                                                                  call_args_values[0],
-                                                                                  spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0));
-                            spidir_builder_build_brcond(builder, null_check, null_ptr, non_null_ptr);
-
-                            // perform the null pointer branch, throw an exception
-                            spidir_builder_set_block(builder, null_ptr);
-                            spidir_builder_build_call(builder, m_builtin_throw_null_reference_exception, 0, NULL);
-                            spidir_builder_build_unreachable(builder);
-
-                            // and return to the non-null flow
-                            spidir_builder_set_block(builder, non_null_ptr);
+                            spidir_builder_build_call(builder, m_builtin_null_check, 1,
+                                                      (spidir_value_t[]){ call_args_values[0] });
                         }
                     } else {
                         target_type = target->Parameters->Elements[i - 1]->ParameterType;
@@ -1230,17 +1224,19 @@ static tdn_err_t jit_instruction(
             // if we are in this path make sure we have a clause
             CHECK(region->clause != NULL);
 
-            // and make sure it is not a filter/finally one
+            // and make sure it is not a fault/finally one
             if (region->is_handler) {
                 CHECK(
                     region->clause->Flags != COR_ILEXCEPTION_CLAUSE_FINALLY &&
                     region->clause->Flags != COR_ILEXCEPTION_CLAUSE_FAULT
                 );
             }
-            // TODO: check not within a fault
+            // TODO: check not within a filter
 
             // this exits the block, lets figure to where
             jit_label_t* target_label = NULL;
+            finally_handler_t* first_handle = NULL;
+            finally_handler_t* last_handler = NULL;
             for (int i = arrlen(ctx->regions) - 1; i >= 0; i--) {
                 jit_region_t* cur_region = ctx->regions[i];
                 if (cur_region->is_handler) continue; // we must leave into another protected block
@@ -1252,14 +1248,36 @@ static tdn_err_t jit_instruction(
                     break;
 
                 } else if (cur_region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-                    // TODO: we went through the protected range of a finally handler, jump to it
-                    CHECK_FAIL();
+                    // we need to go through this finally
+                    finally_handler_t* path = hmgetp_null(cur_region->finally_handlers->finally_paths, branch_target);
+                    if (path == NULL) {
+                    }
 
+                    // if we already have another finally on the stack
+                    // set its next block to the current block, also
+                    // verify the consistency
+                    if (last_handler != NULL) {
+                        if (last_handler->has_next_block) {
+                            CHECK(last_handler->next_block.id == path->region->entry_block.id);
+                        } else {
+                            last_handler->next_block = path->region->entry_block;
+                        }
+                    }
+
+                    last_handler = path;
+                    if (first_handle == NULL) first_handle = path;
                 }
             }
 
             // make sure we got a label at all
             CHECK(target_label != NULL);
+
+            // if we have a first handle then get the label
+            // from that region to jump to
+            if (first_handle != NULL) {
+                target_label = jit_get_label(first_handle->region, first_handle->region->pc_start);
+                CHECK(target_label != NULL);
+            }
 
             // create a branch into the handler, we know that, verify the stack
             // on the way
@@ -1268,7 +1286,47 @@ static tdn_err_t jit_instruction(
             } else {
                 target_label->snapshot.initialized = true;
             }
+
             spidir_builder_build_branch(builder, target_label->block);
+        } break;
+
+        // this needs to jump into the next block, for fault and finally's fault path
+        // this simply goes into the next handler, for non-faulting finally path this
+        // goes into
+        case CEE_ENDFINALLY: {
+            // must be inside fault or finally
+            CHECK(
+                region->is_handler &&
+                (
+                    region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
+                    region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FAULT
+                )
+            );
+
+            // figure where we need to go
+            if (!region->is_finally_path) {
+                // get the region of the next handler, skipping
+                // the current one
+                for (int i = arrlen(ctx->regions) - 2; i >= 0; i--) {
+                    if (ctx->regions[i]->is_handler)
+                        continue;
+
+                    if (ctx->regions[i]->clause == NULL) {
+                        // we got to the root region, meaning there is nothing
+                        // else in the fault path to handle, so just rethrow the
+                        // error
+                        spidir_builder_build_call(builder, m_builtin_rethrow, 0, NULL);
+                        spidir_builder_build_unreachable(builder);
+                        break;
+                    }
+
+                    jit_region_t* handler = &ctx->handler_regions[ctx->regions[i]->clause_index];
+                    spidir_builder_build_branch(builder, handler->entry_block);
+                }
+            } else {
+                // we need to go to the next entry finally of this path
+                spidir_builder_build_branch(builder, region->next_block);
+            }
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1923,10 +1981,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     RuntimeMethodBase method = builder_ctx->method;
     RuntimeExceptionHandlingClause_Array clauses = method->MethodBody->ExceptionHandlingClauses;
 
-    // for tracking the region we are in right now
-    jit_region_t* try_regions = NULL;
-    jit_region_t* fault_handler_regions = NULL;
-
     TRACE("%U::%U", method->DeclaringType->Name, method->Name);
 
     // setup the context that will be used for this method jitting
@@ -2120,28 +2174,39 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
     // setup the try and fault handler regions
     size_t region_count = clauses != NULL ? clauses->Length : 0;
-    arrsetlen(try_regions, region_count);
-    arrsetlen(fault_handler_regions, region_count);
+    arrsetlen(ctx.protected_regions, region_count);
+    arrsetlen(ctx.handler_regions, region_count);
 
-    memset(try_regions, 0, region_count * sizeof(jit_region_t));
-    memset(fault_handler_regions, 0, region_count * sizeof(jit_region_t));
+    memset(ctx.protected_regions, 0, region_count * sizeof(jit_region_t));
+    memset(ctx.handler_regions, 0, region_count * sizeof(jit_region_t));
 
     // setup all the regions
     for (int i = 0; i < region_count; i++) {
         RuntimeExceptionHandlingClause c = clauses->Elements[i];
 
-        try_regions[i].clause = c;
-        try_regions[i].clause_index = i;
-        try_regions[i].pc_start = c->TryOffset;
-        try_regions[i].pc_end = c->TryOffset + c->TryLength;
-        CHECK_AND_RETHROW(create_region_labels(&ctx, &try_regions[i]));
+        // if this is a finally we need to create a common finally handlers block
+        finally_handlers_t* handler = NULL;
+        if (c->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+            handler = tdn_host_mallocz(sizeof(finally_handlers_t));
+            CHECK_ERROR(handler != NULL, TDN_ERROR_OUT_OF_MEMORY);
+        }
 
-        fault_handler_regions[i].clause = c;
-        fault_handler_regions[i].clause_index = i;
-        fault_handler_regions[i].pc_start = c->HandlerOffset;
-        fault_handler_regions[i].pc_end = c->HandlerOffset + c->HandlerLength;
-        fault_handler_regions[i].is_handler = true;
-        CHECK_AND_RETHROW(create_region_labels(&ctx, &fault_handler_regions[i]));
+        memset(&ctx.protected_regions[i], 0, sizeof(jit_region_t));
+        ctx.protected_regions[i].clause = c;
+        ctx.protected_regions[i].clause_index = i;
+        ctx.protected_regions[i].pc_start = c->TryOffset;
+        ctx.protected_regions[i].pc_end = c->TryOffset + c->TryLength;
+        ctx.protected_regions[i].finally_handlers = handler;
+        CHECK_AND_RETHROW(create_region_labels(&ctx, &ctx.protected_regions[i]));
+
+        memset(&ctx.handler_regions[i], 0, sizeof(jit_region_t));
+        ctx.handler_regions[i].clause = c;
+        ctx.handler_regions[i].clause_index = i;
+        ctx.handler_regions[i].pc_start = c->HandlerOffset;
+        ctx.handler_regions[i].pc_end = c->HandlerOffset + c->HandlerLength;
+        ctx.handler_regions[i].is_handler = true;
+        ctx.handler_regions[i].finally_handlers = handler;
+        CHECK_AND_RETHROW(create_region_labels(&ctx, &ctx.handler_regions[i]));
     }
 
     // TODO: finally paths
@@ -2253,14 +2318,14 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         jit_region_t* new_region = NULL;
 
         // check if we entered a new region or not
-        for (int i = region->clause_index + 1; i < arrlen(try_regions); i++) {
-            jit_region_t* try = &try_regions[i];
-            jit_region_t* fault_handler = &fault_handler_regions[i];
+        for (int i = region->clause_index + 1; i < arrlen(ctx.protected_regions); i++) {
+            jit_region_t* protected_region = &ctx.protected_regions[i];
+            jit_region_t* handler_region = &ctx.handler_regions[i];
 
-            if (pc == try->pc_start) {
-                new_region = try;
+            if (pc == protected_region->pc_start) {
+                new_region = protected_region;
 
-                // we got into a try-region
+                // we got into a protected region
                 if (
                     flow_control == TDN_IL_CF_NEXT ||
                     flow_control == TDN_IL_CF_CALL ||
@@ -2278,8 +2343,8 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // we will already set it in here
                 new_region->has_block = true;
                 spidir_builder_set_block(builder, new_region->entry_block);
-            } else if (pc == fault_handler->pc_start) {
-                new_region = fault_handler;
+            } else if (pc == handler_region->pc_start) {
+                new_region = handler_region;
 
                 // the current region no longer has a block it can use
                 region->has_block = false;
@@ -2300,7 +2365,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
                 // for exception handlers we need to set the first item as the exception
                 // TODO: handler filters
-                if (fault_handler->clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                if (handler_region->clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
                     CHECK_AND_RETHROW(eval_stack_push(stack, new_region->clause->CatchType,
                                     spidir_builder_build_call(builder,
                                                               m_builtin_get_exception, 0, NULL)));
@@ -2397,18 +2462,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         if (pc == region->pc_end) {
             // we got to the end of a region, make sure we can't fallthrough from here,
             // if its the root then allow for return as well
-            if (region->clause == NULL) {
-                CHECK(
-                    flow_control == TDN_IL_CF_BRANCH ||
-                    flow_control == TDN_IL_CF_THROW ||
-                    flow_control == TDN_IL_CF_RETURN
-                );
-            } else {
-                CHECK(
-                    flow_control == TDN_IL_CF_BRANCH ||
-                    flow_control == TDN_IL_CF_THROW
-                );
-            }
+            CHECK(
+                flow_control == TDN_IL_CF_BRANCH ||
+                flow_control == TDN_IL_CF_THROW ||
+                flow_control == TDN_IL_CF_RETURN
+            );
 
             // pop the region and clear it
             arrpop(ctx.regions);
@@ -2436,15 +2494,15 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 cleanup:
     arrfree(ctx.regions);
 
-    for (int i = 0; i < arrlen(try_regions); i++) {
-        jit_region_free(&try_regions[i]);
+    for (int i = 0; i < arrlen(ctx.protected_regions); i++) {
+        jit_region_free(&ctx.protected_regions[i]);
     }
-    arrfree(try_regions);
+    arrfree(ctx.protected_regions);
 
-    for (int i = 0; i < arrlen(fault_handler_regions); i++) {
-        jit_region_free(&fault_handler_regions[i]);
+    for (int i = 0; i < arrlen(ctx.handler_regions); i++) {
+        jit_region_free(&ctx.handler_regions[i]);
     }
-    arrfree(fault_handler_regions);
+    arrfree(ctx.handler_regions);
 
     jit_region_free(&root_region);
 

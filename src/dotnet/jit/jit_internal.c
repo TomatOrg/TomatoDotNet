@@ -269,9 +269,21 @@ void eval_stack_free(eval_stack_t* stack) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void jit_region_free(jit_region_t* region) {
+    // only free this on the handler path, and not on the protected path, since that
+    // pointer is shared in both
+    if (region->is_handler && region->finally_handlers != NULL) {
+        for (int i = 0; i < hmlen(region->finally_handlers->finally_paths); i++) {
+            jit_region_free(region->finally_handlers->finally_paths[i].region);
+        }
+        hmfree(region->finally_handlers->finally_paths);
+
+        tdn_host_free(region->finally_handlers);
+    }
+
     for (int i = 0; i < arrlen(region->labels); i++) {
         arrfree(region->labels[i].snapshot.stack);
     }
+
     arrfree(region->labels);
 }
 

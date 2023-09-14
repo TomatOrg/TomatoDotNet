@@ -1,23 +1,36 @@
+using System.Reflection;
+
 namespace System;
 
 public class Test
 {
 
-    public bool Do(long a)
+    class Lol
     {
+
+        public void Something()
+        {
+            
+        }
+        
+        public void Dispose()
+        {
+            
+        }
+        
+    }
+    
+    public void Do()
+    {
+        var lol = new Lol();
         try
         {
-            checked
-            {
-                _ = (int)a;
-            }
+            lol.Something();
         }
-        catch (OverflowException e)
+        finally
         {
-            return false;
+            lol.Dispose();
         }
-
-        return true;
     }
     
 }
