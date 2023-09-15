@@ -198,12 +198,6 @@ typedef struct finally_handler {
 
     // the region this finally handler uses
     jit_region_t* region;
-
-    // the block this path goes to
-    spidir_block_t next_block;
-
-    // did we set the next block already
-    bool has_next_block;
 } finally_handler_t;
 
 typedef struct finally_handlers {
@@ -249,6 +243,7 @@ typedef struct jit_region {
     // if this is a finally path then this is the next
     // block we need to go to after this finally
     spidir_block_t next_block;
+    bool has_next_block;
 } jit_region_t;
 
 /**

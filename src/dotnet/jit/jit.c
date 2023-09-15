@@ -1251,16 +1251,40 @@ static tdn_err_t jit_instruction(
                     // we need to go through this finally
                     finally_handler_t* path = hmgetp_null(cur_region->finally_handlers->finally_paths, branch_target);
                     if (path == NULL) {
+                        jit_region_t* new_region = tdn_host_mallocz(sizeof(jit_region_t));
+                        CHECK(new_region != NULL);
+
+                        // create the new region and set
+                        // all the fields, including creating
+                        // the labels for that run
+                        new_region->clause = cur_region->clause;
+                        new_region->clause_index = cur_region->clause_index;
+                        new_region->pc_start = cur_region->clause->HandlerOffset;
+                        new_region->pc_end = cur_region->clause->HandlerOffset + cur_region->clause->HandlerLength;
+                        new_region->is_finally_path = true;
+                        new_region->is_handler = true;
+                        new_region->finally_handlers = cur_region->finally_handlers;
+                        CHECK_AND_RETHROW(create_region_labels(ctx, new_region));
+
+                        // create a new handler
+                        finally_handler_t new_path = {
+                            .region = new_region,
+                            .key = branch_target
+                        };
+                        hmputs(cur_region->finally_handlers->finally_paths, new_path);
+                        path = hmgetp_null(cur_region->finally_handlers->finally_paths, branch_target);
+                        CHECK(path != NULL);
                     }
 
                     // if we already have another finally on the stack
                     // set its next block to the current block, also
                     // verify the consistency
                     if (last_handler != NULL) {
-                        if (last_handler->has_next_block) {
-                            CHECK(last_handler->next_block.id == path->region->entry_block.id);
+                        if (last_handler->region->has_next_block) {
+                            CHECK(last_handler->region->next_block.id == path->region->entry_block.id);
                         } else {
-                            last_handler->next_block = path->region->entry_block;
+                            last_handler->region->next_block = path->region->entry_block;
+                            last_handler->region->has_next_block = true;
                         }
                     }
 
@@ -1272,11 +1296,25 @@ static tdn_err_t jit_instruction(
             // make sure we got a label at all
             CHECK(target_label != NULL);
 
+            // update the last handler to jump into the target label
+            if (last_handler != NULL) {
+                if (last_handler->region->has_next_block) {
+                    CHECK(last_handler->region->next_block.id == target_label->block.id);
+                } else {
+                    last_handler->region->next_block = target_label->block;
+                    last_handler->region->has_next_block = true;
+                }
+            }
+
             // if we have a first handle then get the label
             // from that region to jump to
             if (first_handle != NULL) {
                 target_label = jit_get_label(first_handle->region, first_handle->region->pc_start);
-                CHECK(target_label != NULL);
+                if (target_label == NULL) {
+                    // no label, so just go into the entry and don't process the target label stuff
+                    spidir_builder_build_branch(builder, first_handle->region->entry_block);
+                    break;
+                }
             }
 
             // create a branch into the handler, we know that, verify the stack
@@ -1303,6 +1341,9 @@ static tdn_err_t jit_instruction(
                 )
             );
 
+            // empty the stack
+            eval_stack_clear(stack);
+
             // figure where we need to go
             if (!region->is_finally_path) {
                 // get the region of the next handler, skipping
@@ -1325,6 +1366,7 @@ static tdn_err_t jit_instruction(
                 }
             } else {
                 // we need to go to the next entry finally of this path
+                CHECK(region->has_next_block);
                 spidir_builder_build_branch(builder, region->next_block);
             }
         } break;
@@ -2239,7 +2281,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     int indent = 0;
 
     // which of the finallys we are looking at
-    int finally_path_index = 0;
+    int finally_path_index = -1;
 
     pc = 0;
     flow_control = TDN_IL_CF_FIRST;
@@ -2347,12 +2389,18 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 new_region->has_block = true;
                 spidir_builder_set_block(builder, new_region->entry_block);
             } else if (pc == handler_region->pc_start) {
-                new_region = handler_region;
-
                 // for finally we have duplicate paths for each of the valid entries
+                // first is the fault path, the rest are the valid paths, get the correct
+                // region to pass on
                 if (handler_region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-                    finally_path_index
+                    if (finally_path_index >= 0) {
+                        handler_region = handler_region->finally_handlers->finally_paths[finally_path_index].region;
+                    }
+
+                    // increment to the next one
+                    finally_path_index++;
                 }
+                new_region = handler_region;
 
                 // the current region no longer has a block it can use
                 region->has_block = false;
@@ -2478,6 +2526,20 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // pop the region and clear it
             arrpop(ctx.regions);
+
+            // finally is duplicated multiple times, the first path is a fault path
+            // and the others are success paths, handle them right now if there are
+            // more to handle
+            if (
+                region->is_handler &&
+                region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY
+            ) {
+                if (finally_path_index < hmlen(region->finally_handlers->finally_paths)) {
+                    pc = region->pc_start;
+                } else {
+                    finally_path_index = -1;
+                }
+            }
         }
 
         //--------------------------------------------------------------------------------------------------------------

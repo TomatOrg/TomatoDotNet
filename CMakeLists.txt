@@ -16,6 +16,7 @@ add_compile_options(-fsanitize=address)
 
 add_link_options(-fsanitize=address)
 
+set(SPIDIR_ENABLE_LOGGING 1)
 add_subdirectory(libs/spidir/c-api)
 
 include_directories(include)

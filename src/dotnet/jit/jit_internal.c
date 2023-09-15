@@ -268,23 +268,28 @@ void eval_stack_free(eval_stack_t* stack) {
 // Jit labels/blocks
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static void jit_region_free_labels(jit_region_t* region) {
+    for (int i = 0; i < arrlen(region->labels); i++) {
+        arrfree(region->labels[i].snapshot.stack);
+    }
+    arrfree(region->labels);
+}
+
 void jit_region_free(jit_region_t* region) {
     // only free this on the handler path, and not on the protected path, since that
     // pointer is shared in both
     if (region->is_handler && region->finally_handlers != NULL) {
         for (int i = 0; i < hmlen(region->finally_handlers->finally_paths); i++) {
-            jit_region_free(region->finally_handlers->finally_paths[i].region);
+            jit_region_t* reg = region->finally_handlers->finally_paths[i].region;
+            jit_region_free_labels(reg);
+            tdn_host_free(reg);
         }
         hmfree(region->finally_handlers->finally_paths);
 
         tdn_host_free(region->finally_handlers);
     }
 
-    for (int i = 0; i < arrlen(region->labels); i++) {
-        arrfree(region->labels[i].snapshot.stack);
-    }
-
-    arrfree(region->labels);
+    jit_region_free_labels(region);
 }
 
 static int jit_get_label_index(jit_region_t* ctx, uint32_t address) {
