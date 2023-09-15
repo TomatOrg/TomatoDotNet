@@ -2238,6 +2238,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     // for debug
     int indent = 0;
 
+    // which of the finallys we are looking at
+    int finally_path_index = 0;
+
     pc = 0;
     flow_control = TDN_IL_CF_FIRST;
     while (pc < method->MethodBody->ILSize) {
@@ -2345,6 +2348,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 spidir_builder_set_block(builder, new_region->entry_block);
             } else if (pc == handler_region->pc_start) {
                 new_region = handler_region;
+
+                // for finally we have duplicate paths for each of the valid entries
+                if (handler_region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+                    finally_path_index
+                }
 
                 // the current region no longer has a block it can use
                 region->has_block = false;
