@@ -399,6 +399,31 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
+        case CEE_STARG: {
+            uint16_t argi = inst.operand.variable;
+            CHECK(argi < arrlen(ctx->args));
+            jit_arg_t* arg = &ctx->args[argi];
+            CHECK(arg->spilled);
+
+            RuntimeTypeInfo value_type;
+            spidir_value_t value;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
+
+            // check type
+            CHECK(tdn_type_verifier_assignable_to(value_type, arg->type));
+
+            // was spilled, this is a stack slot
+            if (jit_is_struct_type(value_type)) {
+                // use memcpy
+                jit_emit_memcpy(builder, arg->value, value, value_type->StackSize);
+            } else {
+                // use a proper load
+                spidir_builder_build_store(builder,
+                                          get_spidir_mem_size(arg->type),
+                                          value, arg->value);
+            }
+        } break;
+
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // Locals
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -444,7 +469,7 @@ static tdn_err_t jit_instruction(
             CHECK_AND_RETHROW(eval_stack_push(stack, type, ctx->locals[var]));
         } break;
 
-            // store to a local variable
+        // store to a local variable
         case CEE_STLOC: {
             // verify the argument and get the stack type
             int var = inst.operand.variable;
@@ -452,7 +477,7 @@ static tdn_err_t jit_instruction(
 
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // check the type
             RuntimeTypeInfo local_type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
@@ -485,7 +510,7 @@ static tdn_err_t jit_instruction(
             // pop the item
             spidir_value_t obj;
             RuntimeTypeInfo obj_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &obj_type, &obj, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
 
             // check this is either an object or a managed pointer
             CHECK(
@@ -565,8 +590,8 @@ static tdn_err_t jit_instruction(
             // pop the item
             spidir_value_t obj, value;
             RuntimeTypeInfo obj_type, value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &obj_type, &obj, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
 
             // check this is either an object or a managed pointer
             CHECK(
@@ -677,7 +702,7 @@ static tdn_err_t jit_instruction(
             // pop the item
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // get the stack type of the field
             RuntimeTypeInfo field_type = inst.operand.field->FieldType;
@@ -710,7 +735,7 @@ static tdn_err_t jit_instruction(
             // pop the items
             spidir_value_t array;
             RuntimeTypeInfo array_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &array_type, &array, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &array_type, &array, NULL));
 
             // push the length, the load automatically zero extends it
             spidir_value_t length_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length));
@@ -726,8 +751,8 @@ static tdn_err_t jit_instruction(
             // pop the items
             spidir_value_t index, array;
             RuntimeTypeInfo index_type, array_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &index_type, &index, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &array_type, &array, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &index_type, &index, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &array_type, &array, NULL));
 
             // verify the element type
             CHECK(array_type->IsArray);
@@ -816,9 +841,9 @@ static tdn_err_t jit_instruction(
             // pop the items
             spidir_value_t value, index, array;
             RuntimeTypeInfo value_type, index_type, array_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &index_type, &index, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &array_type, &array, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &index_type, &index, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &array_type, &array, NULL));
 
             // verify the array type
             CHECK(array_type->IsArray);
@@ -942,7 +967,7 @@ static tdn_err_t jit_instruction(
 
                 // pop it
                 stack_meta_t meta;
-                CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &call_args_types[i], &call_args_values[i], &meta));
+                CHECK_AND_RETHROW(eval_stack_pop(stack, &call_args_types[i], &call_args_values[i], &meta));
 
                 // validate the stack type
                 RuntimeTypeInfo target_type;
@@ -1040,7 +1065,7 @@ static tdn_err_t jit_instruction(
             // pop the item
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // ECMA-335 doesn't say brtrue takes in anything but
             // O and native int, but I think its just an oversight
@@ -1095,8 +1120,8 @@ static tdn_err_t jit_instruction(
             // pop the items
             spidir_value_t value1, value2;
             RuntimeTypeInfo value1_type, value2_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value2_type, &value2, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value1_type, &value1, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value2_type, &value2, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value1_type, &value1, NULL));
 
             //
             // perform the binary comparison and branch operations check,
@@ -1185,7 +1210,7 @@ static tdn_err_t jit_instruction(
             } else {
                 RuntimeTypeInfo ret_type;
                 spidir_value_t ret_value;
-                eval_stack_pop(stack, builder, &ret_type, &ret_value, NULL);
+                eval_stack_pop(stack, &ret_type, &ret_value, NULL);
 
                 // make sure the type is a valid return target
                 CHECK(tdn_type_verifier_assignable_to(ret_type, wanted_ret_type));
@@ -1410,7 +1435,7 @@ static tdn_err_t jit_instruction(
             // pop the value and ignore it
             RuntimeTypeInfo type;
             spidir_value_t value;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &type, &value, NULL));
 
             // and now push it twice
             CHECK_AND_RETHROW(eval_stack_push(stack, type, value));
@@ -1420,7 +1445,7 @@ static tdn_err_t jit_instruction(
         // Pop a value and ignore it
         case CEE_POP: {
             // pop the value and ignore it
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, NULL, NULL, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, NULL, NULL, NULL));
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1434,8 +1459,8 @@ static tdn_err_t jit_instruction(
             // pop the items
             spidir_value_t value, shift_amount;
             RuntimeTypeInfo value_type, shift_amount_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &shift_amount_type, &shift_amount, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &shift_amount_type, &shift_amount, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // type check
             CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
@@ -1468,8 +1493,8 @@ static tdn_err_t jit_instruction(
             // pop the items
             spidir_value_t value1, value2;
             RuntimeTypeInfo value1_type, value2_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value2_type, &value2, NULL));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value1_type, &value1, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value2_type, &value2, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value1_type, &value1, NULL));
 
             // figure the type we are going to use
             RuntimeTypeInfo result = NULL;
@@ -1525,7 +1550,7 @@ static tdn_err_t jit_instruction(
             // pop the item
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // type check, also get the ones value for the width
             // for the xor operation
@@ -1550,7 +1575,7 @@ static tdn_err_t jit_instruction(
             // pop the item
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // type check, also get the ones value for the width
             // for the xor operation
@@ -1581,7 +1606,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_U1: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // make sure it is an integer type
             CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
@@ -1608,7 +1633,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_U2: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // make sure it is an integer type
             CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
@@ -1634,7 +1659,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_U4: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             if (value_type == tInt32) {
                 // nothing to do, push it again
@@ -1653,7 +1678,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_I8: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // choose based on the opcode
             RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_I ? tIntPtr : tInt64;
@@ -1679,7 +1704,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_U8: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // choose based on the opcode
             RuntimeTypeInfo push_type = inst.opcode == CEE_CONV_U ? tIntPtr : tInt64;
@@ -1732,7 +1757,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_OVF_I4_UN: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // type check
             spidir_value_type_t type;
@@ -1842,7 +1867,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_OVF_U_UN: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // choose the type to push
             RuntimeTypeInfo push_type;
@@ -1878,7 +1903,7 @@ static tdn_err_t jit_instruction(
         case CEE_CONV_OVF_U: {
             spidir_value_t value;
             RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
 
             // choose the type to push
             RuntimeTypeInfo push_type;
@@ -1946,7 +1971,7 @@ static tdn_err_t jit_instruction(
         case CEE_NEWARR: {
             spidir_value_t num_elems;
             RuntimeTypeInfo num_elems_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, builder, &num_elems_type, &num_elems, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &num_elems_type, &num_elems, NULL));
 
             // type check
             CHECK(num_elems_type == tInt32 || num_elems_type == tIntPtr);

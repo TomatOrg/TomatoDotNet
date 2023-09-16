@@ -121,7 +121,6 @@ tdn_err_t eval_stack_alloc(
  */
 tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
-    spidir_builder_handle_t builder,
     RuntimeTypeInfo* out_type,
     spidir_value_t* out_value,
     stack_meta_t* meta

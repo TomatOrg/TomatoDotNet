@@ -4,33 +4,10 @@ namespace System;
 
 public class Test
 {
-
-    class Lol
-    {
-
-        public void Something()
-        {
-            
-        }
-        
-        public void Dispose()
-        {
-            
-        }
-        
-    }
     
-    public void Do()
+    public void Loop2(int a)
     {
-        var lol = new Lol();
-        try
-        {
-            lol.Something();
-        }
-        finally
-        {
-            lol.Dispose();
-        }
+        a = 123;
     }
     
 }
