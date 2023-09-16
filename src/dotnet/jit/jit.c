@@ -54,7 +54,7 @@ tdn_err_t tdn_jit_init() {
 
     // create the dummy null type
     tNull = GC_NEW(RuntimeTypeInfo);
-    CHECK_AND_RETHROW(tdn_create_string_from_cstr("<num>", &tNull->Name));
+    CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
 
     m_spidir_module = spidir_module_create();
 
@@ -849,7 +849,7 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
-            // load an element from an array
+        // load an element from an array
         case CEE_STELEM:
         case CEE_STELEM_REF: {
             // pop the items
@@ -921,9 +921,9 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Control flow
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Function calls
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         case CEE_NEWOBJ:
         case CEE_CALL:
@@ -1550,8 +1550,8 @@ static tdn_err_t jit_instruction(
                 case CEE_MUL: result_value = spidir_builder_build_imul(builder, value1, value2); break;
                 case CEE_DIV: result_value = spidir_builder_build_sdiv(builder, value1, value2); break;
                 case CEE_DIV_UN: result_value = spidir_builder_build_udiv(builder, value1, value2); break;
-                case CEE_REM: CHECK_FAIL("TODO: spidir is missing spidir_builder_build_irem");
-                case CEE_REM_UN: CHECK_FAIL("TODO: spidir is missing spidir_builder_build_urem");
+                case CEE_REM: result_value = spidir_builder_build_srem(builder, value1, value2); break;
+                case CEE_REM_UN: result_value = spidir_builder_build_urem(builder, value1, value2); break;
                 default: CHECK_FAIL();
             }
 
@@ -2028,6 +2028,8 @@ static tdn_err_t jit_instruction(
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // Misc operations
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
 
         // push the size in bytes of the given type
         case CEE_SIZEOF: {
