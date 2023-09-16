@@ -399,6 +399,20 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
+        case CEE_LDARGA: {
+            uint16_t argi = inst.operand.variable;
+            CHECK(argi < arrlen(ctx->args));
+            jit_arg_t* arg = &ctx->args[argi];
+            CHECK(arg->spilled);
+
+            // get the argument we are loading
+            RuntimeTypeInfo arg_type;
+            CHECK_AND_RETHROW(tdn_get_byref_type(arg->type, &arg_type));
+
+            // push the stack slot to the stack
+            CHECK_AND_RETHROW(eval_stack_push(stack, arg_type, arg->value));
+        } break;
+
         case CEE_STARG: {
             uint16_t argi = inst.operand.variable;
             CHECK(argi < arrlen(ctx->args));
