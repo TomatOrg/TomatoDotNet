@@ -3,6 +3,8 @@
 #include "tinydotnet/host.h"
 #include "util/except.h"
 
+#include <spidir/platform.h>
+
 void* spidir_platform_alloc(size_t size, size_t align) {
     if (align <= alignof(max_align_t)) {
         // Get a `realloc`-able pointer where possible

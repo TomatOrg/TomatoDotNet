@@ -515,10 +515,10 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
         if (clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
             CHECK(clause.filter_offset >= 0);
             CHECK(clause.filter_offset < code_size);
-        }
 
-        // filter must come before the length
-        CHECK(clause.filter_offset < clause.handler_offset);
+            // filter must come before the length
+            CHECK(clause.filter_offset < clause.handler_offset);
+        }
 
         // our jit mandates the handler comes before the try so we will always know everything only
         // after going through the try region, this is only important for finally regions

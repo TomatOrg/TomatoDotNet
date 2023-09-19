@@ -239,6 +239,10 @@ typedef struct jit_region {
     // is this a non-faulting finally path
     bool is_finally_path;
 
+    // the currently processed finally path, -1 at the start
+    // or INT32_MAX if this has no finally paths
+    int current_finally_path;
+
     // if this is a finally path then this is the next
     // block we need to go to after this finally
     spidir_block_t next_block;

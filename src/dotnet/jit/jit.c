@@ -9,6 +9,7 @@
 // TODO: lock
 
 #include <spidir/spidir.h>
+#include <spidir/log.h>
 #include <stdbool.h>
 
 #include "spidir/spidir_debug.h"
@@ -49,12 +50,26 @@ static spidir_function_t m_builtin_get_exception;
 // creates a null check by doing a deref without other side effects
 static spidir_function_t m_builtin_null_check;
 
+static void spidir_log_callback(spidir_log_level_t level, const char* module, size_t module_len, const char* message, size_t message_len) {
+    switch (level) {
+        case SPIDIR_LOG_LEVEL_ERROR: ERROR("%.*s: %.*s", module_len, module, message_len, message); break;
+        case SPIDIR_LOG_LEVEL_WARN: WARN("%.*s: %.*s", module_len, module, message_len, message); break;
+        case SPIDIR_LOG_LEVEL_INFO: TRACE("%.*s: %.*s", module_len, module, message_len, message); break;
+        case SPIDIR_LOG_LEVEL_DEBUG: TRACE("%.*s: %.*s", module_len, module, message_len, message); break;
+        case SPIDIR_LOG_LEVEL_TRACE: TRACE("%.*s: %.*s", module_len, module, message_len, message); break;
+    }
+}
+
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
 
     // create the dummy null type
     tNull = GC_NEW(RuntimeTypeInfo);
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
+
+    spidir_log_init(spidir_log_callback);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
+//    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
 
     m_spidir_module = spidir_module_create();
 
@@ -938,16 +953,22 @@ static tdn_err_t jit_instruction(
             // TODO: check method accessibility
 
             // verify we can call it
-            CHECK(!target->Attributes.Abstract);
             if (is_newobj) {
+                // newobj cannot call static or abstract methods
+                CHECK(!target->Attributes.Abstract);
                 CHECK(!target->Attributes.Static);
+
+                // ctor must be a special name
                 CHECK(target->Attributes.RTSpecialName);
 
                 // TODO: for strings we need to calculate the string size
                 object_size = target->DeclaringType->HeapSize;
-
             } else if (is_callvirt) {
+                // callvirt can not call static methods
                 CHECK(!target->Attributes.Static);
+            } else {
+                // call can not call abstract methods
+                CHECK(!target->Attributes.Abstract);
             }
 
             // get all the arguments
@@ -1068,6 +1089,7 @@ static tdn_err_t jit_instruction(
 
             // a branch, emit the branch
             spidir_builder_build_branch(builder, target_label->block);
+            region->has_block = false;
 
             // because we don't fall-through we clear the stack
             eval_stack_clear(stack);
@@ -1302,6 +1324,7 @@ static tdn_err_t jit_instruction(
                         new_region->pc_end = cur_region->clause->HandlerOffset + cur_region->clause->HandlerLength;
                         new_region->is_finally_path = true;
                         new_region->is_handler = true;
+                        new_region->current_finally_path = INT32_MAX;
                         new_region->finally_handlers = cur_region->finally_handlers;
                         CHECK_AND_RETHROW(create_region_labels(ctx, new_region));
 
@@ -1352,6 +1375,7 @@ static tdn_err_t jit_instruction(
                 if (target_label == NULL) {
                     // no label, so just go into the entry and don't process the target label stuff
                     spidir_builder_build_branch(builder, first_handle->region->entry_block);
+                    region->has_block = false;
                     break;
                 }
             }
@@ -1365,6 +1389,7 @@ static tdn_err_t jit_instruction(
             }
 
             spidir_builder_build_branch(builder, target_label->block);
+            region->has_block = false;
         } break;
 
         // this needs to jump into the next block, for fault and finally's fault path
@@ -1397,16 +1422,19 @@ static tdn_err_t jit_instruction(
                         // error
                         spidir_builder_build_call(builder, m_builtin_rethrow, 0, NULL);
                         spidir_builder_build_unreachable(builder);
-                        break;
+                    } else {
+                        jit_region_t* handler = &ctx->handler_regions[ctx->regions[i]->clause_index];
+                        spidir_builder_build_branch(builder, handler->entry_block);
                     }
 
-                    jit_region_t* handler = &ctx->handler_regions[ctx->regions[i]->clause_index];
-                    spidir_builder_build_branch(builder, handler->entry_block);
+                    region->has_block = false;
+                    break;
                 }
             } else {
                 // we need to go to the next entry finally of this path
                 CHECK(region->has_next_block);
                 spidir_builder_build_branch(builder, region->next_block);
+                region->has_block = false;
             }
         } break;
 
@@ -2280,6 +2308,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         ctx.protected_regions[i].pc_start = c->TryOffset;
         ctx.protected_regions[i].pc_end = c->TryOffset + c->TryLength;
         ctx.protected_regions[i].finally_handlers = handler;
+        ctx.protected_regions[i].current_finally_path = INT32_MAX;
         CHECK_AND_RETHROW(create_region_labels(&ctx, &ctx.protected_regions[i]));
 
         memset(&ctx.handler_regions[i], 0, sizeof(jit_region_t));
@@ -2289,17 +2318,19 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         ctx.handler_regions[i].pc_end = c->HandlerOffset + c->HandlerLength;
         ctx.handler_regions[i].is_handler = true;
         ctx.handler_regions[i].finally_handlers = handler;
+        ctx.handler_regions[i].current_finally_path = handler == NULL ? INT32_MAX : -1;
         CHECK_AND_RETHROW(create_region_labels(&ctx, &ctx.handler_regions[i]));
     }
 
-    // TODO: finally paths
-
     // finally create the top most region
+    // the index is going to be set to the index of the last
+    // clause so we will search all the handlers if we are
+    // in the root
     jit_region_t root_region = {
         .pc_start = 0,
         .pc_end = method->MethodBody->ILSize,
         .clause = NULL,
-        .clause_index = -1,
+        .clause_index = region_count - 1,
     };
     CHECK_AND_RETHROW(create_region_labels(&ctx, &root_region));
 
@@ -2320,9 +2351,6 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
     // for debug
     int indent = 0;
-
-    // which of the finallys we are looking at
-    int finally_path_index = -1;
 
     pc = 0;
     flow_control = TDN_IL_CF_FIRST;
@@ -2400,11 +2428,13 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         //--------------------------------------------------------------------------------------------------------------
         // Actual jit handling
         //--------------------------------------------------------------------------------------------------------------
+        CHECK(arrlen(ctx.regions) > 0);
         jit_region_t* region = arrlast(ctx.regions);
         jit_region_t* new_region = NULL;
 
         // check if we entered a new region or not
-        for (int i = region->clause_index + 1; i < arrlen(ctx.protected_regions); i++) {
+        int start_index = region->clause_index == -1 ? 0 : region->clause_index;
+        for (int i = 0; i <= region->clause_index; i++) {
             jit_region_t* protected_region = &ctx.protected_regions[i];
             jit_region_t* handler_region = &ctx.handler_regions[i];
 
@@ -2434,12 +2464,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // first is the fault path, the rest are the valid paths, get the correct
                 // region to pass on
                 if (handler_region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-                    if (finally_path_index >= 0) {
-                        handler_region = handler_region->finally_handlers->finally_paths[finally_path_index].region;
+                    int finaly_path_index = handler_region->current_finally_path++;
+                    CHECK(finaly_path_index < hmlen(handler_region->finally_handlers->finally_paths));
+                    if (finaly_path_index >= 0) {
+                        handler_region = handler_region->finally_handlers->finally_paths[finaly_path_index].region;
                     }
-
-                    // increment to the next one
-                    finally_path_index++;
                 }
                 new_region = handler_region;
 
@@ -2556,7 +2585,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             CHECK(arrlen(stack->stack) == 0);
         }
 
-        if (pc == region->pc_end) {
+        // we might be reaching the end of multiple nested blocks, so until we find a region which
+        // does not end we need to pop it
+        while (arrlen(ctx.regions) != 0 && pc == region->pc_end) {
             // we got to the end of a region, make sure we can't fallthrough from here,
             // if its the root then allow for return as well
             CHECK(
@@ -2575,12 +2606,19 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 region->is_handler &&
                 region->clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY
             ) {
-                if (finally_path_index < hmlen(region->finally_handlers->finally_paths)) {
+                int finaly_path_index = ctx.handler_regions[region->clause_index].current_finally_path;
+                if (finaly_path_index < hmlen(region->finally_handlers->finally_paths)) {
                     pc = region->pc_start;
-                } else {
-                    finally_path_index = -1;
+
+                    // we don't want to go completely out just yet, we have some
+                    // more paths to take
+                    break;
                 }
             }
+
+            // get the new last region for the while condition to get
+            // updated
+            region = arrlast(ctx.regions);
         }
 
         //--------------------------------------------------------------------------------------------------------------
@@ -2591,7 +2629,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
             RuntimeExceptionHandlingClause c = clauses->Elements[i];
             if (c->TryOffset + c->TryLength == pc) {
                 indent -= 4;
-                tdn_host_printf("[*] \t\t\t%*s} // end .try\n", indent, "");
+                tdn_host_printf("[*] \t\t\t%*s} // end .try - %04x\n", indent, "");
             } else if (c->HandlerOffset + c->HandlerLength == pc) {
                 indent -= 4;
                 tdn_host_printf("[*] \t\t\t%*s} // end handler\n", indent, "");
