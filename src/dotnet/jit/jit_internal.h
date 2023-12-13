@@ -31,6 +31,10 @@ typedef struct jit_label jit_label_t;
 
 typedef struct stack_meta {
     bool came_from_ldarg0;
+
+    // if the type is Object, and the value is boxed, this will
+    // have the boxed type
+    RuntimeTypeInfo BoxedType;
 } stack_meta_t;
 
 typedef struct eval_stack_item {

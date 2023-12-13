@@ -92,3 +92,26 @@ bool tdn_compare_string_to_cstr(String str, const char* cstr) {
 
     return true;
 }
+
+bool tdn_compare_string(String a, String b) {
+    if (a == NULL && b == NULL) {
+        return true;
+    }
+
+    if (a == NULL || b == NULL) {
+        return false;
+    }
+
+    if (a->Length != b->Length) {
+        return false;
+    }
+
+    int len = a->Length;
+    for (int i = 0; i < len; i++) {
+        if (a->Chars[i] != b->Chars[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}

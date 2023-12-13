@@ -126,6 +126,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, IndexOutOfRangeException),
     LOAD_TYPE(System, NullReferenceException),
     LOAD_TYPE(System, OverflowException),
+    { "System", "Nullable`1", &tNullable },
 };
 static int m_loaded_types = 0;
 
@@ -318,6 +319,7 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
 
         // find the largest field for alignment calculation,
         // also fills their size
+        bool is_managed = false;
         size_t largest_alignment = 0;
         for (int i = 0; i < fields->Length; i++) {
             RuntimeFieldInfo field = fields->Elements[i];
@@ -326,8 +328,10 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
                 continue;
             }
             CHECK_AND_RETHROW(fill_stack_size(field_type));
+            if (tdn_type_is_referencetype(field_type) || !field_type->IsUnmanaged) is_managed = true;
             largest_alignment = MAX(largest_alignment, fields->Elements[i]->FieldType->StackAlignment);
         }
+        type->IsUnmanaged = is_managed;
 
         // align the alignment nicely, and then align the base of our own data
         size_t alignment = MIN(largest_alignment, type->Packing ?: _Alignof(size_t));
@@ -614,16 +618,6 @@ tdn_err_t tdn_parser_method_body(
         CHECK_FAIL();
     }
 
-    // now that we are done we have the full sizes
-    uint8_t* code_start = end;
-    uint8_t* code_end = pe_image_address(&assembly->Metadata->file, method_def->rva + header_size + code_size);
-    CHECK(code_end != NULL);
-    CHECK(code_size <= INT32_MAX);
-
-    // set the code
-    body->ILSize = (int)code_size;
-    body->IL = code_start;
-
     // there are more sections, process them
     if (flags & CorILMethod_MoreSects) {
         // make sure we can access the header
@@ -657,6 +651,16 @@ tdn_err_t tdn_parser_method_body(
                 methodBase, kind & CorILMethod_Sect_FatFormat,
                 sect_start + sizeof(uint32_t), size - sizeof(uint32_t), code_size));
     }
+
+    // now that we are done we have the full sizes
+    uint8_t* code_start = end;
+    uint8_t* code_end = pe_image_address(&assembly->Metadata->file, method_def->rva + header_size + code_size);
+    CHECK(code_end != NULL);
+    CHECK(code_size <= INT32_MAX);
+
+    // set the code
+    body->ILSize = (int)code_size;
+    body->IL = code_start;
 
 cleanup:
     return err;
@@ -808,13 +812,19 @@ static tdn_err_t corelib_jit_types(RuntimeAssembly assembly) {
 
     CHECK_AND_RETHROW(tdn_jit_init());
 
-    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
-    }
-
-    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
-    }
+//    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
+//        RuntimeTypeInfo type = *m_load_types[i].dest;
+//
+//        // skip generic types
+//        if (type->GenericTypeDefinition == type) {
+//            continue;
+//        }
+//        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
+//    }
+//
+//    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
+//        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
+//    }
 
 cleanup:
     return err;

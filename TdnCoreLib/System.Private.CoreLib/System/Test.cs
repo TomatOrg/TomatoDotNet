@@ -5,38 +5,9 @@ namespace System;
 public class Test
 {
 
-    class Thing
+    public object Add(int? a, int? b)
     {
-        public void Dispose()
-        {
-        }
-        
-        public int GetThing()
-        {
-            return 1;
-        }
-    }
-    
-    
-    public int Add(long b)
-    {
-        Thing thing = new Thing();
-        try
-        {
-            Thing thing2 = new Thing();
-            try
-            {
-                return thing.GetThing() + thing2.GetThing();
-            }
-            finally
-            {
-                thing2.Dispose();
-            }
-        }
-        finally
-        {
-            thing.Dispose();
-        }
+        return a ?? 0 + b ?? 0;
     }
     
 }

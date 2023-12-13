@@ -13,7 +13,7 @@ public class Object
     internal ushort _monitorOwnerThreadId;
     internal uint _monitorDepthAndGcFlags;
     private Type _type;
-    private unsafe void* _objectType;
+    private unsafe void* _next;
 
     ~Object()
     {

@@ -80,7 +80,11 @@ tdn_err_t tdn_assembly_lookup_method(
 
                 if (!tdn_compare_string_to_cstr(m->Name, ref->name)) continue;
                 if (m->Parameters->Length != signature.parameters->Length) continue;
-                if ((size_t)m->GenericArguments->Length != signature.generic_param_count) continue;
+                if (m->GenericArguments != NULL) {
+                    if ((size_t)m->GenericArguments->Length != signature.generic_param_count) continue;
+                } else {
+                    if (signature.generic_param_count != 0) continue;
+                }
                 if (m->ReturnParameter->ParameterType != signature.return_parameter->ParameterType) continue;
 
                 // compare the parameter types
@@ -116,21 +120,58 @@ cleanup:
 tdn_err_t tdn_assembly_lookup_field(
     RuntimeAssembly assembly,
     int metadata_token,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
     RuntimeFieldInfo* field
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
     token_t token = { .token = metadata_token };
-    CHECK(token.table == METADATA_FIELD, "tdn_assembly_lookup_field: called with invalid table %02x", token.table);
-    CHECK(token.index != 0 && token.index <= assembly->Fields->Length);
 
-    *field = assembly->Fields->Elements[token.index - 1];
+    if (token.table == METADATA_FIELD) {
+        CHECK(token.index != 0 && token.index <= assembly->Fields->Length);
+        *field = assembly->Fields->Elements[token.index - 1];
+
+    } else if (token.table == METADATA_MEMBER_REF) {
+        CHECK(token.index != 0 && token.index <= assembly->Fields->Length);
+        metadata_member_ref_t* ref = &assembly->Metadata->member_refs[token.index - 1];
+
+        // get the owner type
+        RuntimeTypeInfo type;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, ref->class.token, typeArgs, methodArgs, &type));
+
+        // resolve the field type
+        RuntimeTypeInfo field_type;
+        CHECK_AND_RETHROW(sig_parse_field_type(ref->signature, assembly, typeArgs, methodArgs, &field_type));
+
+        // search for a field with that name
+        RuntimeFieldInfo found = NULL;
+        RuntimeFieldInfo_Array fields = type->DeclaredFields;
+        for (int i = 0; i < fields->Length; i++) {
+            RuntimeFieldInfo info = fields->Elements[i];
+            if (tdn_compare_string_to_cstr(info->Name, ref->name)) {
+                // make sure the type matches
+                CHECK(info->FieldType == field_type);
+                found = info;
+                break;
+            }
+        }
+        CHECK(found != NULL);
+
+        *field = found;
+    } else {
+        CHECK_FAIL("tdn_assembly_lookup_field: called with invalid table %02x", token.table);
+    }
 
 cleanup:
     return err;
 }
 
-tdn_err_t tdn_assembly_lookup_type_by_cstr(RuntimeAssembly assembly, const char* namespace, const char* name, RuntimeTypeInfo* out_type) {
+tdn_err_t tdn_assembly_lookup_type_by_cstr(
+    RuntimeAssembly assembly,
+    const char* namespace,
+    const char* name,
+    RuntimeTypeInfo* out_type
+) {
     tdn_err_t err = TDN_NO_ERROR;
 
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {

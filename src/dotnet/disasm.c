@@ -94,7 +94,10 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
 
         case InlineField: {
             inst->operand_type = TDN_IL_FIELD;
-            CHECK_AND_RETHROW(tdn_assembly_lookup_field(assembly, FETCH(int32_t), &inst->operand.field));
+            CHECK_AND_RETHROW(tdn_assembly_lookup_field(
+                    assembly, FETCH(int32_t),
+                    method->DeclaringType->GenericArguments, method->GenericArguments,
+                    &inst->operand.field));
         } break;
 
         case InlineI: {

@@ -69,3 +69,4 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str);
 tdn_err_t tdn_append_cstr_to_string(String str, const char* cstr, String* out_str);
 
 bool tdn_compare_string_to_cstr(String str, const char* cstr);
+bool tdn_compare_string(String a, String b);

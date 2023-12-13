@@ -416,6 +416,33 @@ cleanup:
     return err;
 }
 
+tdn_err_t sig_parse_field_type(
+    blob_entry_t _blob,
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo* type
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+    blob_entry_t* blob = &_blob;
+
+    CHECK(FETCH_BYTE == FIELD);
+
+    // Parse custom modifiers
+    RuntimeTypeInfo cmod_type = NULL;
+    bool required = false;
+    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+    while(cmod_type != NULL) {
+        CHECK(!required);
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+    }
+
+    // parse the type
+    CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, type));
+
+cleanup:
+    return err;
+}
+
 tdn_err_t sig_parse_type_spec(blob_entry_t _blob, RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs, RuntimeTypeInfo* type) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;

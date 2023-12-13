@@ -64,7 +64,7 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // have created the instance already, we are going to just let
     // the GC clean after ourselves and use the real one
     RuntimeTypeInfo result = NULL;
-    if (atomic_compare_exchange_strong(&new_type->ArrayType, &result, new_type)) {
+    if (atomic_compare_exchange_strong(&type->ArrayType, &result, new_type)) {
         result = new_type;
     }
 
@@ -119,7 +119,7 @@ tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // have created the instance already, we are going to just let
     // the GC clean after ourselves and use the real one
     RuntimeTypeInfo result = NULL;
-    if (atomic_compare_exchange_strong(&new_type->ByRefType, &result, new_type)) {
+    if (atomic_compare_exchange_strong(&type->ByRefType, &result, new_type)) {
         result = new_type;
     }
 
@@ -172,7 +172,7 @@ tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) 
     // have created the instance already, we are going to just let
     // the GC clean after ourselves and use the real one
     RuntimeTypeInfo result = NULL;
-    if (atomic_compare_exchange_strong(&new_type->PointerType, &result, new_type)) {
+    if (atomic_compare_exchange_strong(&type->PointerType, &result, new_type)) {
         result = new_type;
     }
 

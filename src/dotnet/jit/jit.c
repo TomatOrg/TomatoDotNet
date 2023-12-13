@@ -32,11 +32,13 @@ static RuntimeMethodBase* m_methods_to_jit = NULL;
 //
 
 // memory manipulation (mainly used for structs)
-static spidir_function_t m_builtin_memset;
+static spidir_function_t m_builtin_bzero;
 static spidir_function_t m_builtin_memcpy;
 
 // GC related
 static spidir_function_t m_builtin_gc_new;
+static spidir_function_t m_builtin_gc_bzero;
+static spidir_function_t m_builtin_gc_memcpy;
 
 // throwing related
 static spidir_function_t m_builtin_throw_index_out_of_range_exception;
@@ -76,18 +78,17 @@ tdn_err_t tdn_jit_init() {
     //
     // Create built-in types
     //
-    m_builtin_memset = spidir_module_create_extern_function(m_spidir_module,
-                                         "memset",
-                                         SPIDIR_TYPE_PTR,
-                                         3, (spidir_value_type_t[]){
+    m_builtin_bzero = spidir_module_create_extern_function(m_spidir_module,
+                                         "bzero",
+                                         SPIDIR_TYPE_NONE,
+                                         2, (spidir_value_type_t[]){
                                             SPIDIR_TYPE_PTR,
-                                            SPIDIR_TYPE_I32,
                                             SPIDIR_TYPE_I64
                                         });
 
     m_builtin_memcpy = spidir_module_create_extern_function(m_spidir_module,
                                                 "memcpy",
-                                                SPIDIR_TYPE_PTR,
+                                                SPIDIR_TYPE_NONE,
                                                 3, (spidir_value_type_t[]){
                                                 SPIDIR_TYPE_PTR,
                                                 SPIDIR_TYPE_PTR,
@@ -97,6 +98,16 @@ tdn_err_t tdn_jit_init() {
                                                             "gc_new",
                                                             SPIDIR_TYPE_PTR,
                                                             2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
+
+    m_builtin_gc_memcpy = spidir_module_create_extern_function(m_spidir_module,
+                                                            "gc_memcpy",
+                                                            SPIDIR_TYPE_NONE,
+                                                            3, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR });
+
+    m_builtin_gc_bzero = spidir_module_create_extern_function(m_spidir_module,
+                                                               "gc_bzero",
+                                                               SPIDIR_TYPE_NONE,
+                                                               2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR });
 
     m_builtin_throw_index_out_of_range_exception = spidir_module_create_extern_function(
             m_spidir_module, "throw_index_out_of_range_exception", SPIDIR_TYPE_NONE, 0, NULL);
@@ -229,10 +240,20 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, spidir_module_hand
  * Emit a memcpy with a known size
  */
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
+    // TODO:
     spidir_builder_build_call(builder, m_builtin_memcpy, 3,
                               (spidir_value_t[]){
                                       ptr1, ptr2,
                                       spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, size)
+                              });
+}
+
+static void jit_emit_gc_memcpy(spidir_builder_handle_t builder, RuntimeTypeInfo type, spidir_value_t ptr1, spidir_value_t ptr2) {
+    // TODO: if struct is small enough inline it manually
+    spidir_builder_build_call(builder, m_builtin_gc_memcpy, 3,
+                              (spidir_value_t[]){
+                                      spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)type),
+                                      ptr1, ptr2,
                               });
 }
 
@@ -659,7 +680,11 @@ static tdn_err_t jit_instruction(
             // perform the actual store
             if (jit_is_struct_type(field_type)) {
                 // we are copying a struct to the stack
-                jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
+                if (field_type->IsUnmanaged) {
+                    jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
+                } else {
+                    jit_emit_gc_memcpy(builder, field_type, field_ptr, value);
+                }
             } else {
                 // we are copying a simpler value
                 spidir_builder_build_store(builder,
@@ -926,7 +951,11 @@ static tdn_err_t jit_instruction(
             // perform the actual store
             if (jit_is_struct_type(T)) {
                 // we are copying a struct to the stack
-                jit_emit_memcpy(builder, element_ptr, value, T->StackSize);
+                if (T->IsUnmanaged) {
+                    jit_emit_memcpy(builder, element_ptr, value, T->StackSize);
+                } else {
+                    jit_emit_gc_memcpy(builder, T, element_ptr, value);
+                }
             } else {
                 // we are copying a simpler value
                 spidir_builder_build_store(builder,
@@ -1045,7 +1074,8 @@ static tdn_err_t jit_instruction(
                 }
 
                 // check that we can do the assignment
-                CHECK(tdn_type_verifier_assignable_to(call_args_types[i], target_type));
+                CHECK(tdn_type_verifier_assignable_to(call_args_types[i], target_type),
+                      "%T verifier-assignable-to %T", call_args_types[i], target_type);
             }
 
             // TODO: indirect calls, de-virt
@@ -2053,17 +2083,198 @@ static tdn_err_t jit_instruction(
             CHECK_AND_RETHROW(eval_stack_push(stack, array_type, array));
         } break;
 
+        case CEE_BOX: {
+            spidir_value_t val;
+            RuntimeTypeInfo val_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &val_type, &val, NULL));
+
+            CHECK(tdn_type_verifier_assignable_to(val_type, inst.operand.type));
+
+            if (tdn_type_is_referencetype(inst.operand.type)) {
+                // for reference type there is nothing special todo, it stays as is
+                CHECK_AND_RETHROW(eval_stack_push(stack, val_type, val));
+
+            } else {
+                // this is the struct path, it may have nullable and may not have nullable
+                bool is_nullable = val_type->GenericTypeDefinition == tNullable;
+
+                // if we have a Nullable<> then prepare the allocation and movement
+                size_t has_value_offset = -1;
+                size_t val_offset = -1;
+                spidir_block_t next;
+                if (is_nullable) {
+                    // get the needed offsets for the given type
+                    RuntimeFieldInfo_Array fields = val_type->DeclaredFields;
+                    for (int i = 0; i < fields->Length; i++) {
+                        RuntimeFieldInfo field = fields->Elements[i];
+                        if (tdn_compare_string_to_cstr(field->Name, "_hasValue")) {
+                            has_value_offset = field->FieldOffset;
+                        } else if (tdn_compare_string_to_cstr(field->Name, "_value")) {
+                            val_offset = field->FieldOffset;
+                        }
+                    }
+                    CHECK(has_value_offset != -1);
+                    CHECK(val_offset != -1);
+
+                    // the needed pointers
+                    spidir_value_t has_value_ptr = spidir_builder_build_ptroff(builder, val,
+                                                                               spidir_builder_build_iconst(builder,
+                                                                                                           SPIDIR_TYPE_I64,
+                                                                                                           has_value_offset));
+
+                    spidir_value_t value_ptr = spidir_builder_build_ptroff(builder, val,
+                                                                           spidir_builder_build_iconst(builder,
+                                                                                                       SPIDIR_TYPE_I64,
+                                                                                                       has_value_offset));
+
+                    // check if we have a value
+                    spidir_value_t has_value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_1, SPIDIR_TYPE_I32,
+                                                                         has_value_ptr);
+                    has_value = spidir_builder_build_icmp(builder,
+                                                          SPIDIR_ICMP_NE,
+                                                          SPIDIR_TYPE_I32,
+                                                          has_value,
+                                                          spidir_builder_build_iconst(builder,
+                                                                                      SPIDIR_TYPE_I32,
+                                                                                      0));
+
+                    // we are using a phi to choose the correct
+                    next = spidir_builder_create_block(builder);
+                    spidir_block_t allocate = spidir_builder_create_block(builder);
+                    spidir_builder_build_brcond(builder, has_value, allocate, next);
+
+                    // perform the copy path
+                    spidir_builder_set_block(builder, allocate);
+
+                    // if we have an integer type we need to read it, to make it consistent with
+                    // whatever we will have in the non-nullable case
+                    val_type = tdn_get_verification_type(val_type->GenericArguments->Elements[0]);
+                    if (val_type == tByte) {
+                        val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_1, SPIDIR_TYPE_I32, value_ptr);
+                    } else if (val_type == tInt16) {
+                        val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_2, SPIDIR_TYPE_I32, value_ptr);
+                    } else if (val_type == tInt32) {
+                        val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32, value_ptr);
+                    } else if (val_type == tInt64) {
+                        val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I32, value_ptr);
+                    } else {
+                        // otherwise it is just the pointer since its a struct
+                        val = value_ptr;
+                    }
+                }
+
+                // allocate it
+                spidir_value_t args[2] = {
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst.operand.type),
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, sizeof(struct Object) + inst.operand.type->HeapSize),
+                };
+                spidir_value_t obj = spidir_builder_build_call(builder, m_builtin_gc_new, 2, args);
+                spidir_value_t obj_value = spidir_builder_build_ptroff(builder, obj,
+                                                                       spidir_builder_build_iconst(builder,
+                                                                                                   SPIDIR_TYPE_I64,
+                                                                                                   sizeof(struct Object)));
+
+                // copy it, if its an integer copy properly, which will most likely truncate it
+                if (val_type == tByte) {
+                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_1, val, obj_value);
+                } else if (val_type == tInt16) {
+                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_2, val, obj_value);
+                } else if (val_type == tInt32) {
+                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4, val, obj_value);
+                } else if (val_type == tInt64) {
+                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, val, obj_value);
+                } else {
+                    if (val_type->IsUnmanaged) {
+                        jit_emit_memcpy(builder, obj_value, val, val_type->StackSize);
+                    } else {
+                        jit_emit_gc_memcpy(builder, val_type, obj_value, val);
+                    }
+                }
+
+                // and finally now that it is properly allocated we can setup the next path
+                // with the proper phi
+                if (is_nullable) {
+                    spidir_builder_build_branch(builder, next);
+
+                    // now setup the phi
+                    //  first input is the allocation path
+                    //  second input is the no allocation path
+                    spidir_builder_set_block(builder, next);
+                    spidir_value_t inputs[2] = {
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
+                        obj,
+                    };
+                    obj = spidir_builder_build_phi(builder, SPIDIR_TYPE_PTR, 2, inputs, NULL);
+                }
+
+                // finally push the object, will either be a phi result or just the object
+                stack_meta_t meta = {
+                    .BoxedType = val_type
+                };
+                CHECK_AND_RETHROW(eval_stack_push_with_meta(stack, tObject, obj, meta));
+            }
+        } break;
+
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // Misc operations
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
 
         // push the size in bytes of the given type
         case CEE_SIZEOF: {
             CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
                                               spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32,
                                                                           inst.operand.type->StackSize)));
+        } break;
+
+        case CEE_INITOBJ: {
+            spidir_value_t dest;
+            RuntimeTypeInfo dest_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &dest_type, &dest, NULL));
+
+            // must be a ByRef
+            CHECK(dest_type->IsByRef);
+            dest_type = dest_type->ElementType;
+
+            // must be assignable to properly
+            CHECK(tdn_type_assignable_to(inst.operand.type, dest_type),
+                  "%T assignable-to %T", inst.operand.type, dest_type);
+
+            // get the base type so we know how to best assign it
+            dest_type = tdn_get_verification_type(dest_type);
+            if (dest_type == tByte) {
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_1,
+                                           spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), dest);
+
+            } else if (dest_type == tInt16) {
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_2,
+                                           spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), dest);
+
+            } else if (dest_type == tInt32) {
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4,
+                                           spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), dest);
+
+            } else if (dest_type == tInt64) {
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
+                                           spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0), dest);
+
+            } else if (tdn_type_is_referencetype(dest_type) || dest_type == tIntPtr) {
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
+                                           spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0), dest);
+
+            } else if (dest_type->IsUnmanaged) {
+                spidir_builder_build_call(builder, m_builtin_bzero, 2,
+                                          (spidir_value_t[]){
+                                              dest,
+                                              spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, dest_type->StackSize)
+                                          });
+
+            } else {
+                spidir_builder_build_call(builder, m_builtin_gc_bzero, 2,
+                                          (spidir_value_t[]){
+                                                  spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)dest_type),
+                                                  dest,
+                                          });
+            }
         } break;
 
         case CEE_NOP: {
@@ -2160,10 +2371,9 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // clear it
             if (jit_is_struct_type(var->LocalType)) {
-                spidir_builder_build_call(builder, m_builtin_memset, 3,
+                spidir_builder_build_call(builder, m_builtin_bzero, 2,
                                           (spidir_value_t[]){
                                                   ctx.locals[i],
-                                                  spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0),
                                                   spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, var->LocalType->StackSize)
                                           });
             } else {

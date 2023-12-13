@@ -39,50 +39,76 @@ static int string_arginf_sz(const struct printf_info* info, size_t n, int* argty
     return 1;
 }
 
-static void output_type_name(RuntimeTypeInfo type, bool short_name) {
+static void output_type_name(FILE* f, RuntimeTypeInfo type, bool short_name) {
     if (short_name) {
-        if (type == tVoid) { printf("void"); return; }
-        if (type == tObject) { printf("object"); return; }
-        if (type == tSByte) { printf("sbyte"); return; }
-        if (type == tInt16) { printf("short"); return; }
-        if (type == tInt32) { printf("int"); return; }
-        if (type == tInt64) { printf("long"); return; }
-        if (type == tByte) { printf("byte"); return; }
-        if (type == tUInt16) { printf("ushort"); return; }
-        if (type == tUInt32) { printf("uint"); return; }
-        if (type == tUInt64) { printf("ulong"); return; }
-        if (type == tString) { printf("string"); return; }
-        if (type == tBoolean) { printf("bool"); return; }
-        if (type == tChar) { printf("char"); return; }
+        if (type == tVoid) { fprintf(f, "void"); return; }
+        if (type == tObject) { fprintf(f, "object"); return; }
+        if (type == tSByte) { fprintf(f, "sbyte"); return; }
+        if (type == tInt16) { fprintf(f, "short"); return; }
+        if (type == tInt32) { fprintf(f, "int"); return; }
+        if (type == tInt64) { fprintf(f, "long"); return; }
+        if (type == tByte) { fprintf(f, "byte"); return; }
+        if (type == tUInt16) { fprintf(f, "ushort"); return; }
+        if (type == tUInt32) { fprintf(f, "uint"); return; }
+        if (type == tUInt64) { fprintf(f, "ulong"); return; }
+        if (type == tString) { fprintf(f, "string"); return; }
+        if (type == tBoolean) { fprintf(f, "bool"); return; }
+        if (type == tChar) { fprintf(f, "char"); return; }
+    }
+
+    if (type->IsGenericParameter) {
+        fprintf(f, "%U", type->Name);
+        return;
     }
 
     if (type->DeclaringType != NULL) {
-        output_type_name(type->DeclaringType, false);
-        printf("+");
+        output_type_name(f, type->DeclaringType, false);
+        fprintf(f, "+");
     }
 
     if (type->Namespace != NULL) {
-        printf("%U.", type->Namespace);
+        fprintf(f, "%U.", type->Namespace);
     }
 
-    printf("%U", type->Name);
+    fprintf(f, "%U", type->Name);
 
     if (type->GenericArguments != NULL) {
-        printf("<");
+        fprintf(f, "<");
         for (int i = 0; i < type->GenericArguments->Length; i++) {
             if (i != 0) {
-                printf(", ");
+                fprintf(f, ", ");
             }
-            output_type_name(type->GenericArguments->Elements[i], short_name);
+            output_type_name(f, type->GenericArguments->Elements[i], short_name);
         }
-        printf(">");
+        fprintf(f, ">");
     }
+}
+
+static int type_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
+    int len = 0;
+
+    RuntimeTypeInfo type = *(RuntimeTypeInfo*)args[0];
+
+    if (type == NULL) {
+        return fprintf(stream, "<NULL>");
+    }
+
+    output_type_name(stream, type, true);
+
+    return len;
+}
+
+static int type_arginf_sz(const struct printf_info* info, size_t n, int* argtypes, int* size) {
+    if (n > 0) {
+        argtypes[0] = PA_POINTER;
+    }
+    return 1;
 }
 
 static tdn_err_t dump_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    static const char* visibility_str[] = {
+    static const char* type_visibility_str[] = {
         [TDN_TYPE_VISIBILITY_NOT_PUBLIC] = " ",
         [TDN_TYPE_VISIBILITY_PUBLIC] = "public ",
         [TDN_TYPE_VISIBILITY_NESTED_PUBLIC] = "public ",
@@ -95,22 +121,22 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
 
     TRACE("");
     printf("[*] %s%s%s%s ",
-           visibility_str[type->Attributes.Visibility],
+           type_visibility_str[type->Attributes.Visibility],
            type->Attributes.Sealed ? "sealed " : "",
            !type->Attributes.Interface && type->Attributes.Abstract ? "abstract " : "",
            type->Attributes.Interface ? "interface" : "class");
-    output_type_name(type, false);
+    output_type_name(stdout, type, false);
 
     if (type->BaseType != NULL) {
         printf(" : ");
-        output_type_name(type->BaseType, true);
+        output_type_name(stdout, type->BaseType, true);
     }
 
     printf(" { // sizeof == 0x%x\n", type->HeapSize);
 
     for (int j = 0; j < type->DeclaredFields->Length; j++) {
         RuntimeFieldInfo fieldInfo = type->DeclaredFields->Elements[j];
-        static const char* visibility_str[] = {
+        static const char* field_visibility_str[] = {
             [TDN_FIELD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
             [TDN_FIELD_ACCESS_PRIVATE] = "private",
             [TDN_FIELD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
@@ -120,9 +146,9 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
             [TDN_FIELD_ACCESS_PUBLIC] = "public",
         };
         printf("[*] \t%s %s",
-               visibility_str[fieldInfo->Attributes.FieldAccess],
+               field_visibility_str[fieldInfo->Attributes.FieldAccess],
                fieldInfo->Attributes.Static ? "static " : "");
-        output_type_name(fieldInfo->FieldType, true);
+        output_type_name(stdout, fieldInfo->FieldType, true);
         printf(" %U;", fieldInfo->Name);
 
         if (!fieldInfo->Attributes.Static) {
@@ -155,7 +181,7 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
         printf("[*] \t%s %s",
                visibility_str[method->Attributes.MemberAccess],
                method->Attributes.Static ? "static " : "");
-        output_type_name(method->ReturnParameter->ParameterType, true);
+        output_type_name(stdout, method->ReturnParameter->ParameterType, true);
         printf(" %U(", method->Name);
         for (int p = 0; p < method->Parameters->Length; p++) {
             if (p != 0) {
@@ -166,7 +192,7 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
             printf("%s%s",
                    parameter->Attributes.In ? "in " : "",
                    parameter->Attributes.Out ? "out " : "");
-            output_type_name(parameter->ParameterType, true);
+            output_type_name(stdout, parameter->ParameterType, true);
             if (parameter->Name != NULL) {
                 printf(" %U", parameter->Name);
             }
@@ -195,6 +221,7 @@ int main() {
     void* image = NULL;
 
     register_printf_specifier('U', string_output, string_arginf_sz);
+    register_printf_specifier('T', type_output, type_arginf_sz);
 
     // load the test image
     file = fopen("TdnCoreLib/System.Private.CoreLib/bin/Release/net7.0/System.Private.CoreLib.dll", "rb");

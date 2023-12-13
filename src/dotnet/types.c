@@ -39,6 +39,8 @@ RuntimeTypeInfo tIndexOutOfRangeException = NULL;
 RuntimeTypeInfo tNullReferenceException = NULL;
 RuntimeTypeInfo tOverflowException = NULL;
 
+RuntimeTypeInfo tNullable = NULL;
+
 RuntimeTypeInfo tNull = NULL;
 
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {

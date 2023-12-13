@@ -273,6 +273,7 @@ tdn_err_t tdn_assembly_lookup_method(
 tdn_err_t tdn_assembly_lookup_field(
     RuntimeAssembly assembly,
     int metadata_token,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
     RuntimeFieldInfo* field);
 
 tdn_err_t tdn_assembly_lookup_type_by_cstr(
