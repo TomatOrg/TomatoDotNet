@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tinydotnet/types/basic.h"
-#include "tinydotnet/types/reflection.h"
+#include "tomatodotnet/types/basic.h"
+#include "tomatodotnet/types/reflection.h"
 
 typedef struct string_builder {
     char* chars;

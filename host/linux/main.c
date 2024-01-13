@@ -2,15 +2,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
-#include "tinydotnet/except.h"
+#include "tomatodotnet/except.h"
 #include "util/except.h"
 #include "dotnet/gc/gc.h"
 #include "dotnet/loader.h"
-#include "tinydotnet/disasm.h"
-#include "tinydotnet/jit/jit.h"
+#include "tomatodotnet/disasm.h"
+#include "tomatodotnet/jit/jit.h"
 #include "dotnet/jit/jit_internal.h"
 
-#include "tinydotnet/tdn.h"
+#include "tomatodotnet/tdn.h"
 #include <printf.h>
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {

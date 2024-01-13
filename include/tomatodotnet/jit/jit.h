@@ -1,7 +1,7 @@
 #pragma once
 
-#include "tinydotnet/except.h"
-#include "tinydotnet/types/reflection.h"
+#include "tomatodotnet/except.h"
+#include "tomatodotnet/types/reflection.h"
 
 /**
  * Jit a specific method, this is usually needed when you want to call a non-virtual method

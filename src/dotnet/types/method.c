@@ -1,7 +1,7 @@
 
-#include "tinydotnet/except.h"
-#include "tinydotnet/types/basic.h"
-#include "tinydotnet/types/reflection.h"
+#include "tomatodotnet/except.h"
+#include "tomatodotnet/types/basic.h"
+#include "tomatodotnet/types/reflection.h"
 #include "util/except.h"
 
 tdn_err_t tdn_make_generic_method(

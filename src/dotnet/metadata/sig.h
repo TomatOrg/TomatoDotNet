@@ -1,8 +1,8 @@
 #pragma once
 
-#include "tinydotnet/except.h"
+#include "tomatodotnet/except.h"
 #include "metadata_tables.h"
-#include "tinydotnet/types/reflection.h"
+#include "tomatodotnet/types/reflection.h"
 
 typedef struct method_signature {
     uint32_t generic_param_count;

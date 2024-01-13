@@ -1,7 +1,7 @@
 #include <stddef.h>
 #include "loader.h"
-#include "tinydotnet/except.h"
-#include "tinydotnet/types/reflection.h"
+#include "tomatodotnet/except.h"
+#include "tomatodotnet/types/reflection.h"
 #include "dotnet/metadata/pe.h"
 #include "util/except.h"
 #include "util/string.h"
@@ -9,9 +9,9 @@
 #include "dotnet/gc/gc.h"
 #include "dotnet/metadata/sig.h"
 #include "util/stb_ds.h"
-#include "tinydotnet/jit/jit.h"
+#include "tomatodotnet/jit/jit.h"
 #include "dotnet/jit/jit_internal.h"
-#include <tinydotnet/types/type.h>
+#include <tomatodotnet/types/type.h>
 
 typedef struct memory_file_handle {
      void* buffer;

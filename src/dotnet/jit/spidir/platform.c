@@ -1,6 +1,6 @@
 
 #include <stddef.h>
-#include "tinydotnet/host.h"
+#include "tomatodotnet/host.h"
 #include "util/except.h"
 
 #include <spidir/platform.h>

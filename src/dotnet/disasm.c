@@ -1,7 +1,7 @@
 
 
-#include "tinydotnet/disasm.h"
-#include "tinydotnet/types/type.h"
+#include "tomatodotnet/disasm.h"
+#include "tomatodotnet/types/type.h"
 #include "util/except.h"
 #include "util/string.h"
 
@@ -38,7 +38,7 @@ typedef struct il_opcode {
 static il_opcode_t m_il_opcodes[] = {
 #define OPDEF_REAL_OPCODES_ONLY
 #define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) [c] = { .name = s, .operand_type = args, .control_flow = TDN_IL_CF_##ctrl },
-#include "tinydotnet/opcode.def"
+#include "tomatodotnet/opcode.def"
 #undef OPDEF
 #undef OPDEF_REAL_OPCODES_ONLY
 };

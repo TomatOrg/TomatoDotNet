@@ -1,11 +1,12 @@
 #pragma once
 
-#include "tinydotnet/except.h"
-#include "spidir/spidir.h"
-#include "tinydotnet/disasm.h"
+#include "tomatodotnet/types/type.h"
+#include "tomatodotnet/except.h"
+#include "tomatodotnet/disasm.h"
+
 #include "util/stb_ds.h"
-#include "tinydotnet/types/type.h"
 #include "util/except.h"
+#include "jit_interface.h"
 
 tdn_err_t tdn_jit_init();
 
@@ -42,7 +43,7 @@ typedef struct eval_stack_item {
     RuntimeTypeInfo type;
 
     // the value to access it
-    spidir_value_t value;
+    jit_value_t value;
 
     // metadata about the stack item
     stack_meta_t meta;
@@ -53,7 +54,7 @@ typedef struct eval_stack_value_instance {
     RuntimeTypeInfo key;
 
     // list of stack-slots for this type
-    spidir_value_t* stack;
+    jit_value_t* stack;
 
     // how much are currently in use
     int depth;
@@ -80,7 +81,7 @@ typedef struct eval_stack_snapshot_item {
 
     // the value for accessing the item, can
     // either be the input value or a phi node
-    spidir_value_t value;
+    jit_value_t value;
 } eval_stack_snapshot_item_t;
 
 typedef struct eval_stack_snapshot {
@@ -97,7 +98,7 @@ typedef struct eval_stack_snapshot {
 tdn_err_t eval_stack_push(
     eval_stack_t* stack,
     RuntimeTypeInfo type,
-    spidir_value_t value
+    jit_value_t value
 );
 
 /**
@@ -106,7 +107,7 @@ tdn_err_t eval_stack_push(
 tdn_err_t eval_stack_push_with_meta(
     eval_stack_t* stack,
     RuntimeTypeInfo type,
-    spidir_value_t value,
+    jit_value_t value,
     stack_meta_t meta
 );
 
@@ -115,9 +116,9 @@ tdn_err_t eval_stack_push_with_meta(
  */
 tdn_err_t eval_stack_alloc(
     eval_stack_t* stack,
-    spidir_builder_handle_t builder,
+    jit_builder_t builder,
     RuntimeTypeInfo type,
-    spidir_value_t* out_value
+    jit_value_t* out_value
 );
 
 /**
@@ -126,7 +127,7 @@ tdn_err_t eval_stack_alloc(
 tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
     RuntimeTypeInfo* out_type,
-    spidir_value_t* out_value,
+    jit_value_t* out_value,
     stack_meta_t* meta
 );
 
@@ -135,7 +136,7 @@ tdn_err_t eval_stack_pop(
  * assuming we are coming from the current label
  */
 tdn_err_t eval_stack_snapshot(
-    spidir_builder_handle_t builder,
+    jit_builder_t builder,
     eval_stack_t* stack,
     jit_label_t* target
 );
@@ -156,7 +157,7 @@ tdn_err_t eval_stack_update_phis(
  * we already jitted.
  */
 tdn_err_t eval_stack_merge(
-    spidir_builder_handle_t builder,
+    jit_builder_t builder,
     eval_stack_t* stack,
     jit_label_t* target,
     bool modify
@@ -181,7 +182,7 @@ typedef struct jit_label {
     uint32_t address;
 
     // the spidir block of the label
-    spidir_block_t block;
+    jit_block_t block;
 
     // the stack snapshot at the label's location
     eval_stack_snapshot_t snapshot;
@@ -229,7 +230,7 @@ typedef struct jit_region {
     uint32_t pc_end;
 
     // the block to use when entering the region
-    spidir_block_t entry_block;
+    jit_block_t entry_block;
 
     // is this the handler part of the clause
     bool is_handler;
@@ -249,7 +250,7 @@ typedef struct jit_region {
 
     // if this is a finally path then this is the next
     // block we need to go to after this finally
-    spidir_block_t next_block;
+    jit_block_t next_block;
     bool has_next_block;
 } jit_region_t;
 
@@ -278,7 +279,7 @@ typedef struct jit_label_location {
 typedef struct jit_arg {
     // the value to get the argument, either a param-ref
     // or a stackslot, depending on spilled
-    spidir_value_t value;
+    jit_value_t value;
 
     // the type of the argument
     RuntimeTypeInfo type;
@@ -292,7 +293,7 @@ typedef struct jit_context {
     RuntimeMethodBase method;
 
     // the current builder
-    spidir_builder_handle_t builder;
+    jit_builder_t builder;
 
     // the locations where labels reside, only used
     // as a reference from the first global pass
@@ -303,7 +304,7 @@ typedef struct jit_context {
 
     // the stack-slots for each of the local variables
     // of this function
-    spidir_value_t* locals;
+    jit_value_t* locals;
 
     // the eval stack, it is the same no matter where we are
     eval_stack_t stack;

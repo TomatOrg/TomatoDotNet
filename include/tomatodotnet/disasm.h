@@ -39,7 +39,7 @@ typedef enum tdn_il_control_flow {
 typedef enum tdn_il_opcode {
 #define OPDEF_REAL_OPCODES_ONLY
 #define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) c = (((REFPRE - (s1)) << 8) + (s2)),
-#include "tinydotnet/opcode.def"
+#include "tomatodotnet/opcode.def"
 #undef OPDEF
 #undef OPDEF_REAL_OPCODES_ONLY
 } tdn_il_opcode_t;

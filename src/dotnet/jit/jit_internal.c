@@ -1,6 +1,6 @@
 #include "jit_internal.h"
 #include "util/except.h"
-#include "tinydotnet/types/type.h"
+#include "tomatodotnet/types/type.h"
 
 #include "spidir/spidir_debug.h"
 

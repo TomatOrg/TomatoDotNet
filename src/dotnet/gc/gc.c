@@ -1,5 +1,5 @@
 #include "gc.h"
-#include "tinydotnet/host.h"
+#include "tomatodotnet/host.h"
 #include "util/except.h"
 #include "dotnet/metadata/metadata.h"
 #include "util/stb_ds.h"

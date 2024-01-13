@@ -1,6 +1,6 @@
 
-#include "tinydotnet/except.h"
-#include "tinydotnet/types/basic.h"
+#include "tomatodotnet/except.h"
+#include "tomatodotnet/types/basic.h"
 #include "util/string.h"
 #include "dotnet/gc/gc.h"
 #include "util/except.h"
