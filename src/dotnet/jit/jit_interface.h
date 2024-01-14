@@ -112,6 +112,55 @@ typedef enum {
     JIT_ICMP_ULE,
 } jit_icmp_kind_t;
 
+#elif __JIT_FIRM__
+
+#include <libfirm/firm.h>
+
+typedef ir_entity* jit_function_t;
+
+// TODO: right now this does not contain any type information, which can be a problem
+typedef ir_node* jit_value_t;
+#define JIT_VALUE_INVALID  NULL
+
+typedef ir_node* jit_block_t;
+#define JIT_IS_SAME_BLOCK(a, b) ((a) == (b))
+
+typedef struct jit_builder {
+    ir_graph* graph;
+    ir_node** params;
+    ir_node** blocks;
+}* jit_builder_t;
+
+typedef struct {} jit_module_t;
+
+typedef struct {} jit_phi_t;
+#define JIT_INIT_PHI    ((jit_phi_t){  })
+
+typedef ir_type* jit_value_type_t;
+extern ir_type* g_firm_i32;
+extern ir_type* g_firm_i64;
+extern ir_type* g_firm_ptr;
+#define JIT_TYPE_NONE       NULL
+#define JIT_TYPE_I32        g_firm_i32
+#define JIT_TYPE_I64        g_firm_i64
+#define JIT_TYPE_PTR        g_firm_ptr
+
+typedef enum {
+    JIT_MEM_SIZE_1,
+    JIT_MEM_SIZE_2,
+    JIT_MEM_SIZE_4,
+    JIT_MEM_SIZE_8,
+} jit_mem_size_t;
+
+typedef enum {
+    JIT_ICMP_EQ,
+    JIT_ICMP_NE,
+    JIT_ICMP_SLT,
+    JIT_ICMP_SLE,
+    JIT_ICMP_ULT,
+    JIT_ICMP_ULE,
+} jit_icmp_kind_t;
+
 #else
     #error Unknown jit interface
 #endif

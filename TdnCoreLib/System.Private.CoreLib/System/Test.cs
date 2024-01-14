@@ -9,5 +9,10 @@ public class Test
     {
         return a ?? 0 + b ?? 0;
     }
+
+    // public int Add(int a, int b)
+    // {
+    //     return a + b;
+    // }
     
 }
