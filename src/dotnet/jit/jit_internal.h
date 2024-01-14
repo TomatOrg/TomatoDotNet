@@ -77,7 +77,7 @@ typedef struct eval_stack_snapshot_item {
 
     // the phi that can be used to add more
     // inputs to the slot
-    spidir_phi_t phi;
+    jit_phi_t phi;
 
     // the value for accessing the item, can
     // either be the input value or a phi node

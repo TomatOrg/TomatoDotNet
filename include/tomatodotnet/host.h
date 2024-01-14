@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdarg.h>
 
 // logging helpers
 void tdn_host_log_trace(const char* format, ...);
@@ -9,6 +10,7 @@ void tdn_host_log_error(const char* format, ...);
 
 // raw logging
 void tdn_host_printf(const char* format, ...);
+void tdn_host_vprintf(const char* format, va_list args);
 
 // special string functions
 size_t tdn_host_strnlen(const char* string, size_t maxlen);

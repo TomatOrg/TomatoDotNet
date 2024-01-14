@@ -9,6 +9,7 @@ typedef struct string_builder {
 
 void string_builder_push_string(string_builder_t* builder, String str);
 void string_builder_push_cstr(string_builder_t* builder, const char* str);
+void string_builder_push_uint(string_builder_t* builder, size_t a);
 void string_builder_push_char(string_builder_t* builder, char c);
 char* string_builder_build(string_builder_t* builder);
 void string_builder_free(string_builder_t* builder);

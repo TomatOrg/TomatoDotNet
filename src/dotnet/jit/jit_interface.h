@@ -19,6 +19,7 @@ typedef spidir_builder_handle_t jit_builder_t;
 typedef spidir_module_handle_t jit_module_t;
 
 typedef spidir_phi_t jit_phi_t;
+#define JIT_INIT_PHI    ((jit_phi_t){ .id = -1 })
 
 typedef spidir_value_type_t jit_value_type_t;
 #define JIT_TYPE_NONE       SPIDIR_TYPE_NONE
@@ -40,7 +41,76 @@ typedef spidir_icmp_kind_t jit_icmp_kind_t;
 #define JIT_ICMP_ULT        SPIDIR_ICMP_ULT
 #define JIT_ICMP_ULE        SPIDIR_ICMP_ULE
 
+#elif __JIT_MIR__
 
+#include "mir/mir.h"
+
+typedef struct jit_function_inner {
+    int index;
+    MIR_item_t proto;
+    MIR_item_t func;
+    bool has_return;
+    bool is_32bit_return;
+} jit_function_inner_t;
+
+typedef jit_function_inner_t* jit_function_t;
+
+// TODO: right now this does not contain any type information, which can be a problem
+typedef struct jit_value {
+    MIR_op_t op;
+    bool is_32bit;
+} jit_value_t;
+#define JIT_VALUE_INVALID  ((jit_value_t){})
+
+typedef uint64_t jit_block_t;
+#define JIT_IS_SAME_BLOCK(a, b) ((a) == (b))
+
+typedef struct jit_builder {
+    // function information
+    MIR_item_t func;
+    bool has_return;
+
+    // for value generation
+    uint32_t value_index;
+
+    // the current block
+    bool has_block;
+    uint64_t current_block;
+
+    // the entry block
+    uint64_t entry_block;
+
+    // the blocks themselves
+    MIR_insn_t* blocks;
+    MIR_insn_t* blocks_cursors;
+}* jit_builder_t;
+
+typedef MIR_module_t jit_module_t;
+
+typedef MIR_op_t jit_phi_t;
+#define JIT_INIT_PHI    ((jit_phi_t){ .mode = MIR_OP_UNDEF })
+
+typedef MIR_type_t jit_value_type_t;
+#define JIT_TYPE_NONE       MIR_T_UNDEF
+#define JIT_TYPE_I32        MIR_T_I32
+#define JIT_TYPE_I64        MIR_T_I64
+#define JIT_TYPE_PTR        MIR_T_P
+
+typedef enum {
+    JIT_MEM_SIZE_1,
+    JIT_MEM_SIZE_2,
+    JIT_MEM_SIZE_4,
+    JIT_MEM_SIZE_8,
+} jit_mem_size_t;
+
+typedef enum {
+    JIT_ICMP_EQ,
+    JIT_ICMP_NE,
+    JIT_ICMP_SLT,
+    JIT_ICMP_SLE,
+    JIT_ICMP_ULT,
+    JIT_ICMP_ULE,
+} jit_icmp_kind_t;
 
 #else
     #error Unknown jit interface
@@ -48,6 +118,8 @@ typedef spidir_icmp_kind_t jit_icmp_kind_t;
 
 typedef void (*jit_build_function_callback_t)(jit_builder_t builder, void* ctx);
 
+jit_function_t jit_get_function_from_id(uint64_t id);
+uint64_t jit_get_function_id(jit_function_t id);
 
 /**
  * Choose and initialize the wanted jit interface

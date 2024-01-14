@@ -18,6 +18,14 @@ void string_builder_push_cstr(string_builder_t* builder, const char* str) {
     }
 }
 
+void string_builder_push_uint(string_builder_t* builder, size_t a) {
+    if (a <= 9) {
+        string_builder_push_char(builder, a + '0');
+    } else {
+        ASSERT(!"TODO");
+    }
+}
+
 void string_builder_push_char(string_builder_t* builder, char c) {
     arrpush(builder->chars, c);
 }

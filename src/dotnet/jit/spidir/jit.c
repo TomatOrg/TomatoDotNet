@@ -26,6 +26,14 @@ void tdn_jit_dump() {
     spidir_module_dump(m_jit_module, stdout_dump_callback, NULL);
 }
 
+jit_function_t jit_get_function_from_id(uint64_t id) {
+    return (jit_function_t){ .id = id };
+}
+
+uint64_t jit_get_function_id(jit_function_t id) {
+        return id.id;
+}
+
 tdn_err_t jit_init() {
     spidir_log_init(spidir_log_callback);
 //    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);

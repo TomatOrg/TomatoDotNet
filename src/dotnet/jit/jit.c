@@ -1081,7 +1081,7 @@ static tdn_err_t jit_instruction(
 
             // emit the actual call
             jit_value_t value = jit_builder_build_call(builder,
-                                                             (jit_function_t){ target->JitMethodId },
+                                                             jit_get_function_from_id(target->JitMethodId),
                                                              arrlen(call_args_values), call_args_values);
 
             // for primitive types push it now
@@ -2185,7 +2185,7 @@ static tdn_err_t jit_instruction(
                     //  second input is the no allocation path
                     jit_builder_set_block(builder, next);
                     jit_value_t inputs[2] = {
-                            jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0),
+                        jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0),
                         obj,
                     };
                     obj = jit_builder_build_phi(builder, JIT_TYPE_PTR, 2, inputs, NULL);
@@ -2902,7 +2902,7 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t handl
         handle,
         name, ret_type, arrlen(params), params
     );
-    method->JitMethodId = func.id;
+    method->JitMethodId = jit_get_function_id(func);
 
     // queue to methods to jit if we didn't start with this already
     if (!method->JitStarted) {
@@ -2937,7 +2937,7 @@ static tdn_err_t jit_method(RuntimeMethodBase method) {
         .err = TDN_NO_ERROR
     };
     jit_module_build_function(m_jit_module,
-                                 (jit_function_t){ method->JitMethodId },
+                                 jit_get_function_from_id(method->JitMethodId),
                                  jit_method_callback, &ctx);
     CHECK_AND_RETHROW(ctx.err);
 
