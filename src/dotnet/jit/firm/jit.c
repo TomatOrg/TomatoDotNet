@@ -151,7 +151,7 @@ void jit_module_build_function(jit_module_t module,
 }
 
 jit_module_t jit_builder_get_module(jit_builder_t builder) {
-    ASSERT(!"jit_builder_get_module");
+    return (jit_module_t){};
 }
 
 jit_block_t jit_builder_create_block(jit_builder_t builder) {
@@ -213,17 +213,29 @@ void jit_builder_build_return(jit_builder_t builder,
 
 void jit_builder_build_branch(jit_builder_t builder,
                               jit_block_t dest) {
-    ASSERT(!"jit_builder_build_branch");
+    ir_node* jmp = new_Jmp();
+    add_immBlock_pred(dest, jmp);
 }
 
 void jit_builder_build_brcond(jit_builder_t builder,
                               jit_value_t cond, jit_block_t true_dest,
                               jit_block_t false_dest) {
-    ASSERT(!"jit_builder_build_brcond");
+    // if this isn't the result of a compare then create it as one,
+    // emitting a != 0 essentially
+    if (get_irn_mode(cond) != mode_b) {
+        ir_node* zero = new_Const_long(get_irn_mode(cond), 0);
+        cond = new_Cmp(cond, zero, ir_relation_equal);
+        cond = new_Not(cond);
+    }
+
+    ir_node* cond_node = new_Cond(cond);
+    ir_node* proj_true = new_r_Proj(cond_node, mode_X, pn_Cond_true);
+    ir_node* proj_false = new_r_Proj(cond_node, mode_X, pn_Cond_false);
+    add_immBlock_pred(true_dest, proj_true);
+    add_immBlock_pred(false_dest, proj_false);
 }
 
 void jit_builder_build_unreachable(jit_builder_t builder) {
-    ASSERT(!"jit_builder_build_unreachable");
 }
 
 jit_value_t jit_builder_build_phi(jit_builder_t builder,
@@ -404,7 +416,23 @@ void jit_builder_build_store(jit_builder_t builder,
     ASSERT(!"jit_builder_build_store");
 }
 
+static struct {
+    size_t key;
+    ir_type* value;
+}* m_stackslot_types;
+
 jit_value_t jit_builder_build_stackslot(jit_builder_t builder,
                                         uint32_t size, uint32_t align) {
-    ASSERT(!"jit_builder_build_stackslot");
+    ir_type* type = hmget(m_stackslot_types, size);
+    if (type == NULL) {
+        type = new_type_primitive(mode_ANY);
+        set_type_size(type, size);
+        hmput(m_stackslot_types, size, type);
+    }
+
+    ident* slot_ident = new_id_fmt("v%d", builder->slots++);
+    ir_entity* stack_slot = new_entity(get_irg_frame_type(builder->graph), slot_ident, type);
+    set_entity_alignment(stack_slot, align);
+
+    return new_Member(get_irg_frame(builder->graph), stack_slot);
 }

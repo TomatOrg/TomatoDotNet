@@ -129,12 +129,14 @@ typedef struct jit_builder {
     ir_graph* graph;
     ir_node** params;
     ir_node** blocks;
+    int slots;
+    int phis;
 }* jit_builder_t;
 
 typedef struct {} jit_module_t;
 
-typedef struct {} jit_phi_t;
-#define JIT_INIT_PHI    ((jit_phi_t){  })
+typedef ir_node* jit_phi_t;
+#define JIT_INIT_PHI    NULL
 
 typedef ir_type* jit_value_type_t;
 extern ir_type* g_firm_i32;
