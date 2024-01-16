@@ -1,6 +1,6 @@
 #pragma once
 
-#include <util/except.h>
+#include "util/except.h"
 
 #ifdef __JIT_SPIDIR__
 
@@ -114,7 +114,7 @@ typedef enum {
 
 #elif __JIT_FIRM__
 
-#include <libfirm/firm.h>
+#include "libfirm/firm.h"
 
 typedef ir_entity* jit_function_t;
 

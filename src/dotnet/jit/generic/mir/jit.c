@@ -1,5 +1,5 @@
 #include <stdarg.h>
-#include "dotnet/jit/jit_interface.h"
+#include "dotnet/jit/generic/jit_interface.h"
 #include "util/string.h"
 #include "util/string_builder.h"
 #include "util/stb_ds.h"

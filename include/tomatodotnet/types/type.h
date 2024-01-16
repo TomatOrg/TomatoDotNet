@@ -116,7 +116,8 @@ typedef struct RuntimeTypeInfo {
     uint32_t IsGenericParameter : 1;
     uint32_t IsByRef : 1;
     uint32_t IsArray : 1;
-    uint32_t : 23;
+    uint32_t IsPointer : 1;
+    uint32_t : 22;
     uint32_t IsUnmanaged : 1;
 }* RuntimeTypeInfo;
 

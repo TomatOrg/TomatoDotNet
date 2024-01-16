@@ -167,6 +167,7 @@ tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) 
     new_type->EndFillingHeapSize = 1;
     new_type->FillingStackSize = 1;
     new_type->EndFillingStackSize = 1;
+    new_type->IsPointer = 1;
 
     // set the array type, because in the mean time someone could
     // have created the instance already, we are going to just let

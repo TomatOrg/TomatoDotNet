@@ -2,7 +2,7 @@
 #include "util/except.h"
 #include "tomatodotnet/types/type.h"
 
-#include "spidir/spidir_debug.h"
+#include "dotnet/jit/generic/spidir/spidir_debug.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Evaluation stack

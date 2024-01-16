@@ -1,7 +1,7 @@
 
 #include "spidir/spidir.h"
 #include "spidir/log.h"
-#include "dotnet/jit/jit_interface.h"
+#include "dotnet/jit/generic/jit_interface.h"
 
 static void spidir_log_callback(spidir_log_level_t level, const char* module, size_t module_len, const char* message, size_t message_len) {
     switch (level) {
