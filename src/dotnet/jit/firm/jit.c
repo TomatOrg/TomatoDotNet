@@ -74,6 +74,7 @@ static ir_type* init_class_type(RuntimeTypeInfo type) {
 
         ir_entity* field_entity = new_entity(typ, ident, field_type);
         set_entity_offset(field_entity, field->FieldOffset);
+        field->JitFieldId = (uint64_t)field_entity;
     }
 
     // setup the type alignment correctly
@@ -82,6 +83,13 @@ static ir_type* init_class_type(RuntimeTypeInfo type) {
     set_type_state(typ, layout_fixed);
 
     return ptrtyp == NULL ? typ : ptrtyp;
+}
+
+ir_mode* get_ir_mode(RuntimeTypeInfo type) {
+    if (jit_is_struct_type(type)) {
+        ASSERT(!IS_ERROR(tdn_get_pointer_type(type, &type)));
+    }
+    return get_type_mode(get_ir_type(type));
 }
 
 ir_type* get_ir_type(RuntimeTypeInfo type) {
@@ -96,13 +104,13 @@ ir_type* get_ir_type(RuntimeTypeInfo type) {
         if (type == tSByte) {
             typ = new_type_primitive(mode_Bs);
             hmput(m_firm_type_map, type, typ);
-        } else if (type == tByte) {
+        } else if (type == tByte || type == tBoolean) {
             typ = new_type_primitive(mode_Bu);
             hmput(m_firm_type_map, type, typ);
         } else if (type == tInt16) {
             typ = new_type_primitive(mode_Hs);
             hmput(m_firm_type_map, type, typ);
-        } else if (type == tUInt16) {
+        } else if (type == tUInt16 || type == tChar) {
             typ = new_type_primitive(mode_Hu);
             hmput(m_firm_type_map, type, typ);
         } else if (type == tInt32) {
@@ -134,6 +142,11 @@ ir_type* get_ir_type(RuntimeTypeInfo type) {
     return typ;
 }
 
+static ir_entity* m_builtin_bzero = NULL;
+
+static ir_entity* m_builtin_gc_new = NULL;
+static ir_entity* m_builtin_gc_bzero = NULL;
+
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -143,6 +156,27 @@ tdn_err_t tdn_jit_init() {
 
     // init the ir backend
     ir_init();
+
+    // create the external functions
+    ir_type* bzero_proto = new_type_method(2, 0, false,
+                                           cc_fastcall_set, mtp_property_malloc);
+    set_method_param_type(bzero_proto, 0, get_type_for_mode(mode_P));
+    set_method_param_type(bzero_proto, 1, get_ir_type(tUInt64));
+    m_builtin_bzero = new_entity(get_glob_type(), new_id_from_str("bzero"), bzero_proto);
+
+    ir_type* gc_new_proto = new_type_method(2, 1, false,
+                                            cc_fastcall_set, mtp_property_malloc);
+    set_method_param_type(gc_new_proto, 0, get_ir_type(tRuntimeTypeInfo));
+    set_method_param_type(gc_new_proto, 1, get_ir_type(tUInt64));
+    set_method_res_type(gc_new_proto, 0, get_ir_type(tObject));
+    m_builtin_gc_new = new_entity(get_glob_type(), new_id_from_str("gc_new"), gc_new_proto);
+
+    ir_type* gc_bzero_proto = new_type_method(2, 0, false,
+                                            cc_fastcall_set, mtp_property_malloc);
+    set_method_param_type(gc_bzero_proto, 1, get_type_for_mode(mode_P));
+    set_method_param_type(gc_bzero_proto, 0, get_ir_type(tRuntimeTypeInfo));
+    m_builtin_gc_bzero = new_entity(get_glob_type(), new_id_from_str("gc_bzero"), gc_bzero_proto);
+
 
     // set the implicit options
     set_optimize(1);
@@ -306,7 +340,7 @@ void tdn_jit_dump() {
     do_firm_optimizations();
     do_firm_lowering();
 
-//    dump_all_ir_graphs("");
+    dump_all_ir_graphs("");
     be_main(stdout, "test");
 }
 
@@ -318,8 +352,8 @@ void tdn_jit_dump() {
 // Jit helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-//static tdn_err_t jit_prepare_method(RuntimeMethodBase method);
-//
+static tdn_err_t jit_prepare_method(RuntimeMethodBase method);
+
 //#define SWAP(a, b) \
 //    do { \
 //        typeof(a) __temp = a; \
@@ -399,37 +433,37 @@ cleanup:
     return err;
 }
 
-///**
-// * Resolve the label of a
-// *
-// */
-//static tdn_err_t resolve_and_verify_branch_target(
-//    jit_context_t* ctx,
-//    jit_region_t* region,
-//    uint32_t target,
-//    jit_label_t** out_label
-//) {
-//    tdn_err_t err = TDN_NO_ERROR;
-//
-//    // if we have a branch target make sure we have the target label
-//    jit_label_t* target_label = jit_get_label(region, target);
-//    CHECK(target_label != NULL);
-//
-//    // stack consistency check
-//    if (target_label->snapshot.initialized) {
-//        // we have a snapshot, perform a merge as needed, only modify if we have not visited it yet
-//        CHECK_AND_RETHROW(eval_stack_merge(ctx->builder, &ctx->stack, target_label, !target_label->visited));
-//    } else {
-//        // otherwise create a snapshot of our stack
-//        CHECK_AND_RETHROW(eval_stack_snapshot(ctx->builder, &ctx->stack, target_label));
-//    }
-//
-//    // give it back
-//    *out_label = target_label;
-//
-//cleanup:
-//    return err;
-//}
+/**
+ * Resolve the label of a
+ *
+ */
+static tdn_err_t resolve_and_verify_branch_target(
+    jit_context_t* ctx,
+    jit_region_t* region,
+    uint32_t target,
+    jit_label_t** out_label
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // if we have a branch target make sure we have the target label
+    jit_label_t* target_label = jit_get_label(region, target);
+    CHECK(target_label != NULL);
+
+    // stack consistency check
+    if (target_label->snapshot.initialized) {
+        // we have a snapshot, perform a merge as needed, only modify if we have not visited it yet
+        CHECK_AND_RETHROW(eval_stack_merge(&ctx->stack, target_label, !target_label->visited));
+    } else {
+        // otherwise create a snapshot of our stack
+        CHECK_AND_RETHROW(eval_stack_snapshot(&ctx->stack, target_label));
+    }
+
+    // give it back
+    *out_label = target_label;
+
+cleanup:
+    return err;
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The jit itself
@@ -459,8 +493,8 @@ static tdn_err_t jit_instruction(
     RuntimeMethodBase method = ctx->method;
     eval_stack_t* stack = &ctx->stack;
 
-//    RuntimeTypeInfo* call_args_types = NULL;
-//    jit_value_t* call_args_values = NULL;
+    RuntimeTypeInfo* call_args_types = NULL;
+    ir_node** call_args_values = NULL;
 
     //
     // the main instruction jitting
@@ -480,30 +514,21 @@ static tdn_err_t jit_instruction(
             // get the argument we are loading
             RuntimeTypeInfo arg_type = tdn_get_intermediate_type(arg->type);
 
-            if (arg->spilled) {
-                // was spilled, this is a stack slot
-                if (jit_is_struct_type(arg_type)) {
-                    // use memcpy
-                    ASSERT(!"TODO: this");
-//                    jit_value_t location;
-//                    CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, arg_type, &location));
-//                    jit_emit_memcpy(builder, location, arg->value, arg_type->StackSize);
-                } else {
+            if (jit_is_struct_type(arg_type)) {
+                // use memcpy
+                ir_node* location;
+                CHECK_AND_RETHROW(eval_stack_alloc(stack, arg_type, &location));
+                ir_type* typ = get_ir_type(arg_type);
+                set_store(new_CopyB(get_store(), location, arg->value, typ, cons_floats));
+            } else {
+                if (arg->spilled) {
                     // use a proper load
                     ir_type* typ = get_ir_type(arg_type);
                     ir_mode* mode = get_stack_mode(typ);
-                    ir_node* load = new_Load(get_store(), arg->value, mode, typ, cons_none);
+                    ir_node* load = new_Load(get_store(), arg->value, mode, typ, cons_floats);
+                    set_store(new_Proj(load, mode_M, pn_Load_M));
                     CHECK_AND_RETHROW(eval_stack_push(stack, arg_type,
                                                       new_Proj(load, mode, pn_Load_res)));
-                }
-            } else {
-                // was not spilled, this is a param-ref
-                if (jit_is_struct_type(arg_type)) {
-                    // passed by pointer, memcpy to the stack
-                    ASSERT(!"TODO: this");
-//                    jit_value_t location;
-//                    CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, arg_type, &location));
-//                    jit_emit_memcpy(builder, location, arg->value, arg_type->StackSize);
                 } else {
                     // just push it
                     stack_meta_t meta = {
@@ -514,19 +539,19 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
-//        case CEE_LDARGA: {
-//            uint16_t argi = inst.operand.variable;
-//            CHECK(argi < arrlen(ctx->args));
-//            jit_arg_t* arg = &ctx->args[argi];
-//            CHECK(arg->spilled);
-//
-//            // get the argument we are loading
-//            RuntimeTypeInfo arg_type;
-//            CHECK_AND_RETHROW(tdn_get_byref_type(arg->type, &arg_type));
-//
-//            // push the stack slot to the stack
-//            CHECK_AND_RETHROW(eval_stack_push(stack, arg_type, arg->value));
-//        } break;
+        case CEE_LDARGA: {
+            uint16_t argi = inst.operand.variable;
+            CHECK(argi < arrlen(ctx->args));
+            jit_arg_t* arg = &ctx->args[argi];
+            CHECK(arg->spilled);
+
+            // get the argument we are loading
+            RuntimeTypeInfo arg_type;
+            CHECK_AND_RETHROW(tdn_get_byref_type(arg->type, &arg_type));
+
+            // push the stack slot to the stack
+            CHECK_AND_RETHROW(eval_stack_push(stack, arg_type, arg->value));
+        } break;
 
         case CEE_STARG: {
             uint16_t argi = inst.operand.variable;
@@ -544,237 +569,219 @@ static tdn_err_t jit_instruction(
             // was spilled, this is a stack slot
             if (jit_is_struct_type(value_type)) {
                 // use memcpy
-                ASSERT(!"");
-//                jit_emit_memcpy(builder, arg->value, value, value_type->StackSize);
+                ir_type* typ = get_ir_type(value_type);
+                set_store(new_CopyB(get_store(), arg->value, value, typ, cons_floats));
             } else {
                 // use a proper load
-                ir_node* store = new_Store(get_store(), arg->value, value, get_ir_type(arg->type), cons_none);
+                ir_node* store = new_Store(get_store(), arg->value, value, get_ir_type(arg->type), cons_floats);
                 set_store(new_Proj(store, mode_M, pn_Store_M));
             }
         } break;
 
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//        // Locals
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-//        // load a local variable
-//        case CEE_LDLOC: {
-//            // verify the argument and get the stack type
-//            int var = inst.operand.variable;
-//            CHECK(var < arrlen(ctx->locals));
-//
-//            RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
-//            RuntimeTypeInfo tracked_type = tdn_get_intermediate_type(type);
-//
-//            if (jit_is_struct_type(type)) {
-//                // struct type, copy the stack slot to the eval stack
-//                jit_value_t loc;
-//                CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, type, &loc));
-//                jit_emit_memcpy(builder, loc, ctx->locals[var], type->StackSize);
-//            } else {
-//                // not a struct type, load it from the stack slot
-//                jit_value_t value = jit_builder_build_load(builder,
-//                                                                 get_jit_mem_size(type),
-//                                                                 get_jit_mem_type(type),
-//                                                                 ctx->locals[var]);
-//                if (type == tSByte) {
-//                    value = jit_builder_build_sfill(builder, 8, value);
-//                } else if (type == tInt16) {
-//                    value = jit_builder_build_sfill(builder, 16, value);
-//                }
-//                CHECK_AND_RETHROW(eval_stack_push(stack, tracked_type, value));
-//            }
-//        } break;
-//
-//            // load the pointer to a local variable
-//        case CEE_LDLOCA: {
-//            int var = inst.operand.variable;
-//            CHECK(var < method->MethodBody->LocalVariables->Length);
-//
-//            RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
-//            type = tdn_get_verification_type(type);
-//            CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
-//
-//            CHECK_AND_RETHROW(eval_stack_push(stack, type, ctx->locals[var]));
-//        } break;
-//
-//        // store to a local variable
-//        case CEE_STLOC: {
-//            // verify the argument and get the stack type
-//            int var = inst.operand.variable;
-//            CHECK(var < method->MethodBody->LocalVariables->Length);
-//
-//            jit_value_t value;
-//            RuntimeTypeInfo value_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
-//
-//            // check the type
-//            RuntimeTypeInfo local_type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
-//            CHECK(tdn_type_verifier_assignable_to(value_type, local_type));
-//
-//            if (jit_is_struct_type(value_type)) {
-//                // struct type, copy the stack slot to the eval stack
-//                jit_emit_memcpy(builder, ctx->locals[var], value, value_type->StackSize);
-//            } else {
-//                // not a struct type, just store it
-//                jit_builder_build_store(builder,
-//                                           get_jit_mem_size(local_type),
-//                                           value,
-//                                           ctx->locals[var]);
-//            }
-//        } break;
-//
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//        // Object related
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-//        // load a field
-//        case CEE_LDFLD:
-//        case CEE_LDFLDA: {
-//            RuntimeFieldInfo field = inst.operand.field;
-//            bool ldsfld = inst.opcode == CEE_LDFLDA;
-//
-//            // TODO: check field accessibility
-//
-//            // pop the item
-//            jit_value_t obj;
-//            RuntimeTypeInfo obj_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
-//
-//            // check this is either an object or a managed pointer
-//            CHECK(
-//                obj_type->IsByRef ||
-//                tdn_type_is_referencetype(obj_type) ||
-//                (jit_is_struct_type(obj_type) && !ldsfld)
-//            );
-//
-//            // TODO: verify the field is contained within the given object
-//
-//            // get the stack type of the field
-//            RuntimeTypeInfo field_type = inst.operand.field->FieldType;
-//
-//            // figure the pointer to the field itself
-//            jit_value_t field_ptr;
-//            if (field->Attributes.Static) {
-//                // static field
-//                // TODO: get a pointer to the static field
-//                CHECK_FAIL();
-//            } else {
-//                // instance field
-//                if (field->FieldOffset == 0) {
-//                    // field is at offset zero, just load it
-//                    field_ptr = obj;
-//                } else {
-//                    // build an offset to the field
-//                    field_ptr = jit_builder_build_ptroff(builder, obj,
-//                                                            jit_builder_build_iconst(builder,
-//                                                                                        JIT_TYPE_I64,
-//                                                                                        field->FieldOffset));
-//                }
-//            }
-//
-//            if (ldsfld) {
-//                if (!field->Attributes.Static) {
-//                    // TODO: emit null check
-//                }
-//
-//                // tracks as a managed pointer to the verification type
-//                RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
-//                CHECK_AND_RETHROW(tdn_get_byref_type(value_type, &value_type));
-//
-//                // for reference to field we don't need the load
-//                CHECK_AND_RETHROW(eval_stack_push(stack, value_type, field_ptr));
-//            } else {
-//                // tracks as the intermediate type
-//                RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
-//
-//                // perform the actual load
-//                if (jit_is_struct_type(field_type)) {
-//                    // we are copying a struct to the stack
-//                    jit_value_t value;
-//                    CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, value_type, &value));
-//                    jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
-//                } else {
-//                    // we are copying a simpler value
-//                    jit_value_t value = jit_builder_build_load(builder,
-//                                                                     get_jit_mem_size(field_type),
-//                                                                     get_jit_mem_type(field_type),
-//                                                                     field_ptr);
-//                    if (field_type == tSByte) {
-//                        value = jit_builder_build_sfill(builder, 8, value);
-//                    } else if (field_type == tInt16) {
-//                        value = jit_builder_build_sfill(builder, 16, value);
-//                    }
-//                    CHECK_AND_RETHROW(eval_stack_push(stack, value_type, value));
-//                }
-//            }
-//        } break;
-//
-//        // store to a field
-//        case CEE_STFLD: {
-//            RuntimeFieldInfo field = inst.operand.field;
-//
-//            // TODO: check field accessibility
-//
-//            // pop the item
-//            jit_value_t obj, value;
-//            RuntimeTypeInfo obj_type, value_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
-//
-//            // check this is either an object or a managed pointer
-//            CHECK(
-//                obj_type->IsByRef ||
-//                tdn_type_is_referencetype(obj_type)
-//            );
-//
-//            // TODO: verify the field is contained within the given object
-//
-//            // get the stack type of the field
-//            RuntimeTypeInfo field_type = inst.operand.field->FieldType;
-//            CHECK(tdn_type_verifier_assignable_to(value_type, field_type));
-//
-//            // figure the pointer to the field itself
-//            jit_value_t field_ptr;
-//            if (field->Attributes.Static) {
-//                // static field
-//                // TODO: get a pointer to the static field
-//                CHECK_FAIL();
-//            } else {
-//                // instance field
-//                if (field->FieldOffset == 0) {
-//                    // field is at offset zero, just load it
-//                    field_ptr = obj;
-//                } else {
-//                    // build an offset to the field
-//                    field_ptr = jit_builder_build_ptroff(builder, obj,
-//                                                            jit_builder_build_iconst(builder,
-//                                                                                        JIT_TYPE_I64,
-//                                                                                        field->FieldOffset));
-//                }
-//            }
-//
-//            // TODO: perform write barrier as needed
-//
-//            // perform the actual store
-//            if (jit_is_struct_type(field_type)) {
-//                // we are copying a struct to the stack
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Locals
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        // load a local variable
+        case CEE_LDLOC: {
+            // verify the argument and get the stack type
+            int var = inst.operand.variable;
+            CHECK(var < arrlen(ctx->locals));
+
+            RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
+            RuntimeTypeInfo tracked_type = tdn_get_intermediate_type(type);
+
+            if (jit_is_struct_type(type)) {
+                // struct type, copy the stack slot to the eval stack
+                ir_node* loc;
+                CHECK_AND_RETHROW(eval_stack_alloc(stack, type, &loc));
+                ir_type* typ = get_ir_type(type);
+                set_store(new_CopyB(get_store(), loc, ctx->locals[var], typ, cons_floats));
+            } else {
+                ir_node* value = new_Load(get_store(), ctx->locals[var],
+                                          get_ir_mode(tracked_type),
+                                          get_ir_type(type),
+                                          cons_floats);
+                set_store(new_Proj(value, mode_M, pn_Load_M));
+                CHECK_AND_RETHROW(eval_stack_push(stack, tracked_type,
+                                                  new_Proj(value, get_ir_mode(tracked_type), pn_Load_res)));
+            }
+        } break;
+
+        // load the pointer to a local variable
+        case CEE_LDLOCA: {
+            int var = inst.operand.variable;
+            CHECK(var < method->MethodBody->LocalVariables->Length);
+
+            RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
+            type = tdn_get_verification_type(type);
+            CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+
+            CHECK_AND_RETHROW(eval_stack_push(stack, type, ctx->locals[var]));
+        } break;
+
+        // store to a local variable
+        case CEE_STLOC: {
+            // verify the argument and get the stack type
+            int var = inst.operand.variable;
+            CHECK(var < method->MethodBody->LocalVariables->Length);
+
+            ir_node* value;
+            RuntimeTypeInfo value_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
+
+            // check the type
+            RuntimeTypeInfo local_type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
+            CHECK(tdn_type_verifier_assignable_to(value_type, local_type));
+
+            if (jit_is_struct_type(value_type)) {
+                // struct type, copy the stack slot to the eval stack
+                ir_type* typ = get_ir_type(local_type);
+                set_store(new_CopyB(get_store(), ctx->locals[var], value, typ, cons_floats));
+            } else {
+                // not a struct type, just store it
+                ir_type* typ = get_ir_type(local_type);
+                ir_node* store = new_Store(get_store(), ctx->locals[var], value, typ, cons_floats);
+                set_store(new_Proj(store, mode_M, pn_Store_M));
+            }
+        } break;
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Object related
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        // load a field
+        case CEE_LDFLD:
+        case CEE_LDFLDA: {
+            RuntimeFieldInfo field = inst.operand.field;
+            bool ldflda = inst.opcode == CEE_LDFLDA;
+
+            // TODO: check field accessibility
+
+            // pop the item
+            ir_node* obj;
+            RuntimeTypeInfo obj_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
+
+            // check this is either an object or a managed pointer
+            CHECK(
+                obj_type->IsByRef ||
+                tdn_type_is_referencetype(obj_type) ||
+                (jit_is_struct_type(obj_type) && !ldflda)
+            );
+
+            // TODO: verify the field is contained within the given object
+
+            // get the stack type of the field
+            RuntimeTypeInfo field_type = inst.operand.field->FieldType;
+
+            // figure the pointer to the field itself
+            ir_node* field_ptr = NULL;
+            if (field->Attributes.Static) {
+                // static field
+                // TODO: get a pointer to the static field
+                CHECK_FAIL();
+            } else {
+                // instance field
+                get_ir_type(field->DeclaringType);
+                ir_entity* entity = (ir_entity*)(field->JitFieldId);
+                field_ptr = new_Member(obj, entity);
+            }
+
+            if (ldflda) {
+                if (!field->Attributes.Static) {
+                    // TODO: emit null check
+                }
+
+                // tracks as a managed pointer to the verification type
+                RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
+                CHECK_AND_RETHROW(tdn_get_byref_type(value_type, &value_type));
+
+                // for reference to field we don't need the load
+                CHECK_AND_RETHROW(eval_stack_push(stack, value_type, field_ptr));
+            } else {
+                // tracks as the intermediate type
+                RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
+
+                // perform the actual load
+                if (jit_is_struct_type(field_type)) {
+                    // we are copying a struct to the stack
+                    ir_node* value;
+                    CHECK_AND_RETHROW(eval_stack_alloc(stack, value_type, &value));
+                    // jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
+                    ASSERT(!"handle struct fields properly");
+                } else {
+                    // we are copying a simpler value
+                    ir_node* value = new_Load(get_store(), field_ptr,
+                                              get_ir_mode(value_type),
+                                              get_ir_type(field_type),
+                                              cons_throws_exception);
+                    set_store(new_Proj(value, mode_M, pn_Load_M));
+                    value = new_Proj(value, get_ir_mode(value_type), pn_Load_res);
+                    CHECK_AND_RETHROW(eval_stack_push(stack, value_type, value));
+                }
+            }
+        } break;
+
+        // store to a field
+        case CEE_STFLD: {
+            RuntimeFieldInfo field = inst.operand.field;
+
+            // TODO: check field accessibility
+
+            // pop the item
+            ir_node* obj;
+            ir_node* value;
+            RuntimeTypeInfo obj_type, value_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
+
+            // check this is either an object or a managed pointer
+            CHECK(
+                obj_type->IsByRef ||
+                tdn_type_is_referencetype(obj_type)
+            );
+
+            // TODO: verify the field is contained within the given object
+
+            // get the stack type of the field
+            RuntimeTypeInfo field_type = inst.operand.field->FieldType;
+            CHECK(tdn_type_verifier_assignable_to(value_type, field_type));
+
+            // figure the pointer to the field itself
+            ir_node* field_ptr;
+            if (field->Attributes.Static) {
+                // static field
+                // TODO: get a pointer to the static field
+                CHECK_FAIL();
+            } else {
+                // instance field
+                get_ir_type(field->DeclaringType);
+                ir_entity* entity = (ir_entity*)(field->JitFieldId);
+                field_ptr = new_Member(obj, entity);
+            }
+
+            // TODO: perform write barrier as needed
+
+            // perform the actual store
+            if (jit_is_struct_type(field_type)) {
+                // we are copying a struct to the stack
+                ASSERT(!"TODO: this");
 //                if (field_type->IsUnmanaged) {
 //                    jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
 //                } else {
 //                    jit_emit_gc_memcpy(builder, field_type, field_ptr, value);
 //                }
-//            } else {
-//                // we are copying a simpler value
-//                jit_builder_build_store(builder,
-//                                           get_jit_mem_size(field_type),
-//                                           value,
-//                                           field_ptr);
-//            }
-//        } break;
-//
-//        //----------------------------------------------------------------------------------------------------------
-//
+            } else {
+                // we are copying a simpler value
+                ir_node* store = new_Store(get_store(), field_ptr, value,
+                                           get_ir_type(field_type), cons_throws_exception);
+                set_store(new_Proj(store, mode_M, pn_Store_M));
+            }
+        } break;
+
+        //----------------------------------------------------------------------------------------------------------
+
 //        // load a static field
 //        case CEE_LDSFLD:
 //        case CEE_LDSFLDA: {
@@ -1043,306 +1050,344 @@ static tdn_err_t jit_instruction(
 //                                           element_ptr);
 //            }
 //        } break;
-//
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//        // Function calls
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-//        case CEE_NEWOBJ:
-//        case CEE_CALL:
-//        case CEE_CALLVIRT: {
-//            RuntimeMethodBase target = inst.operand.method;
-//            bool is_static = target->Attributes.Static;
-//            bool is_call = inst.opcode == CEE_CALL;
-//            bool is_callvirt = inst.opcode == CEE_CALLVIRT;
-//            bool is_newobj = inst.opcode == CEE_NEWOBJ;
-//            size_t object_size = 0;
-//
-//            // TODO: check method accessibility
-//
-//            // verify we can call it
-//            if (is_newobj) {
-//                // newobj cannot call static or abstract methods
-//                CHECK(!target->Attributes.Abstract);
-//                CHECK(!target->Attributes.Static);
-//
-//                // ctor must be a special name
-//                CHECK(target->Attributes.RTSpecialName);
-//
-//                // TODO: for strings we need to calculate the string size
-//                object_size = target->DeclaringType->HeapSize;
-//            } else if (is_callvirt) {
-//                // callvirt can not call static methods
-//                CHECK(!target->Attributes.Static);
-//            } else {
-//                // call can not call abstract methods
-//                CHECK(!target->Attributes.Abstract);
-//            }
-//
-//            // get all the arguments
-//            int call_args_count = target->Parameters->Length + (is_static ? 0 : 1);
-//            arrsetlen(call_args_types, call_args_count);
-//            arrsetlen(call_args_values, call_args_count);
-//            for (int i = call_args_count - 1; i >= 0; i--) {
-//                if (is_newobj && i == 0) {
-//                    // special case for the first argument for newobj, we need to allocate it, either
-//                    // on the stack if its a value type or on the heap if its a reference type
-//                    RuntimeTypeInfo target_this_type;
-//                    jit_value_t obj = JIT_VALUE_INVALID;
-//                    if (tdn_type_is_referencetype(target->DeclaringType)) {
-//                        // call gc_new to allocate it
-//                        target_this_type = target->DeclaringType;
-//                        obj = jit_builder_build_call(builder, m_builtin_gc_new, 2, (jit_value_t[]){
-//                            jit_builder_build_iconst(builder, JIT_TYPE_PTR, (uint64_t)target_this_type),
-//                            jit_builder_build_iconst(builder, JIT_TYPE_I64, object_size)
-//                        });
-//                        CHECK_AND_RETHROW(eval_stack_push(stack, target->DeclaringType, obj));
-//                    } else {
-//                        // allocate it on the stack
-//                        CHECK_AND_RETHROW(tdn_get_byref_type(target->DeclaringType, &target_this_type));
-//                        CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, target->DeclaringType, &obj));
-//                    }
-//
-//                    call_args_types[i] = target_this_type;
-//                    call_args_values[i] = obj;
-//                    break;
-//                }
-//
-//                // pop it
-//                stack_meta_t meta;
-//                CHECK_AND_RETHROW(eval_stack_pop(stack, &call_args_types[i], &call_args_values[i], &meta));
-//
-//                // validate the stack type
-//                RuntimeTypeInfo target_type;
-//                if (!is_static) {
-//                    if (i == 0) {
-//                        // if we are in a callvirt update the target
-//                        // to be from the instance type, this will
-//                        // help us to perform a de-virt in case the
-//                        // class is either sealed or the method is final
-//                        if (is_callvirt) {
-//                            // TODO: this
-//                        }
-//
-//                        // figure the correct one for value types
-//                        if (tdn_type_is_valuetype(target->DeclaringType)) {
-//                            CHECK_AND_RETHROW(tdn_get_byref_type(target->DeclaringType, &target_type));
-//                        } else {
-//                            target_type = target->DeclaringType;
-//                        }
-//
-//                        if (is_call) {
-//                            // TODO: verify that we don't bypass the override of a function
-//                            //       unless we are part of the class tree
-//                        } else if (
-//                            is_callvirt &&
-//                            (
-//                                !target->Attributes.Virtual || // method is not virtual
-//                                target->DeclaringType->Attributes.Sealed || // the type on the stack is sealed
-//                                (target->Attributes.Virtual && target->Attributes.Final) // the method is final
-//                            )
-//                        ) {
-//                            jit_builder_build_call(builder, m_builtin_null_check, 1,
-//                                                      (jit_value_t[]){ call_args_values[0] });
-//                        }
-//                    } else {
-//                        target_type = target->Parameters->Elements[i - 1]->ParameterType;
-//                    }
-//                } else {
-//                    target_type = target->Parameters->Elements[i]->ParameterType;
-//                }
-//
-//                // check that we can do the assignment
-//                CHECK(tdn_type_verifier_assignable_to(call_args_types[i], target_type),
-//                      "%T verifier-assignable-to %T", call_args_types[i], target_type);
-//            }
-//
-//            // TODO: indirect calls, de-virt
-//
-//            // make sure that we can actually call the target
-//            CHECK_AND_RETHROW(jit_prepare_method(target, jit_builder_get_module(builder)));
-//
-//            RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
-//
-//            // for struct instances allocate and push it beforehand
-//            if (ret_type != tVoid && jit_is_struct_type(ret_type)) {
-//                // need to allocate the space in the caller, insert it as the first argument, already pushed
-//                // to the stack
-//                CHECK(!is_newobj);
-//                jit_value_t ret_buffer;
-//                CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, ret_type, &ret_buffer));
-//                        arrins(call_args_values, 0, ret_buffer);
-//            }
-//
-//            // emit the actual call
-//            jit_value_t value = jit_builder_build_call(builder,
-//                                                             jit_get_function_from_id(target->JitMethodId),
-//                                                             arrlen(call_args_values), call_args_values);
-//
-//            // for primitive types push it now
-//            if (ret_type != tVoid && !jit_is_struct_type(ret_type)) {
-//                CHECK(!is_newobj);
-//                CHECK_AND_RETHROW(eval_stack_push(stack, ret_type, value));
-//            }
-//        } break;
-//
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//        // Control flow
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-//        // unconditional branch
-//        case CEE_BR: {
-//            // get and validate the label
-//            jit_label_t* target_label = NULL;
-//            CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
-//
-//            // a branch, emit the branch
-//            jit_builder_build_branch(builder, target_label->block);
-//            region->has_block = false;
-//
-//            // because we don't fall-through we clear the stack
-//            eval_stack_clear(stack);
-//        } break;
-//
-//        // conditional branches
-//        case CEE_BRFALSE:
-//        case CEE_BRTRUE: {
-//            // pop the item
-//            jit_value_t value;
-//            RuntimeTypeInfo value_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
-//
-//            // ECMA-335 doesn't say brtrue takes in anything but
-//            // O and native int, but I think its just an oversight
-//            CHECK(
-//                tdn_type_is_referencetype(value_type) ||
-//                value_type == tInt32 ||
-//                value_type == tInt64 ||
-//                value_type == tIntPtr
-//            );
-//
-//            // get the jump locations
-//            jit_label_t* target_label = NULL;
-//            CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
-//
-//            jit_label_t* next_label = NULL;
-//            CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, pc + inst.length, &next_label));
-//
-//            // choose the target to fit the brcond
-//            jit_block_t true_dest;
-//            jit_block_t false_dest;
-//            if (inst.opcode == CEE_BRTRUE) {
-//                // jump if non-zero
-//                true_dest = target_label->block;
-//                false_dest = next_label->block;
-//            } else {
-//                // jump if zero
-//                true_dest = next_label->block;
-//                false_dest = target_label->block;
-//            }
-//
-//            // a branch, emit the branch
-//            jit_builder_build_brcond(builder, value, true_dest, false_dest);
-//        } break;
-//
-//        // all the different compare and compare-and-branches
-//        // that we have
-//        case CEE_BEQ:
-//        case CEE_BGE:
-//        case CEE_BGT:
-//        case CEE_BLE:
-//        case CEE_BLT:
-//        case CEE_BNE_UN:
-//        case CEE_BGE_UN:
-//        case CEE_BGT_UN:
-//        case CEE_BLE_UN:
-//        case CEE_BLT_UN:
-//        case CEE_CEQ:
-//        case CEE_CGT:
-//        case CEE_CGT_UN:
-//        case CEE_CLT:
-//        case CEE_CLT_UN: {
-//            // pop the items
-//            jit_value_t value1, value2;
-//            RuntimeTypeInfo value1_type, value2_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &value2_type, &value2, NULL));
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &value1_type, &value1, NULL));
-//
-//            //
-//            // perform the binary comparison and branch operations check,
-//            // anything else can not be tested
-//            //
-//            if (value1_type == tInt32) {
-//                CHECK(value2_type == tInt32 || value2_type == tIntPtr);
-//
-//            } else if (value1_type == tInt64) {
-//                CHECK(value2_type == tInt64);
-//
-//            } else if (value1_type == tIntPtr) {
-//                CHECK(value2_type == tInt32 || value2_type == tIntPtr);
-//
-//            } else if (value1_type->IsByRef) {
-//                // TODO: does this only apply to types
-//                //       of the same reference? I assume
-//                //       it does but we might need to change this
-//                CHECK(value2_type == value1_type);
-//
-//            } else if (tdn_type_is_referencetype(value1_type) && tdn_type_is_referencetype(value2_type)) {
-//                CHECK(
-//                    inst.opcode == CEE_BEQ ||
-//                    inst.opcode == CEE_BNE_UN ||
-//                    inst.opcode == CEE_CEQ ||
-//                    inst.opcode == CEE_CGT_UN
-//                );
-//
-//            } else {
-//                CHECK_FAIL();
-//            }
-//
-//            // jit only has the one side, need to flip for the other side
-//            jit_icmp_kind_t kind;
-//            bool compare = false;
-//            switch (inst.opcode) {
-//                case CEE_CEQ: compare = true;
-//                case CEE_BEQ: kind = JIT_ICMP_EQ; break;
-//                case CEE_BGE: kind = JIT_ICMP_SLE; SWAP(value1, value2); break;
-//                case CEE_CGT: compare = true;
-//                case CEE_BGT: kind = JIT_ICMP_SLT; SWAP(value1, value2); break;
-//                case CEE_BLE: kind = JIT_ICMP_SLE; break;
-//                case CEE_CLT: compare = true;
-//                case CEE_BLT: kind = JIT_ICMP_SLT; break;
-//                case CEE_BNE_UN: kind = JIT_ICMP_NE; break;
-//                case CEE_BGE_UN: kind = JIT_ICMP_ULE; SWAP(value1, value2); break;
-//                case CEE_CGT_UN: compare = true;
-//                case CEE_BGT_UN: kind = JIT_ICMP_ULT; SWAP(value1, value2); break;
-//                case CEE_BLE_UN: kind = JIT_ICMP_ULE; break;
-//                case CEE_CLT_UN: compare = true;
-//                case CEE_BLT_UN: kind = JIT_ICMP_ULT; break;
-//                default: CHECK_FAIL();
-//            }
-//
-//            // create the comparison
-//            jit_value_t cmp = jit_builder_build_icmp(builder,
-//                                                           kind,
-//                                                           JIT_TYPE_I32,
-//                                                           value1, value2);
-//
-//            // check if its a compare or not
-//            if (compare) {
-//                // a compare, just push the result as an int32
-//                eval_stack_push(stack, tInt32, cmp);
-//            } else {
-//                // get the jump locations
-//                jit_label_t* target_label = NULL;
-//                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
-//
-//                jit_label_t* next_label = NULL;
-//                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, pc + inst.length, &next_label));
-//
-//                // a branch, emit the branch
-//                jit_builder_build_brcond(builder, cmp, target_label->block, next_label->block);
-//            }
-//        } break;
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Function calls
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        case CEE_NEWOBJ:
+        case CEE_CALL:
+        case CEE_CALLVIRT: {
+            RuntimeMethodBase target = inst.operand.method;
+            bool is_static = target->Attributes.Static;
+            bool is_call = inst.opcode == CEE_CALL;
+            bool is_callvirt = inst.opcode == CEE_CALLVIRT;
+            bool is_newobj = inst.opcode == CEE_NEWOBJ;
+            size_t object_size = 0;
+            size_t alignment_size = 0;
+
+            // TODO: check method accessibility
+
+            // verify we can call it
+            if (is_newobj) {
+                // newobj cannot call static or abstract methods
+                CHECK(!target->Attributes.Abstract);
+                CHECK(!target->Attributes.Static);
+
+                // ctor must be a special name
+                CHECK(target->Attributes.RTSpecialName);
+
+                // TODO: for strings we need to calculate the string size
+                object_size = target->DeclaringType->HeapSize;
+                alignment_size = target->DeclaringType->HeapAlignment;
+            } else if (is_callvirt) {
+                // callvirt can not call static methods
+                CHECK(!target->Attributes.Static);
+            } else {
+                // call can not call abstract methods
+                CHECK(!target->Attributes.Abstract);
+            }
+
+            // get all the arguments
+            int call_args_count = target->Parameters->Length + (is_static ? 0 : 1);
+            arrsetlen(call_args_types, call_args_count);
+            arrsetlen(call_args_values, call_args_count);
+            for (int i = call_args_count - 1; i >= 0; i--) {
+                if (is_newobj && i == 0) {
+                    // special case for the first argument for newobj, we need to allocate it, either
+                    // on the stack if its a value type or on the heap if its a reference type
+                    RuntimeTypeInfo target_this_type;
+                    ir_node* obj = NULL;
+                    if (tdn_type_is_referencetype(target->DeclaringType)) {
+                        // call gc_new to allocate it
+                        target_this_type = target->DeclaringType;
+                        ir_node* call = new_Call(get_store(), new_Address(m_builtin_gc_new), 2, (ir_node*[]) {
+                            new_Const_long(mode_P, (long)target_this_type),
+                            new_Const_long(mode_Lu, (long)object_size),
+                        }, get_entity_type(m_builtin_gc_new));
+                        set_store(new_Proj(call, mode_M, pn_Call_M));
+                        obj = new_Proj(call, mode_T, pn_Call_T_result);
+                        obj = new_Proj(obj, get_ir_mode(target_this_type), 0);
+                        CHECK_AND_RETHROW(eval_stack_push(stack, target->DeclaringType, obj));
+                    } else {
+                        // allocate it on the stack
+                        CHECK_AND_RETHROW(tdn_get_byref_type(target->DeclaringType, &target_this_type));
+                        CHECK_AND_RETHROW(eval_stack_alloc(stack, target->DeclaringType, &obj));
+                    }
+
+                    call_args_types[i] = target_this_type;
+                    call_args_values[i] = obj;
+                    break;
+                }
+
+                // pop it
+                stack_meta_t meta;
+                CHECK_AND_RETHROW(eval_stack_pop(stack, &call_args_types[i], &call_args_values[i], &meta));
+
+                // validate the stack type
+                RuntimeTypeInfo target_type;
+                if (!is_static) {
+                    if (i == 0) {
+                        // if we are in a callvirt update the target
+                        // to be from the instance type, this will
+                        // help us to perform a de-virt in case the
+                        // class is either sealed or the method is final
+                        if (is_callvirt) {
+                            // TODO: this
+                        }
+
+                        // figure the correct one for value types
+                        if (tdn_type_is_valuetype(target->DeclaringType)) {
+                            CHECK_AND_RETHROW(tdn_get_byref_type(target->DeclaringType, &target_type));
+                        } else {
+                            target_type = target->DeclaringType;
+                        }
+
+                        if (is_call) {
+                            // TODO: verify that we don't bypass the override of a function
+                            //       unless we are part of the class tree
+                        } else if (
+                            is_callvirt &&
+                            (
+                                !target->Attributes.Virtual || // method is not virtual
+                                target->DeclaringType->Attributes.Sealed || // the type on the stack is sealed
+                                (target->Attributes.Virtual && target->Attributes.Final) // the method is final
+                            )
+                        ) {
+                            // TODO: exception handling
+                            ir_node* null_check = new_Load(get_store(), call_args_values[0],
+                                                     mode_Bu, get_ir_type(tByte),
+                                                     cons_throws_exception);
+                            set_store(new_Proj(null_check, mode_M, pn_Load_M));
+                        }
+                    } else {
+                        target_type = target->Parameters->Elements[i - 1]->ParameterType;
+                    }
+                } else {
+                    target_type = target->Parameters->Elements[i]->ParameterType;
+                }
+
+                // check that we can do the assignment
+                CHECK(tdn_type_verifier_assignable_to(call_args_types[i], target_type),
+                      "%T verifier-assignable-to %T", call_args_types[i], target_type);
+            }
+
+            // make sure that we can actually call the target
+            CHECK_AND_RETHROW(jit_prepare_method(target));
+
+            // figure the call address
+            ir_entity* target_entity = (ir_entity*)target->JitMethodId;
+            ir_node* target_address = NULL;
+            if (target->Attributes.Virtual && !target->Attributes.Final) {
+                ASSERT(!"Indirect call");
+            } else {
+                target_address = new_Address(target_entity);
+            }
+
+            RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
+
+            // for struct instances allocate and push it beforehand
+            if (ret_type != tVoid && jit_is_struct_type(ret_type)) {
+                // need to allocate the space in the caller, insert it as the first argument, already pushed
+                // to the stack
+                ASSERT(!"TODO: return by-value struct");
+                CHECK(!is_newobj);
+                ir_node* ret_buffer;
+                CHECK_AND_RETHROW(eval_stack_alloc(stack, ret_type, &ret_buffer));
+                        arrins(call_args_values, 0, ret_buffer);
+            }
+
+            // emit the actual call
+            ir_node* value = new_Call(get_store(), target_address,
+                                      arrlen(call_args_values), call_args_values,
+                                      get_entity_type(target_entity));
+            set_store(new_Proj(value, mode_M, pn_Call_M));
+
+            // for primitive types push it now
+            if (ret_type != tVoid && !jit_is_struct_type(ret_type)) {
+                CHECK(!is_newobj);
+                ir_node* proj = new_Proj(value, mode_T, pn_Call_T_result);
+                ir_node* res = new_Proj(proj, get_ir_mode(target->ReturnParameter->ParameterType), 0);
+                if (ret_type != target->ReturnParameter->ParameterType) {
+                    res = new_Conv(res, get_ir_mode(ret_type));
+                }
+                CHECK_AND_RETHROW(eval_stack_push(stack, ret_type, res));
+            }
+        } break;
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Control flow
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        // unconditional branch
+        case CEE_BR: {
+            // get and validate the label
+            jit_label_t* target_label = NULL;
+            CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
+
+            // a branch, emit the branch
+            ir_node* jmp = new_Jmp();
+            add_immBlock_pred(target_label->block, jmp);
+            region->has_block = false;
+
+            // because we don't fall-through we clear the stack
+            eval_stack_clear(stack);
+        } break;
+
+        // conditional branches
+        case CEE_BRFALSE:
+        case CEE_BRTRUE: {
+            // pop the item
+            ir_node* value;
+            RuntimeTypeInfo value_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
+
+            // ECMA-335 doesn't say brtrue takes in anything but
+            // O and native int, but I think its just an oversight
+            CHECK(
+                tdn_type_is_referencetype(value_type) ||
+                value_type == tInt32 ||
+                value_type == tInt64 ||
+                value_type == tIntPtr
+            );
+
+            // get the jump locations
+            jit_label_t* target_label = NULL;
+            CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
+
+            jit_label_t* next_label = NULL;
+            CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, pc + inst.length, &next_label));
+
+            // choose the target to fit the brcond
+            ir_node* cmp = new_Cmp(value, new_Const_long(get_irn_mode(value), 0),
+                                   (inst.opcode == CEE_BRTRUE) ? ir_relation_less_greater : ir_relation_equal);
+            ir_node* cond = new_Cond(cmp);
+            ir_node* true_dest = new_Proj(cond, mode_X, pn_Cond_true);
+            ir_node* false_dest = new_Proj(cond, mode_X, pn_Cond_false);
+
+            // a branch, emit the branch
+            add_immBlock_pred(target_label->block, true_dest);
+            add_immBlock_pred(next_label->block, false_dest);
+        } break;
+
+        // all the different compare and compare-and-branches
+        // that we have
+        case CEE_BEQ:
+        case CEE_BGE:
+        case CEE_BGT:
+        case CEE_BLE:
+        case CEE_BLT:
+        case CEE_BNE_UN:
+        case CEE_BGE_UN:
+        case CEE_BGT_UN:
+        case CEE_BLE_UN:
+        case CEE_BLT_UN:
+        case CEE_CEQ:
+        case CEE_CGT:
+        case CEE_CGT_UN:
+        case CEE_CLT:
+        case CEE_CLT_UN: {
+            // pop the items
+            ir_node* value1;
+            ir_node* value2;
+            RuntimeTypeInfo value1_type, value2_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value2_type, &value2, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &value1_type, &value1, NULL));
+
+            //
+            // perform the binary comparison and branch operations check,
+            // anything else can not be tested
+            //
+            if (value1_type == tInt32) {
+                CHECK(value2_type == tInt32 || value2_type == tIntPtr);
+
+            } else if (value1_type == tInt64) {
+                CHECK(value2_type == tInt64);
+
+            } else if (value1_type == tIntPtr) {
+                CHECK(value2_type == tInt32 || value2_type == tIntPtr);
+
+            } else if (value1_type->IsByRef) {
+                // TODO: does this only apply to types
+                //       of the same reference? I assume
+                //       it does but we might need to change this
+                CHECK(value2_type == value1_type);
+
+            } else if (tdn_type_is_referencetype(value1_type) && tdn_type_is_referencetype(value2_type)) {
+                CHECK(
+                    inst.opcode == CEE_BEQ ||
+                    inst.opcode == CEE_BNE_UN ||
+                    inst.opcode == CEE_CEQ ||
+                    inst.opcode == CEE_CGT_UN
+                );
+
+            } else {
+                CHECK_FAIL();
+            }
+
+            // jit only has the one side, need to flip for the other side
+            ir_relation kind;
+            bool compare = false;
+            switch (inst.opcode) {
+                case CEE_CEQ: compare = true;
+                case CEE_BEQ: kind = ir_relation_equal; break;
+                case CEE_BGE: kind = ir_relation_greater_equal; break;
+                case CEE_CGT: compare = true;
+                case CEE_BGT: kind = ir_relation_greater; break;
+                case CEE_BLE: kind = ir_relation_less_equal; break;
+                case CEE_CLT: compare = true;
+                case CEE_BLT: kind = ir_relation_less; break;
+                case CEE_BNE_UN: kind = ir_relation_less_greater; break;
+                case CEE_BGE_UN: {
+                    kind = ir_relation_less_equal;
+                    value1 = new_Bitcast(value1, find_unsigned_mode(get_irn_mode(value1)));
+                    value2 = new_Bitcast(value2, find_unsigned_mode(get_irn_mode(value2)));
+                } break;
+                case CEE_CGT_UN: compare = true;
+                case CEE_BGT_UN: {
+                    kind = ir_relation_less;
+                    value1 = new_Bitcast(value1, find_unsigned_mode(get_irn_mode(value1)));
+                    value2 = new_Bitcast(value2, find_unsigned_mode(get_irn_mode(value2)));
+                } break;
+                case CEE_BLE_UN: {
+                    kind = ir_relation_less_equal;
+                    value1 = new_Bitcast(value1, find_unsigned_mode(get_irn_mode(value1)));
+                    value2 = new_Bitcast(value2, find_unsigned_mode(get_irn_mode(value2)));
+                } break;
+                case CEE_CLT_UN: compare = true;
+                case CEE_BLT_UN: {
+                    kind = ir_relation_less;
+                    value1 = new_Bitcast(value1, find_unsigned_mode(get_irn_mode(value1)));
+                    value2 = new_Bitcast(value2, find_unsigned_mode(get_irn_mode(value2)));
+                } break;
+                default: CHECK_FAIL();
+            }
+
+            // create the comparison
+            ir_node* cmp = new_Cmp(value1, value2, kind);
+
+            // check if its a compare or not
+            if (compare) {
+                // a compare, just push the result as an int32
+                eval_stack_push(stack, tInt32, new_Mux(cmp,
+                                                       new_Const_long(mode_Is, 1),
+                                                       new_Const_long(mode_Is, 0)));
+            } else {
+                // get the jump locations
+                jit_label_t* target_label = NULL;
+                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
+
+                jit_label_t* next_label = NULL;
+                CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, pc + inst.length, &next_label));
+
+                // a branch, emit the branch
+                ir_node* cond = new_Cond(cmp);
+                ir_node* true_dest = new_Proj(cond, mode_X, pn_Cond_true);
+                ir_node* false_dest = new_Proj(cond, mode_X, pn_Cond_false);
+                add_immBlock_pred(target_label->block, true_dest);
+                add_immBlock_pred(next_label->block, false_dest);
+            }
+        } break;
 
         // return value from the function
         case CEE_RET: {
@@ -1375,6 +1420,9 @@ static tdn_err_t jit_instruction(
 //                    jit_builder_build_return(builder, JIT_VALUE_INVALID);
                 } else {
                     // returning a normal pointer sized thing
+                    if (ret_type != wanted_ret_type) {
+                        ret_value = new_Conv(ret_value, get_ir_mode(wanted_ret_type));
+                    }
                     add_immBlock_pred(end, new_Return(get_store(), 1, &ret_value));
                 }
             }
@@ -2131,200 +2179,187 @@ static tdn_err_t jit_instruction(
 //            // push the array pointer
 //            CHECK_AND_RETHROW(eval_stack_push(stack, array_type, array));
 //        } break;
-//
-//        case CEE_BOX: {
-//            jit_value_t val;
-//            RuntimeTypeInfo val_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &val_type, &val, NULL));
-//
-//            CHECK(tdn_type_verifier_assignable_to(val_type, inst.operand.type));
-//
-//            if (tdn_type_is_referencetype(inst.operand.type)) {
-//                // for reference type there is nothing special todo, it stays as is
-//                CHECK_AND_RETHROW(eval_stack_push(stack, val_type, val));
-//
-//            } else {
-//                // this is the struct path, it may have nullable and may not have nullable
-//                bool is_nullable = val_type->GenericTypeDefinition == tNullable;
-//
-//                // if we have a Nullable<> then prepare the allocation and movement
-//                size_t has_value_offset = -1;
-//                size_t val_offset = -1;
-//                jit_block_t next;
-//                if (is_nullable) {
-//                    // get the needed offsets for the given type
-//                    RuntimeFieldInfo_Array fields = val_type->DeclaredFields;
-//                    for (int i = 0; i < fields->Length; i++) {
-//                        RuntimeFieldInfo field = fields->Elements[i];
-//                        if (tdn_compare_string_to_cstr(field->Name, "_hasValue")) {
-//                            has_value_offset = field->FieldOffset;
-//                        } else if (tdn_compare_string_to_cstr(field->Name, "_value")) {
-//                            val_offset = field->FieldOffset;
-//                        }
-//                    }
-//                    CHECK(has_value_offset != -1);
-//                    CHECK(val_offset != -1);
-//
-//                    // the needed pointers
-//                    jit_value_t has_value_ptr = jit_builder_build_ptroff(builder, val,
-//                                                                               jit_builder_build_iconst(builder,
-//                                                                                                           JIT_TYPE_I64,
-//                                                                                                           has_value_offset));
-//
-//                    jit_value_t value_ptr = jit_builder_build_ptroff(builder, val,
-//                                                                           jit_builder_build_iconst(builder,
-//                                                                                                       JIT_TYPE_I64,
-//                                                                                                       has_value_offset));
-//
-//                    // check if we have a value
-//                    jit_value_t has_value = jit_builder_build_load(builder, JIT_MEM_SIZE_1, JIT_TYPE_I32,
-//                                                                         has_value_ptr);
-//                    has_value = jit_builder_build_icmp(builder,
-//                                                          JIT_ICMP_NE,
-//                                                          JIT_TYPE_I32,
-//                                                          has_value,
-//                                                          jit_builder_build_iconst(builder,
-//                                                                                      JIT_TYPE_I32,
-//                                                                                      0));
-//
-//                    // we are using a phi to choose the correct
-//                    next = jit_builder_create_block(builder);
-//                    jit_block_t allocate = jit_builder_create_block(builder);
-//                    jit_builder_build_brcond(builder, has_value, allocate, next);
-//
-//                    // perform the copy path
-//                    jit_builder_set_block(builder, allocate);
-//
-//                    // if we have an integer type we need to read it, to make it consistent with
-//                    // whatever we will have in the non-nullable case
-//                    val_type = tdn_get_verification_type(val_type->GenericArguments->Elements[0]);
-//                    if (val_type == tByte) {
-//                        val = jit_builder_build_load(builder, JIT_MEM_SIZE_1, JIT_TYPE_I32, value_ptr);
-//                    } else if (val_type == tInt16) {
-//                        val = jit_builder_build_load(builder, JIT_MEM_SIZE_2, JIT_TYPE_I32, value_ptr);
-//                    } else if (val_type == tInt32) {
-//                        val = jit_builder_build_load(builder, JIT_MEM_SIZE_4, JIT_TYPE_I32, value_ptr);
-//                    } else if (val_type == tInt64) {
-//                        val = jit_builder_build_load(builder, JIT_MEM_SIZE_8, JIT_TYPE_I32, value_ptr);
-//                    } else {
-//                        // otherwise it is just the pointer since its a struct
-//                        val = value_ptr;
-//                    }
-//                }
-//
-//                // allocate it
-//                jit_value_t args[2] = {
-//                    jit_builder_build_iconst(builder, JIT_TYPE_PTR, (uint64_t)inst.operand.type),
-//                    jit_builder_build_iconst(builder, JIT_TYPE_I64, sizeof(struct Object) + inst.operand.type->HeapSize),
-//                };
-//                jit_value_t obj = jit_builder_build_call(builder, m_builtin_gc_new, 2, args);
-//                jit_value_t obj_value = jit_builder_build_ptroff(builder, obj,
-//                                                                       jit_builder_build_iconst(builder,
-//                                                                                                   JIT_TYPE_I64,
-//                                                                                                   sizeof(struct Object)));
-//
-//                // copy it, if its an integer copy properly, which will most likely truncate it
-//                if (val_type == tByte) {
-//                    jit_builder_build_store(builder, JIT_MEM_SIZE_1, val, obj_value);
-//                } else if (val_type == tInt16) {
-//                    jit_builder_build_store(builder, JIT_MEM_SIZE_2, val, obj_value);
-//                } else if (val_type == tInt32) {
-//                    jit_builder_build_store(builder, JIT_MEM_SIZE_4, val, obj_value);
-//                } else if (val_type == tInt64) {
-//                    jit_builder_build_store(builder, JIT_MEM_SIZE_8, val, obj_value);
-//                } else {
-//                    if (val_type->IsUnmanaged) {
-//                        jit_emit_memcpy(builder, obj_value, val, val_type->StackSize);
-//                    } else {
-//                        jit_emit_gc_memcpy(builder, val_type, obj_value, val);
-//                    }
-//                }
-//
-//                // and finally now that it is properly allocated we can setup the next path
-//                // with the proper phi
-//                if (is_nullable) {
-//                    jit_builder_build_branch(builder, next);
-//
-//                    // now setup the phi
-//                    //  first input is the allocation path
-//                    //  second input is the no allocation path
-//                    jit_builder_set_block(builder, next);
-//                    jit_value_t inputs[2] = {
-//                        jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0),
-//                        obj,
-//                    };
-//                    obj = jit_builder_build_phi(builder, JIT_TYPE_PTR, 2, inputs, NULL);
-//                }
-//
-//                // finally push the object, will either be a phi result or just the object
-//                stack_meta_t meta = {
-//                    .BoxedType = val_type
-//                };
-//                CHECK_AND_RETHROW(eval_stack_push_with_meta(stack, tObject, obj, meta));
-//            }
-//        } break;
-//
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//        // Misc operations
-//        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-//        // push the size in bytes of the given type
-//        case CEE_SIZEOF: {
-//            CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
-//                                              jit_builder_build_iconst(builder, JIT_TYPE_I32,
-//                                                                          inst.operand.type->StackSize)));
-//        } break;
-//
-//        case CEE_INITOBJ: {
-//            jit_value_t dest;
-//            RuntimeTypeInfo dest_type;
-//            CHECK_AND_RETHROW(eval_stack_pop(stack, &dest_type, &dest, NULL));
-//
-//            // must be a ByRef
-//            CHECK(dest_type->IsByRef);
-//            dest_type = dest_type->ElementType;
-//
-//            // must be assignable to properly
-//            CHECK(tdn_type_assignable_to(inst.operand.type, dest_type),
-//                  "%T assignable-to %T", inst.operand.type, dest_type);
-//
-//            // get the base type so we know how to best assign it
-//            dest_type = tdn_get_verification_type(dest_type);
-//            if (dest_type == tByte) {
-//                jit_builder_build_store(builder, JIT_MEM_SIZE_1,
-//                                           jit_builder_build_iconst(builder, JIT_TYPE_I32, 0), dest);
-//
-//            } else if (dest_type == tInt16) {
-//                jit_builder_build_store(builder, JIT_MEM_SIZE_2,
-//                                           jit_builder_build_iconst(builder, JIT_TYPE_I32, 0), dest);
-//
-//            } else if (dest_type == tInt32) {
-//                jit_builder_build_store(builder, JIT_MEM_SIZE_4,
-//                                           jit_builder_build_iconst(builder, JIT_TYPE_I32, 0), dest);
-//
-//            } else if (dest_type == tInt64) {
-//                jit_builder_build_store(builder, JIT_MEM_SIZE_8,
-//                                           jit_builder_build_iconst(builder, JIT_TYPE_I64, 0), dest);
-//
-//            } else if (tdn_type_is_referencetype(dest_type) || dest_type == tIntPtr) {
-//                jit_builder_build_store(builder, JIT_MEM_SIZE_8,
-//                                           jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0), dest);
-//
-//            } else if (dest_type->IsUnmanaged) {
-//                jit_builder_build_call(builder, m_builtin_bzero, 2,
-//                                          (jit_value_t[]){
-//                                              dest,
-//                                              jit_builder_build_iconst(builder, JIT_TYPE_I64, dest_type->StackSize)
-//                                          });
-//
-//            } else {
-//                jit_builder_build_call(builder, m_builtin_gc_bzero, 2,
-//                                          (jit_value_t[]){
-//                                                  jit_builder_build_iconst(builder, JIT_TYPE_PTR, (uint64_t)dest_type),
-//                                                  dest,
-//                                          });
-//            }
-//        } break;
+
+        case CEE_BOX: {
+            ir_node* val;
+            RuntimeTypeInfo val_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &val_type, &val, NULL));
+
+            CHECK(tdn_type_verifier_assignable_to(val_type, inst.operand.type));
+
+            if (tdn_type_is_referencetype(inst.operand.type)) {
+                // for reference type there is nothing special todo, it stays as is
+                CHECK_AND_RETHROW(eval_stack_push(stack, val_type, val));
+
+            } else {
+                // this is the struct path, it may have nullable and may not have nullable
+                bool is_nullable = val_type->GenericTypeDefinition == tNullable;
+
+                // if we have a Nullable<> then prepare the allocation and movement
+                ir_node* next = NULL;
+                ir_entity* has_value_entity = NULL;
+                ir_entity* value_entity = NULL;
+                if (is_nullable) {
+                    // get the needed offsets for the given type
+                    ir_type* typ = get_ir_type(val_type);
+
+                    RuntimeFieldInfo_Array fields = val_type->DeclaredFields;
+                    for (int i = 0; i < fields->Length; i++) {
+                        RuntimeFieldInfo field = fields->Elements[i];
+                        if (tdn_compare_string_to_cstr(field->Name, "_hasValue")) {
+                            has_value_entity = (ir_entity*)field->JitFieldId;
+                        } else if (tdn_compare_string_to_cstr(field->Name, "_value")) {
+                            value_entity = (ir_entity*)field->JitFieldId;
+                        }
+                    }
+                    CHECK(has_value_entity != NULL);
+                    CHECK(value_entity != NULL);
+
+                    // the needed pointers
+                    ir_node* has_value_ptr = new_Member(val, has_value_entity);
+                    ir_node* value_ptr = new_Member(val, value_entity);
+
+                    // check if we have a value
+                    ir_node* has_value = new_Load(get_store(), has_value_ptr,
+                                                  mode_Bu, get_ir_type(tBoolean), cons_floats);
+                    set_store(new_Proj(has_value, mode_M, pn_Load_M));
+                    has_value = new_Proj(has_value, mode_Bu, pn_Load_res);
+                    has_value = new_Cmp(has_value,
+                                        new_Const_long(mode_Bu, 0),
+                                        ir_relation_less_greater);
+
+                    // we are using a phi to choose the correct
+                    next = new_immBlock();
+                    ir_node* allocate = new_immBlock();
+                    ir_node* cond = new_Cond(has_value);
+
+                    add_immBlock_pred(allocate, new_Proj(cond, mode_X, pn_Cond_true));
+                    add_immBlock_pred(next, new_Proj(cond, mode_X, pn_Cond_false));
+
+                    // we no longer going to be any preds to it
+                    mature_immBlock(allocate);
+
+                    // perform the copy path
+                    set_cur_block(allocate);
+
+                    // if we have an integer type we need to read it, to make it consistent with
+                    // whatever we will have in the non-nullable case
+                    val_type = tdn_get_verification_type(val_type->GenericArguments->Elements[0]);
+                    if (
+                        val_type == tByte || val_type == tInt16 || val_type == tInt32 ||
+                        val_type == tInt64 || val_type == tUIntPtr
+                    ) {
+                        val = new_Load(get_store(), value_ptr,
+                                       get_ir_mode(val_type), get_ir_type(val_type),
+                                       cons_floats);
+                        set_store(new_Proj(val, mode_M, pn_Load_M));
+                        val = new_Proj(val, get_ir_mode(val_type), pn_Load_res);
+                    } else {
+                        // otherwise it is just the pointer since its a struct
+                        val = value_ptr;
+                    }
+                }
+
+                // allocate it
+                ir_node* args[2] = {
+                    new_Const_long(mode_P, (long)inst.operand.type),
+                    new_Const_long(mode_Lu, (long)(sizeof(struct Object) + inst.operand.type->HeapSize)),
+                };
+                ir_node* obj = new_Call(get_store(),
+                                        new_Address(m_builtin_gc_new), 2, args,
+                                        get_entity_type(m_builtin_gc_new));
+                set_store(new_Proj(obj, mode_M, pn_Call_M));
+                obj = new_Proj(obj, mode_T, pn_Call_T_result);
+                obj = new_Proj(obj, get_ir_mode(tObject), 0);
+
+                // TODO: in theory we want a special boxed type in the jit, for now fuck it I am too lazy
+
+                ir_node* obj_value = new_Add(obj,
+                                             new_Const_long(mode_Ls, (long)sizeof(struct Object)));
+
+                // copy it, if its an integer copy properly, which will most likely truncate it
+                if (val_type == tByte || val_type == tInt16 || val_type == tInt32 || val_type == tInt64 || val_type == tUIntPtr) {
+                    ir_node* store = new_Store(get_store(), obj_value, val, get_ir_type(val_type), cons_floats);
+                    set_store(new_Proj(store, mode_M, pn_Store_M));
+                } else {
+                    if (val_type->IsUnmanaged) {
+                        set_store(new_CopyB(get_store(), obj_value, val, get_ir_type(val_type), cons_floats));
+                    } else {
+                        ASSERT(!"TODO: this");
+                    }
+                }
+
+                // and finally now that it is properly allocated we can setup the next path
+                // with the proper phi
+                if (is_nullable) {
+                    add_immBlock_pred(next, new_Jmp());
+                    mature_immBlock(next);
+
+                    // now setup the phi
+                    //  first input is the allocation path
+                    //  second input is the no allocation path
+                    set_cur_block(next);
+                    ir_node* inputs[2] = {
+                        new_Const_long(mode_P, 0),
+                        obj,
+                    };
+                    obj = new_Phi(2, inputs, mode_P);
+                }
+
+                // finally push the object, will either be a phi result or just the object
+                stack_meta_t meta = {
+                    .BoxedType = val_type
+                };
+                CHECK_AND_RETHROW(eval_stack_push_with_meta(stack, tObject, obj, meta));
+            }
+        } break;
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Misc operations
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        // push the size in bytes of the given type
+        case CEE_SIZEOF: {
+            CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
+                                              new_Const_long(mode_Is, inst.operand.type->StackSize)));
+        } break;
+
+        case CEE_INITOBJ: {
+            ir_node* dest;
+            RuntimeTypeInfo dest_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &dest_type, &dest, NULL));
+
+            // must be a ByRef
+            CHECK(dest_type->IsByRef);
+            dest_type = dest_type->ElementType;
+
+            // must be assignable to properly
+            CHECK(tdn_type_assignable_to(inst.operand.type, dest_type),
+                  "%T assignable-to %T", inst.operand.type, dest_type);
+
+            // get the base type so we know how to best assign it
+            dest_type = tdn_get_verification_type(dest_type);
+            if (
+                dest_type == tByte || dest_type == tInt16 || dest_type == tInt32 ||
+                dest_type == tInt64 || tdn_type_is_referencetype(dest_type) || dest_type == tIntPtr
+            ) {
+                ir_node* store = new_Store(get_store(), dest,
+                          new_Const_long(get_ir_mode(dest_type), 0),
+                          get_ir_type(dest_type), cons_floats);
+
+            } else if (dest_type->IsUnmanaged) {
+                ir_node* res = new_Call(get_store(), new_Address(m_builtin_bzero), 2, (ir_node*[]){
+                    dest, new_Const_long(mode_Lu, dest_type->StackSize)
+                }, get_entity_type(m_builtin_bzero));
+                set_store(new_Proj(res, mode_M, pn_Call_M));
+
+            } else {
+                ir_node* res = new_Call(get_store(), new_Address(m_builtin_gc_bzero), 2, (ir_node*[]){
+                        dest, new_Const_long(get_ir_mode(tRuntimeTypeInfo), (long)dest_type)
+                }, get_entity_type(m_builtin_bzero));
+                set_store(new_Proj(res, mode_M, pn_Call_M));
+            }
+        } break;
 
         case CEE_NOP: {
             // do nothing
@@ -2335,8 +2370,8 @@ static tdn_err_t jit_instruction(
     }
 
 cleanup:
-//    arrfree(call_args_types);
-//    arrfree(call_args_values);
+    arrfree(call_args_types);
+    arrfree(call_args_values);
 
     return err;
 }
@@ -2399,6 +2434,7 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
         set_cur_block(get_irg_start_block(ctx.graph));
 
         ir_node* args = get_irg_args(ctx.graph);
+        ir_node* frame = get_irg_frame(ctx.graph);
 
         arrsetlen(ctx.args, arg_count);
         for (int i = 0; i < arg_count; i++) {
@@ -2407,7 +2443,12 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
             CHECK_AND_RETHROW(jit_resolve_parameter_type(method, i, &type));
 
             // set it up initially
-            ctx.args[i].value = new_Proj(args, get_type_mode(get_ir_type(type)), i);
+            if (jit_is_struct_type(type)) {
+                ir_entity* ent = new_parameter_entity(get_irg_frame_type(ctx.graph), i, get_ir_type(type));
+                ctx.args[i].value = new_Member(frame, ent);
+            } else {
+                ctx.args[i].value = new_Proj(args, get_ir_mode(type), i);
+            }
             ctx.args[i].type = type;
             ctx.args[i].spilled = false;
         }
@@ -2432,12 +2473,10 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
 
             // clear it
             if (jit_is_struct_type(var->LocalType)) {
-                // TODO: call memset zero
-//                jit_builder_build_call(builder, m_builtin_bzero, 2,
-//                                          (jit_value_t[]){
-//                                                  ctx.locals[i],
-//                                                  jit_builder_build_iconst(builder, JIT_TYPE_I64, var->LocalType->StackSize)
-//                                          });
+                ir_node* res = new_Call(get_store(), new_Address(m_builtin_bzero), 2, (ir_node*[]){
+                        ctx.locals[i], new_Const_long(mode_Lu, var->LocalType->StackSize)
+                }, get_entity_type(m_builtin_bzero));
+                set_store(new_Proj(res, mode_M, pn_Call_M));
             } else {
                 ir_node* s = new_Store(get_store(), ctx.locals[i],
                                            new_Const_long(get_type_mode(typ), 0),
@@ -2478,7 +2517,7 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
             RuntimeTypeInfo type = ctx.args[arg].type;
 
             // create a stackslot for the spill
-            if (!ctx.args[arg].spilled) {
+            if (!ctx.args[arg].spilled && !jit_is_struct_type(type)) {
                 // create it
                 ident* id = new_id_fmt("arg%d", arg);
                 ir_type* typ = get_ir_type(type);
@@ -2488,13 +2527,8 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
                 ctx.args[arg].spilled = true;
 
                 // store it, if its a value-type we need to copy it instead
-                if (jit_is_struct_type(type)) {
-                    ir_node* s = new_CopyB(get_store(), ctx.args[arg].value, old_arg, typ, cons_none);
-                    set_store(new_Proj(s, mode_M, pn_Store_M));
-                } else {
-                    ir_node* s = new_Store(get_store(), ctx.args[arg].value, old_arg, typ, cons_none);
-                    set_store(new_Proj(s, mode_M, pn_Store_M));
-                }
+                ir_node* s = new_Store(get_store(), ctx.args[arg].value, old_arg, typ, cons_none);
+                set_store(new_Proj(s, mode_M, pn_Store_M));
             }
 
             // needed for verifying call

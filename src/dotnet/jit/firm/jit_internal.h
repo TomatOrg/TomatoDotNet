@@ -13,6 +13,7 @@ tdn_err_t tdn_jit_init();
 
 void tdn_jit_dump();
 
+ir_mode* get_ir_mode(RuntimeTypeInfo type);
 ir_type* get_ir_type(RuntimeTypeInfo type);
 
 /**
@@ -156,9 +157,6 @@ typedef struct jit_label {
 
     // did we visit this label already?
     bool visited;
-
-    // copied from the label location
-    bool needs_phi;
 } jit_label_t;
 
 typedef struct jit_region jit_region_t;

@@ -92,6 +92,7 @@ typedef struct RuntimeFieldInfo {
     struct RuntimeMemberInfo;
     FieldAttributes Attributes;
     RuntimeTypeInfo FieldType;
+    uint64_t JitFieldId;
     int FieldOffset;
 }* RuntimeFieldInfo;
 DEFINE_ARRAY(RuntimeFieldInfo);

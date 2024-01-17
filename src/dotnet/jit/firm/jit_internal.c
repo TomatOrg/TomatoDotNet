@@ -45,7 +45,12 @@ tdn_err_t eval_stack_alloc(eval_stack_t* stack, RuntimeTypeInfo type, ir_node** 
     // make sure we can push more
     CHECK(arrlen(stack->stack) + 1 <= stack->max_depth);
 
-    CHECK_FAIL();
+    ir_graph* graph = get_current_ir_graph();
+    ir_type* frame_type = get_irg_frame_type(graph);
+    ir_node* frame = get_irg_frame(graph);
+
+    ir_entity* ent = new_entity(frame_type, id_unique("stack_struct"), get_ir_type(type));
+    *out_value = new_Member(frame, ent);
 
     // push it, we mark the stack_slot as true to say
     // its already in a stack slot and we don't need
@@ -53,6 +58,7 @@ tdn_err_t eval_stack_alloc(eval_stack_t* stack, RuntimeTypeInfo type, ir_node** 
     eval_stack_item_t item = {
         .type = type,
     };
+    set_value(arrlen(stack->stack), *out_value);
     arrpush(stack->stack, item);
 
 cleanup:
@@ -72,7 +78,7 @@ tdn_err_t eval_stack_pop(
 
     // output important data if needed
     if (out_type != NULL) *out_type = item.type;
-    if (out_value != NULL) *out_value = get_value(arrlen(stack->stack), get_type_mode(get_ir_type(item.type)));
+    if (out_value != NULL) *out_value = get_value(arrlen(stack->stack), get_ir_mode(item.type));
     if (meta != NULL) *meta = item.meta;
 
 cleanup:
@@ -125,20 +131,6 @@ tdn_err_t eval_stack_merge(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
     eval_stack_snapshot_t* snapshot = &target->snapshot;
-
-    //
-    // we only ever merge when we go to a location which is already initialized
-    // which can happen on two reasons:
-    // - jump to a location we already went to
-    // - back jump to a previous location with an empty stack
-    //
-    // in the second case we don't need a phi, but we will still
-    // go to the merge path, so make sure that case is happening if we
-    // didn't mark that we need a phi
-    //
-    if (!target->needs_phi) {
-        CHECK(arrlen(stack->stack) == 0);
-    }
 
     // make sure we have the same amount of items
     CHECK(arrlen(stack->stack) == arrlen(snapshot->stack));
