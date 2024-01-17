@@ -141,18 +141,172 @@ tdn_err_t tdn_jit_init() {
     tNull = GC_NEW(RuntimeTypeInfo);
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
 
+    // init the ir backend
     ir_init();
-    set_optimize(5);
+
+    // set the implicit options
+    set_optimize(1);
+    set_opt_constant_folding(true);
+    set_opt_algebraic_simplification(true);
+    set_opt_cse(true);
+    set_opt_global_cse(0);
 
 cleanup:
     return err;
+}
+
+static void after_inline_opt(ir_graph* irg) {
+    scalar_replacement_opt(irg);
+    optimize_load_store(irg);
+    optimize_graph_df(irg);
+    optimize_cf(irg);
+    combo(irg);
+}
+
+static void do_firm_optimizations() {
+    // first remove unused functions, to avoid spending unnecessary time
+    // optimizing them
+    garbage_collect_entities();
+
+    // first step: kill dead code
+    for (size_t i = 0; i < get_irp_n_irgs(); i++) {
+        ir_graph *graph = get_irp_irg(i);
+        combo(graph);
+        optimize_graph_df(graph);
+        optimize_cf(graph);
+    }
+
+    for (size_t i = 0; i < get_irp_n_irgs(); i++) {
+        ir_graph *graph = get_irp_irg(i);
+        opt_tail_rec_irg(graph);
+    }
+
+    optimize_funccalls();
+    lower_const_code();
+
+    // second round of unused function removal before we perform expensive
+    // optimizations
+    garbage_collect_entities();
+
+    bool is_agressive = false;
+
+    for (size_t i = 0; i < get_irp_n_irgs(); i++) {
+        ir_graph *graph = get_irp_irg(i);
+
+        scalar_replacement_opt(graph);
+        do_loop_inversion(graph);
+        optimize_graph_df(graph);
+        optimize_reassociation(graph);
+        optimize_graph_df(graph);
+        set_opt_global_cse(1);
+        optimize_graph_df(graph);
+        set_opt_global_cse(0);
+        place_code(graph);
+
+        // Confirm construction currently can only handle blocks with only
+        // one control flow predecessor. Calling optimize_cf here removes
+        // Bad predecessors and help the optimization of switch constructs.
+        optimize_cf(graph);
+        construct_confirms(graph);
+        optimize_graph_df(graph);
+
+        optimize_cf(graph);
+        optimize_load_store(graph);
+        lower_highlevel_graph(graph);
+        conv_opt(graph);
+        occult_consts(graph);
+        if (is_agressive) {
+            opt_jumpthreading(graph);
+        }
+        remove_confirms(graph);
+        set_opt_global_cse(1);
+        optimize_graph_df(graph);
+        set_opt_global_cse(0);
+        place_code(graph);
+        optimize_cf(graph);
+
+        if (is_agressive) {
+            opt_if_conv(graph);
+            optimize_graph_df(graph);
+            optimize_cf(graph);
+
+            opt_bool(graph);
+        }
+
+        opt_osr(graph, osr_flag_default | osr_flag_keep_reg_pressure | osr_flag_ignore_x86_shift);
+        optimize_graph_df(graph);
+        dead_node_elimination(graph);
+    }
+
+    inline_functions(750, 0, after_inline_opt);
+
+    for (size_t i = 0; i < get_irp_n_irgs(); i++) {
+        ir_graph *graph = get_irp_irg(i);
+
+        optimize_graph_df(graph);
+        optimize_cf(graph);
+
+        if (is_agressive) {
+            opt_jumpthreading(graph);
+        }
+
+        optimize_graph_df(graph);
+        optimize_cf(graph);
+
+        optimize_reassociation(graph);
+    }
+}
+
+static void do_firm_lowering() {
+    be_lower_for_target();
+
+
+    bool is_agressive = false;
+
+    for (size_t i = 0; i < get_irp_n_irgs(); i++) {
+        ir_graph* graph = get_irp_irg(i);
+
+        lower_highlevel_graph(graph);
+        optimize_graph_df(graph);
+        conv_opt(graph);
+        occult_consts(graph);
+        optimize_cf(graph);
+
+        set_opt_global_cse(1);
+        optimize_graph_df(graph);
+        set_opt_global_cse(0);
+        place_code(graph);
+        optimize_cf(graph);
+
+        if (is_agressive) {
+            opt_if_conv(graph);
+            optimize_graph_df(graph);
+            optimize_cf(graph);
+        }
+
+        add_irg_constraints(graph, IR_GRAPH_CONSTRAINT_NORMALISATION2);
+        optimize_graph_df(graph);
+
+        opt_parallelize_mem(graph);
+        combine_memops(graph);
+        optimize_graph_df(graph);
+        opt_frame_irg(graph);
+    }
+
+    local_opts_const_code();
+    garbage_collect_entities();
+    mark_private_methods();
 }
 
 void tdn_jit_dump() {
 //    FILE* f = fopen("/home/tomato/projects/tinydotnet/test.vcg", "w");
 //    dump_typegraph(f);
 //    fclose(f);
-    dump_all_ir_graphs("");
+
+    do_firm_optimizations();
+    do_firm_lowering();
+
+//    dump_all_ir_graphs("");
     be_main(stdout, "test");
 }
 
@@ -339,7 +493,6 @@ static tdn_err_t jit_instruction(
                     ir_type* typ = get_ir_type(arg_type);
                     ir_mode* mode = get_stack_mode(typ);
                     ir_node* load = new_Load(get_store(), arg->value, mode, typ, cons_none);
-                    set_store(new_Proj(load, mode_M, pn_Load_M));
                     CHECK_AND_RETHROW(eval_stack_push(stack, arg_type,
                                                       new_Proj(load, mode, pn_Load_res)));
                 }
@@ -2264,18 +2417,8 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
     }
 
 
-    // create the entry block
-    bool created_entry_block = false;
-    ir_type* frame = NULL;
-
     // prepare the locals by allocating their stack slots already
     if (method->MethodBody->LocalVariables != NULL) {
-        // using the entry block to zero the variables
-        created_entry_block = true;
-
-        frame = new_type_frame();
-        set_irg_frame_type(ctx.graph, frame);
-
         // setup the variables
         arrsetlen(ctx.locals, method->MethodBody->LocalVariables->Length);
         for (int i = 0; i < method->MethodBody->LocalVariables->Length; i++) {
@@ -2284,7 +2427,7 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
             // create it
             ident* id = new_id_fmt("local%d", var->LocalIndex);
             ir_type* typ = get_ir_type(var->LocalType);
-            ir_entity* lentity = new_entity(frame, id, typ);
+            ir_entity* lentity = new_entity(get_irg_frame_type(ctx.graph), id, typ);
             ctx.locals[i] = new_Member(get_irg_frame(ctx.graph), lentity);
 
             // clear it
@@ -2334,19 +2477,12 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
             CHECK(arg < arg_count);
             RuntimeTypeInfo type = ctx.args[arg].type;
 
-            // using the entry block to spill the parameters
-            if (!created_entry_block) {
-                created_entry_block = true;
-                frame = new_type_frame();
-                set_irg_frame_type(ctx.graph, frame);
-            }
-
             // create a stackslot for the spill
             if (!ctx.args[arg].spilled) {
                 // create it
                 ident* id = new_id_fmt("arg%d", arg);
                 ir_type* typ = get_ir_type(type);
-                ir_entity* lentity = new_entity(frame, id, typ);
+                ir_entity* lentity = new_entity(get_irg_frame_type(ctx.graph), id, typ);
                 ir_node* old_arg = ctx.args[arg].value;
                 ctx.args[arg].value = new_Member(get_irg_frame(ctx.graph), lentity);
                 ctx.args[arg].spilled = true;
@@ -2852,7 +2988,17 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method) {
     ident* id = new_id_from_str(name);
     string_builder_free(&builder);
 
-    ir_entity* entity = new_entity(get_class_ir_type(method->DeclaringType), id, method_type);
+    ir_entity* entity = new_entity(get_glob_type(), id, method_type);
+    switch (method->Attributes.MemberAccess) {
+        case TDN_METHOD_ACCESS_PRIVATE_SCOPE: set_entity_visibility(entity, ir_visibility_local); break;
+        case TDN_METHOD_ACCESS_PRIVATE: set_entity_visibility(entity, ir_visibility_local); break;
+        case TDN_METHOD_ACCESS_FAMILY_AND_ASSEMBLY: set_entity_visibility(entity, ir_visibility_external_private); break;
+        case TDN_METHOD_ACCESS_ASSEMBLY: set_entity_visibility(entity, ir_visibility_external_private); break;
+        case TDN_METHOD_ACCESS_FAMILY: set_entity_visibility(entity, ir_visibility_external_private); break;
+        case TDN_METHOD_ACCESS_FAMILY_OR_ASSEMBLY: set_entity_visibility(entity, ir_visibility_external_private); break;
+        case TDN_METHOD_ACCESS_PUBLIC: set_entity_visibility(entity, ir_visibility_external); break;
+        default: CHECK_FAIL();
+    }
 
     // create the function itself
     method->JitMethodId = (uintptr_t)entity;
