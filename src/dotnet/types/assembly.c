@@ -16,6 +16,11 @@ tdn_err_t tdn_assembly_lookup_type(
 
     token_t token = { .token = metadata_token };
     switch (token.table) {
+        case METADATA_TYPE_REF: {
+            CHECK(token.index != 0 && token.index <= assembly->TypeRefs->Length);
+            *type = assembly->TypeRefs->Elements[token.index - 1];
+        } break;
+
         case METADATA_TYPE_DEF: {
             CHECK(token.index != 0 && token.index <= assembly->TypeDefs->Length);
             *type = assembly->TypeDefs->Elements[token.index - 1];

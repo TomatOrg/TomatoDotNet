@@ -111,7 +111,8 @@ typedef struct dotnet_file {
             // 0x22
             metadata_table_info_t _reserved_0x22;
             // 0x23
-            metadata_table_info_t _reserved_0x23;
+            uint32_t assembly_refs_count;
+            metadata_assembly_ref_t* assembly_refs;
             // 0x24
             metadata_table_info_t _reserved_0x24;
             // 0x25
@@ -148,6 +149,8 @@ typedef struct dotnet_file {
 
     Guid* guids;
     size_t guids_count;
+
+    int entry_point_token;
 } dotnet_file_t;
 
 tdn_err_t dotnet_load_file(dotnet_file_t* file);

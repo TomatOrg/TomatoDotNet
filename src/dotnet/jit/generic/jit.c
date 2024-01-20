@@ -18,10 +18,12 @@
 #include "dotnet/gc/gc.h"
 #include "util/string.h"
 
+//#define JIT_IL_OUTPUT
+
 /**
  * The jit module, DON'T USE FROM WITHIN THE BUILDER
  */
-jit_module_t m_jit_module;
+static jit_module_t m_jit_module;
 
 /**
  * Stack of methods that we need to jit and are already
@@ -122,6 +124,10 @@ tdn_err_t tdn_jit_init() {
                  "null_check",
                  JIT_TYPE_NONE,
                  1, (jit_value_type_t[]){ JIT_TYPE_PTR });
+
+    // link the builtins module
+    jit_link_module(m_jit_module);
+    m_jit_module = NULL;
 
 cleanup:
     return err;
@@ -2199,16 +2205,9 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // Misc operations
-        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        // push the size in bytes of the given type
-        case CEE_SIZEOF: {
-            CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
-                                              jit_builder_build_iconst(builder, JIT_TYPE_I32,
-                                                                          inst.operand.type->StackSize)));
-        } break;
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Indirect access
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         case CEE_INITOBJ: {
             jit_value_t dest;
@@ -2261,6 +2260,62 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
+        case CEE_LDIND_I1:
+        case CEE_LDIND_I2:
+        case CEE_LDIND_I4:
+        case CEE_LDIND_I8:
+        case CEE_LDIND_U1:
+        case CEE_LDIND_U2:
+        case CEE_LDIND_U4: {
+            jit_value_t addr;
+            RuntimeTypeInfo addr_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &addr_type, &addr, NULL));
+
+            // must be a ByRef
+            CHECK(addr_type->IsByRef);
+            addr_type = addr_type->ElementType;
+
+            // make sure the type is verified
+            CHECK(tdn_type_assignable_to(addr_type, inst.operand.type));
+            RuntimeTypeInfo stack_type = tdn_get_intermediate_type(addr_type);
+
+            jit_value_type_t mem_type = get_jit_mem_type(addr_type);
+            jit_mem_size_t mem_size = get_jit_mem_size(addr_type);
+            jit_value_t result = jit_builder_build_load(builder, mem_size, mem_type, addr);
+            CHECK_AND_RETHROW(eval_stack_push(stack, stack_type, result));
+        } break;
+
+        case CEE_STIND_I1:
+        case CEE_STIND_I2:
+        case CEE_STIND_I4:
+        case CEE_STIND_I8: {
+            jit_value_t val, addr;
+            RuntimeTypeInfo val_type, addr_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &val_type, &val, NULL));
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &addr_type, &addr, NULL));
+
+            // must be a ByRef
+            CHECK(addr_type->IsByRef);
+            addr_type = addr_type->ElementType;
+
+            // make sure the type is verified
+            CHECK(tdn_type_verifier_assignable_to(val_type, addr_type));
+
+            jit_mem_size_t mem_size = get_jit_mem_size(addr_type);
+            jit_builder_build_store(builder, mem_size, val, addr);
+        } break;
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Misc operations
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        // push the size in bytes of the given type
+        case CEE_SIZEOF: {
+            CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
+                                              jit_builder_build_iconst(builder, JIT_TYPE_I32,
+                                                                          inst.operand.type->StackSize)));
+        } break;
+
         case CEE_NOP: {
             // do nothing
         } break;
@@ -2287,7 +2342,9 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
     RuntimeMethodBase method = builder_ctx->method;
     RuntimeExceptionHandlingClause_Array clauses = method->MethodBody->ExceptionHandlingClauses;
 
+#ifdef JIT_IL_OUTPUT
     TRACE("%U::%U", method->DeclaringType->Name, method->Name);
+#endif
 
     // setup the context that will be used for this method jitting
     jit_context_t ctx = {
@@ -2553,6 +2610,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
+#ifdef JIT_IL_OUTPUT
         //--------------------------------------------------------------------------------------------------------------
         // debug prints
         //--------------------------------------------------------------------------------------------------------------
@@ -2618,6 +2676,8 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
             case TDN_IL_SWITCH: CHECK_FAIL();
         }
         tdn_host_printf("\n");
+#endif
+
 
         //--------------------------------------------------------------------------------------------------------------
         // Actual jit handling
@@ -2815,6 +2875,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
             region = arrlast(ctx.regions);
         }
 
+#ifdef JIT_IL_OUTPUT
         //--------------------------------------------------------------------------------------------------------------
         // debug prints
         //--------------------------------------------------------------------------------------------------------------
@@ -2829,6 +2890,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
                 tdn_host_printf("[*] \t\t\t%*s} // end handler\n", indent, "");
             }
         }
+#endif
     }
 
     // make sure we have no more regions in our stack
@@ -2949,7 +3011,7 @@ cleanup:
 // High-level apis
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
+static tdn_err_t tdn_jit_method_internal(RuntimeMethodBase methodInfo) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // prepare it, this should queue the method
@@ -2965,16 +3027,50 @@ cleanup:
     return err;
 }
 
+tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(methodInfo != NULL);
+
+    // create a new module that we are going to use
+    m_jit_module = jit_module_create();
+
+    // actually jit it
+    CHECK_AND_RETHROW(tdn_jit_method_internal(methodInfo));
+
+    // and link that module
+    jit_link_module(m_jit_module);
+    m_jit_module = NULL;
+
+cleanup:
+    return err;
+}
+
+void* tdn_jit_get_method_address(RuntimeMethodBase methodInfo) {
+    jit_function_t function = jit_get_function_from_id(methodInfo->JitMethodId);
+    if (function == NULL) {
+        return NULL;
+    }
+    return jit_get_function_addr(function);
+}
+
 tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    // create a new module that we are going to use
+    m_jit_module = jit_module_create();
 
     // jit all the virtual methods, as those are the one that can be called
     // by other stuff unknowingly, the rest are going to be jitted lazyily
     for (int i = 0; i < type->DeclaredMethods->Length; i++) {
         RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[i];
         if (!method->Attributes.Virtual) continue;
-        CHECK_AND_RETHROW(tdn_jit_method(method));
+        CHECK_AND_RETHROW(tdn_jit_method_internal(method));
     }
+
+    // and link that module
+    jit_link_module(m_jit_module);
+    m_jit_module = NULL;
 
 cleanup:
     return err;

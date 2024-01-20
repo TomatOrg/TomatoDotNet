@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 #include <stdarg.h>
+#include <bits/stdint-uintn.h>
+#include "except.h"
 
 // logging helpers
 void tdn_host_log_trace(const char* format, ...);
@@ -24,19 +26,20 @@ void tdn_host_free(void* ptr);
 typedef void* tdn_file_t;
 
 /**
- * Resolve an assembly and open it as a file
+ * Resolve an assembly and open it as a file, the major version of the assembly must match
+ * the requested one, and the highest minor should be given for best result
  */
-int tdn_resolve_assembly(const char* name, tdn_file_t* out_file);
+int tdn_host_resolve_assembly(const char* name, uint16_t major_version, tdn_file_t* out_file);
 
 /**
- * Read a file opened by tdn_resolve_assembly
+ * Read a file opened by tdn_host_resolve_assembly
  */
-int tdn_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer);
+int tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer);
 
 /**
- * Close a file returned by tdn_resolve_assembly
+ * Close a file returned by tdn_host_resolve_assembly
  */
-int tdn_close_file(tdn_file_t file);
+int tdn_host_close_file(tdn_file_t file);
 
 /**
  * Request the host to turn an error it returned into a

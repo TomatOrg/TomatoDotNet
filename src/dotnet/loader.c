@@ -830,6 +830,90 @@ cleanup:
     return err;
 }
 
+static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembly);
+
+static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+    tdn_file_t current_file = NULL;
+
+    // and now create it
+    assembly->AssemblyRefs = (RuntimeAssembly_Array)GC_NEW_ARRAY(RuntimeAssembly, assembly->Metadata->assembly_refs_count);
+    for (int i = 0; i < assembly->Metadata->assembly_refs_count; i++) {
+        metadata_assembly_ref_t* assembly_ref = &assembly->Metadata->assembly_refs[i];
+
+        // TODO: some hashmap of known assemblies or something
+        RuntimeAssembly new_assembly = NULL;
+        if (strcmp(assembly_ref->name, "System.Private.CoreLib") == 0) {
+            // TODO: validate major version
+            CHECK(mCoreAssembly != NULL);
+            new_assembly = mCoreAssembly;
+        } else {
+            CHECK_FAIL("Unknown assembly %s", assembly_ref->name);
+
+            // if we can't find it ourselves we will search for it from the host
+            CHECK(tdn_host_resolve_assembly(assembly_ref->name, assembly_ref->major_version, &current_file) == 0);
+            CHECK_AND_RETHROW(load_assembly(current_file, &new_assembly));
+
+            // no longer need the file
+            tdn_host_close_file(current_file);
+            current_file = NULL;
+        }
+        CHECK(new_assembly != NULL);
+
+        // TODO: validate the minor version
+
+        assembly->AssemblyRefs->Elements[i] = new_assembly;
+    }
+
+cleanup:
+    if (current_file != NULL) {
+        tdn_host_close_file(current_file);
+    }
+
+    return err;
+}
+
+static tdn_err_t assembly_load_type_refs(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    assembly->TypeRefs = (RuntimeTypeInfo_Array)GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->type_refs_count);
+    for (int i = 0; i < assembly->Metadata->type_refs_count; i++) {
+        metadata_type_ref_t* type_ref = &assembly->Metadata->type_refs[i];
+        RuntimeTypeInfo wanted_type = NULL;
+
+        // search for the type wherever needed
+        token_t resolution_scope = type_ref->resolution_scope;
+        switch (resolution_scope.table) {
+
+            // find the type from an assembly
+            case METADATA_ASSEMBLY_REF: {
+                CHECK(resolution_scope.index != 0 && resolution_scope.index <= assembly->AssemblyRefs->Length);
+                RuntimeAssembly scope = assembly->AssemblyRefs->Elements[resolution_scope.index - 1];
+
+                for (int j = 0; j < scope->TypeDefs->Length; j++) {
+                    RuntimeTypeInfo type = scope->TypeDefs->Elements[j];
+                    if (
+                        tdn_compare_string_to_cstr(type->Namespace, type_ref->type_namespace) &&
+                        tdn_compare_string_to_cstr(type->Name, type_ref->type_name)
+                    ) {
+                        wanted_type = type;
+                        break;
+                    }
+                }
+            } break;
+
+            default:
+                CHECK_FAIL();
+        }
+
+        CHECK(wanted_type != NULL, "Couldn't resolve type %s.%s!", type_ref->type_namespace, type_ref->type_name);
+        assembly->TypeRefs->Elements[i] = wanted_type;
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
@@ -1325,9 +1409,6 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     } else {
         // this is the normal initialization path
         assembly->TypeDefs = GC_NEW_ARRAY(RuntimeTypeInfo, file->type_defs_count);
-        for (int i = 0; i < file->type_defs_count; i++) {
-            assembly->TypeDefs->Elements[i] = GC_NEW(RuntimeTypeInfo);
-        }
     }
 
     //
@@ -1350,6 +1431,10 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(type_def->type_namespace, &type->Namespace));
         type->Attributes.Value = (int)type_def->flags;
     }
+
+    // Load all the external references
+    CHECK_AND_RETHROW(assembly_load_assembly_refs(assembly));
+    CHECK_AND_RETHROW(assembly_load_type_refs(assembly));
 
     // load all the methods and fields
     CHECK_AND_RETHROW(assembly_load_methods(assembly));
@@ -1386,6 +1471,11 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         CHECK_AND_RETHROW(corelib_jit_types(assembly));
 
         mCoreAssembly = assembly;
+    }
+
+    // resolve the entry point
+    if (file->entry_point_token != 0) {
+        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, file->entry_point_token, NULL, NULL, &assembly->EntryPoint));
     }
 
     // we are success

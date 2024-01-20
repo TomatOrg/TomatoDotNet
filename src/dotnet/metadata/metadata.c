@@ -663,6 +663,8 @@ tdn_err_t dotnet_load_file(dotnet_file_t* file) {
     metadata_root_after_version_t* after = (metadata_root_after_version_t*)((uintptr_t)version + before->Length);
     CHECK(com_header->MetaData.Size >= (void*)(after + 1) - (void*)before);
 
+    file->entry_point_token = com_header->EntryPointToken;
+
     // II.24.2.2
     void* md_stream_start = NULL;
     size_t md_stream_size = 0;

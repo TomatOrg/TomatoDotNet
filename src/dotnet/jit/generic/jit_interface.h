@@ -51,6 +51,7 @@ typedef struct jit_function_inner {
     MIR_item_t func;
     bool has_return;
     bool is_32bit_return;
+    bool is_import;
 } jit_function_inner_t;
 
 typedef jit_function_inner_t* jit_function_t;
@@ -62,8 +63,41 @@ typedef struct jit_value {
 } jit_value_t;
 #define JIT_VALUE_INVALID  ((jit_value_t){})
 
-typedef uint64_t jit_block_t;
+typedef int jit_block_t;
 #define JIT_IS_SAME_BLOCK(a, b) ((a) == (b))
+
+typedef struct {
+    int block;
+    int phi;
+} jit_phi_t;
+#define JIT_INIT_PHI    ((jit_phi_t){ -1, -1 })
+
+typedef struct jit_phi_instance {
+    // the phi in question
+    MIR_op_t phi;
+
+    // the inputs for this phi
+    jit_value_t* inputs;
+} jit_phi_instance_t;
+
+typedef struct jit_block_instance {
+    // the entry to the block, never changes once created
+    // this is always a label
+    MIR_insn_t entry;
+
+    // the cursor for where to place the next instruction,
+    // changes whenever adding a block
+    MIR_insn_t cursor;
+
+    // the instructions that jump to this block, this is always
+    // either a conditional or unconditional jump instruction
+    MIR_insn_t* preds;
+
+    // the phis in this block
+    jit_phi_instance_t* phis;
+} jit_block_instance_t;
+
+typedef MIR_module_t jit_module_t;
 
 typedef struct jit_builder {
     // function information
@@ -75,20 +109,20 @@ typedef struct jit_builder {
 
     // the current block
     bool has_block;
-    uint64_t current_block;
+    jit_block_t current_block;
+
+    // the last alloca
+    MIR_insn_t last_alloca;
 
     // the entry block
-    uint64_t entry_block;
+    jit_block_t entry_block;
 
     // the blocks themselves
-    MIR_insn_t* blocks;
-    MIR_insn_t* blocks_cursors;
+    jit_block_instance_t* blocks;
+
+    // the current module
+    jit_module_t module;
 }* jit_builder_t;
-
-typedef MIR_module_t jit_module_t;
-
-typedef MIR_op_t jit_phi_t;
-#define JIT_INIT_PHI    ((jit_phi_t){ .mode = MIR_OP_UNDEF })
 
 typedef MIR_type_t jit_value_type_t;
 #define JIT_TYPE_NONE       MIR_T_UNDEF
@@ -169,15 +203,33 @@ typedef enum {
 
 typedef void (*jit_build_function_callback_t)(jit_builder_t builder, void* ctx);
 
+/**
+ * Find a jit function from its ID
+ */
 jit_function_t jit_get_function_from_id(uint64_t id);
+
+/**
+ * Get the ID of a jit function
+ */
 uint64_t jit_get_function_id(jit_function_t id);
+
+/**
+ * Get the address of a jitted function
+ */
+void* jit_get_function_addr(jit_function_t func);
 
 /**
  * Choose and initialize the wanted jit interface
  */
 tdn_err_t jit_init();
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Module interface
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 jit_module_t jit_module_create(void);
+
+void jit_link_module(jit_module_t module);
 
 void jit_module_destroy(jit_module_t module);
 
@@ -196,6 +248,10 @@ void jit_module_build_function(jit_module_t module,
                                   void* ctx);
 
 jit_module_t jit_builder_get_module(jit_builder_t builder);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// IR Builder Interface
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 jit_block_t jit_builder_create_block(jit_builder_t builder);
 

@@ -246,8 +246,15 @@ tdn_err_t tdn_make_generic_method(RuntimeMethodInfo type,
 
 typedef struct dotnet_file dotnet_file_t;
 
-typedef struct RuntimeAssembly {
+typedef struct RuntimeAssembly* RuntimeAssembly;
+DEFINE_ARRAY(RuntimeAssembly);
+
+struct RuntimeAssembly {
     struct Object Object;
+
+    // The external assemblies and types we need
+    RuntimeAssembly_Array AssemblyRefs;
+    RuntimeTypeInfo_Array TypeRefs;
 
     // the prepared functions
     RuntimeTypeInfo_Array TypeDefs;
@@ -257,7 +264,10 @@ typedef struct RuntimeAssembly {
     // the metadata of this assembly
     dotnet_file_t* Metadata;
     RuntimeModule Module;
-}* RuntimeAssembly;
+
+    // The entry point of the assembly
+    RuntimeMethodBase EntryPoint;
+};
 
 tdn_err_t tdn_assembly_lookup_type(
     RuntimeAssembly assembly,

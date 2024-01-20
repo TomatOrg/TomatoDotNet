@@ -8,9 +8,10 @@
 #include "util/except.h"
 #include "jit_interface.h"
 
+/**
+ * Initialize the jit backend
+ */
 tdn_err_t tdn_jit_init();
-
-void tdn_jit_dump();
 
 /**
  * Helper to check if a type is a struct type and not any other type

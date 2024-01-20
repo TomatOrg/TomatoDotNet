@@ -3,46 +3,84 @@
 #include "util/string.h"
 #include "util/string_builder.h"
 #include "util/stb_ds.h"
+#include "mir/mir-gen.h"
+#include "dotnet/gc/gc.h"
 
-// TODO: something better lol
-extern jit_module_t m_jit_module;
+//#define MIR_INSTRUCTION_OUTPUT
 
 static MIR_context_t m_mir_ctx = NULL;
 
 static jit_function_inner_t** m_functions;
 
-void tdn_jit_dump() {
-    MIR_output(m_mir_ctx, stdout);
-}
+#undef memcpy
+void* memcpy(void* dest, const void* src, size_t n);
 
 static void MIR_NO_RETURN error_func(MIR_error_type_t error_type, const char *format, ...) {
     va_list args;
+    tdn_host_printf("[-] ");
     va_start(args, format);
     tdn_host_vprintf(format, args);
     va_end(args);
+    tdn_host_printf("\n");
     __builtin_trap();
 }
 
 tdn_err_t jit_init() {
     m_mir_ctx = MIR_init();
     MIR_set_error_func(m_mir_ctx, error_func);
+
+    // setup the external functions
+    MIR_load_external(m_mir_ctx, "bzero", bzero);
+    MIR_load_external(m_mir_ctx, "memcpy", memcpy);
+    MIR_load_external(m_mir_ctx, "gc_new", gc_new);
+    MIR_load_external(m_mir_ctx, "gc_memcpy", NULL);
+    MIR_load_external(m_mir_ctx, "gc_bzero", NULL);
+    MIR_load_external(m_mir_ctx, "throw_index_out_of_range_exception", NULL);
+    MIR_load_external(m_mir_ctx, "throw_overflow_exception", NULL);
+    MIR_load_external(m_mir_ctx, "throw", NULL);
+    MIR_load_external(m_mir_ctx, "rethrow", NULL);
+    MIR_load_external(m_mir_ctx, "get_exception", NULL);
+    MIR_load_external(m_mir_ctx, "null_check", NULL);
+
+    // we are going to have a single generator for now
+    MIR_gen_init(m_mir_ctx, 0);
+    MIR_gen_set_optimize_level(m_mir_ctx, 0, 4);
+
     return TDN_NO_ERROR;
 }
 
 jit_function_t jit_get_function_from_id(uint64_t id) {
-    return m_functions[id];
+    if (id >= arrlen(m_functions)) {
+        return NULL;
+    } else {
+        return m_functions[id];
+    }
 }
 
 uint64_t jit_get_function_id(jit_function_t func) {
     return func->index;
 }
 
+void* jit_get_function_addr(jit_function_t func) {
+    return func->func->addr;
+}
+
 jit_module_t jit_module_create(void) {
     return MIR_new_module(m_mir_ctx, "lol");
 }
 
+void jit_link_module(jit_module_t module) {
+    // finish with the module
+    MIR_finish_module(m_mir_ctx);
+
+    // load the module for linking
+    MIR_load_module(m_mir_ctx, module);
+
+    // actually link it
+    MIR_link(m_mir_ctx, MIR_set_gen_interface, NULL);
+}
+
 void jit_module_destroy(jit_module_t module) {
-    ASSERT(!"jit_module_destroy");
 }
 
 jit_function_t jit_module_create_function(jit_module_t module, const char* name,
@@ -76,6 +114,7 @@ jit_function_t jit_module_create_function(jit_module_t module, const char* name,
     string_builder_free(&builder);
 
     jit_function_t function = malloc(sizeof(jit_function_inner_t));
+    bzero(function, sizeof(*function));
     function->index = arrlen(m_functions);
     function->func = func;
     function->proto = proto;
@@ -114,11 +153,13 @@ jit_function_t jit_module_create_extern_function(
     string_builder_free(&builder);
 
     jit_function_t function = malloc(sizeof(jit_function_inner_t));
+    bzero(function, sizeof(*function));
     function->index = arrlen(m_functions);
     function->func = func;
     function->proto = proto;
     function->has_return = ret_type != JIT_TYPE_NONE;
     function->is_32bit_return = ret_type == JIT_TYPE_I32;
+    function->is_import = true;
     arrpush(m_functions, function);
     return function;
 }
@@ -129,30 +170,62 @@ void jit_module_build_function(jit_module_t module,
                                void* ctx) {
     struct jit_builder builder = {
         .func = func->func,
+        .has_return = func->has_return,
+        .module = module
     };
 
     // generate everything
     callback(&builder, ctx);
 
-    // and now we can prepend the actual jump into the first block
-    MIR_prepend_insn(m_mir_ctx, func->func,
-                     MIR_new_insn(m_mir_ctx, MIR_JMP,
-                                  MIR_new_label_op(m_mir_ctx, builder.blocks[builder.entry_block])));
+    // and now we can prepend the actual jump into the first block, we will need
+    // to put it either after the stackalots or at the first instruction if there
+    // are no stack slots
+    MIR_insn_t jmp_to_entry = MIR_new_insn(m_mir_ctx, MIR_JMP,
+                                           MIR_new_label_op(m_mir_ctx, builder.blocks[builder.entry_block].entry));
+    if (builder.last_alloca == NULL) {
+        MIR_prepend_insn(m_mir_ctx, func->func, jmp_to_entry);
+    } else {
+        MIR_insert_insn_after(m_mir_ctx, func->func, builder.last_alloca, jmp_to_entry);
+    }
 
+    // build all the phis
+    for (int block_index = 0; block_index < arrlen(builder.blocks); block_index++) {
+        jit_block_instance_t* block = &builder.blocks[block_index];
+        int pred_count = arrlen(block->preds);
+
+        for (int phi_index = 0; phi_index < arrlen(block->phis); phi_index++) {
+            jit_phi_instance_t* phi = &block->phis[phi_index];
+            ASSERT(arrlen(phi->inputs) == pred_count);
+
+            for (int input_index = 0; input_index < pred_count; input_index++) {
+                MIR_insn_t insn = MIR_new_insn(m_mir_ctx, MIR_MOV, phi->phi, phi->inputs[input_index]);
+                MIR_insert_insn_before(m_mir_ctx, builder.func, block->preds[input_index], insn);
+            }
+        }
+    }
+
+    // free all the blocks
+    for (int i = 0; i < arrlen(builder.blocks); i++) {
+        arrfree(builder.blocks[i].preds);
+        arrfree(builder.blocks[i].phis);
+    }
     arrfree(builder.blocks);
-    arrfree(builder.blocks_cursors);
 }
 
 jit_module_t jit_builder_get_module(jit_builder_t builder) {
-    return m_jit_module;
+    return builder->module;
 }
 
 jit_block_t jit_builder_create_block(jit_builder_t builder) {
     // create the label and the cursor
     uint64_t id = arrlen(builder->blocks);
     MIR_label_t label = MIR_new_label(m_mir_ctx);
-    arrpush(builder->blocks, label);
-    arrpush(builder->blocks_cursors, label);
+
+    jit_block_t block = arraddnindex(builder->blocks, 1);
+    builder->blocks[block].entry = label;
+    builder->blocks[block].cursor = label;
+    builder->blocks[block].preds = NULL;
+    builder->blocks[block].phis = NULL;
 
     // append it so it will be inside the instruction list
     MIR_append_insn(m_mir_ctx, builder->func, label);
@@ -187,19 +260,21 @@ static char int2hex(int a) {
     if (a <= 9) {
         return a + '0';
     } else {
-        return a + 'a';
+        return (a - 10) + 'A';
     }
 }
 
 static void append_instruction(jit_builder_t builder, MIR_insn_t insn) {
+#ifdef MIR_INSTRUCTION_OUTPUT
     // just print it nicely
     tdn_host_printf("[*] ");
     MIR_output_insn(m_mir_ctx, stdout, insn, builder->func->u.func, 1);
+#endif
 
     // insert after the cursor and increment the cursor to be on the new
     // instruction
-    MIR_insert_insn_after(m_mir_ctx, builder->func, builder->blocks_cursors[builder->current_block], insn);
-    builder->blocks_cursors[builder->current_block] = insn;
+    MIR_insert_insn_after(m_mir_ctx, builder->func, builder->blocks[builder->current_block].cursor, insn);
+    builder->blocks[builder->current_block].cursor = insn;
 }
 
 static jit_value_t create_mir_reg(jit_builder_t builder, bool is_32bit) {
@@ -260,24 +335,32 @@ jit_value_t jit_builder_build_call(jit_builder_t builder,
 void jit_builder_build_return(jit_builder_t builder,
                               jit_value_t value) {
     append_instruction(builder,
-                       MIR_new_ret_insn(m_mir_ctx, builder->has_return ? 0 : 1, value));
+                       MIR_new_ret_insn(m_mir_ctx, builder->has_return ? 1 : 0, value.op));
 }
 
 void jit_builder_build_branch(jit_builder_t builder,
                               jit_block_t dest) {
-    append_instruction(builder, MIR_new_insn(m_mir_ctx, MIR_JMP,
-                                             MIR_new_label_op(m_mir_ctx, builder->blocks[dest])));
+    MIR_insn_t branch = MIR_new_insn(m_mir_ctx, MIR_JMP,
+                                     MIR_new_label_op(m_mir_ctx, builder->blocks[dest].entry));
+    append_instruction(builder, branch);
+    arrpush(builder->blocks[dest].preds, branch);
 }
 
 void jit_builder_build_brcond(jit_builder_t builder,
                               jit_value_t cond, jit_block_t true_dest,
                               jit_block_t false_dest) {
-    append_instruction(builder, MIR_new_insn(m_mir_ctx, cond.is_32bit ? MIR_BTS : MIR_BT,
-                                             cond.op,
-                                             MIR_new_label_op(m_mir_ctx, builder->blocks[true_dest])));
+    MIR_insn_t true_insn = MIR_new_insn(m_mir_ctx, cond.is_32bit ? MIR_BTS : MIR_BT,
+                                        MIR_new_label_op(m_mir_ctx, builder->blocks[true_dest].entry),
+                                        cond.op);
 
-    append_instruction(builder, MIR_new_insn(m_mir_ctx, MIR_JMP,
-                                             MIR_new_label_op(m_mir_ctx, builder->blocks[false_dest])));
+    MIR_insn_t false_insn = MIR_new_insn(m_mir_ctx, MIR_JMP,
+                                         MIR_new_label_op(m_mir_ctx, builder->blocks[false_dest].entry));
+
+    arrpush(builder->blocks[true_dest].preds, true_insn);
+    arrpush(builder->blocks[false_dest].preds, false_insn);
+
+    append_instruction(builder, true_insn);
+    append_instruction(builder, false_insn);
 }
 
 void jit_builder_build_unreachable(jit_builder_t builder) {
@@ -288,15 +371,34 @@ jit_value_t jit_builder_build_phi(jit_builder_t builder,
                                   size_t input_count,
                                   const jit_value_t* inputs,
                                   jit_phi_t* out_phi_handle) {
-    ASSERT(input_count == 0);
+    // make sure there are as many inputs as preds
+    jit_block_instance_t* instance = &builder->blocks[builder->current_block];
+
+    // add a new phi
+    int phi_index = arraddnindex(instance->phis, 1);
+    jit_phi_instance_t* phi = &instance->phis[phi_index];
+    phi->inputs = NULL;
+
+    // output the handle correctly
+    out_phi_handle->block = builder->current_block;
+    out_phi_handle->phi = phi_index;
+
+    // setup the phi location
     jit_value_t result = create_mir_reg(builder, type == JIT_TYPE_I32);
-    *out_phi_handle = result.op;
+    phi->phi = result.op;
+
+    // add the current inputs
+    for (int i = 0; i < input_count; i++) {
+        arrpush(phi->inputs, inputs[i]);
+    }
+
     return result;
 }
 
 void jit_builder_add_phi_input(jit_builder_t builder,
                                jit_phi_t phi, jit_value_t input) {
-    append_instruction(builder, MIR_new_insn(m_mir_ctx, MIR_MOV, phi, input.op));
+    // just add the phi into the list
+    arrpush(builder->blocks[phi.block].phis[phi.phi].inputs, input);
 }
 
 jit_value_t jit_builder_build_iconst(jit_builder_t builder,
@@ -423,9 +525,9 @@ jit_value_t jit_builder_build_sfill(jit_builder_t builder,
                                     uint8_t width, jit_value_t value) {
     MIR_insn_code_t code;
     switch (width) {
-        case 1: code = MIR_EXT8; break;
-        case 2: code = MIR_EXT16; break;
-        case 4: code = MIR_EXT32; break;
+        case 8: code = MIR_EXT8; break;
+        case 16: code = MIR_EXT16; break;
+        case 32: code = MIR_EXT32; break;
         default: ASSERT(!"Invalid sfill length");
     }
     jit_value_t result = create_mir_reg(builder, false);
@@ -514,8 +616,11 @@ void jit_builder_build_store(jit_builder_t builder,
 jit_value_t jit_builder_build_stackslot(jit_builder_t builder,
                                         uint32_t size, uint32_t align) {
     jit_value_t result = create_mir_reg(builder, false);
-    MIR_prepend_insn(m_mir_ctx, builder->func,
-                     MIR_new_insn(m_mir_ctx, MIR_ALLOCA, result.op,
-                                             MIR_new_int_op(m_mir_ctx, size)));
+    MIR_insn_t alloca = MIR_new_insn(m_mir_ctx, MIR_ALLOCA, result.op,
+                                     MIR_new_int_op(m_mir_ctx, size));
+    MIR_prepend_insn(m_mir_ctx, builder->func, alloca);
+    if (builder->last_alloca == NULL) {
+        builder->last_alloca = alloca;
+    }
     return result;
 }

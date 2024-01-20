@@ -215,16 +215,13 @@ cleanup:
     return err;
 }
 
-int main() {
+static tdn_err_t load_assembly_from_path(const char* filename, RuntimeAssembly* assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     FILE* file = NULL;
     void* image = NULL;
 
-    register_printf_specifier('U', string_output, string_arginf_sz);
-    register_printf_specifier('T', type_output, type_arginf_sz);
-
     // load the test image
-    file = fopen("TdnCoreLib/System.Private.CoreLib/bin/Release/net7.0/System.Private.CoreLib.dll", "rb");
+    file = fopen(filename, "rb");
     CHECK_ERROR(file != NULL, -errno);
     fseek(file, 0, SEEK_END);
     size_t size = ftell(file);
@@ -236,24 +233,32 @@ int main() {
     file = NULL;
 
     // load the corelib
-    RuntimeAssembly assembly;
-    CHECK_AND_RETHROW(tdn_load_assembly_from_memory(image, size, &assembly));
-
-    RuntimeTypeInfo type;
-    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(assembly, "System", "Test", &type));
-    CHECK(type != NULL);
-
-    CHECK_AND_RETHROW(tdn_jit_method((RuntimeMethodBase)type->DeclaredMethods->Elements[0]));
-    tdn_jit_dump();
-
-//    type = type->DeclaredMethods->Elements[0]->Parameters->Elements[0]->ParameterType;
-//    CHECK_AND_RETHROW(dump_type(type));
-
-
+    CHECK_AND_RETHROW(tdn_load_assembly_from_memory(image, size, assembly));
 
 cleanup:
     free(image);
     if (file != NULL) fclose(file);
+
+    return err;
+}
+
+int main() {
+    tdn_err_t err = TDN_NO_ERROR;
+    register_printf_specifier('U', string_output, string_arginf_sz);
+    register_printf_specifier('T', type_output, type_arginf_sz);
+
+    // load the corelib, must come first
+    RuntimeAssembly corelib = NULL;
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Release/net7.0/System.Private.CoreLib.dll", &corelib));
+
+    RuntimeAssembly tests = NULL;
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net7.0/Tests.dll", &tests));
+
+    tdn_jit_method(tests->EntryPoint);
+    int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
+    TRACE("Tests = %d", entry_point());
+
+cleanup:
     gc_free_all();
 
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : EXIT_SUCCESS;
