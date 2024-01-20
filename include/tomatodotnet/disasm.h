@@ -52,7 +52,7 @@ typedef struct tdn_il_inst {
     tdn_il_operand_t operand_type;
     union {
         uint16_t variable;
-        int32_t int8;
+        int8_t int8;
         int32_t int32;
         int64_t int64;
         uint32_t uint8;

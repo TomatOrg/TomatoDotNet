@@ -46,6 +46,7 @@ typedef struct init_type {
     size_t heap_size;
     size_t heap_alignment;
     RuntimeTypeInfo* dest;
+    bool is_unmanaged;
 } init_type_t;
 
 typedef struct load_type {
@@ -54,7 +55,7 @@ typedef struct load_type {
     RuntimeTypeInfo* dest;
 } load_type_t;
 
-#define INIT_VALUE_TYPE(namespace, name) \
+#define INIT_VALUE_TYPE(namespace, name, is_unmanaged) \
     { \
         #namespace, \
         #name, \
@@ -62,7 +63,8 @@ typedef struct load_type {
         _Alignof(name), \
         sizeof(name), \
         _Alignof(name), \
-        &t##name \
+        &t##name, \
+        is_unmanaged \
     }
 
 #define INIT_HEAP_TYPE(namespace, name) \
@@ -81,21 +83,21 @@ typedef struct load_type {
  * for some of the recursive by nature (System.Int32 has int)
  */
 static init_type_t m_init_types[] = {
-    INIT_VALUE_TYPE(System, ValueType),
-    INIT_VALUE_TYPE(System, Enum),
-    INIT_VALUE_TYPE(System, Boolean),
-    INIT_VALUE_TYPE(System, Char),
-    INIT_VALUE_TYPE(System, SByte),
-    INIT_VALUE_TYPE(System, Int16),
-    INIT_VALUE_TYPE(System, Int32),
-    INIT_VALUE_TYPE(System, Int64),
-    INIT_VALUE_TYPE(System, IntPtr),
-    INIT_VALUE_TYPE(System, Byte),
-    INIT_VALUE_TYPE(System, UInt16),
-    INIT_VALUE_TYPE(System, UInt32),
-    INIT_VALUE_TYPE(System, UInt64),
-    INIT_VALUE_TYPE(System, UIntPtr),
-    INIT_VALUE_TYPE(System, Void),
+    INIT_VALUE_TYPE(System, ValueType, true),
+    INIT_VALUE_TYPE(System, Enum, true),
+    INIT_VALUE_TYPE(System, Boolean, true),
+    INIT_VALUE_TYPE(System, Char, true),
+    INIT_VALUE_TYPE(System, SByte, true),
+    INIT_VALUE_TYPE(System, Int16, true),
+    INIT_VALUE_TYPE(System, Int32, true),
+    INIT_VALUE_TYPE(System, Int64, true),
+    INIT_VALUE_TYPE(System, IntPtr, true),
+    INIT_VALUE_TYPE(System, Byte, true),
+    INIT_VALUE_TYPE(System, UInt16, true),
+    INIT_VALUE_TYPE(System, UInt32, true),
+    INIT_VALUE_TYPE(System, UInt64, true),
+    INIT_VALUE_TYPE(System, UIntPtr, true),
+    INIT_VALUE_TYPE(System, Void, true),
 };
 static int m_inited_types = 0;
 
@@ -160,6 +162,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             type->FillingStackSize = 1;
             type->EndFillingStackSize = 1;
             type->QueuedTypeInit = 1;
+            type->IsUnmanaged = init_type->is_unmanaged;
             *init_type->dest = type;
             *out_type = type;
             m_inited_types++;
@@ -328,10 +331,12 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
                 continue;
             }
             CHECK_AND_RETHROW(fill_stack_size(field_type));
-            if (tdn_type_is_referencetype(field_type) || !field_type->IsUnmanaged) is_managed = true;
+            if (tdn_type_is_referencetype(field_type) || !field_type->IsUnmanaged) {
+                is_managed = true;
+            }
             largest_alignment = MAX(largest_alignment, fields->Elements[i]->FieldType->StackAlignment);
         }
-        type->IsUnmanaged = is_managed;
+        type->IsUnmanaged = !is_managed;
 
         // align the alignment nicely, and then align the base of our own data
         size_t alignment = MIN(largest_alignment, type->Packing ?: _Alignof(size_t));

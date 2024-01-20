@@ -25,6 +25,15 @@ static void MIR_NO_RETURN error_func(MIR_error_type_t error_type, const char *fo
     __builtin_trap();
 }
 
+static void stub_gc_memcpy() { ASSERT(!"gc_memcpy"); }
+static void stub_gc_bzero() { ASSERT(!"gc_bzero"); }
+static void stub_throw_index_out_of_range_exception() { ASSERT(!"throw_index_out_of_range_exception"); }
+static void stub_throw_overflow_exception() { ASSERT(!"throw_overflow_exception"); }
+static void stub_throw() { ASSERT(!"throw"); }
+static void stub_rethrow() { ASSERT(!"rethrow"); }
+static void stub_get_exception() { ASSERT(!"get_exception"); }
+static void stub_null_check() { ASSERT(!"null_check"); }
+
 tdn_err_t jit_init() {
     m_mir_ctx = MIR_init();
     MIR_set_error_func(m_mir_ctx, error_func);
@@ -33,14 +42,14 @@ tdn_err_t jit_init() {
     MIR_load_external(m_mir_ctx, "bzero", bzero);
     MIR_load_external(m_mir_ctx, "memcpy", memcpy);
     MIR_load_external(m_mir_ctx, "gc_new", gc_new);
-    MIR_load_external(m_mir_ctx, "gc_memcpy", NULL);
-    MIR_load_external(m_mir_ctx, "gc_bzero", NULL);
-    MIR_load_external(m_mir_ctx, "throw_index_out_of_range_exception", NULL);
-    MIR_load_external(m_mir_ctx, "throw_overflow_exception", NULL);
-    MIR_load_external(m_mir_ctx, "throw", NULL);
-    MIR_load_external(m_mir_ctx, "rethrow", NULL);
-    MIR_load_external(m_mir_ctx, "get_exception", NULL);
-    MIR_load_external(m_mir_ctx, "null_check", NULL);
+    MIR_load_external(m_mir_ctx, "gc_memcpy", stub_gc_memcpy);
+    MIR_load_external(m_mir_ctx, "gc_bzero", stub_gc_bzero);
+    MIR_load_external(m_mir_ctx, "throw_index_out_of_range_exception", stub_throw_index_out_of_range_exception);
+    MIR_load_external(m_mir_ctx, "throw_overflow_exception", stub_throw_overflow_exception);
+    MIR_load_external(m_mir_ctx, "throw", stub_throw);
+    MIR_load_external(m_mir_ctx, "rethrow", stub_rethrow);
+    MIR_load_external(m_mir_ctx, "get_exception", stub_get_exception);
+    MIR_load_external(m_mir_ctx, "null_check", stub_null_check);
 
     // we are going to have a single generator for now
     MIR_gen_init(m_mir_ctx, 0);
@@ -574,7 +583,7 @@ jit_value_t jit_builder_build_load(jit_builder_t builder,
         case JIT_MEM_SIZE_4: mir_load_type = MIR_T_U32; break;
         case JIT_MEM_SIZE_8: mir_load_type = MIR_T_U64; break;
     }
-    jit_value_t result = create_mir_reg(builder, false);
+    jit_value_t result = create_mir_reg(builder, type == JIT_TYPE_I32);
 
     MIR_disp_t base = 0;
     MIR_reg_t reg = 0;
