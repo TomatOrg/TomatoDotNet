@@ -345,21 +345,54 @@ void tdn_jit_dump() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// JIT helpers
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Jit helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static tdn_err_t jit_prepare_method(RuntimeMethodBase method);
 
-//#define SWAP(a, b) \
-//    do { \
-//        typeof(a) __temp = a; \
-//        a = b; \
-//        b = __temp; \
-//    } while (0)
+static void jit_emit_bzero(ir_node* ptr, RuntimeTypeInfo type, bool heap, bool non_null) {
+    ASSERT(jit_is_struct_type(type));
+
+    if (type->HeapSize <= 64) {
+        // inline
+        for (int i = 0; i < type->DeclaredFields->Length; i++) {
+            RuntimeFieldInfo field = type->DeclaredFields->Elements[i];
+            if (field->Attributes.Static) continue;
+
+            // zero out the field properly
+            ir_entity* entity = (ir_entity*)field->JitFieldId;
+            ir_node* field_ptr = new_Member(ptr, entity);
+            if (jit_is_struct_type(field->FieldType)) {
+                // this is another struct, zero it as well at the correct offset
+                jit_emit_bzero(field_ptr, field->FieldType, heap, non_null);
+            } else {
+                // store a zero to the field
+                // TODO: handle the write barrier whenever needed
+                ir_node* store = new_Store(get_store(), field_ptr,
+                                           new_Const_long(get_ir_mode(field->FieldType), 0),
+                                           get_ir_type(field->FieldType),
+                                           non_null ? cons_floats : cons_throws_exception);
+                set_store(new_Proj(store, mode_M, pn_Store_M));
+            }
+
+        }
+    } else {
+        // outline
+        ir_node* call = NULL;
+        if (heap && !type->IsUnmanaged) {
+            // if the object is not unmanaged and requires a write barrier then use gc_bzero
+            call = new_Call(get_store(), new_Address(m_builtin_gc_bzero), 2, (ir_node*[]){
+                ptr, new_Const_long(mode_P, (long)type)
+            }, get_entity_type(m_builtin_gc_bzero));
+        } else {
+            // otherwise we use a normal bzero for speed
+            call = new_Call(get_store(), new_Address(m_builtin_bzero), 2, (ir_node*[]){
+                    ptr, new_Const_long(mode_P, type->HeapSize)
+            }, get_entity_type(m_builtin_bzero));
+        }
+        set_store(new_Proj(call, mode_M, pn_Call_M));
+    }
+}
 
 /**
  * Resolve the parameter type, taking into account that for non-static arg0 is the this
@@ -2346,18 +2379,9 @@ static tdn_err_t jit_instruction(
                 ir_node* store = new_Store(get_store(), dest,
                           new_Const_long(get_ir_mode(dest_type), 0),
                           get_ir_type(dest_type), cons_floats);
-
-            } else if (dest_type->IsUnmanaged) {
-                ir_node* res = new_Call(get_store(), new_Address(m_builtin_bzero), 2, (ir_node*[]){
-                    dest, new_Const_long(mode_Lu, dest_type->StackSize)
-                }, get_entity_type(m_builtin_bzero));
-                set_store(new_Proj(res, mode_M, pn_Call_M));
-
             } else {
-                ir_node* res = new_Call(get_store(), new_Address(m_builtin_gc_bzero), 2, (ir_node*[]){
-                        dest, new_Const_long(get_ir_mode(tRuntimeTypeInfo), (long)dest_type)
-                }, get_entity_type(m_builtin_bzero));
-                set_store(new_Proj(res, mode_M, pn_Call_M));
+                // zero out the struct properly
+                jit_emit_bzero(dest, dest_type, true, true);
             }
         } break;
 
@@ -2473,10 +2497,7 @@ static tdn_err_t internal_jit_method(RuntimeMethodBase method) {
 
             // clear it
             if (jit_is_struct_type(var->LocalType)) {
-                ir_node* res = new_Call(get_store(), new_Address(m_builtin_bzero), 2, (ir_node*[]){
-                        ctx.locals[i], new_Const_long(mode_Lu, var->LocalType->StackSize)
-                }, get_entity_type(m_builtin_bzero));
-                set_store(new_Proj(res, mode_M, pn_Call_M));
+                jit_emit_bzero(ctx.locals[i], var->LocalType, false, true);
             } else {
                 ir_node* s = new_Store(get_store(), ctx.locals[i],
                                            new_Const_long(get_type_mode(typ), 0),
