@@ -140,6 +140,9 @@ void jit_builder_add_phi_input(jit_builder_t builder,
 jit_value_t jit_builder_build_iconst(jit_builder_t builder,
                                      jit_value_type_t type,
                                      uint64_t value) {
+    if (type == JIT_TYPE_I32) {
+        value &= 0xFFFFFFFF;
+    }
     return spidir_builder_build_iconst(builder, type, value);
 }
 

@@ -564,8 +564,244 @@ public class CodeGenBringUpTests
 
     #endregion
     
-    // TODO: JTrue
+    // TODO: JTrueEqFP
 
+    #region JTrueEqInt1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int JTrueEqInt1(int x)
+    {
+        int returnValue = 0;
+
+        if (x == int.MinValue) returnValue = 1;
+        else if (x == -1) returnValue = 2;
+        else if (x == 0) returnValue = 3;
+        else if (x == 1) returnValue = 4;
+        else if (x == int.MaxValue) returnValue = 5;
+
+        return returnValue;
+    }
+
+    public static bool TestJTrueEqInt1()
+    {
+        bool returnValue = true;
+
+        if (JTrueEqInt1(int.MinValue)   != 1) returnValue = false;
+        if (JTrueEqInt1(int.MinValue+1) != 0) returnValue = false;
+        if (JTrueEqInt1(-1)             != 2) returnValue = false;
+        if (JTrueEqInt1(0)              != 3) returnValue = false;
+        if (JTrueEqInt1(1)              != 4) returnValue = false;
+        if (JTrueEqInt1(int.MaxValue-1) != 0) returnValue = false;
+        if (JTrueEqInt1(int.MaxValue)   != 5) returnValue = false;
+
+        return returnValue;
+    }
+
+    #endregion
+
+    // TODO: JTrueGeDbl
+    // TODO: JTrueGeFP
+
+    #region JTrueGeInt1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int JTrueGeInt1(int x)
+    {
+        int returnValue = -1;
+
+        if (x >= int.MaxValue)          returnValue = 7;
+        else if (x >= 2)                returnValue = 6;
+        else if (x >= 1)                returnValue = 5;
+        else if (x >= 0)                returnValue = 4;
+        else if (x >= -1)               returnValue = 3;
+        else if (x >= (int.MinValue+1)) returnValue = 2;
+        else if (x >= int.MinValue)     returnValue = 1;
+
+        return returnValue;
+    }
+
+    public static bool TestJTrueGeInt1()
+    {
+        bool returnValue = true;
+
+        if (JTrueGeInt1(int.MinValue)   != 1) returnValue = false;
+        if (JTrueGeInt1(int.MinValue+1) != 2) returnValue = false;
+        if (JTrueGeInt1(-1)             != 3) returnValue = false;
+        if (JTrueGeInt1(0)              != 4) returnValue = false;
+        if (JTrueGeInt1(1)              != 5) returnValue = false;
+        if (JTrueGeInt1(int.MaxValue-1) != 6) returnValue = false;
+        if (JTrueGeInt1(int.MaxValue)   != 7) returnValue = false;
+
+        return returnValue;
+    }
+
+    #endregion
+    
+    // TODO: JTrueGtDbl
+    // TODO: JTrueGtFP
+
+    #region JTrueGtInt1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int JTrueGtInt1(int x)
+    {
+        int returnValue = -1;
+
+        if (x > int.MaxValue)          returnValue = 0;    // Never true
+        else if (x > (int.MaxValue-1)) returnValue = 7;
+        else if (x > 1)                returnValue = 6;
+        else if (x > 0)                returnValue = 5;
+        else if (x > -1)               returnValue = 4;
+        else if (x > (int.MinValue+1)) returnValue = 3;
+        else if (x > int.MinValue)     returnValue = 2;
+        else                           returnValue = 1;
+
+        return returnValue;
+    }
+
+    public static bool TestJTrueGtInt1()
+    {
+        bool returnValue = true;
+
+        if (JTrueGtInt1(int.MinValue)   != 1) returnValue = false;
+        if (JTrueGtInt1(int.MinValue+1) != 2) returnValue = false;
+        if (JTrueGtInt1(-1)             != 3) returnValue = false;
+        if (JTrueGtInt1(0)              != 4) returnValue = false;
+        if (JTrueGtInt1(1)              != 5) returnValue = false;
+        if (JTrueGtInt1(int.MaxValue-1) != 6) returnValue = false;
+        if (JTrueGtInt1(int.MaxValue)   != 7) returnValue = false;
+
+        return returnValue;
+    }
+
+    #endregion
+    
+    // TODO: JTrueLeDbl
+    // TODO: JTrueLeFP
+
+    #region JTrueLeInt1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int JTrueLeInt1(int x)
+    {
+        int returnValue = -1;
+
+        if (x <= int.MinValue)          returnValue = 1;
+        else if (x <= -2)               returnValue = 2;
+        else if (x <= -1)               returnValue = 3;
+        else if (x <= 0)                returnValue = 4;
+        else if (x <= 1)                returnValue = 5;
+        else if (x <= (int.MaxValue-1)) returnValue = 6;
+        else if (x <= int.MaxValue)     returnValue = 7;
+
+        return returnValue;
+    }
+
+    public static bool TestJTrueLeInt1()
+    {
+        bool returnValue = true;
+
+        if (JTrueLeInt1(int.MinValue)   != 1) returnValue = false;
+        if (JTrueLeInt1(int.MinValue+1) != 2) returnValue = false;
+        if (JTrueLeInt1(-1)             != 3) returnValue = false;
+        if (JTrueLeInt1(0)              != 4) returnValue = false;
+        if (JTrueLeInt1(1)              != 5) returnValue = false;
+        if (JTrueLeInt1(int.MaxValue-1) != 6) returnValue = false;
+        if (JTrueLeInt1(int.MaxValue)   != 7) returnValue = false;
+
+        return returnValue;
+    }
+
+    #endregion
+    
+    // TODO: JTrueLtDbl
+    // TODO: JTrueLtFP
+
+    #region JTrueLtInt1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int JTrueLtInt1(int x)
+    {
+        int returnValue = -1;
+
+        if (x < int.MinValue)          returnValue = 0;    // Never true
+        else if (x < (int.MinValue+1)) returnValue = 1;
+        else if (x < -1)               returnValue = 2;
+        else if (x < 0)                returnValue = 3;
+        else if (x < 1)                returnValue = 4;
+        else if (x < (int.MaxValue-1)) returnValue = 5;
+        else if (x < int.MaxValue)     returnValue = 6;
+        else                           returnValue = 7;
+
+        return returnValue;
+    }
+
+    public static bool TestJTrueLtInt1()
+    {
+        bool returnValue = true;
+
+        if (JTrueLtInt1(int.MinValue)   != 1) returnValue = false;
+        if (JTrueLtInt1(int.MinValue+1) != 2) returnValue = false;
+        if (JTrueLtInt1(-1)             != 3) returnValue = false;
+        if (JTrueLtInt1(0)              != 4) returnValue = false;
+        if (JTrueLtInt1(1)              != 5) returnValue = false;
+        if (JTrueLtInt1(int.MaxValue-1) != 6) returnValue = false;
+        if (JTrueLtInt1(int.MaxValue)   != 7) returnValue = false;
+
+        return returnValue;
+    }
+
+    #endregion
+    
+    // TODO: JTrueNeDbl
+    // TODO: JTrueNeFP
+
+    #region JTrueNeInt1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int JTrueNeInt1(int x)
+    {
+        int returnValue = -1;
+
+        if (x != int.MinValue)
+        {
+            if (x != -1)
+            {
+                if (x != 0)
+                {
+                    if (x != 1)
+                    {
+                        if (x != int.MaxValue) returnValue = 0;
+                        else returnValue = 5;
+                    }
+                    else returnValue = 4;
+                }
+                else returnValue = 3;
+            }
+            else returnValue = 2;
+        }
+        else returnValue = 1;
+
+        return returnValue;
+    }
+
+    public static bool TestJTrueNeInt1()
+    {
+        bool returnValue = true;
+
+        if (JTrueNeInt1(int.MinValue)   != 1) returnValue = false;
+        if (JTrueNeInt1(int.MinValue+1) != 0) returnValue = false;
+        if (JTrueNeInt1(-1)             != 2) returnValue = false;
+        if (JTrueNeInt1(0)              != 3) returnValue = false;
+        if (JTrueNeInt1(1)              != 4) returnValue = false;
+        if (JTrueNeInt1(int.MaxValue-1) != 0) returnValue = false;
+        if (JTrueNeInt1(int.MaxValue)   != 5) returnValue = false;
+
+        return returnValue;
+    }
+
+    #endregion
+    
     #region Le1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -1276,6 +1512,12 @@ public class CodeGenBringUpTests
         if (!TestIntConv()) return false;
         if (!TestJmp1()) return false;
         if (!TestJTrue1()) return false;
+        if (!TestJTrueEqInt1()) return false;
+        if (!TestJTrueGeInt1()) return false;
+        if (!TestJTrueGtInt1()) return false;
+        if (!TestJTrueLeInt1()) return false;
+        if (!TestJTrueLtInt1()) return false;
+        if (!TestJTrueNeInt1()) return false;
         if (!TestLe1()) return false;
         if (!TestLeftShift()) return false;
         if (!TestLngConv()) return false;

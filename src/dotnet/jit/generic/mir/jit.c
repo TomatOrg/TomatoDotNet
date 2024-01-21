@@ -6,7 +6,7 @@
 #include "mir/mir-gen.h"
 #include "dotnet/gc/gc.h"
 
-#define MIR_INSTRUCTION_OUTPUT
+//#define MIR_INSTRUCTION_OUTPUT
 
 static MIR_context_t m_mir_ctx = NULL;
 
@@ -82,7 +82,7 @@ void jit_link_module(jit_module_t module) {
     // finish with the module
     MIR_finish_module(m_mir_ctx);
 
-    MIR_output(m_mir_ctx, stdout);
+//    MIR_output(m_mir_ctx, stdout);
 
     // load the module for linking
     MIR_load_module(m_mir_ctx, module);
