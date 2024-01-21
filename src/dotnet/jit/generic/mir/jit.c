@@ -6,7 +6,7 @@
 #include "mir/mir-gen.h"
 #include "dotnet/gc/gc.h"
 
-//#define MIR_INSTRUCTION_OUTPUT
+#define MIR_INSTRUCTION_OUTPUT
 
 static MIR_context_t m_mir_ctx = NULL;
 
@@ -81,6 +81,8 @@ jit_module_t jit_module_create(void) {
 void jit_link_module(jit_module_t module) {
     // finish with the module
     MIR_finish_module(m_mir_ctx);
+
+    MIR_output(m_mir_ctx, stdout);
 
     // load the module for linking
     MIR_load_module(m_mir_ctx, module);
@@ -311,7 +313,7 @@ jit_value_t jit_builder_build_param_ref(jit_builder_t builder,
     name[3] = index + '0';
     MIR_reg_t reg = MIR_reg(m_mir_ctx, name, builder->func->u.func);
     MIR_op_t op = MIR_new_reg_op(m_mir_ctx, reg);
-    MIR_type_t type = MIR_reg_type(m_mir_ctx, reg, builder->func->u.func);
+    MIR_type_t type = VARR_GET(MIR_var_t, builder->func->u.func->vars, index).type;
     return (jit_value_t){ .op = op, .is_32bit = (type != MIR_T_I64 && type != MIR_T_U64 && type != MIR_T_P) };
 }
 
@@ -419,6 +421,7 @@ jit_value_t jit_builder_build_iconst(jit_builder_t builder,
 jit_value_t jit_builder_build_iadd(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_ADDS : MIR_ADD, result.op, lhs.op, rhs.op));
     return result;
@@ -427,6 +430,7 @@ jit_value_t jit_builder_build_iadd(jit_builder_t builder,
 jit_value_t jit_builder_build_isub(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_SUBS : MIR_SUB, result.op, lhs.op, rhs.op));
     return result;
@@ -434,6 +438,7 @@ jit_value_t jit_builder_build_isub(jit_builder_t builder,
 
 jit_value_t jit_builder_build_and(jit_builder_t builder,
                                   jit_value_t lhs, jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_ANDS : MIR_AND, result.op, lhs.op, rhs.op));
     return result;
@@ -441,6 +446,7 @@ jit_value_t jit_builder_build_and(jit_builder_t builder,
 
 jit_value_t jit_builder_build_or(jit_builder_t builder,
                                  jit_value_t lhs, jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_ORS : MIR_OR, result.op, lhs.op, rhs.op));
     return result;
@@ -448,6 +454,7 @@ jit_value_t jit_builder_build_or(jit_builder_t builder,
 
 jit_value_t jit_builder_build_xor(jit_builder_t builder,
                                   jit_value_t lhs, jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_XORS : MIR_XOR, result.op, lhs.op, rhs.op));
     return result;
@@ -479,6 +486,7 @@ jit_value_t jit_builder_build_ashr(jit_builder_t builder,
 jit_value_t jit_builder_build_imul(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_MULS : MIR_MUL, result.op, lhs.op, rhs.op));
     return result;
@@ -487,6 +495,7 @@ jit_value_t jit_builder_build_imul(jit_builder_t builder,
 jit_value_t jit_builder_build_sdiv(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_DIVS : MIR_DIV, result.op, lhs.op, rhs.op));
     return result;
@@ -495,6 +504,7 @@ jit_value_t jit_builder_build_sdiv(jit_builder_t builder,
 jit_value_t jit_builder_build_udiv(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_UDIVS : MIR_UDIV, result.op, lhs.op, rhs.op));
     return result;
@@ -503,6 +513,7 @@ jit_value_t jit_builder_build_udiv(jit_builder_t builder,
 jit_value_t jit_builder_build_srem(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_MODS : MIR_MOD, result.op, lhs.op, rhs.op));
     return result;
@@ -511,6 +522,7 @@ jit_value_t jit_builder_build_srem(jit_builder_t builder,
 jit_value_t jit_builder_build_urem(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    ASSERT(lhs.is_32bit == rhs.is_32bit);
     jit_value_t result = create_mir_reg(builder, lhs.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, lhs.is_32bit ? MIR_UMODS : MIR_UMOD, result.op, lhs.op, rhs.op));
     return result;
@@ -539,7 +551,7 @@ jit_value_t jit_builder_build_sfill(jit_builder_t builder,
         case 32: code = MIR_EXT32; break;
         default: ASSERT(!"Invalid sfill length");
     }
-    jit_value_t result = create_mir_reg(builder, false);
+    jit_value_t result = create_mir_reg(builder, value.is_32bit);
     append_instruction(builder, MIR_new_insn(m_mir_ctx, code, result.op, value.op));
     return result;
 }
@@ -608,7 +620,6 @@ void jit_builder_build_store(jit_builder_t builder,
         case JIT_MEM_SIZE_4: mir_load_type = MIR_T_U32; break;
         case JIT_MEM_SIZE_8: mir_load_type = MIR_T_U64; break;
     }
-    jit_value_t result = create_mir_reg(builder, false);
 
     MIR_disp_t base = 0;
     MIR_reg_t reg = 0;

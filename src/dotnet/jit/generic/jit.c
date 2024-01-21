@@ -18,7 +18,7 @@
 #include "dotnet/gc/gc.h"
 #include "util/string.h"
 
-//#define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 /**
  * The jit module, DON'T USE FROM WITHIN THE BUILDER
@@ -1464,10 +1464,9 @@ static tdn_err_t jit_instruction(
 
         // Push an int32 to the stack
         case CEE_LDC_I4: {
-            // NOTE: we are treating the value as a uint32 so it will not sign extend it
             CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
                                               jit_builder_build_iconst(builder,
-                                                                          JIT_TYPE_I32, inst.operand.uint32)));
+                                                                          JIT_TYPE_I32, inst.operand.int32)));
         } break;
 
         // Push an int64
@@ -2282,6 +2281,14 @@ static tdn_err_t jit_instruction(
             jit_value_type_t mem_type = get_jit_mem_type(addr_type);
             jit_mem_size_t mem_size = get_jit_mem_size(addr_type);
             jit_value_t result = jit_builder_build_load(builder, mem_size, mem_type, addr);
+
+            // sign extend as needed
+            if (addr_type == tSByte) {
+                result = jit_builder_build_sfill(builder, 8, result);
+            } else if (addr_type == tInt16) {
+                result = jit_builder_build_sfill(builder, 16, result);
+            }
+
             CHECK_AND_RETHROW(eval_stack_push(stack, stack_type, result));
         } break;
 

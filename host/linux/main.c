@@ -256,7 +256,9 @@ int main() {
 
     tdn_jit_method(tests->EntryPoint);
     int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
-    TRACE("Tests = %d", entry_point());
+    int tests_output = entry_point();
+    TRACE("Tests = %d", tests_output);
+    ASSERT(tests_output == 0);
 
 cleanup:
     gc_free_all();
