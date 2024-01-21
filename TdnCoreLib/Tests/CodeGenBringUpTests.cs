@@ -95,9 +95,144 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
-    // TODO: array tests
 
+    #region Args5
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int Args5(int a, int b, int c, int d, int e)
+    {
+        return a+b+c+d+e;
+    }
+
+    public static bool TestArgs5()
+    {
+        int y = Args5(1,2,3,4,5);
+        if (y == 15) return true;
+        else return false;
+    }
+
+    #endregion
+
+    #region Array1
+    
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static void Array1(int[] a)
+    {
+        a[1] = 5;
+    }
+
+    static bool TestArray1()
+    {
+        int[] a = {1, 2, 3, 4};
+        Array1(a);
+
+        if (a[1] != 5) return false;
+        return true;
+    }
+    
+    #endregion
+    
+    #region Array2
+    
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static int Array2(int[] a)
+    {
+        return a[1];
+    }
+
+    static bool TestArray2()
+    {
+        int[] a = {1, 2, 3, 4};
+        if (Array2(a) != 2) return false;
+        return true;
+    }
+
+    #endregion
+    
+    #region Array3
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static int Array3()
+    {
+        int[] a = {1, 2, 3, 4};
+        a[1] = 5;
+        return a[1];
+    }
+
+    static bool TestArray3()
+    {
+        if (Array3() != 5) return false;
+        return true;
+    }
+    
+    #endregion
+    
+    #region Array4
+    
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static int Array4(int i) {
+        int[] a = {1, 2, 3, 4};
+        return a[i];
+    }
+
+    static bool TestArray4()
+    {
+        if (Array4(1) != 2) return false;
+        return true;
+    }
+
+    #endregion
+    
+    // TODO: ArrayExc
+
+    #region ArrayJagged
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static int ArrayJagged(int i)
+    {
+        int[][] a = new int[2][];
+        a[0] = new int[2] {0, 1};
+        a[1] = new int[2] {2, 3};
+        return a[1][i];
+    }
+
+    static bool TestArrayJagged()
+    {
+        if (ArrayJagged(1) != 3) return false;
+        return true;
+    }
+
+    #endregion
+    
+    // TODO: ArrayMD
+
+    #region ArrayObj
+
+    class Dummy
+    {
+        public int field;
+        public Dummy(int f)
+        {
+            field = f;
+        }
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    static int ArrayObj(int i)
+    {
+        Dummy[] a = {new Dummy(0), new Dummy(1), new Dummy(2), new Dummy(3), new Dummy(4),
+            new Dummy(5), new Dummy(6), new Dummy(7), new Dummy(8), new Dummy(9)};
+        return a[i].field;
+    }
+
+    static bool TestArrayObj()
+    {
+        if (ArrayObj(1) != 1) return false;
+        return true;
+    }
+
+    #endregion
+    
     #region AsgAdd1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -181,8 +316,23 @@ public class CodeGenBringUpTests
     }
 
     #endregion
+
+    #region Call1
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static void  M() {  }
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static void  Call1()
+    {
+        M();
+    }
+    public static bool TestCall1()
+    {
+        Call1();
+        return true;
+    }
     
-    // TODO: Call1
+    #endregion
     
     // TODO: CastThenBinop
 
@@ -469,8 +619,28 @@ public class CodeGenBringUpTests
     #endregion
     
     // TODO: InstanceCalls
+
+    #region IntArraySum
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int IntArraySum(int []a, int n)
+    {
+        int sum = 0;
+        for (int i = 0; i < n; ++i)
+            sum += a[i];
+        return sum;
+    }
+
+
+    public static bool TestIntArraySum()
+    {
+        int [] a = new int[5] {1, 2, 3, 4, 5};
+        int result = IntArraySum(a, a.Length);
+        if (result == 15) return true;
+        return false;
+    }
     
-    // TODO: IntArraySum
+    #endregion
 
     #region IntConv
 
@@ -1544,12 +1714,20 @@ public class CodeGenBringUpTests
         if (!TestAnd1()) return false;
         if (!TestAndref()) return false;
         if (!TestArgs4()) return false;
+        if (!TestArgs5()) return false;
+        if (!TestArray1()) return false;
+        if (!TestArray2()) return false;
+        if (!TestArray3()) return false;
+        if (!TestArray4()) return false;
+        if (!TestArrayJagged()) return false;
+        if (!TestArrayObj()) return false;
         if (!TestAsgAdd1()) return false;
         if (!TestAsgAnd1()) return false;
         if (!TestAsgOr1()) return false;
         if (!TestAsgSub1()) return false;
         if (!TestAsgXor1()) return false;
         if (!TestBinaryRMW()) return false;
+        if (!TestCall1()) return false;
         if (!TestCnsBool()) return false;
         if (!TestCnsLng1()) return false;
         if (!TestDiv1()) return false;
@@ -1563,6 +1741,7 @@ public class CodeGenBringUpTests
         if (!TestGt1()) return false;
         if (!TestInd1()) return false;
         if (!TestInitObj()) return false;
+        if (!TestIntArraySum()) return false;
         if (!TestIntConv()) return false;
         if (!TestJmp1()) return false;
         if (!TestJTrue1()) return false;

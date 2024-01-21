@@ -18,7 +18,7 @@
 #include "dotnet/gc/gc.h"
 #include "util/string.h"
 
-#define JIT_IL_OUTPUT
+//#define JIT_IL_OUTPUT
 
 /**
  * The jit module, DON'T USE FROM WITHIN THE BUILDER
@@ -898,7 +898,7 @@ static tdn_err_t jit_instruction(
             // verify the array type
             CHECK(array_type->IsArray);
             RuntimeTypeInfo T = array_type->ElementType;
-            if (inst.opcode == CEE_LDELEM_REF) {
+            if (inst.opcode == CEE_STELEM_REF) {
                 // figure from the array, must be a pointer type
                 CHECK(tdn_type_is_referencetype(T));
                 CHECK(tdn_type_array_element_compatible_with(value_type, T));
