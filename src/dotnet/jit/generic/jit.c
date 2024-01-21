@@ -18,7 +18,7 @@
 #include "dotnet/gc/gc.h"
 #include "util/string.h"
 
-//#define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 /**
  * The jit module, DON'T USE FROM WITHIN THE BUILDER
@@ -45,6 +45,7 @@ static jit_function_t m_builtin_gc_bzero;
 static jit_function_t m_builtin_gc_memcpy;
 
 // throwing related
+static jit_function_t m_builtin_throw_invalid_cast_exception;
 static jit_function_t m_builtin_throw_index_out_of_range_exception;
 static jit_function_t m_builtin_throw_overflow_exception;
 static jit_function_t m_builtin_throw;
@@ -94,6 +95,11 @@ tdn_err_t tdn_jit_init() {
             "gc_bzero",
             JIT_TYPE_NONE,
             2, (jit_value_type_t[]){ JIT_TYPE_PTR, JIT_TYPE_PTR });
+
+    m_builtin_throw_invalid_cast_exception = jit_module_create_extern_function(m_jit_module,
+           "throw_invalid_cast_exception",
+           JIT_TYPE_NONE,
+           0, NULL);
 
     m_builtin_throw_index_out_of_range_exception = jit_module_create_extern_function(m_jit_module,
             "throw_index_out_of_range_exception",
@@ -2197,11 +2203,76 @@ static tdn_err_t jit_instruction(
                 }
 
                 // finally push the object, will either be a phi result or just the object
-                stack_meta_t meta = {
-                    .BoxedType = val_type
-                };
-                CHECK_AND_RETHROW(eval_stack_push_with_meta(stack, tObject, obj, meta));
+                CHECK_AND_RETHROW(eval_stack_push(stack, tObject, obj));
             }
+        } break;
+
+        case CEE_UNBOX:
+        case CEE_UNBOX_ANY: {
+            jit_value_t obj;
+            RuntimeTypeInfo obj_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
+
+            // TODO: Nullable support
+
+            // must be a reference type
+            CHECK(tdn_type_is_referencetype(obj_type));
+            CHECK(tdn_type_verifier_assignable_to(inst.operand.type, obj_type));
+
+            if (tdn_type_is_referencetype(inst.operand.type)) {
+                // unbox must be a value type
+                CHECK(inst.opcode != CEE_UNBOX);
+
+                // TODO: implement the correct behaviour for reference types
+                CHECK_FAIL();
+            } else {
+                // we can inline the check since the type has to be the exact value type we are trying to unpack
+                // this will take care of the null check as well
+                jit_value_t object_type_offset = jit_builder_build_iconst(builder, JIT_TYPE_I64, offsetof(struct Object, ObjectType));
+                jit_value_t object_type_ptr = jit_builder_build_ptroff(builder, obj, object_type_offset);
+                jit_value_t object_type = jit_builder_build_load(builder, JIT_MEM_SIZE_8, JIT_TYPE_PTR, object_type_ptr);
+
+                jit_block_t valid = jit_builder_create_block(builder);
+                jit_block_t invalid = jit_builder_create_block(builder);
+
+                jit_value_t wanted_type = jit_builder_build_iconst(builder, JIT_TYPE_PTR, (uint64_t)inst.operand.type);
+                jit_value_t is_wanted_type = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I32, object_type, wanted_type);
+                jit_builder_build_brcond(builder, is_wanted_type, valid, invalid);
+
+                // invalid path, throws the invalid cast
+                jit_builder_set_block(builder, invalid);
+                jit_builder_build_call(builder, m_builtin_throw_invalid_cast_exception, 0, NULL);
+                jit_builder_build_unreachable(builder);
+
+                // valid path, actually emit it
+                jit_builder_set_block(builder, valid);
+
+                // compute the address of the pointer
+                jit_value_t object_size = jit_builder_build_iconst(builder, JIT_TYPE_I64, sizeof(struct Object));
+                jit_value_t value_type_ptr = jit_builder_build_ptroff(builder, obj, object_size);
+
+                if (inst.opcode == CEE_UNBOX) {
+                    // for unbox just push the ref to it
+                    RuntimeTypeInfo ref_type = NULL;
+                    CHECK_AND_RETHROW(tdn_get_byref_type(inst.operand.type, &ref_type));
+                    CHECK_AND_RETHROW(eval_stack_push(stack, ref_type, value_type_ptr));
+                } else {
+                    // for unbox.any deref it as well
+                    if (jit_is_struct_type(obj_type)) {
+                        jit_value_t location;
+                        CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, inst.operand.type, &location));
+                        jit_emit_memcpy(builder, location, value_type_ptr, inst.operand.type->StackSize);
+                    } else {
+                        jit_value_t value = jit_builder_build_load(builder,
+                                                                   get_jit_mem_size(inst.operand.type),
+                                                                   get_jit_mem_type(inst.operand.type),
+                                                                   value_type_ptr);
+                        RuntimeTypeInfo tracked_type = tdn_get_intermediate_type(inst.operand.type);
+                        CHECK_AND_RETHROW(eval_stack_push(stack, tracked_type, value));
+                    }
+                }
+            }
+
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////

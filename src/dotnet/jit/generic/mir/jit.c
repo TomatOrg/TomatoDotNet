@@ -27,12 +27,15 @@ static void MIR_NO_RETURN error_func(MIR_error_type_t error_type, const char *fo
 
 static void stub_gc_memcpy() { ASSERT(!"gc_memcpy"); }
 static void stub_gc_bzero() { ASSERT(!"gc_bzero"); }
+static void stub_throw_invalid_cast_exception() { ASSERT(!"throw_invalid_cast_exception"); }
 static void stub_throw_index_out_of_range_exception() { ASSERT(!"throw_index_out_of_range_exception"); }
 static void stub_throw_overflow_exception() { ASSERT(!"throw_overflow_exception"); }
 static void stub_throw() { ASSERT(!"throw"); }
 static void stub_rethrow() { ASSERT(!"rethrow"); }
 static void stub_get_exception() { ASSERT(!"get_exception"); }
-static void stub_null_check() { ASSERT(!"null_check"); }
+
+// TODO: turn into always inline function
+static void null_check(void* ptr) { ASSERT(ptr != NULL); }
 
 tdn_err_t jit_init() {
     m_mir_ctx = MIR_init();
@@ -44,12 +47,13 @@ tdn_err_t jit_init() {
     MIR_load_external(m_mir_ctx, "gc_new", gc_new);
     MIR_load_external(m_mir_ctx, "gc_memcpy", stub_gc_memcpy);
     MIR_load_external(m_mir_ctx, "gc_bzero", stub_gc_bzero);
+    MIR_load_external(m_mir_ctx, "throw_invalid_cast_exception", stub_throw_invalid_cast_exception);
     MIR_load_external(m_mir_ctx, "throw_index_out_of_range_exception", stub_throw_index_out_of_range_exception);
     MIR_load_external(m_mir_ctx, "throw_overflow_exception", stub_throw_overflow_exception);
     MIR_load_external(m_mir_ctx, "throw", stub_throw);
     MIR_load_external(m_mir_ctx, "rethrow", stub_rethrow);
     MIR_load_external(m_mir_ctx, "get_exception", stub_get_exception);
-    MIR_load_external(m_mir_ctx, "null_check", stub_null_check);
+    MIR_load_external(m_mir_ctx, "null_check", null_check);
 
     // we are going to have a single generator for now
     MIR_gen_init(m_mir_ctx, 0);

@@ -1106,8 +1106,45 @@ public class CodeGenBringUpTests
     }
 
     #endregion
+
+    #region ObjAlloc
+
+    public class Point2
+    {
+        int x;
+        int y;
+
+        [MethodImplAttribute(MethodImplOptions.NoInlining)]
+        public Point2(int a, int b) { x=a; y = b; }
+
+        [MethodImplAttribute(MethodImplOptions.NoInlining)]
+        public bool IsOrigin() { return (x==0 && y == 0); }
+
+        [MethodImplAttribute(MethodImplOptions.NoInlining)]
+        public int DistanceSquared(Point2 p) { return (x-p.x)*(x-p.x) + (y-p.y)*(y-p.y); }
+    }
     
-    // TODO: ObjAlloc
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static Point2 ObjAlloc()
+    {
+        Point2 p1 = new Point2(10,20);
+        Point2 p2 = new Point2(10,20);
+
+        int d = p1.DistanceSquared(p2);
+        if (d != 0) return null;
+        
+        return new Point2(0,0);
+    }
+
+
+    public static bool TestObjAlloc()
+    {
+        Point2 obj = ObjAlloc();
+        if (obj == null) return false;
+        return true;
+    }
+
+    #endregion
     
     // TODO: OpMemberOfSTructLocal
 
@@ -1444,8 +1481,25 @@ public class CodeGenBringUpTests
     // TODO: UDivConst
     
     // TODO: UModConst
+
+    #region Unbox
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int Unbox(object o)
+    {
+        return (int)o;
+    }
+
+    public static bool TestUnbox()
+    {
+        int r = 3;
+        object o = r;
+        int y = Unbox(o);
+        if (y == 3) return true;
+        else return false;
+    }
     
-    // TODO: Unbox
+    #endregion
 
     #region Xor1
 
@@ -1532,6 +1586,7 @@ public class CodeGenBringUpTests
         if (!TestNestedCalls()) return false;
         if (!TestNotAndNeg()) return false;
         if (!TestNotRMW()) return false;
+        if (!TestObjAlloc()) return false;
         if (!TestOr1()) return false;
         if (!TestOrRef()) return false;
         if (!TestRem1()) return false;
@@ -1542,6 +1597,7 @@ public class CodeGenBringUpTests
         if (!TestSub1()) return false;
         if (!TestSubRef()) return false;
         if (!TestSwap()) return false;
+        if (!TestUnbox()) return false;
         if (!TestXor1()) return false;
         if (!TestXorRef()) return false;
         
