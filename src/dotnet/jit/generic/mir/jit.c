@@ -30,12 +30,10 @@ static void stub_gc_bzero() { ASSERT(!"gc_bzero"); }
 static void stub_throw_invalid_cast_exception() { ASSERT(!"throw_invalid_cast_exception"); }
 static void stub_throw_index_out_of_range_exception() { ASSERT(!"throw_index_out_of_range_exception"); }
 static void stub_throw_overflow_exception() { ASSERT(!"throw_overflow_exception"); }
+static void stub_throw_null_reference_exception() { ASSERT(!"throw_null_reference_exception"); }
 static void stub_throw() { ASSERT(!"throw"); }
 static void stub_rethrow() { ASSERT(!"rethrow"); }
 static void stub_get_exception() { ASSERT(!"get_exception"); }
-
-// TODO: turn into always inline function
-static void null_check(void* ptr) { ASSERT(ptr != NULL); }
 
 tdn_err_t jit_init() {
     m_mir_ctx = MIR_init();
@@ -50,10 +48,10 @@ tdn_err_t jit_init() {
     MIR_load_external(m_mir_ctx, "throw_invalid_cast_exception", stub_throw_invalid_cast_exception);
     MIR_load_external(m_mir_ctx, "throw_index_out_of_range_exception", stub_throw_index_out_of_range_exception);
     MIR_load_external(m_mir_ctx, "throw_overflow_exception", stub_throw_overflow_exception);
+    MIR_load_external(m_mir_ctx, "throw_null_reference_exception", stub_throw_null_reference_exception);
     MIR_load_external(m_mir_ctx, "throw", stub_throw);
     MIR_load_external(m_mir_ctx, "rethrow", stub_rethrow);
     MIR_load_external(m_mir_ctx, "get_exception", stub_get_exception);
-    MIR_load_external(m_mir_ctx, "null_check", null_check);
 
     // we are going to have a single generator for now
     MIR_gen_init(m_mir_ctx, 0);
@@ -534,16 +532,14 @@ jit_value_t jit_builder_build_urem(jit_builder_t builder,
 
 jit_value_t jit_builder_build_iext(jit_builder_t builder,
                                    jit_value_t value) {
-    jit_value_t result = create_mir_reg(builder, false);
-    append_instruction(builder, MIR_new_insn(m_mir_ctx, MIR_UEXT32, result.op, value.op));
-    return result;
+    value.is_32bit = false;
+    return value;
 }
 
 jit_value_t jit_builder_build_itrunc(jit_builder_t builder,
                                      jit_value_t value) {
-    jit_value_t result = create_mir_reg(builder, true);
-    append_instruction(builder, MIR_new_insn(m_mir_ctx, MIR_MOV, result.op, value.op));
-    return result;
+    value.is_32bit = true;
+    return value;
 }
 
 jit_value_t jit_builder_build_sfill(jit_builder_t builder,

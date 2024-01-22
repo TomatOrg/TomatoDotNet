@@ -70,23 +70,6 @@
         *blob->data; \
     })
 
-static tdn_err_t sig_get_next_custom_mod(blob_entry_t* blob, RuntimeTypeInfo* type, bool* required) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    uint8_t byte = PEEK_BYTE;
-    if (byte == ELEMENT_TYPE_CMOD_OPT || byte == ELEMENT_TYPE_CMOD_REQD) {
-        FETCH_BYTE;
-        *required = byte == ELEMENT_TYPE_CMOD_REQD;
-        *type = NULL;
-        CHECK_FAIL(); // TODO: this
-    } else {
-        *type = NULL;
-    }
-
-cleanup:
-    return err;
-}
-
 tdn_err_t sig_parse_compressed_int(blob_entry_t* blob, uint32_t* value) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -143,6 +126,28 @@ static tdn_err_t sig_parse_type_def_or_ref_or_spec_encoded(
             (token_t){ .index = index, .table = table }.token,
             typeArgs, methodArgs,
             type));
+
+cleanup:
+    return err;
+}
+
+
+
+static tdn_err_t sig_get_next_custom_mod(
+    blob_entry_t* blob, RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo* type, bool* required
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    uint8_t byte = PEEK_BYTE;
+    if (byte == ELEMENT_TYPE_CMOD_OPT || byte == ELEMENT_TYPE_CMOD_REQD) {
+        FETCH_BYTE;
+        *required = byte == ELEMENT_TYPE_CMOD_REQD;
+        CHECK_AND_RETHROW(sig_parse_type_def_or_ref_or_spec_encoded(blob, assembly, typeArgs, methodArgs, type));
+    } else {
+        *type = NULL;
+    }
 
 cleanup:
     return err;
@@ -239,10 +244,10 @@ static tdn_err_t sig_parse_type(
             // Parse custom modifiers
             RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
-            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             while(cmod_type != NULL) {
                 CHECK(!required);
-                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             }
 
             // Get the element type
@@ -262,10 +267,10 @@ static tdn_err_t sig_parse_type(
             // Parse custom modifiers
             RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
-            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             while(cmod_type != NULL) {
                 CHECK(!required);
-                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             }
 
             // Get the element type
@@ -311,10 +316,10 @@ static tdn_err_t sig_parse_ret_type(
     // Parse custom modifiers
     RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
-    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     while(cmod_type != NULL) {
         CHECK(!required);
-        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     }
 
     // Now figure the correct type
@@ -361,10 +366,10 @@ static tdn_err_t sig_parse_param(
     // Parse custom modifiers
     RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
-    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     while(cmod_type != NULL) {
         CHECK(!required);
-        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     }
 
     // figure the correct type
@@ -398,19 +403,27 @@ tdn_err_t sig_parse_field(blob_entry_t _blob, RuntimeFieldInfo field_info) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;
 
+    RuntimeAssembly assembly = field_info->Module->Assembly;
+    RuntimeTypeInfo_Array typeArgs = field_info->DeclaringType->GenericArguments;
+
     CHECK(FETCH_BYTE == FIELD);
 
     // Parse custom modifiers
     RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
-    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, NULL, &cmod_type, &required));
     while(cmod_type != NULL) {
-        CHECK(!required);
-        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        if (cmod_type == tIsVolatile) {
+            field_info->IsVolatile = 1;
+        } else {
+            CHECK(!required);
+        }
+
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, NULL, &cmod_type, &required));
     }
 
     // parse the type
-    CHECK_AND_RETHROW(sig_parse_type(blob, field_info->Module->Assembly, field_info->DeclaringType->GenericArguments, NULL, &field_info->FieldType));
+    CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, NULL, &field_info->FieldType));
 
 cleanup:
     return err;
@@ -430,10 +443,10 @@ tdn_err_t sig_parse_field_type(
     // Parse custom modifiers
     RuntimeTypeInfo cmod_type = NULL;
     bool required = false;
-    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     while(cmod_type != NULL) {
         CHECK(!required);
-        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     }
 
     // parse the type
@@ -453,10 +466,10 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, RuntimeAssembly assembly, Runt
             // Parse custom modifiers
             RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
-            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             while(cmod_type != NULL) {
                 CHECK(!required);
-                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             }
 
             // can either be a VOID or Type
@@ -479,10 +492,10 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, RuntimeAssembly assembly, Runt
             // Parse custom modifiers
             RuntimeTypeInfo cmod_type = NULL;
             bool required = false;
-            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             while(cmod_type != NULL) {
                 CHECK(!required);
-                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+                CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
             }
 
             RuntimeTypeInfo elementType = NULL;
@@ -565,10 +578,10 @@ tdn_err_t sig_parse_local_var_sig(
         // Parse custom modifiers
         RuntimeTypeInfo cmod_type = NULL;
         bool required = false;
-        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
         while(cmod_type != NULL) {
             CHECK(!required);
-            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, &cmod_type, &required));
+            CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
         }
 
         // check the Constraint

@@ -7,6 +7,7 @@
 #include "spidir/spidir.h"
 
 typedef spidir_function_t jit_function_t;
+#define IS_FUNCTION_NULL(x) ((x).id == -1)
 
 typedef spidir_value_t jit_value_t;
 #define JIT_VALUE_INVALID SPIDIR_VALUE_INVALID
@@ -55,6 +56,7 @@ typedef struct jit_function_inner {
 } jit_function_inner_t;
 
 typedef jit_function_inner_t* jit_function_t;
+#define IS_FUNCTION_NULL(x) ((x) == NULL)
 
 // TODO: right now this does not contain any type information, which can be a problem
 typedef struct jit_value {

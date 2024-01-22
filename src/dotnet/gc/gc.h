@@ -9,6 +9,8 @@ void* gc_new(RuntimeTypeInfo type, size_t size);
 
 void* gc_raw_alloc(size_t size);
 
+void gc_register_root(void* ptr);
+
 #define GC_NEW(type) \
     ({ \
         type ___ptr = gc_new(t##type, sizeof(struct type)); \

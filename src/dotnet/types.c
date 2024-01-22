@@ -41,6 +41,8 @@ RuntimeTypeInfo tOverflowException = NULL;
 
 RuntimeTypeInfo tNullable = NULL;
 
+RuntimeTypeInfo tIsVolatile = NULL;
+
 RuntimeTypeInfo tNull = NULL;
 
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {

@@ -5,11 +5,13 @@ namespace Tests;
 
 public class CodeGenBringUpTests
 {
-    
     #region Add1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int Add1(int x) { return x+1; }
+    public static int Add1(int x)
+    {
+        return x + 1;
+    }
 
     public static bool TestAdd1()
     {
@@ -31,10 +33,9 @@ public class CodeGenBringUpTests
             return true;
         else
             return false;
-
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Addref(int x, ref int a)
     {
         x += a;
@@ -46,7 +47,10 @@ public class CodeGenBringUpTests
     #region And1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int And1(int x) { return x & 1; }
+    public static int And1(int x)
+    {
+        return x & 1;
+    }
 
     public static bool TestAnd1()
     {
@@ -70,7 +74,7 @@ public class CodeGenBringUpTests
             return false;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int AndRef(int x, ref int a)
     {
         x &= a;
@@ -84,12 +88,12 @@ public class CodeGenBringUpTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Args4(int a, int b, int c, int d)
     {
-        return a+b+c+d;
+        return a + b + c + d;
     }
 
     public static bool TestArgs4()
     {
-        int y = Args4(1,2,3,4);
+        int y = Args4(1, 2, 3, 4);
         if (y == 10) return true;
         else return false;
     }
@@ -101,12 +105,12 @@ public class CodeGenBringUpTests
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     public static int Args5(int a, int b, int c, int d, int e)
     {
-        return a+b+c+d+e;
+        return a + b + c + d + e;
     }
 
     public static bool TestArgs5()
     {
-        int y = Args5(1,2,3,4,5);
+        int y = Args5(1, 2, 3, 4, 5);
         if (y == 15) return true;
         else return false;
     }
@@ -114,7 +118,7 @@ public class CodeGenBringUpTests
     #endregion
 
     #region Array1
-    
+
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     static void Array1(int[] a)
     {
@@ -123,17 +127,17 @@ public class CodeGenBringUpTests
 
     static bool TestArray1()
     {
-        int[] a = {1, 2, 3, 4};
+        int[] a = { 1, 2, 3, 4 };
         Array1(a);
 
         if (a[1] != 5) return false;
         return true;
     }
-    
+
     #endregion
-    
+
     #region Array2
-    
+
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     static int Array2(int[] a)
     {
@@ -142,19 +146,19 @@ public class CodeGenBringUpTests
 
     static bool TestArray2()
     {
-        int[] a = {1, 2, 3, 4};
+        int[] a = { 1, 2, 3, 4 };
         if (Array2(a) != 2) return false;
         return true;
     }
 
     #endregion
-    
+
     #region Array3
 
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     static int Array3()
     {
-        int[] a = {1, 2, 3, 4};
+        int[] a = { 1, 2, 3, 4 };
         a[1] = 5;
         return a[1];
     }
@@ -164,14 +168,15 @@ public class CodeGenBringUpTests
         if (Array3() != 5) return false;
         return true;
     }
-    
+
     #endregion
-    
+
     #region Array4
-    
+
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
-    static int Array4(int i) {
-        int[] a = {1, 2, 3, 4};
+    static int Array4(int i)
+    {
+        int[] a = { 1, 2, 3, 4 };
         return a[i];
     }
 
@@ -182,7 +187,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: ArrayExc
 
     #region ArrayJagged
@@ -191,8 +196,8 @@ public class CodeGenBringUpTests
     static int ArrayJagged(int i)
     {
         int[][] a = new int[2][];
-        a[0] = new int[2] {0, 1};
-        a[1] = new int[2] {2, 3};
+        a[0] = new int[2] { 0, 1 };
+        a[1] = new int[2] { 2, 3 };
         return a[1][i];
     }
 
@@ -203,7 +208,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: ArrayMD
 
     #region ArrayObj
@@ -211,6 +216,7 @@ public class CodeGenBringUpTests
     class Dummy
     {
         public int field;
+
         public Dummy(int f)
         {
             field = f;
@@ -220,8 +226,11 @@ public class CodeGenBringUpTests
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     static int ArrayObj(int i)
     {
-        Dummy[] a = {new Dummy(0), new Dummy(1), new Dummy(2), new Dummy(3), new Dummy(4),
-            new Dummy(5), new Dummy(6), new Dummy(7), new Dummy(8), new Dummy(9)};
+        Dummy[] a =
+        {
+            new Dummy(0), new Dummy(1), new Dummy(2), new Dummy(3), new Dummy(4),
+            new Dummy(5), new Dummy(6), new Dummy(7), new Dummy(8), new Dummy(9)
+        };
         return a[i].field;
     }
 
@@ -232,11 +241,15 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     #region AsgAdd1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int AsgAdd1(int x) { x += 1; return x; }
+    public static int AsgAdd1(int x)
+    {
+        x += 1;
+        return x;
+    }
 
     public static bool TestAsgAdd1()
     {
@@ -249,7 +262,11 @@ public class CodeGenBringUpTests
     #region AsgAnd1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int AsgAnd1(int x) { x &= 3; return x; }
+    public static int AsgAnd1(int x)
+    {
+        x &= 3;
+        return x;
+    }
 
     public static bool TestAsgAnd1()
     {
@@ -258,11 +275,15 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     #region AsgOr1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int AsgOr1(int x) { x |= 0xa; return x; }
+    public static int AsgOr1(int x)
+    {
+        x |= 0xa;
+        return x;
+    }
 
     public static bool TestAsgOr1()
     {
@@ -275,7 +296,11 @@ public class CodeGenBringUpTests
     #region AsgSub1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int AsgSub1(int x) { x -= 1; return x; }
+    public static int AsgSub1(int x)
+    {
+        x -= 1;
+        return x;
+    }
 
     public static bool TestAsgSub1()
     {
@@ -288,7 +313,11 @@ public class CodeGenBringUpTests
     #region AsgXor1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int AsgXor1(int x) { x ^= 0xf; return x; }
+    public static int AsgXor1(int x)
+    {
+        x ^= 0xf;
+        return x;
+    }
 
     public static bool TestAsgXor1()
     {
@@ -320,29 +349,37 @@ public class CodeGenBringUpTests
     #region Call1
 
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
-    public static void  M() {  }
+    public static void M()
+    {
+    }
+
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
-    public static void  Call1()
+    public static void Call1()
     {
         M();
     }
+
     public static bool TestCall1()
     {
         Call1();
         return true;
     }
-    
+
     #endregion
-    
+
+    #region CastThenBinop
+
     // TODO: CastThenBinop
+
+    #endregion
 
     #region CnsBool
 
     // Returns !b
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static bool CnsBool(bool b) 
-    { 
+    public static bool CnsBool(bool b)
+    {
         // Thisis just to exercise bool constants.
         // Otherwise we could write this as "return !b"
         if (b == true)
@@ -363,7 +400,10 @@ public class CodeGenBringUpTests
     #region CnsLng1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static long CnsLng1() { return 1; }
+    public static long CnsLng1()
+    {
+        return 1;
+    }
 
     public static bool TestCnsLng1()
     {
@@ -373,7 +413,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: dbl
 
     #region Div1
@@ -390,14 +430,13 @@ public class CodeGenBringUpTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Div1(int a, int b)
     {
-
         return a / b;
     }
 
     #endregion
-    
+
     // TODO: div2
-    
+
     // TODO: DivConst
 
     #region DivRef
@@ -449,6 +488,7 @@ public class CodeGenBringUpTests
         {
             result = a * FactorialRec(a - 1);
         }
+
         return result;
     }
 
@@ -475,6 +515,7 @@ public class CodeGenBringUpTests
             curr = next;
             next = temp;
         }
+
         return curr;
     }
 
@@ -507,7 +548,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: FP
 
     #region GCD
@@ -516,12 +557,12 @@ public class CodeGenBringUpTests
     public static int Gcd(int a, int b)
     {
         int result;
-        if (b == 0) 
+        if (b == 0)
             result = a;
-        else if (a < b) 
+        else if (a < b)
             result = Gcd(b, a);
         else
-            result = Gcd(b, a%b);
+            result = Gcd(b, a % b);
 
         return result;
     }
@@ -573,7 +614,11 @@ public class CodeGenBringUpTests
     #region Ind1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void Ind1(ref int x) { x = 1; return; }
+    public static void Ind1(ref int x)
+    {
+        x = 1;
+        return;
+    }
 
     public static bool TestInd1()
     {
@@ -617,13 +662,13 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: InstanceCalls
 
     #region IntArraySum
 
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
-    public static int IntArraySum(int []a, int n)
+    public static int IntArraySum(int[] a, int n)
     {
         int sum = 0;
         for (int i = 0; i < n; ++i)
@@ -634,51 +679,69 @@ public class CodeGenBringUpTests
 
     public static bool TestIntArraySum()
     {
-        int [] a = new int[5] {1, 2, 3, 4, 5};
+        int[] a = new int[5] { 1, 2, 3, 4, 5 };
         int result = IntArraySum(a, a.Length);
         if (result == 15) return true;
         return false;
     }
-    
+
     #endregion
 
     #region IntConv
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static long IntConv(int x) { return (long) x; }
+    public static long IntConv(int x)
+    {
+        return (long)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static long IntConv(UInt32 x) { return (long) x; }
+    public static long IntConv(UInt32 x)
+    {
+        return (long)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int IntConv(UInt16 x) { return (int)x; }
+    public static int IntConv(UInt16 x)
+    {
+        return (int)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int IntConv(byte x) { return (int)x; }
+    public static int IntConv(byte x)
+    {
+        return (int)x;
+    }
 
     //[MethodImplAttribute(MethodImplOptions.NoInlining)]
     //public static UInt16 IntConv(byte x) { return (UInt16)x; }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static byte IntConv(Int16 x) { return (byte)x; }
+    public static byte IntConv(Int16 x)
+    {
+        return (byte)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static UInt32 IntConv(long x) { return (UInt32)x; }
+    public static UInt32 IntConv(long x)
+    {
+        return (UInt32)x;
+    }
 
     public static bool TestIntConv()
     {
         long x = IntConv((int)3);
         if (x != 3) return false;
-        
+
         x = IntConv((UInt32)3294168832);
         if (x != 3294168832L) return false;
 
-        int z = IntConv((UInt16) 123);
+        int z = IntConv((UInt16)123);
         if (z != 123) return false;
 
         z = IntConv((byte)3);
         if (z != 3) return false;
-               
+
         byte w = IntConv((Int16)3);
         if (w != 3) return false;
 
@@ -697,13 +760,13 @@ public class CodeGenBringUpTests
     {
         goto L1;
         L2:
-        x = x+1;
+        x = x + 1;
         goto L3;
         L1:
-        x = x+1;
+        x = x + 1;
         goto L2;
         L3:
-        return x+1;
+        return x + 1;
     }
 
     public static bool TestJmp1()
@@ -721,7 +784,7 @@ public class CodeGenBringUpTests
     public static int JTrue1(int x)
     {
         if (x == 1)
-            return x+1;
+            return x + 1;
         return 0;
     }
 
@@ -733,7 +796,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: JTrueEqFP
 
     #region JTrueEqInt1
@@ -756,13 +819,13 @@ public class CodeGenBringUpTests
     {
         bool returnValue = true;
 
-        if (JTrueEqInt1(int.MinValue)   != 1) returnValue = false;
-        if (JTrueEqInt1(int.MinValue+1) != 0) returnValue = false;
-        if (JTrueEqInt1(-1)             != 2) returnValue = false;
-        if (JTrueEqInt1(0)              != 3) returnValue = false;
-        if (JTrueEqInt1(1)              != 4) returnValue = false;
-        if (JTrueEqInt1(int.MaxValue-1) != 0) returnValue = false;
-        if (JTrueEqInt1(int.MaxValue)   != 5) returnValue = false;
+        if (JTrueEqInt1(int.MinValue) != 1) returnValue = false;
+        if (JTrueEqInt1(int.MinValue + 1) != 0) returnValue = false;
+        if (JTrueEqInt1(-1) != 2) returnValue = false;
+        if (JTrueEqInt1(0) != 3) returnValue = false;
+        if (JTrueEqInt1(1) != 4) returnValue = false;
+        if (JTrueEqInt1(int.MaxValue - 1) != 0) returnValue = false;
+        if (JTrueEqInt1(int.MaxValue) != 5) returnValue = false;
 
         return returnValue;
     }
@@ -779,13 +842,13 @@ public class CodeGenBringUpTests
     {
         int returnValue = -1;
 
-        if (x >= int.MaxValue)          returnValue = 7;
-        else if (x >= 2)                returnValue = 6;
-        else if (x >= 1)                returnValue = 5;
-        else if (x >= 0)                returnValue = 4;
-        else if (x >= -1)               returnValue = 3;
-        else if (x >= (int.MinValue+1)) returnValue = 2;
-        else if (x >= int.MinValue)     returnValue = 1;
+        if (x >= int.MaxValue) returnValue = 7;
+        else if (x >= 2) returnValue = 6;
+        else if (x >= 1) returnValue = 5;
+        else if (x >= 0) returnValue = 4;
+        else if (x >= -1) returnValue = 3;
+        else if (x >= (int.MinValue + 1)) returnValue = 2;
+        else if (x >= int.MinValue) returnValue = 1;
 
         return returnValue;
     }
@@ -794,19 +857,19 @@ public class CodeGenBringUpTests
     {
         bool returnValue = true;
 
-        if (JTrueGeInt1(int.MinValue)   != 1) returnValue = false;
-        if (JTrueGeInt1(int.MinValue+1) != 2) returnValue = false;
-        if (JTrueGeInt1(-1)             != 3) returnValue = false;
-        if (JTrueGeInt1(0)              != 4) returnValue = false;
-        if (JTrueGeInt1(1)              != 5) returnValue = false;
-        if (JTrueGeInt1(int.MaxValue-1) != 6) returnValue = false;
-        if (JTrueGeInt1(int.MaxValue)   != 7) returnValue = false;
+        if (JTrueGeInt1(int.MinValue) != 1) returnValue = false;
+        if (JTrueGeInt1(int.MinValue + 1) != 2) returnValue = false;
+        if (JTrueGeInt1(-1) != 3) returnValue = false;
+        if (JTrueGeInt1(0) != 4) returnValue = false;
+        if (JTrueGeInt1(1) != 5) returnValue = false;
+        if (JTrueGeInt1(int.MaxValue - 1) != 6) returnValue = false;
+        if (JTrueGeInt1(int.MaxValue) != 7) returnValue = false;
 
         return returnValue;
     }
 
     #endregion
-    
+
     // TODO: JTrueGtDbl
     // TODO: JTrueGtFP
 
@@ -817,14 +880,14 @@ public class CodeGenBringUpTests
     {
         int returnValue = -1;
 
-        if (x > int.MaxValue)          returnValue = 0;    // Never true
-        else if (x > (int.MaxValue-1)) returnValue = 7;
-        else if (x > 1)                returnValue = 6;
-        else if (x > 0)                returnValue = 5;
-        else if (x > -1)               returnValue = 4;
-        else if (x > (int.MinValue+1)) returnValue = 3;
-        else if (x > int.MinValue)     returnValue = 2;
-        else                           returnValue = 1;
+        if (x > int.MaxValue) returnValue = 0; // Never true
+        else if (x > (int.MaxValue - 1)) returnValue = 7;
+        else if (x > 1) returnValue = 6;
+        else if (x > 0) returnValue = 5;
+        else if (x > -1) returnValue = 4;
+        else if (x > (int.MinValue + 1)) returnValue = 3;
+        else if (x > int.MinValue) returnValue = 2;
+        else returnValue = 1;
 
         return returnValue;
     }
@@ -833,19 +896,19 @@ public class CodeGenBringUpTests
     {
         bool returnValue = true;
 
-        if (JTrueGtInt1(int.MinValue)   != 1) returnValue = false;
-        if (JTrueGtInt1(int.MinValue+1) != 2) returnValue = false;
-        if (JTrueGtInt1(-1)             != 3) returnValue = false;
-        if (JTrueGtInt1(0)              != 4) returnValue = false;
-        if (JTrueGtInt1(1)              != 5) returnValue = false;
-        if (JTrueGtInt1(int.MaxValue-1) != 6) returnValue = false;
-        if (JTrueGtInt1(int.MaxValue)   != 7) returnValue = false;
+        if (JTrueGtInt1(int.MinValue) != 1) returnValue = false;
+        if (JTrueGtInt1(int.MinValue + 1) != 2) returnValue = false;
+        if (JTrueGtInt1(-1) != 3) returnValue = false;
+        if (JTrueGtInt1(0) != 4) returnValue = false;
+        if (JTrueGtInt1(1) != 5) returnValue = false;
+        if (JTrueGtInt1(int.MaxValue - 1) != 6) returnValue = false;
+        if (JTrueGtInt1(int.MaxValue) != 7) returnValue = false;
 
         return returnValue;
     }
 
     #endregion
-    
+
     // TODO: JTrueLeDbl
     // TODO: JTrueLeFP
 
@@ -856,13 +919,13 @@ public class CodeGenBringUpTests
     {
         int returnValue = -1;
 
-        if (x <= int.MinValue)          returnValue = 1;
-        else if (x <= -2)               returnValue = 2;
-        else if (x <= -1)               returnValue = 3;
-        else if (x <= 0)                returnValue = 4;
-        else if (x <= 1)                returnValue = 5;
-        else if (x <= (int.MaxValue-1)) returnValue = 6;
-        else if (x <= int.MaxValue)     returnValue = 7;
+        if (x <= int.MinValue) returnValue = 1;
+        else if (x <= -2) returnValue = 2;
+        else if (x <= -1) returnValue = 3;
+        else if (x <= 0) returnValue = 4;
+        else if (x <= 1) returnValue = 5;
+        else if (x <= (int.MaxValue - 1)) returnValue = 6;
+        else if (x <= int.MaxValue) returnValue = 7;
 
         return returnValue;
     }
@@ -871,19 +934,19 @@ public class CodeGenBringUpTests
     {
         bool returnValue = true;
 
-        if (JTrueLeInt1(int.MinValue)   != 1) returnValue = false;
-        if (JTrueLeInt1(int.MinValue+1) != 2) returnValue = false;
-        if (JTrueLeInt1(-1)             != 3) returnValue = false;
-        if (JTrueLeInt1(0)              != 4) returnValue = false;
-        if (JTrueLeInt1(1)              != 5) returnValue = false;
-        if (JTrueLeInt1(int.MaxValue-1) != 6) returnValue = false;
-        if (JTrueLeInt1(int.MaxValue)   != 7) returnValue = false;
+        if (JTrueLeInt1(int.MinValue) != 1) returnValue = false;
+        if (JTrueLeInt1(int.MinValue + 1) != 2) returnValue = false;
+        if (JTrueLeInt1(-1) != 3) returnValue = false;
+        if (JTrueLeInt1(0) != 4) returnValue = false;
+        if (JTrueLeInt1(1) != 5) returnValue = false;
+        if (JTrueLeInt1(int.MaxValue - 1) != 6) returnValue = false;
+        if (JTrueLeInt1(int.MaxValue) != 7) returnValue = false;
 
         return returnValue;
     }
 
     #endregion
-    
+
     // TODO: JTrueLtDbl
     // TODO: JTrueLtFP
 
@@ -894,14 +957,14 @@ public class CodeGenBringUpTests
     {
         int returnValue = -1;
 
-        if (x < int.MinValue)          returnValue = 0;    // Never true
-        else if (x < (int.MinValue+1)) returnValue = 1;
-        else if (x < -1)               returnValue = 2;
-        else if (x < 0)                returnValue = 3;
-        else if (x < 1)                returnValue = 4;
-        else if (x < (int.MaxValue-1)) returnValue = 5;
-        else if (x < int.MaxValue)     returnValue = 6;
-        else                           returnValue = 7;
+        if (x < int.MinValue) returnValue = 0; // Never true
+        else if (x < (int.MinValue + 1)) returnValue = 1;
+        else if (x < -1) returnValue = 2;
+        else if (x < 0) returnValue = 3;
+        else if (x < 1) returnValue = 4;
+        else if (x < (int.MaxValue - 1)) returnValue = 5;
+        else if (x < int.MaxValue) returnValue = 6;
+        else returnValue = 7;
 
         return returnValue;
     }
@@ -910,19 +973,19 @@ public class CodeGenBringUpTests
     {
         bool returnValue = true;
 
-        if (JTrueLtInt1(int.MinValue)   != 1) returnValue = false;
-        if (JTrueLtInt1(int.MinValue+1) != 2) returnValue = false;
-        if (JTrueLtInt1(-1)             != 3) returnValue = false;
-        if (JTrueLtInt1(0)              != 4) returnValue = false;
-        if (JTrueLtInt1(1)              != 5) returnValue = false;
-        if (JTrueLtInt1(int.MaxValue-1) != 6) returnValue = false;
-        if (JTrueLtInt1(int.MaxValue)   != 7) returnValue = false;
+        if (JTrueLtInt1(int.MinValue) != 1) returnValue = false;
+        if (JTrueLtInt1(int.MinValue + 1) != 2) returnValue = false;
+        if (JTrueLtInt1(-1) != 3) returnValue = false;
+        if (JTrueLtInt1(0) != 4) returnValue = false;
+        if (JTrueLtInt1(1) != 5) returnValue = false;
+        if (JTrueLtInt1(int.MaxValue - 1) != 6) returnValue = false;
+        if (JTrueLtInt1(int.MaxValue) != 7) returnValue = false;
 
         return returnValue;
     }
 
     #endregion
-    
+
     // TODO: JTrueNeDbl
     // TODO: JTrueNeFP
 
@@ -959,19 +1022,19 @@ public class CodeGenBringUpTests
     {
         bool returnValue = true;
 
-        if (JTrueNeInt1(int.MinValue)   != 1) returnValue = false;
-        if (JTrueNeInt1(int.MinValue+1) != 0) returnValue = false;
-        if (JTrueNeInt1(-1)             != 2) returnValue = false;
-        if (JTrueNeInt1(0)              != 3) returnValue = false;
-        if (JTrueNeInt1(1)              != 4) returnValue = false;
-        if (JTrueNeInt1(int.MaxValue-1) != 0) returnValue = false;
-        if (JTrueNeInt1(int.MaxValue)   != 5) returnValue = false;
+        if (JTrueNeInt1(int.MinValue) != 1) returnValue = false;
+        if (JTrueNeInt1(int.MinValue + 1) != 0) returnValue = false;
+        if (JTrueNeInt1(-1) != 2) returnValue = false;
+        if (JTrueNeInt1(0) != 3) returnValue = false;
+        if (JTrueNeInt1(1) != 4) returnValue = false;
+        if (JTrueNeInt1(int.MaxValue - 1) != 0) returnValue = false;
+        if (JTrueNeInt1(int.MaxValue) != 5) returnValue = false;
 
         return returnValue;
     }
 
     #endregion
-    
+
     #region Le1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -992,7 +1055,10 @@ public class CodeGenBringUpTests
     #region LeftShift
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int LeftShift(int x, int y) { return x << y; }
+    public static int LeftShift(int x, int y)
+    {
+        return x << y;
+    }
 
     public static bool TestLeftShift()
     {
@@ -1006,25 +1072,43 @@ public class CodeGenBringUpTests
     #region LngConv
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int LngConv(long x, out int y) { return y = (int) x; }
+    public static int LngConv(long x, out int y)
+    {
+        return y = (int)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static UInt32 LngConv(long x, out UInt32 y) { return y = (UInt32) x; }
+    public static UInt32 LngConv(long x, out UInt32 y)
+    {
+        return y = (UInt32)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static UInt16 LngConv(long x, out UInt16 y) { return y = (UInt16)x; }
+    public static UInt16 LngConv(long x, out UInt16 y)
+    {
+        return y = (UInt16)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static byte LngConv(long x, out byte y) { return y = (byte)x; }
+    public static byte LngConv(long x, out byte y)
+    {
+        return y = (byte)x;
+    }
 
     //[MethodImplAttribute(MethodImplOptions.NoInlining)]
     //public static UInt16 LngConv(byte x) { return (UInt16)x; }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static Int16 LngConv(long x, out Int16 y) { return y = (Int16)x; }
+    public static Int16 LngConv(long x, out Int16 y)
+    {
+        return y = (Int16)x;
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static sbyte LngConv(long x, out sbyte y) { return y = (sbyte)x; }
+    public static sbyte LngConv(long x, out sbyte y)
+    {
+        return y = (sbyte)x;
+    }
 
     // TODO: why does this have IntPtr in it 
     // [MethodImplAttribute(MethodImplOptions.NoInlining)]
@@ -1072,7 +1156,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: LocalLoc
 
     #region LongArgsAndReturn
@@ -1082,7 +1166,7 @@ public class CodeGenBringUpTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     public static long LongArgsAndReturn(long a, long b)
     {
-        return a>b ? a : b;
+        return a > b ? a : b;
     }
 
 
@@ -1111,7 +1195,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: ModConst
 
     #region Mul1
@@ -1125,10 +1209,10 @@ public class CodeGenBringUpTests
             return false;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Mul1(int a, int b)
     {
-        return a*b;
+        return a * b;
     }
 
     #endregion
@@ -1144,10 +1228,10 @@ public class CodeGenBringUpTests
             return false;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Mul2(int a)
     {
-        return a*5;
+        return a * 5;
     }
 
     #endregion
@@ -1156,17 +1240,17 @@ public class CodeGenBringUpTests
 
     private static bool TestMul3()
     {
-        int result= Mul3(3);
+        int result = Mul3(3);
         if (result == 15369)
             return true;
         else
             return false;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Mul3(int a)
     {
-        return a*5123;
+        return a * 5123;
     }
 
     #endregion
@@ -1181,13 +1265,12 @@ public class CodeGenBringUpTests
             return true;
         else
             return false;
-		
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int Mul4(ref int a)
     {
-        return a*1038;
+        return a * 1038;
     }
 
     #endregion
@@ -1212,7 +1295,10 @@ public class CodeGenBringUpTests
     #region NegRMW
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void NegRMW(ref int x) { x = -x; }
+    public static void NegRMW(ref int x)
+    {
+        x = -x;
+    }
 
     public static bool TestNegRMW()
     {
@@ -1251,7 +1337,10 @@ public class CodeGenBringUpTests
     #region NotAndNeg
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int NotAndNeg(int x, int y) { return -x ^ ~y; }
+    public static int NotAndNeg(int x, int y)
+    {
+        return -x ^ ~y;
+    }
 
     public static bool TestNotAndNeg()
     {
@@ -1265,7 +1354,10 @@ public class CodeGenBringUpTests
     #region NotRMW
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void NotRMW(ref int x) { x = ~x; }
+    public static void NotRMW(ref int x)
+    {
+        x = ~x;
+    }
 
     public static bool TestNotRMW()
     {
@@ -1285,25 +1377,35 @@ public class CodeGenBringUpTests
         int y;
 
         [MethodImplAttribute(MethodImplOptions.NoInlining)]
-        public Point2(int a, int b) { x=a; y = b; }
+        public Point2(int a, int b)
+        {
+            x = a;
+            y = b;
+        }
 
         [MethodImplAttribute(MethodImplOptions.NoInlining)]
-        public bool IsOrigin() { return (x==0 && y == 0); }
+        public bool IsOrigin()
+        {
+            return (x == 0 && y == 0);
+        }
 
         [MethodImplAttribute(MethodImplOptions.NoInlining)]
-        public int DistanceSquared(Point2 p) { return (x-p.x)*(x-p.x) + (y-p.y)*(y-p.y); }
+        public int DistanceSquared(Point2 p)
+        {
+            return (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y);
+        }
     }
-    
+
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     public static Point2 ObjAlloc()
     {
-        Point2 p1 = new Point2(10,20);
-        Point2 p2 = new Point2(10,20);
+        Point2 p1 = new Point2(10, 20);
+        Point2 p2 = new Point2(10, 20);
 
         int d = p1.DistanceSquared(p2);
         if (d != 0) return null;
-        
-        return new Point2(0,0);
+
+        return new Point2(0, 0);
     }
 
 
@@ -1315,13 +1417,16 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: OpMemberOfSTructLocal
 
     #region Or1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int Or1(int x) { return x | 0xa; }
+    public static int Or1(int x)
+    {
+        return x | 0xa;
+    }
 
     public static bool TestOr1()
     {
@@ -1353,7 +1458,7 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: RecursiveTailCall
 
     #region Rem1
@@ -1378,7 +1483,10 @@ public class CodeGenBringUpTests
     #region RightShiftRef
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static void RightShiftRef(ref int x, int y) { x >>= y; }
+    public static void RightShiftRef(ref int x, int y)
+    {
+        x >>= y;
+    }
 
     public static bool TestRightShiftRef()
     {
@@ -1389,8 +1497,402 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
-    // TODO: rotate
+
+    #region Rotate
+
+    public class Test_Rotate
+    {
+        static ulong s_field;
+
+        ulong field;
+
+        volatile uint volatile_field;
+
+        ushort usfield;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32(uint value, int amount)
+        {
+            return (value << amount) | (value >> (32 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32_1(uint value)
+        {
+            return (value << 1) | (value >> (32 - 1));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32_3(uint value)
+        {
+            return (value << 3) | (value >> (32 - 3));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32comm(uint value, int amount)
+        {
+            return (value >> (32 - amount)) | (value << amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static bool flag()
+        {
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32const()
+        {
+            uint value = flag() ? (uint)0x12345678 : (uint)0x12345678;
+            int amount = 16;
+            return (value >> (32 - amount)) | (value << amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32xor(uint value, int amount)
+        {
+            return (value << amount) ^ (value >> (32 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint ror32(uint value, int amount)
+        {
+            return (value << ((32 - amount))) | (value >> amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint ror32comm(uint value, int amount)
+        {
+            return (value >> amount) | (value << ((32 - amount)));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint ror32const()
+        {
+            uint value = flag() ? (uint)0x12345678 : (uint)0x12345678;
+            int amount = flag() ? 12 : 12;
+            return (value >> amount) | (value << ((32 - amount)));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        uint ror32vfield(int amount)
+        {
+            return (volatile_field << ((32 - amount))) | (volatile_field >> amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64(ulong value, int amount)
+        {
+            return (value << amount) | (value >> (64 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64comm(ulong value, int amount)
+        {
+            return (value >> (64 - amount)) | (value << amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64const()
+        {
+            ulong value = flag() ? (ulong)0x123456789abcdef : (ulong)0xabcdef123456789;
+            int amount = 16;
+            return (value >> (64 - amount)) | (value << amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64_16(ulong value)
+        {
+            return (value >> (64 - 16)) | (value << 16);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64_32(ulong value)
+        {
+            return (value >> (64 - 32)) | (value << 32);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64_32_inplace(ulong value, ulong added)
+        {
+            ulong x = value + added;
+            x = (x >> (64 - 32)) | (x << 32);
+            return x;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong rol64_33(ulong value)
+        {
+            return (value >> (64 - 33)) | (value << 33);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        ulong rol64field(int amount)
+        {
+            return (field << amount) | (field >> (64 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64(ulong value, int amount)
+        {
+            return (value << (64 - amount)) | (value >> amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64comm(ulong value, int amount)
+        {
+            return (value >> amount) | (value << (64 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64const()
+        {
+            ulong value = flag() ? (ulong)0x123456789abcdef : (ulong)0xabcdef123456789;
+            int amount = flag() ? 5 : 5;
+            return (value << (64 - amount)) | (value >> amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64_5(ulong value)
+        {
+            return (value << (64 - 5)) | (value >> 5);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64_32(ulong value)
+        {
+            return (value << (64 - 32)) | (value >> 32);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64_33(ulong value)
+        {
+            return (value << (64 - 33)) | (value >> 33);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64_32_inplace(ulong value, ulong added)
+        {
+            ulong x = value + added;
+            x = (x << (64 - 32)) | (x >> 32);
+            return x;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static ulong ror64sfield(int amount)
+        {
+            return (s_field << (64 - amount)) | (s_field >> amount);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32_call(uint value, int amount)
+        {
+            return (foo(value) << amount) | (foo(value) >> (32 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint foo(uint value)
+        {
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint rol32_and(uint value, int amount)
+        {
+            return (value << amount) | (value >> ((32 - amount) & 31));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint two_left_shifts(uint value, int amount)
+        {
+            return (value << amount) | (value << (32 - amount));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static uint not_rotation(uint value)
+        {
+            return (value >> 10) | (value << 5);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        uint rol32ushort(int amount)
+        {
+            return ((uint)usfield << amount) | ((uint)usfield >> (32 - amount));
+        }
+
+        Test_Rotate(ulong i, uint j, ushort k)
+        {
+            field = i;
+            volatile_field = j;
+            usfield = k;
+        }
+
+        public static bool Test()
+        {
+            s_field = 0x123456789abcdef;
+
+            if (rol32(0x12345678, 16) != 0x56781234)
+            {
+                return false;
+            }
+
+            if (rol32_1(0x12345678) != 0x2468ACF0)
+            {
+                return false;
+            }
+
+            if (rol32_3(0x12345678) != 0x91A2B3C0)
+            {
+                return false;
+            }
+
+            if (rol32comm(0x12345678, 16) != 0x56781234)
+            {
+                return false;
+            }
+
+            if (rol32const() != 0x56781234)
+            {
+                return false;
+            }
+
+            if (ror32(0x12345678, 12) != 0x67812345)
+            {
+                return false;
+            }
+
+            if (ror32comm(0x12345678, 12) != 0x67812345)
+            {
+                return false;
+            }
+
+            if (ror32const() != 0x67812345)
+            {
+                return false;
+            }
+
+            if (rol64(0x123456789abcdef, 32) != 0x89abcdef01234567)
+            {
+                return false;
+            }
+
+            if (rol64comm(0x123456789abcdef, 32) != 0x89abcdef01234567)
+            {
+                return false;
+            }
+
+            if (rol64const() != 0x456789abcdef0123)
+            {
+                return false;
+            }
+
+            if (rol64_16(0x123456789abcdef) != 0x456789abcdef0123)
+            {
+                return false;
+            }
+
+            if (rol64_32(0x123456789abcdef) != rol64(0x123456789abcdef, 32))
+            {
+                return false;
+            }
+
+            if (rol64_33(0x123456789abcdef) != rol64(0x123456789abcdef, 33))
+            {
+                return false;
+            }
+
+            if (rol64_32_inplace(0x123456789abcdef, 0) != rol64(0x123456789abcdef, 32))
+            {
+                return false;
+            }
+
+            if (ror64(0x123456789abcdef, 0) != 0x123456789abcdef)
+            {
+                return false;
+            }
+
+            if (ror64comm(0x123456789abcdef, 0) != 0x123456789abcdef)
+            {
+                return false;
+            }
+
+            if (ror64const() != 0x78091a2b3c4d5e6f)
+            {
+                return false;
+            }
+
+            if (ror64_5(0x123456789abcdef) != 0x78091a2b3c4d5e6f)
+            {
+                return false;
+            }
+
+            if (ror64_32(0x123456789abcdef) != ror64(0x123456789abcdef, 32))
+            {
+                return false;
+            }
+
+            if (ror64_33(0x123456789abcdef) != ror64(0x123456789abcdef, 33))
+            {
+                return false;
+            }
+
+            if (ror64_32_inplace(0x123456789abcdef, 0) != ror64(0x123456789abcdef, 32))
+            {
+                return false;
+            }
+
+            if (rol32_call(0x12345678, 16) != 0x56781234)
+            {
+                return false;
+            }
+
+            if (rol32_and(0x12345678, 16) != 0x56781234)
+            {
+                return false;
+            }
+
+            if (two_left_shifts(0x12345678, 7) != 0xfa2b3c00)
+            {
+                return false;
+            }
+
+            if (not_rotation(0x87654321) != 0xeca9fd70)
+            {
+                return false;
+            }
+
+            if (rol32xor(0x12345678, 16) != 0x56781234)
+            {
+                return false;
+            }
+
+            if (ror64sfield(7) != 0xde02468acf13579b)
+            {
+                return false;
+            }
+
+            Test_Rotate test = new Test_Rotate(0x123456789abcdef, 0x12345678, 0x1234);
+
+            if (test.rol64field(11) != 0x1a2b3c4d5e6f7809)
+            {
+                return false;
+            }
+
+            if (test.ror32vfield(3) != 0x2468acf)
+            {
+                return false;
+            }
+
+            if (test.rol32ushort(25) != 0x68000024)
+            {
+                return false;
+            }
+
+            return true;
+        }
+    }
+
+    #endregion
 
     #region Shift
 
@@ -1464,10 +1966,207 @@ public class CodeGenBringUpTests
 
     #endregion
 
-    // TODO: StaticCalls
+    #region StaticClass
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int Max(int a, int b)
+    {
+        int result = a > b ? a : b;
+        return result;
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static bool IsLessThan(int a, int b)
+    {        
+        return a<b;
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static bool IsEqual(int a, int b)
+    {        
+        return !IsLessThan(a, b) && !IsLessThan(b, a);
+    }
+
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // public static bool IsEqual(float a, float b)
+    // {        
+    //     return System.Math.Abs(a-b) <= Single.Epsilon;
+    // }
+    //
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // public static bool IsEqual(double a, double b)
+    // {        
+    //     return System.Math.Abs(a-b) <= Double.Epsilon;
+    // }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int Sum(int a, int b, int c, int d)
+    {
+        int result = a+b+c+d;
+        return result;
+    }
+
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // public static float Sum(float a, float b, float c, float d)
+    // {
+    //     float result = a+b+c+d;
+    //     return result;
+    // }
+    //
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // public static double Sum(double a, double b, double c, double d)
+    // {
+    //     double result = a+b+c+d;
+    //     return result;
+    // }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int Sum(int a, int b, int c, int d, int e)
+    {
+        int result = a+b+c+d+e;
+        return result;
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static int Sum(int a, int b, int c, int d, int e, int f)
+    {
+        int result = a+b+c+d+e+f;
+        return result;
+    }
+
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // public static float Sum(float a, float b, float c, float d, float e, float f)
+    // {
+    //     float result = a+b+c+d+e+f;
+    //     return result;
+    // }
+    //
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // public static double Sum(double a, double b, double c, double d, double e, double f)
+    // {
+    //     double result = a+b+c+d+e+f;
+    //     return result;
+    // }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static void Print(int s)
+    {
+    }
+
+    [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    public static bool TestStaticCalls()
+    {
+        int a = 1;
+        int b = 2;
+        int c = 3;
+        int d = 4;
+        int e = 5;
+        int f = 6;
+        bool result = true;
+
+        int s = Sum(1,2,3,4);
+        if (s != 10) result = false;
+        
+        s = Sum(1,2,3,4,5);
+        if (s != 15) result = false;
+
+        s = Sum(1,2,3,4,5,6);
+        if (s != 21) result = false;
+
+        s = Sum(a,b,c,d);
+        if (s != 10) result = false;
+
+        s = Sum(a,b,c,d,e);
+        if (s != 15) result = false;
+
+        s = Sum(a,b,c,d,e,f);
+        if (s != 21) result = false;
+
+        s = Max(b,f);
+        if (s != f) result = false;
+
+
+        bool equal = IsEqual(d, d);
+        if (!equal) result = false;
+
+
+        // float f1 = 1f;
+        // float f2 = 2f;
+        // float f3 = 3f;
+        // float f4 = 4f;
+        // float f5 = 5f;
+        // float f6 = 6f;
+        // float fsum = Sum(1f,2f,3f,4f);
+        // if (!IsEqual(fsum, 10f)) result = Fail;
+        //
+        // fsum = Sum(1f, 2f, 3f, 4f, 5f, 6f);
+        // if (!IsEqual(fsum, 21f)) result = Fail;                 
+        //
+        // fsum = Sum(f1,f2,f3,f4);
+        // if (!IsEqual(fsum, 10f)) result = Fail;
+        //
+        // fsum = Sum(f1,f2,f3,f4, f5, f6);
+        // if (!IsEqual(fsum, 21f)) result = Fail;
+
+
+        // double d1 = 1d;
+        // double d2 = 2d;
+        // double d3 = 3d;
+        // double d4 = 4d;
+        // double d5 = 5d;
+        // double d6 = 6d;
+        // double dsum = Sum(1d,2d,3d,4d);
+        // if (!IsEqual(dsum, 10d)) result = Fail;
+        //
+        // dsum = Sum(1d, 2d, 3d, 4d, 5d, 6d);
+        // if (!IsEqual(dsum, 21d)) result = Fail;                 
+        //
+        // dsum = Sum(d1,d2,d3,d4);
+        // if (!IsEqual(dsum, 10d)) result = Fail;
+        //
+        // dsum = Sum(d1,d2,d3,d4,d5,d6);
+        // if (!IsEqual(dsum, 21d)) result = Fail;
+
+        return result;
+    }
     
-    // TODO: StaticValueField
-    
+    #endregion
+
+    #region StaticValueField
+
+    struct TestValue
+    {
+        public int a;
+        public short b;
+        public long c;
+    }
+
+    static TestValue sField;
+
+    public static void Init()
+    {
+        TestValue v = new TestValue();
+        v.a = 100;
+        v.b = 200;
+        v.c = 300;
+        sField = v;
+    }
+
+    public static bool TestStaticValueField()
+    {
+        Init();
+        if (sField.a == 100
+            && sField.b == 200
+            && sField.c == 300)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    #endregion
+
     // TODO: Struct16Args
 
     #region StructFldAddr
@@ -1517,7 +2216,12 @@ public class CodeGenBringUpTests
         public int z;
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public Point(int a, int b, int c) { x = a; y = b; z = c; }
+        public Point(int a, int b, int c)
+        {
+            x = a;
+            y = b;
+            z = c;
+        }
 
         public int X
         {
@@ -1548,7 +2252,10 @@ public class CodeGenBringUpTests
 
         // Returns true if this represents 'origin' otherwise false.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public bool StructInstMethod() { return (x == 0 && y == 0 && z == 0); }
+        public bool StructInstMethod()
+        {
+            return (x == 0 && y == 0 && z == 0);
+        }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         public int StructInstMethod(ref Point p)
@@ -1587,13 +2294,16 @@ public class CodeGenBringUpTests
     }
 
     #endregion
-    
+
     // TODO: StructRreturn
 
     #region Sub1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int Sub1(int x) { return x - 1; }
+    public static int Sub1(int x)
+    {
+        return x - 1;
+    }
 
     public static bool TestSub1()
     {
@@ -1617,7 +2327,7 @@ public class CodeGenBringUpTests
             return false;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int SubRef(int x, ref int a)
     {
         x -= a;
@@ -1638,18 +2348,18 @@ public class CodeGenBringUpTests
 
     public static bool TestSwap()
     {
-        int a = 10, b= 20;
+        int a = 10, b = 20;
         Swap(ref a, ref b);
-        if (a==20 && b== 10) return true;
+        if (a == 20 && b == 10) return true;
         return false;
     }
 
     #endregion
-    
+
     // TODO: switch
-    
+
     // TODO: UDivConst
-    
+
     // TODO: UModConst
 
     #region Unbox
@@ -1668,13 +2378,16 @@ public class CodeGenBringUpTests
         if (y == 3) return true;
         else return false;
     }
-    
+
     #endregion
 
     #region Xor1
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    public static int Xor1(int x) { return x ^ 15; }
+    public static int Xor1(int x)
+    {
+        return x ^ 15;
+    }
 
     public static bool TestXor1()
     {
@@ -1698,7 +2411,7 @@ public class CodeGenBringUpTests
             return false;
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)] 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public static int XorRef(int x, ref int a)
     {
         x ^= a;
@@ -1770,7 +2483,10 @@ public class CodeGenBringUpTests
         if (!TestOrRef()) return false;
         if (!TestRem1()) return false;
         if (!TestRightShiftRef()) return false;
+        if (!Test_Rotate.Test()) return false;
         if (!TestShift()) return false;
+        if (!TestStaticCalls()) return false;
+        if (!TestStaticValueField()) return false;
         if (!TestStructFldAddr()) return false;
         if (!TestStructInstMethod()) return false;
         if (!TestSub1()) return false;
@@ -1779,7 +2495,7 @@ public class CodeGenBringUpTests
         if (!TestUnbox()) return false;
         if (!TestXor1()) return false;
         if (!TestXorRef()) return false;
-        
+
         return true;
     }
 }

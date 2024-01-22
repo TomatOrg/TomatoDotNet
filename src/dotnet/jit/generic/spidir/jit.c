@@ -19,11 +19,8 @@ static spidir_dump_status_t stdout_dump_callback(const char* s, size_t size, voi
     return SPIDIR_DUMP_CONTINUE;
 }
 
-// TODO: something better lol
-extern jit_module_t m_jit_module;
-
 void tdn_jit_dump() {
-    spidir_module_dump(m_jit_module, stdout_dump_callback, NULL);
+//    spidir_module_dump(m_jit_module, stdout_dump_callback, NULL);
 }
 
 jit_function_t jit_get_function_from_id(uint64_t id) {
@@ -34,9 +31,14 @@ uint64_t jit_get_function_id(jit_function_t id) {
         return id.id;
 }
 
+void* jit_get_function_addr(jit_function_t func) {
+    // TODO: this
+    return NULL;
+}
+
 tdn_err_t jit_init() {
     spidir_log_init(spidir_log_callback);
-//    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
     spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
     return TDN_NO_ERROR;
 }
@@ -47,6 +49,10 @@ jit_module_t jit_module_create(void) {
 
 void jit_module_destroy(jit_module_t module) {
     spidir_module_destroy(module);
+}
+
+void jit_link_module(jit_module_t module) {
+    TRACE("TODO: implement linking in spidir");
 }
 
 jit_function_t jit_module_create_function(jit_module_t module, const char* name,

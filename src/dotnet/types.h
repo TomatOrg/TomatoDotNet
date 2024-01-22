@@ -44,6 +44,8 @@ extern RuntimeTypeInfo tOverflowException;
 
 extern RuntimeTypeInfo tNullable;
 
+extern RuntimeTypeInfo tIsVolatile;
+
 extern RuntimeTypeInfo tNull;
 
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type);

@@ -312,6 +312,11 @@ typedef struct jit_context {
 
     // the stack of regions we are nested in
     jit_region_t** regions;
+
+    // did we have a volatile prefix
+    uint32_t LastWasPrefix : 1;
+    uint32_t VolatilePrefix : 1;
+    uint32_t : 30;
 } jit_context_t;
 
 /**

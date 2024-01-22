@@ -52,3 +52,9 @@ void* gc_raw_alloc(size_t size) {
     m_gc_first = object;
     return object;
 }
+
+static void** m_gc_roots = NULL;
+
+void gc_register_root(void* ptr) {
+    arrpush(m_gc_roots, ptr);
+}

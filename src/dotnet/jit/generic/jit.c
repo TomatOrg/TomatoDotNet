@@ -48,14 +48,12 @@ static jit_function_t m_builtin_gc_memcpy;
 static jit_function_t m_builtin_throw_invalid_cast_exception;
 static jit_function_t m_builtin_throw_index_out_of_range_exception;
 static jit_function_t m_builtin_throw_overflow_exception;
+static jit_function_t m_builtin_throw_null_reference_exception;
 static jit_function_t m_builtin_throw;
 
 // exception control flow related
 static jit_function_t m_builtin_rethrow;
 static jit_function_t m_builtin_get_exception;
-
-// creates a null check by doing a deref without other side effects
-static jit_function_t m_builtin_null_check;
 
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
@@ -111,6 +109,11 @@ tdn_err_t tdn_jit_init() {
                JIT_TYPE_NONE,
                0, NULL);
 
+    m_builtin_throw_null_reference_exception = jit_module_create_extern_function(m_jit_module,
+               "throw_null_reference_exception",
+               JIT_TYPE_NONE,
+               0, NULL);
+
     m_builtin_throw = jit_module_create_extern_function(m_jit_module,
                 "throw",
                 JIT_TYPE_NONE,
@@ -125,11 +128,6 @@ tdn_err_t tdn_jit_init() {
                 "get_exception",
                 JIT_TYPE_PTR,
                 0, NULL);
-
-    m_builtin_null_check = jit_module_create_extern_function(m_jit_module,
-                 "null_check",
-                 JIT_TYPE_NONE,
-                 1, (jit_value_type_t[]){ JIT_TYPE_PTR });
 
     // link the builtins module
     jit_link_module(m_jit_module);
@@ -220,10 +218,93 @@ static jit_value_type_t get_jit_mem_type(RuntimeTypeInfo info) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Jit helpers
+// Jit prepare helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t module);
+
+static void register_struct_fields(RuntimeTypeInfo type, void* base) {
+    // go over the struct fields and register them
+    for (int i = 0; i < type->DeclaredFields->Length; i++) {
+        RuntimeFieldInfo field = type->DeclaredFields->Elements[i];
+        if (field->Attributes.Static) continue;
+
+        if (jit_is_struct_type(type)) {
+            // if its a struct recurse
+            register_struct_fields(field->FieldType, base + field->FieldOffset);
+        } else if (tdn_type_is_referencetype(type)) {
+            // if its a reference register it right away
+            gc_register_root(base + field->FieldOffset);
+        }
+    }
+}
+
+/**
+ * Prepares the static part of a type, mostly to do with the static fields and a type
+ * ctor if required
+ *
+ * TODO: maybe just jit it all so we can mark private methods as private since we know for sure no one else
+ *       will need to handle them
+ *
+ * TODO: maybe I should instead allocate the thing on demand
+ */
+static tdn_err_t jit_prepare_type(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check if already jitted
+    if (type->JitStartedStatic) {
+        goto cleanup;
+    }
+    type->JitStartedStatic = 1;
+
+    // create the fields
+    for (int i = 0; i < type->DeclaredFields->Length; i++) {
+        RuntimeFieldInfo field = type->DeclaredFields->Elements[i];
+        if (!field->Attributes.Static) continue;
+
+        // TODO: handle field RVAs
+        CHECK(!field->Attributes.HasFieldRVA);
+
+        // allocate the field
+        field->JitFieldPtr = tdn_host_mallocz(field->FieldType->StackSize);
+        CHECK_ERROR(field->JitFieldPtr != NULL, TDN_ERROR_OUT_OF_MEMORY);
+
+        // register gc fields
+        if (jit_is_struct_type(type)) {
+            register_struct_fields(field->FieldType, field->JitFieldPtr);
+        } else if (tdn_type_is_referencetype(type)) {
+            gc_register_root(field->JitFieldPtr);
+        }
+    }
+
+    // TODO: register the type ctor
+
+cleanup:
+    return err;
+}
+
+/**
+ * Prepares an instance of a type, this takes care of vtable and itable functions
+ * that have to be generated to complete the object
+ */
+static tdn_err_t jit_prepare_type_instance(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check if already jitted
+    if (type->JitStartedInstance) {
+        goto cleanup;
+    }
+    type->JitStartedInstance = 1;
+
+    CHECK_AND_RETHROW(jit_prepare_type(type));
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Jit helpers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #define SWAP(a, b) \
     do { \
@@ -358,6 +439,26 @@ cleanup:
     return err;
 }
 
+static void jit_emit_null_check(jit_builder_t builder, jit_value_t obj) {
+    // create the null check
+    jit_block_t valid = jit_builder_create_block(builder);
+    jit_block_t invalid = jit_builder_create_block(builder);
+    jit_value_t null = jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0);
+    jit_value_t cmp = jit_builder_build_icmp(builder,
+                                             JIT_ICMP_NE, JIT_TYPE_I32,
+                                             null, obj);
+    jit_builder_build_brcond(builder, cmp, valid, invalid);
+
+    // the invalid branch, throw an exception
+    jit_builder_set_block(builder, invalid);
+    jit_builder_build_call(builder, m_builtin_throw_null_reference_exception, 0, NULL);
+    jit_builder_build_unreachable(builder);
+
+    // valid branch, continue forward
+    jit_builder_set_block(builder, valid);
+
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The jit itself
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -381,11 +482,26 @@ static tdn_err_t jit_instruction(
     RuntimeTypeInfo* call_args_types = NULL;
     jit_value_t* call_args_values = NULL;
 
-//
+    // handle prefix cleanu pfirst
+    if (!ctx->LastWasPrefix) {
+        ctx->VolatilePrefix = 0;
+    }
+    ctx->LastWasPrefix = 0;
+
+    //
     // the main instruction jitting
     // TODO: split this to multiple functions in different places
     //
     switch (inst.opcode) {
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Prefixes
+        ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        case CEE_VOLATILE: {
+            ctx->LastWasPrefix = 1;
+            ctx->VolatilePrefix = 1;
+        } break;
+
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // Arguments
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -549,7 +665,7 @@ static tdn_err_t jit_instruction(
         case CEE_LDFLD:
         case CEE_LDFLDA: {
             RuntimeFieldInfo field = inst.operand.field;
-            bool ldsfld = inst.opcode == CEE_LDFLDA;
+            bool ldflda = inst.opcode == CEE_LDFLDA;
 
             // TODO: check field accessibility
 
@@ -562,38 +678,39 @@ static tdn_err_t jit_instruction(
             CHECK(
                 obj_type->IsByRef ||
                 tdn_type_is_referencetype(obj_type) ||
-                (jit_is_struct_type(obj_type) && !ldsfld)
+                (jit_is_struct_type(obj_type) && !ldflda)
             );
 
             // TODO: verify the field is contained within the given object
+
+            // validate we had a volatile prefix for volatile fields
+            if (field->IsVolatile) {
+                CHECK(ctx->VolatilePrefix);
+                ctx->VolatilePrefix = 0;
+            }
 
             // get the stack type of the field
             RuntimeTypeInfo field_type = inst.operand.field->FieldType;
 
             // figure the pointer to the field itself
             jit_value_t field_ptr;
-            if (field->Attributes.Static) {
-                // static field
-                // TODO: get a pointer to the static field
-                CHECK_FAIL();
+            CHECK(!field->Attributes.Static); // fix if we ever get this
+
+            // instance field
+            if (field->FieldOffset == 0) {
+                // field is at offset zero, just load it
+                field_ptr = obj;
             } else {
-                // instance field
-                if (field->FieldOffset == 0) {
-                    // field is at offset zero, just load it
-                    field_ptr = obj;
-                } else {
-                    // build an offset to the field
-                    field_ptr = jit_builder_build_ptroff(builder, obj,
-                                                            jit_builder_build_iconst(builder,
-                                                                                        JIT_TYPE_I64,
-                                                                                        field->FieldOffset));
-                }
+                // build an offset to the field
+                field_ptr = jit_builder_build_ptroff(builder, obj,
+                                                        jit_builder_build_iconst(builder,
+                                                                                    JIT_TYPE_I64,
+                                                                                    field->FieldOffset));
             }
 
-            if (ldsfld) {
-                if (!field->Attributes.Static) {
-                    // TODO: emit null check
-                }
+            if (ldflda) {
+                // explicit null check since only loading the value
+                jit_emit_null_check(builder, obj);
 
                 // tracks as a managed pointer to the verification type
                 RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
@@ -639,6 +756,12 @@ static tdn_err_t jit_instruction(
             CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value, NULL));
             CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj, NULL));
 
+            // validate we had a volatile prefix for volatile fields
+            if (field->IsVolatile) {
+                CHECK(ctx->VolatilePrefix);
+                ctx->VolatilePrefix = 0;
+            }
+
             // check this is either an object or a managed pointer
             CHECK(
                 obj_type->IsByRef ||
@@ -653,29 +776,22 @@ static tdn_err_t jit_instruction(
 
             // figure the pointer to the field itself
             jit_value_t field_ptr;
-            if (field->Attributes.Static) {
-                // static field
-                // TODO: get a pointer to the static field
-                CHECK_FAIL();
-            } else {
-                // instance field
-                if (field->FieldOffset == 0) {
-                    // field is at offset zero, just load it
-                    field_ptr = obj;
-                } else {
-                    // build an offset to the field
-                    field_ptr = jit_builder_build_ptroff(builder, obj,
-                                                            jit_builder_build_iconst(builder,
-                                                                                        JIT_TYPE_I64,
-                                                                                        field->FieldOffset));
-                }
-            }
+            CHECK(!field->Attributes.Static); // fix if we ever get this
 
-            // TODO: perform write barrier as needed
+            // instance field
+            if (field->FieldOffset == 0) {
+                // field is at offset zero, just load it
+                field_ptr = obj;
+            } else {
+                // build an offset to the field
+                field_ptr = jit_builder_build_ptroff(builder, obj,
+                                                        jit_builder_build_iconst(builder,
+                                                                                    JIT_TYPE_I64,
+                                                                                    field->FieldOffset));
+            }
 
             // perform the actual store
             if (jit_is_struct_type(field_type)) {
-                // we are copying a struct to the stack
                 if (field_type->IsUnmanaged) {
                     jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
                 } else {
@@ -683,6 +799,7 @@ static tdn_err_t jit_instruction(
                 }
             } else {
                 // we are copying a simpler value
+                // TODO: GC write barrier for reference types
                 jit_builder_build_store(builder,
                                            get_jit_mem_size(field_type),
                                            value,
@@ -704,10 +821,20 @@ static tdn_err_t jit_instruction(
             // get the stack type of the field
             RuntimeTypeInfo field_type = inst.operand.field->FieldType;
 
+            // Make sure the type is initialized properly
+            // TODO: lazy init static fields?
+            CHECK_AND_RETHROW(jit_prepare_type(field_type));
+
+            // validate we had a volatile prefix for volatile fields
+            if (field->IsVolatile) {
+                CHECK(ctx->VolatilePrefix);
+                ctx->VolatilePrefix = 0;
+            }
+
             // figure the pointer to the field itself
-            // TODO: get a pointer to the static field
-            jit_value_t field_ptr;
-            CHECK_FAIL();
+            CHECK(!inst.operand.field->Attributes.HasFieldRVA);
+            jit_value_t field_ptr = jit_builder_build_iconst(builder, JIT_TYPE_PTR,
+                                                             (uint64_t)field->JitFieldPtr);
 
             if (ldsflda) {
                 // tracks as a managed pointer to the verification type
@@ -749,6 +876,12 @@ static tdn_err_t jit_instruction(
 
             // TODO: check field accessibility
 
+            // validate we had a volatile prefix for volatile fields
+            if (field->IsVolatile) {
+                CHECK(ctx->VolatilePrefix);
+                ctx->VolatilePrefix = 0;
+            }
+
             // pop the item
             jit_value_t value;
             RuntimeTypeInfo value_type;
@@ -758,10 +891,14 @@ static tdn_err_t jit_instruction(
             RuntimeTypeInfo field_type = inst.operand.field->FieldType;
             CHECK(tdn_type_verifier_assignable_to(value_type, field_type));
 
+            // Make sure the type is initialized properly
+            // TODO: lazy init static fields?
+            CHECK_AND_RETHROW(jit_prepare_type(field_type));
+
             // figure the pointer to the field itself
-            // TODO: get a pointer to the static field
-            jit_value_t field_ptr;
-            CHECK_FAIL();
+            CHECK(!inst.operand.field->Attributes.HasFieldRVA);
+            jit_value_t field_ptr = jit_builder_build_iconst(builder, JIT_TYPE_PTR,
+                                                             (uint64_t)field->JitFieldPtr);
 
             // perform the actual store
             if (jit_is_struct_type(field_type)) {
@@ -1059,8 +1196,7 @@ static tdn_err_t jit_instruction(
                                 (target->Attributes.Virtual && target->Attributes.Final) // the method is final
                             )
                         ) {
-                            jit_builder_build_call(builder, m_builtin_null_check, 1,
-                                                      (jit_value_t[]){ call_args_values[0] });
+                            jit_emit_null_check(builder, call_args_values[0]);
                         }
                     } else {
                         target_type = target->Parameters->Elements[i - 1]->ParameterType;
@@ -1088,7 +1224,7 @@ static tdn_err_t jit_instruction(
                 CHECK(!is_newobj);
                 jit_value_t ret_buffer;
                 CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, ret_type, &ret_buffer));
-                        arrins(call_args_values, 0, ret_buffer);
+                arrins(call_args_values, 0, ret_buffer);
             }
 
             // emit the actual call
@@ -2402,6 +2538,12 @@ static tdn_err_t jit_instruction(
             CHECK_FAIL();
     }
 
+    // if we did not have the prefix this time make sure that we handled
+    // all the prefixes that we had
+    if (!ctx->LastWasPrefix) {
+        CHECK(!ctx->VolatilePrefix);
+    }
+
 cleanup:
     arrfree(call_args_types);
     arrfree(call_args_values);
@@ -3015,6 +3157,9 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t handl
 
     // TODO: external methods need special handling
 
+    // prepre the type
+    CHECK_AND_RETHROW(jit_prepare_type(method->DeclaringType));
+
     // handle the return value, we have a special case of returning a struct, if it can't be returned
     // by value then it will be returned by passing an implicit pointer
     jit_value_type_t ret_type = get_jit_return_type(method->ReturnParameter->ParameterType);
@@ -3126,7 +3271,7 @@ cleanup:
 
 void* tdn_jit_get_method_address(RuntimeMethodBase methodInfo) {
     jit_function_t function = jit_get_function_from_id(methodInfo->JitMethodId);
-    if (function == NULL) {
+    if (IS_FUNCTION_NULL(function)) {
         return NULL;
     }
     return jit_get_function_addr(function);
