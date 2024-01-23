@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include <time.h>
 #include "dotnet/jit/generic/jit_interface.h"
 #include "util/string.h"
 #include "util/string_builder.h"

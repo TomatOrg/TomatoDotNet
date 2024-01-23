@@ -12,6 +12,7 @@
 
 #include "tomatodotnet/tdn.h"
 #include <printf.h>
+#include <time.h>
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;
@@ -105,7 +106,7 @@ static int type_arginf_sz(const struct printf_info* info, size_t n, int* argtype
     return 1;
 }
 
-static tdn_err_t dump_type(RuntimeTypeInfo type) {
+static tdn_err_t dump_type(RuntimeTypeInfo type, const char* method_to_dump) {
     tdn_err_t err = TDN_NO_ERROR;
 
     static const char* type_visibility_str[] = {
@@ -169,6 +170,11 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
         } else {
             method = (RuntimeMethodBase) type->DeclaredConstructors->Elements[j];
         }
+
+        if (method_to_dump != NULL && !tdn_compare_string_to_cstr(method->Name, method_to_dump)) {
+            continue;
+        }
+
         static const char* visibility_str[] = {
             [TDN_METHOD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
             [TDN_METHOD_ACCESS_PRIVATE] = "private",
@@ -201,7 +207,7 @@ static tdn_err_t dump_type(RuntimeTypeInfo type) {
 
         if (method->MethodBody != NULL) {
             printf(" {\n");
-//            CHECK_AND_RETHROW(tdn_disasm_il(method, ));
+//            CHECK_AND_RETHROW(tdn_disasm_inst(method, ));
             TRACE("\t}");
             TRACE("");
         } else {
@@ -254,7 +260,17 @@ int main() {
     RuntimeAssembly tests = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net7.0/Tests.dll", &tests));
 
+//    RuntimeTypeInfo Bool_And_Op;
+//    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(tests, "Tests", "Bool_And_Op", &Bool_And_Op));
+//    dump_type(Bool_And_Op, "Sub_Funclet_153");
+
+    clock_t t;
+    t = clock();
     tdn_jit_method(tests->EntryPoint);
+    t = clock() - t;
+    double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
+    TRACE("Full jit took %f seconds", time_taken);
+
     int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
     int tests_output = entry_point();
     TRACE("Tests = %d", tests_output);

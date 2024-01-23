@@ -137,9 +137,14 @@ bool tdn_type_array_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U
         return true;
     }
 
-    if (tdn_get_reduced_type(V) == tdn_get_reduced_type(W)) {
+    // TODO: spec technically says reduced types but bool and int8 are not compatible that way, so
+    //       going to use verification type instead
+    if (tdn_get_verification_type(V) == tdn_get_verification_type(W)) {
         return true;
     }
+    // if (tdn_get_reduced_type(V) == tdn_get_reduced_type(W)) {
+    //     return true;
+    // }
 
     return false;
 }

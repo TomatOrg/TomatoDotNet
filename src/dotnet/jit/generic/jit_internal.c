@@ -9,10 +9,6 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, jit_value_t value) {
-    return eval_stack_push_with_meta(stack, type, value, (stack_meta_t){});
-}
-
-tdn_err_t eval_stack_push_with_meta(eval_stack_t* stack, RuntimeTypeInfo type, jit_value_t value, stack_meta_t meta) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK(type != NULL);
@@ -30,7 +26,6 @@ tdn_err_t eval_stack_push_with_meta(eval_stack_t* stack, RuntimeTypeInfo type, j
     // push it
     eval_stack_item_t item = {
         .type = type,
-        .meta = meta,
         .value = value
     };
     arrpush(stack->stack, item);
@@ -78,8 +73,7 @@ cleanup:
 tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
     RuntimeTypeInfo* out_type,
-    jit_value_t* out_value,
-    stack_meta_t* meta
+    jit_value_t* out_value
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -89,7 +83,6 @@ tdn_err_t eval_stack_pop(
     // output important data if needed
     if (out_type != NULL) *out_type = item.type;
     if (out_value != NULL) *out_value = item.value;
-    if (meta != NULL) *meta = item.meta;
 
     // check if we need to remove it from the used stack-slots list
     if (jit_is_struct_type(item.type)) {
@@ -150,6 +143,11 @@ tdn_err_t eval_stack_snapshot(
         }
     }
 
+    // copy the instance stack depth
+    for (int i = 0; i < hmlen(stack->instance_stacks); i++) {
+        hmput(snapshot->instance_stacks, stack->instance_stacks[i].key, stack->instance_stacks[i].depth);
+    }
+
     // return to the current block
     if (!target_is_current && target->needs_phi) {
         jit_builder_set_block(builder, current_block);
@@ -157,6 +155,27 @@ tdn_err_t eval_stack_snapshot(
 
     // mark this as initialized
     snapshot->initialized = true;
+
+cleanup:
+    return err;
+}
+
+tdn_err_t eval_stack_snapshot_restore(
+    eval_stack_t* stack,
+    eval_stack_snapshot_t* snapshot
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // restore the depth
+    for (int i = 0; i < hmlen(stack->instance_stacks); i++) {
+        stack->instance_stacks[i].depth = hmget(snapshot->instance_stacks, stack->instance_stacks[i].key);
+    }
+
+    arrsetlen(stack->stack, arrlen(snapshot->stack));
+    for (int i = 0; i < arrlen(snapshot->stack); i++) {
+        stack->stack[i].type = snapshot->stack[i].type;
+        stack->stack[i].value = snapshot->stack[i].value;
+    }
 
 cleanup:
     return err;
@@ -224,7 +243,8 @@ tdn_err_t eval_stack_merge(
     }
 
     // make sure we have the same amount of items
-    CHECK(arrlen(stack->stack) == arrlen(snapshot->stack));
+    CHECK(arrlen(stack->stack) == arrlen(snapshot->stack),
+          "expected %d items, got %d items", arrlen(snapshot->stack), arrlen(stack->stack));
 
     for (int i = 0; i < arrlen(stack->stack); i++) {
         // make sure the types are good

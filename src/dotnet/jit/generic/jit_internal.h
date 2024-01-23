@@ -31,19 +31,12 @@ static inline bool jit_is_struct_type(RuntimeTypeInfo type) {
 // fowrad
 typedef struct jit_label jit_label_t;
 
-typedef struct stack_meta {
-    bool came_from_ldarg0;
-} stack_meta_t;
-
 typedef struct eval_stack_item {
     // the type of the item
     RuntimeTypeInfo type;
 
     // the value to access it
     jit_value_t value;
-
-    // metadata about the stack item
-    stack_meta_t meta;
 } eval_stack_item_t;
 
 typedef struct eval_stack_value_instance {
@@ -81,9 +74,17 @@ typedef struct eval_stack_snapshot_item {
     jit_value_t value;
 } eval_stack_snapshot_item_t;
 
+typedef struct eval_stack_snapshot_value_instance {
+    RuntimeTypeInfo key;
+    int value;
+} eval_stack_snapshot_value_instance_t;
+
 typedef struct eval_stack_snapshot {
     // the stack of items that were on the slot
     eval_stack_snapshot_item_t* stack;
+
+    // the stack of value types
+    eval_stack_snapshot_value_instance_t* instance_stacks;
 
     // did we initialize this stack
     bool initialized;
@@ -96,16 +97,6 @@ tdn_err_t eval_stack_push(
     eval_stack_t* stack,
     RuntimeTypeInfo type,
     jit_value_t value
-);
-
-/**
- * Push a new value to the eval stack, also adding metadata to the stack slot
- */
-tdn_err_t eval_stack_push_with_meta(
-    eval_stack_t* stack,
-    RuntimeTypeInfo type,
-    jit_value_t value,
-    stack_meta_t meta
 );
 
 /**
@@ -124,8 +115,7 @@ tdn_err_t eval_stack_alloc(
 tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
     RuntimeTypeInfo* out_type,
-    jit_value_t* out_value,
-    stack_meta_t* meta
+    jit_value_t* out_value
 );
 
 /**
@@ -137,6 +127,15 @@ tdn_err_t eval_stack_snapshot(
     eval_stack_t* stack,
     jit_label_t* target
 );
+
+/**
+ * Restores the stack from the given snapshot
+ */
+tdn_err_t eval_stack_snapshot_restore(
+    eval_stack_t* stack,
+    eval_stack_snapshot_t* snapshot
+);
+
 
 /**
  * Update the stack to contain the phis of the given label
