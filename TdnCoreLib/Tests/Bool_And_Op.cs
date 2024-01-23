@@ -29981,7 +29981,7 @@ public class Bool_And_Op
         return (True_Sum * 2) - False_Sum;
     }
 
-    public static int Run()
+    public static bool Run()
     {
         int Sum = 0;
         Sum += Sub_Funclet_0();
@@ -30448,11 +30448,11 @@ public class Bool_And_Op
 
         if (Sum == 11520)
         {
-            return 100;
+            return true;
         }
         else
         {
-            return 1;
+            return false;
         }
     }
 }

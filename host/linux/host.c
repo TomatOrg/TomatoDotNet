@@ -38,6 +38,7 @@ void tdn_host_printf(const char* format, ...) {
     va_start(va, format);
     vprintf(format, va);
     va_end(va);
+    fflush(stdout);
 }
 
 void tdn_host_vprintf(const char* format, va_list args) {
