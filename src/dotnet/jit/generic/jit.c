@@ -445,7 +445,7 @@ static void jit_emit_null_check(jit_builder_t builder, jit_value_t obj) {
     jit_block_t invalid = jit_builder_create_block(builder);
     jit_value_t null = jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0);
     jit_value_t cmp = jit_builder_build_icmp(builder,
-                                             JIT_ICMP_NE, JIT_TYPE_I32,
+                                             JIT_ICMP_NE, JIT_TYPE_I64,
                                              null, obj);
     jit_builder_build_brcond(builder, cmp, valid, invalid);
 
@@ -970,7 +970,7 @@ static tdn_err_t jit_instruction(
             jit_value_t length = jit_builder_build_load(builder, JIT_MEM_SIZE_4, JIT_TYPE_I64, length_ptr);
 
             // make sure the index < length
-            jit_value_t length_check = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I32, index, length);
+            jit_value_t length_check = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I64, index, length);
             jit_builder_build_brcond(builder, length_check, length_is_valid, length_is_invalid);
 
             // perform the invalid length branch, throw an exception
@@ -1062,7 +1062,7 @@ static tdn_err_t jit_instruction(
             jit_value_t length = jit_builder_build_load(builder, JIT_MEM_SIZE_4, JIT_TYPE_I64, length_ptr);
 
             // make sure the index < length
-            jit_value_t length_check = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I32, index, length);
+            jit_value_t length_check = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I64, index, length);
             jit_builder_build_brcond(builder, length_check, length_is_valid, length_is_invalid);
 
             // perform the invalid length branch, throw an exception
@@ -1272,6 +1272,13 @@ static tdn_err_t jit_instruction(
                 value_type == tIntPtr
             );
 
+            // reference types can't be put directly into a brcond, so
+            // we are going to emit a compare first
+            if (tdn_type_is_referencetype(value_type)) {
+                value = jit_builder_build_icmp(builder, JIT_ICMP_NE, JIT_TYPE_I64, value,
+                                               jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0));
+            }
+
             // get the jump locations
             jit_label_t* target_label = NULL;
             CHECK_AND_RETHROW(resolve_and_verify_branch_target(ctx, region, inst.operand.branch_target, &target_label));
@@ -1375,7 +1382,7 @@ static tdn_err_t jit_instruction(
             // create the comparison
             jit_value_t cmp = jit_builder_build_icmp(builder,
                                                            kind,
-                                                           JIT_TYPE_I32,
+                                                     compare ? JIT_TYPE_I32 : JIT_TYPE_I64,
                                                            value1, value2);
 
             // check if its a compare or not
@@ -1990,7 +1997,7 @@ static tdn_err_t jit_instruction(
                 //      int32 -> uint32
                 //      uint32/uint64 -> int32
                 // perform a signed positive check
-                cond = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I32,
+                cond = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I64,
                                                  jit_builder_build_iconst(builder, type, minus_one),
                                                  value);
             } else if (
@@ -2016,7 +2023,7 @@ static tdn_err_t jit_instruction(
 
                 // sign extend and check they are still the same
                 jit_value_t signed_value = jit_builder_build_sfill(builder, bit_width, value);
-                cond = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I32,
+                cond = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I64,
                                                  value, signed_value);
             } else {
                 // get the correct max value
@@ -2037,7 +2044,7 @@ static tdn_err_t jit_instruction(
 
                 // perform an unsigned less than check, this is fine for both the signed and unsigned
                 // input because we are using twos complement
-                cond = jit_builder_build_icmp(builder, JIT_ICMP_ULT, JIT_TYPE_I32, value,
+                cond = jit_builder_build_icmp(builder, JIT_ICMP_ULT, JIT_TYPE_I64, value,
                                                  jit_builder_build_iconst(builder, type,
                                                                              max_value));
             }
@@ -2133,7 +2140,7 @@ static tdn_err_t jit_instruction(
             }
 
             // make sure is positive by doing a sign check
-            jit_value_t cond = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I32,
+            jit_value_t cond = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I64,
                                                             jit_builder_build_iconst(builder, type, minus_one),
                                                             value);
 
@@ -2261,7 +2268,7 @@ static tdn_err_t jit_instruction(
                                                                          has_value_ptr);
                     has_value = jit_builder_build_icmp(builder,
                                                           JIT_ICMP_NE,
-                                                          JIT_TYPE_I32,
+                                                          JIT_TYPE_I64,
                                                           has_value,
                                                           jit_builder_build_iconst(builder,
                                                                                       JIT_TYPE_I32,
@@ -2370,7 +2377,7 @@ static tdn_err_t jit_instruction(
                 jit_block_t invalid = jit_builder_create_block(builder);
 
                 jit_value_t wanted_type = jit_builder_build_iconst(builder, JIT_TYPE_PTR, (uint64_t)inst.operand.type);
-                jit_value_t is_wanted_type = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I32, object_type, wanted_type);
+                jit_value_t is_wanted_type = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I64, object_type, wanted_type);
                 jit_builder_build_brcond(builder, is_wanted_type, valid, invalid);
 
                 // invalid path, throws the invalid cast

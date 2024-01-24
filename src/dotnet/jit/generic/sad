@@ -1,0 +1,13 @@
+```
+if (a == null) throw_null_ref_except();
+if (b == null) throw_null_ref_except();
+```
+
+translated into
+
+```
+if (a == null) goto throw_null;
+if (b == null) goto throw_null;
+throw_null:
+    throw_null_ref_except();
+```
