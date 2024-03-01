@@ -17,26 +17,26 @@ add_compile_options(-fsanitize=address)
 
 add_link_options(-fsanitize=address)
 
-add_compile_options(-D__JIT_SPIDIR__)
+#add_compile_options(-D__JIT_SPIDIR__)
 #set(SPIDIR_ENABLE_LOGGING 1)
-add_subdirectory(libs/spidir/c-api)
-list (APPEND SOURCES
-    ./src/dotnet/jit/generic/jit.c
-    ./src/dotnet/jit/generic/jit_internal.c
-    ./src/dotnet/jit/generic/spidir/jit.c
-    ./src/dotnet/jit/generic/spidir/platform.c
-)
-link_libraries(spidir)
-
-#add_compile_options(-D__JIT_MIR__)
-#add_subdirectory(libs/mir)
+#add_subdirectory(libs/spidir/c-api)
 #list (APPEND SOURCES
 #    ./src/dotnet/jit/generic/jit.c
 #    ./src/dotnet/jit/generic/jit_internal.c
-#    ./src/dotnet/jit/generic/mir/jit.c
+#    ./src/dotnet/jit/generic/spidir/jit.c
+#    ./src/dotnet/jit/generic/spidir/platform.c
 #)
-#link_libraries(mir_static)
-#include_directories(libs)
+#link_libraries(spidir)
+
+add_compile_options(-D__JIT_MIR__)
+add_subdirectory(libs/mir)
+list (APPEND SOURCES
+    ./src/dotnet/jit/generic/jit.c
+    ./src/dotnet/jit/generic/jit_internal.c
+    ./src/dotnet/jit/generic/mir/jit.c
+)
+link_libraries(mir_static)
+include_directories(libs)
 
 #add_compile_options(-D__JIT_FIRM__)
 #add_subdirectory(libs/libfirm)

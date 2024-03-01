@@ -624,6 +624,16 @@ tdn_err_t tdn_parser_method_body(
         CHECK_FAIL();
     }
 
+    // now we have the code itself
+    uint8_t* code_start = end;
+    uint8_t* code_end = pe_image_address(&assembly->Metadata->file, method_def->rva + header_size + code_size);
+    CHECK(code_end != NULL);
+    CHECK(code_size <= INT32_MAX);
+
+    // set the code
+    body->ILSize = (int)code_size;
+    body->IL = code_start;
+
     // there are more sections, process them
     if (flags & CorILMethod_MoreSects) {
         // make sure we can access the header
@@ -657,16 +667,6 @@ tdn_err_t tdn_parser_method_body(
                 methodBase, kind & CorILMethod_Sect_FatFormat,
                 sect_start + sizeof(uint32_t), size - sizeof(uint32_t), code_size));
     }
-
-    // now that we are done we have the full sizes
-    uint8_t* code_start = end;
-    uint8_t* code_end = pe_image_address(&assembly->Metadata->file, method_def->rva + header_size + code_size);
-    CHECK(code_end != NULL);
-    CHECK(code_size <= INT32_MAX);
-
-    // set the code
-    body->ILSize = (int)code_size;
-    body->IL = code_start;
 
 cleanup:
     return err;
@@ -856,13 +856,13 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
         } else {
             CHECK_FAIL("Unknown assembly %s", assembly_ref->name);
 
-            // if we can't find it ourselves we will search for it from the host
-            CHECK(tdn_host_resolve_assembly(assembly_ref->name, assembly_ref->major_version, &current_file) == 0);
-            CHECK_AND_RETHROW(load_assembly(current_file, &new_assembly));
-
-            // no longer need the file
-            tdn_host_close_file(current_file);
-            current_file = NULL;
+//            // if we can't find it ourselves we will search for it from the host
+//            CHECK(tdn_host_resolve_assembly(assembly_ref->name, assembly_ref->major_version, &current_file) == 0);
+//            CHECK_AND_RETHROW(load_assembly(current_file, &new_assembly));
+//
+//            // no longer need the file
+//            tdn_host_close_file(current_file);
+//            current_file = NULL;
         }
         CHECK(new_assembly != NULL);
 

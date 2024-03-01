@@ -188,7 +188,30 @@ public class CodeGenBringUpTests
 
     #endregion
 
-    // TODO: ArrayExc
+    // #region ArrayExc
+    //
+    // [MethodImplAttribute(MethodImplOptions.NoInlining)]
+    // static int ArrayExc()
+    // {
+    //     int[] a = {1, 2, 3, 4};
+    //     return a[5];
+    // }
+    //
+    // static bool TestArrayExc()
+    // {
+    //     try
+    //     {
+    //         ArrayExc();
+    //         return false;
+    //     }
+    //     catch (System.IndexOutOfRangeException)
+    //     {
+    //         // OK
+    //     }
+    //     return true;
+    // }
+    //
+    // #endregion
 
     #region ArrayJagged
 
@@ -2432,6 +2455,7 @@ public class CodeGenBringUpTests
         if (!TestArray2()) return false;
         if (!TestArray3()) return false;
         if (!TestArray4()) return false;
+        // if (!TestArrayExc()) return false;
         if (!TestArrayJagged()) return false;
         if (!TestArrayObj()) return false;
         if (!TestAsgAdd1()) return false;
