@@ -31,21 +31,12 @@ add_link_options(-fsanitize=address)
 add_compile_options(-D__JIT_MIR__)
 add_subdirectory(libs/mir)
 list (APPEND SOURCES
-    ./src/dotnet/jit/generic/jit.c
-    ./src/dotnet/jit/generic/jit_internal.c
-    ./src/dotnet/jit/generic/mir/jit.c
+        src/dotnet/jit/jit.c
+        src/dotnet/jit/jit_internal.c
+        src/dotnet/jit/mir/jit.c
 )
 link_libraries(mir_static)
 include_directories(libs)
-
-#add_compile_options(-D__JIT_FIRM__)
-#add_subdirectory(libs/libfirm)
-#include_directories(libs/libfirm/include ${libfirm_BINARY_DIR}/gen/include/libfirm)
-#list (APPEND SOURCES
-#    ./src/dotnet/jit/firm/jit.c
-#    ./src/dotnet/jit/firm/jit_internal.c
-#)
-#link_libraries(firm)
 
 include_directories(include)
 include_directories(src)

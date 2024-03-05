@@ -10,7 +10,7 @@
 #include "dotnet/metadata/sig.h"
 #include "util/stb_ds.h"
 #include "tomatodotnet/jit/jit.h"
-#include "dotnet/jit/generic/jit_internal.h"
+#include "dotnet/jit/jit_internal.h"
 #include <tomatodotnet/types/type.h>
 
 typedef struct memory_file_handle {

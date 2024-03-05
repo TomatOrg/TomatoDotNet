@@ -8,7 +8,7 @@
 #include "dotnet/loader.h"
 #include "tomatodotnet/disasm.h"
 #include "tomatodotnet/jit/jit.h"
-#include "dotnet/jit/generic/jit_internal.h"
+#include "dotnet/jit/jit_internal.h"
 
 #include "tomatodotnet/tdn.h"
 #include <printf.h>
