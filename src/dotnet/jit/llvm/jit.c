@@ -77,7 +77,7 @@ void* jit_get_function_addr(jit_function_t func) {
 }
 
 jit_module_t jit_module_create(void) {
-    return LLVMModuleCreateWithName("whatever");
+    return LLVMModuleCreateWithNameInContext("whatever", m_context);
 }
 
 void jit_link_module(jit_module_t module) {
