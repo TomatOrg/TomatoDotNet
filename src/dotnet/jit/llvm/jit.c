@@ -128,8 +128,6 @@ jit_module_t jit_module_create(void) {
 }
 
 void jit_link_module(jit_module_t module) {
-    LLVMDumpModule(module);
-
     LLVMOrcJITDylibRef mainjd = LLVMOrcLLJITGetMainJITDylib(m_lljit);
     LLVMErrorRef error = LLVMOrcLLJITAddLLVMIRModule(m_lljit, mainjd,
                                                      LLVMOrcCreateNewThreadSafeModule(module, m_orc_context));
@@ -308,7 +306,7 @@ void jit_builder_build_brcond(jit_builder_t builder,
     LLVMBasicBlockRef true_block = builder->blocks[true_dest].entry;
     LLVMBasicBlockRef false_block = builder->blocks[false_dest].entry;
 
-    cond = LLVMBuildTrunc(builder->builder, cond, LLVMInt1TypeInContext(m_context), "");
+    cond = LLVMBuildICmp(builder->builder, LLVMIntNE, cond, jit_builder_build_iconst(builder, LLVMTypeOf(cond), 0), "");
     LLVMBuildCondBr(builder->builder, cond, true_block, false_block);
 
     arrpush(builder->blocks[true_dest].preds, builder->blocks[builder->current_block].entry);
@@ -488,27 +486,29 @@ static LLVMTypeRef get_load_store_type(jit_mem_size_t size) {
 }
 
 jit_value_t jit_builder_build_load(jit_builder_t builder, jit_mem_size_t size, jit_value_type_t type, jit_value_t ptr) {
+    LLVMTypeRef load_type;
     if (type != JIT_TYPE_PTR) {
-        get_load_store_type(size);
+        load_type = get_load_store_type(size);
     } else {
         ASSERT(size == JIT_MEM_SIZE_8);
+        load_type = type;
     }
-    LLVMValueRef result = LLVMBuildLoad2(builder->builder, type, ptr, "");
-    if (size != JIT_MEM_SIZE_8 && size != JIT_MEM_SIZE_4) {
-        result = LLVMBuildZExt(builder->builder, result, JIT_TYPE_I32, "");
+    LLVMValueRef result = LLVMBuildLoad2(builder->builder, load_type, ptr, "");
+    if (load_type != type) {
+        result = LLVMBuildZExt(builder->builder, result, type, "");
     }
     return result;
 }
 
 void jit_builder_build_store(jit_builder_t builder, jit_mem_size_t size, jit_value_t data, jit_value_t ptr) {
-    LLVMTypeRef load_type;
+    LLVMTypeRef store_type;
     if (LLVMTypeOf(data) == JIT_TYPE_PTR) {
         ASSERT(size == JIT_MEM_SIZE_8);
-        load_type = JIT_TYPE_PTR;
+        store_type = JIT_TYPE_PTR;
     } else {
-        load_type = get_load_store_type(size);
+        store_type = get_load_store_type(size);
     }
-    data = LLVMBuildTrunc(builder->builder, data, load_type, "");
+    data = LLVMBuildTrunc(builder->builder, data, store_type, "");
     LLVMBuildStore(builder->builder, data, ptr);
 }
 
