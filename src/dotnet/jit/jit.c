@@ -1674,6 +1674,11 @@ static tdn_err_t jit_instruction(
             CHECK(value_type == tInt32 || value_type == tInt64 || value_type == tIntPtr);
             CHECK(shift_amount_type == tInt32 || shift_amount_type == tIntPtr);
 
+            // truncate to 32bit if needed
+            if (shift_amount_type == tIntPtr) {
+                shift_amount = jit_builder_build_itrunc(builder, shift_amount);
+            }
+
             // perform the operation
             jit_value_t result_value;
             switch (inst.opcode) {

@@ -7,6 +7,7 @@
 #include "dotnet/gc/gc.h"
 
 #include <llvm-c/ErrorHandling.h>
+#include <llvm-c/Analysis.h>
 #include <llvm-c/LLJIT.h>
 
 static jit_function_inner_t** m_functions = NULL;
@@ -25,6 +26,39 @@ static LLVMOrcLLJITRef m_lljit = NULL;
 static LLVMOrcThreadSafeContextRef m_orc_context;
 static LLVMContextRef m_context;
 
+static void stub_gc_memcpy() { ASSERT(!"gc_memcpy"); }
+static void stub_gc_bzero() { ASSERT(!"gc_bzero"); }
+static void stub_throw_invalid_cast_exception() { ASSERT(!"throw_invalid_cast_exception"); }
+static void stub_throw_index_out_of_range_exception() { ASSERT(!"throw_index_out_of_range_exception"); }
+static void stub_throw_overflow_exception() { ASSERT(!"throw_overflow_exception"); }
+static void stub_throw_null_reference_exception() { ASSERT(!"throw_null_reference_exception"); }
+static void stub_throw() { ASSERT(!"throw"); }
+static void stub_rethrow() { ASSERT(!"rethrow"); }
+static void stub_get_exception() { ASSERT(!"get_exception"); }
+
+#undef memcpy
+void* memcpy(void* dest, const void* src, size_t n);
+
+struct {
+    const char* name;
+    void* ptr;
+} m_symbols[] = {
+    { "bzero", bzero },
+    { "memcpy", memcpy },
+    { "gc_new", gc_new },
+    { "gc_memcpy", stub_gc_memcpy },
+    { "gc_bzero", stub_gc_bzero },
+    { "throw_invalid_cast_exception", stub_throw_invalid_cast_exception },
+    { "throw_index_out_of_range_exception", stub_throw_index_out_of_range_exception },
+    { "throw_overflow_exception", stub_throw_overflow_exception },
+    { "throw_null_reference_exception", stub_throw_null_reference_exception },
+    { "throw", stub_throw },
+    { "rethrow", stub_rethrow },
+    { "get_exception", stub_get_exception },
+};
+
+static LLVMOrcMaterializationUnitRef m_builtin_symbols;
+
 tdn_err_t jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
     LLVMErrorRef error = NULL;
@@ -39,11 +73,20 @@ tdn_err_t jit_init() {
     m_context = LLVMOrcThreadSafeContextGetContext(m_orc_context);
 
     m_jit_type_i32 = LLVMInt32TypeInContext(m_context);
-    m_jit_type_i64 = LLVMInt32TypeInContext(m_context);
+    m_jit_type_i64 = LLVMInt64TypeInContext(m_context);
     m_jit_type_ptr = LLVMPointerTypeInContext(m_context, 0);
 
     error = LLVMOrcCreateLLJIT(&m_lljit, NULL);
     CHECK(error == NULL);
+
+    LLVMOrcCSymbolMapPair pairs[ARRAY_LENGTH(m_symbols)] = {};
+    for (size_t i = 0; i < ARRAY_LENGTH(m_symbols); i++) {
+        pairs[i].Sym.Address = (uintptr_t)m_symbols[i].ptr;
+        pairs[i].Sym.Flags.GenericFlags = LLVMJITSymbolGenericFlagsNone;
+        pairs[i].Sym.Flags.TargetFlags = 0;
+        pairs[i].Name = LLVMOrcLLJITMangleAndIntern(m_lljit, m_symbols[i].name);
+    }
+    m_builtin_symbols = LLVMOrcAbsoluteSymbols(pairs, ARRAY_LENGTH(pairs));
 
 cleanup:
     if (IS_ERROR(err)) {
@@ -72,24 +115,29 @@ uint64_t jit_get_function_id(jit_function_t func) {
 
 void* jit_get_function_addr(jit_function_t func) {
     LLVMOrcJITTargetAddress address;
-    LLVMOrcLLJITLookup(m_lljit, &address, func->name);
-    return (void*)address;
-}
-
-jit_module_t jit_module_create(void) {
-    return LLVMModuleCreateWithNameInContext("whatever", m_context);
-}
-
-void jit_link_module(jit_module_t module) {
-    LLVMOrcJITDylibRef mainjd = LLVMOrcLLJITGetMainJITDylib(m_lljit);
-    LLVMErrorRef error = LLVMOrcLLJITAddLLVMIRModule(m_lljit, mainjd,
-                                                     LLVMOrcCreateNewThreadSafeModule(module, m_orc_context));
-
+    LLVMErrorRef error = LLVMOrcLLJITLookup(m_lljit, &address, func->name);
     if (IS_ERROR(error)) {
         ERROR("LLVM Error: %s", LLVMGetErrorMessage(error));
         ASSERT(0);
     }
+    return (void*)address;
+}
 
+jit_module_t jit_module_create(void) {
+    return LLVMModuleCreateWithNameInContext("", m_context);
+}
+
+void jit_link_module(jit_module_t module) {
+    LLVMDumpModule(module);
+
+    LLVMOrcJITDylibRef mainjd = LLVMOrcLLJITGetMainJITDylib(m_lljit);
+    LLVMErrorRef error = LLVMOrcLLJITAddLLVMIRModule(m_lljit, mainjd,
+                                                     LLVMOrcCreateNewThreadSafeModule(module, m_orc_context));
+    if (IS_ERROR(error)) {
+        ERROR("LLVM Error: %s", LLVMGetErrorMessage(error));
+        ASSERT(0);
+    }
+    LLVMOrcJITDylibDefine(mainjd, m_builtin_symbols);
 }
 
 void jit_module_destroy(jit_module_t module) {
@@ -178,6 +226,9 @@ void jit_module_build_function(jit_module_t module,
     }
     arrfree(builder.blocks);
 
+    // verify the function is correct
+    LLVMVerifyFunction(builder.function->value, LLVMAbortProcessAction);
+
     // no need for this anymore
     LLVMDisposeBuilder(builder.builder);
 }
@@ -229,7 +280,11 @@ jit_value_t jit_builder_build_call(jit_builder_t builder,
                                    jit_function_t func,
                                    size_t arg_count,
                                    const jit_value_t* args) {
-    return LLVMBuildCall2(builder->builder, func->type, func->value, (jit_value_t*)args, arg_count, "");
+    LLVMValueRef function = LLVMGetNamedFunction(builder->module, func->name);
+    if (function == NULL) {
+        function = LLVMAddFunction(builder->module, func->name, func->type);
+    }
+    return LLVMBuildCall2(builder->builder, func->type, function, (jit_value_t*)args, arg_count, "");
 }
 
 void jit_builder_build_return(jit_builder_t builder,
@@ -302,7 +357,15 @@ void jit_builder_add_phi_input(jit_builder_t builder,
 jit_value_t jit_builder_build_iconst(jit_builder_t builder,
                                      jit_value_type_t type,
                                      uint64_t value) {
-    return LLVMConstInt(type, value, false);
+    if (type == JIT_TYPE_PTR) {
+        if (value == 0) {
+            return LLVMConstPointerNull(type);
+        } else {
+            return LLVMConstIntToPtr(LLVMConstInt(JIT_TYPE_I64, value, false), JIT_TYPE_PTR);
+        }
+    } else {
+        return LLVMConstInt(type, value, false);
+    }
 }
 
 jit_value_t jit_builder_build_iadd(jit_builder_t builder,
@@ -334,18 +397,27 @@ jit_value_t jit_builder_build_xor(jit_builder_t builder,
 
 jit_value_t jit_builder_build_shl(jit_builder_t builder,
                                   jit_value_t lhs, jit_value_t rhs) {
+    if (LLVMTypeOf(lhs) != LLVMTypeOf(rhs)) {
+        rhs = LLVMBuildZExt(builder->builder, rhs, LLVMTypeOf(lhs), "");
+    }
     return LLVMBuildShl(builder->builder, lhs, rhs, "");
 }
 
 jit_value_t jit_builder_build_lshr(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    if (LLVMTypeOf(lhs) != LLVMTypeOf(rhs)) {
+        rhs = LLVMBuildZExt(builder->builder, rhs, LLVMTypeOf(lhs), "");
+    }
     return LLVMBuildLShr(builder->builder, lhs, rhs, "");
 }
 
 jit_value_t jit_builder_build_ashr(jit_builder_t builder,
                                    jit_value_t lhs,
                                    jit_value_t rhs) {
+    if (LLVMTypeOf(lhs) != LLVMTypeOf(rhs)) {
+        rhs = LLVMBuildZExt(builder->builder, rhs, LLVMTypeOf(lhs), "");
+    }
     return LLVMBuildAShr(builder->builder, lhs, rhs, "");
 }
 
@@ -388,8 +460,8 @@ jit_value_t jit_builder_build_itrunc(jit_builder_t builder, jit_value_t value) {
 }
 
 jit_value_t jit_builder_build_sfill(jit_builder_t builder, uint8_t width, jit_value_t value) {
-    value = LLVMBuildTrunc(builder->builder, value, LLVMIntTypeInContext(m_context, width), "");
-    return LLVMBuildSExt(builder->builder, value, LLVMTypeOf(value), "");
+    LLVMValueRef trunc_value = LLVMBuildTrunc(builder->builder, value, LLVMIntTypeInContext(m_context, width), "");
+    return LLVMBuildSExt(builder->builder, trunc_value, LLVMTypeOf(value), "");
 }
 
 jit_value_t jit_builder_build_icmp(jit_builder_t builder,
@@ -416,7 +488,12 @@ static LLVMTypeRef get_load_store_type(jit_mem_size_t size) {
 }
 
 jit_value_t jit_builder_build_load(jit_builder_t builder, jit_mem_size_t size, jit_value_type_t type, jit_value_t ptr) {
-    LLVMValueRef result = LLVMBuildLoad2(builder->builder, get_load_store_type(size), ptr, "");
+    if (type != JIT_TYPE_PTR) {
+        get_load_store_type(size);
+    } else {
+        ASSERT(size == JIT_MEM_SIZE_8);
+    }
+    LLVMValueRef result = LLVMBuildLoad2(builder->builder, type, ptr, "");
     if (size != JIT_MEM_SIZE_8 && size != JIT_MEM_SIZE_4) {
         result = LLVMBuildZExt(builder->builder, result, JIT_TYPE_I32, "");
     }
@@ -424,7 +501,14 @@ jit_value_t jit_builder_build_load(jit_builder_t builder, jit_mem_size_t size, j
 }
 
 void jit_builder_build_store(jit_builder_t builder, jit_mem_size_t size, jit_value_t data, jit_value_t ptr) {
-    data = LLVMBuildTrunc(builder->builder, data, get_load_store_type(size), "");
+    LLVMTypeRef load_type;
+    if (LLVMTypeOf(data) == JIT_TYPE_PTR) {
+        ASSERT(size == JIT_MEM_SIZE_8);
+        load_type = JIT_TYPE_PTR;
+    } else {
+        load_type = get_load_store_type(size);
+    }
+    data = LLVMBuildTrunc(builder->builder, data, load_type, "");
     LLVMBuildStore(builder->builder, data, ptr);
 }
 

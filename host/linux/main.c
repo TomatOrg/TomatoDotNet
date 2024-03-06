@@ -269,10 +269,14 @@ int main() {
     tdn_jit_method(tests->EntryPoint);
     t = clock() - t;
     double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
-    TRACE("Full jit took %f seconds", time_taken);
+    TRACE("Link took %f seconds", time_taken);
 
+    t = clock();
     int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
-    TRACE("%p", entry_point);
+    t = clock() - t;
+    time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
+    TRACE("Jit took %f seconds", time_taken);
+
     int tests_output = entry_point();
     TRACE("Tests = %d", tests_output);
     ASSERT(tests_output == 0);
