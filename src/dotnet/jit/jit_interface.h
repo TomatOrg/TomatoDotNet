@@ -148,6 +148,104 @@ typedef enum {
     JIT_ICMP_ULE,
 } jit_icmp_kind_t;
 
+#elif __JIT_LLVM__
+
+#include <llvm-c/Core.h>
+
+typedef struct jit_function_inner {
+    int index;
+    const char* name;
+    LLVMTypeRef type;
+    LLVMValueRef value;
+} jit_function_inner_t;
+typedef jit_function_inner_t* jit_function_t;
+#define IS_FUNCTION_NULL(x) ((x) == NULL)
+
+typedef LLVMValueRef jit_value_t;
+#define JIT_VALUE_INVALID NULL
+
+typedef int jit_block_t;
+#define JIT_IS_SAME_BLOCK(a, b) ((a) == (b))
+
+typedef struct {
+    int block;
+    int phi;
+} jit_phi_t;
+#define JIT_INIT_PHI    ((jit_phi_t){ -1, -1 })
+
+typedef struct jit_phi_instance {
+    // the phi in question
+    LLVMValueRef phi;
+
+    // the inputs for this phi
+    LLVMValueRef* inputs;
+} jit_phi_instance_t;
+
+typedef struct jit_block_instance {
+    // the entry to the block, never changes once created
+    // this is always a label
+    LLVMBasicBlockRef entry;
+
+    // the instructions that jump to this block, this is always
+    // either a conditional or unconditional jump instruction
+    LLVMBasicBlockRef* preds;
+
+    // the phis in this block
+    jit_phi_instance_t* phis;
+} jit_block_instance_t;
+
+typedef struct jit_builder {
+    jit_function_t function;
+
+    // the builder
+    LLVMBuilderRef builder;
+
+    // the current block
+    bool has_block;
+    jit_block_t current_block;
+
+    // the blocks themselves
+    jit_block_instance_t* blocks;
+
+    // the current module
+    LLVMModuleRef module;
+}* jit_builder_t;
+
+typedef LLVMModuleRef jit_module_t;
+
+//typedef enum {
+//    JIT_TYPE_NONE,
+//    JIT_TYPE_I32,
+//    JIT_TYPE_I64,
+//    JIT_TYPE_PTR
+//} jit_value_type_t;
+
+typedef LLVMTypeRef jit_value_type_t;
+
+#define JIT_TYPE_NONE NULL
+#define JIT_TYPE_I32    m_jit_type_i32
+#define JIT_TYPE_I64    m_jit_type_i64
+#define JIT_TYPE_PTR    m_jit_type_ptr
+
+extern LLVMTypeRef m_jit_type_i32;
+extern LLVMTypeRef m_jit_type_i64;
+extern LLVMTypeRef m_jit_type_ptr;
+
+typedef enum {
+    JIT_MEM_SIZE_1,
+    JIT_MEM_SIZE_2,
+    JIT_MEM_SIZE_4,
+    JIT_MEM_SIZE_8,
+} jit_mem_size_t;
+
+typedef LLVMIntPredicate jit_icmp_kind_t;
+#define JIT_ICMP_EQ         LLVMIntEQ
+#define JIT_ICMP_NE         LLVMIntNE
+#define JIT_ICMP_SLT        LLVMIntSLT
+#define JIT_ICMP_SLE        LLVMIntSLE
+#define JIT_ICMP_ULT        LLVMIntULT
+#define JIT_ICMP_ULE        LLVMIntULE
+
 #else
     #error Unknown jit interface
 #endif

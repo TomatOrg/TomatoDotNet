@@ -17,6 +17,8 @@ add_compile_options(-fsanitize=address)
 
 add_link_options(-fsanitize=address)
 
+############################################################################
+
 #add_compile_options(-D__JIT_SPIDIR__)
 #set(SPIDIR_ENABLE_LOGGING 1)
 #add_subdirectory(libs/spidir/c-api)
@@ -28,16 +30,35 @@ add_link_options(-fsanitize=address)
 #)
 #link_libraries(spidir)
 
-add_compile_options(-D__JIT_MIR__)
-add_subdirectory(libs/mir)
-list (APPEND SOURCES
-        src/dotnet/jit/jit.c
-        src/dotnet/jit/jit_internal.c
-        src/dotnet/jit/mir/jit.c
-)
-link_libraries(mir_static)
-include_directories(libs)
+############################################################################
 
+#add_compile_options(-D__JIT_MIR__)
+#add_subdirectory(libs/mir)
+#list (APPEND SOURCES
+#        src/dotnet/jit/jit.c
+#        src/dotnet/jit/jit_internal.c
+#        src/dotnet/jit/mir/jit.c
+#)
+#link_libraries(mir_static)
+
+############################################################################
+
+add_compile_options(-D__JIT_LLVM__)
+find_package(LLVM REQUIRED CONFIG)
+llvm_map_components_to_libnames(llvm_libs Core OrcJIT Support nativecodegen)
+list (APPEND SOURCES
+    src/dotnet/jit/jit.c
+    src/dotnet/jit/jit_internal.c
+    src/dotnet/jit/llvm/jit.c
+)
+add_definitions(${LLVM_DEFINITIONS})
+include_directories(${LLVM_INCLUDE_DIRS})
+link_directories(${LLVM_LIBRARY_DIRS})
+link_libraries(${llvm_libs} -lstdc++)
+
+############################################################################
+
+include_directories(libs)
 include_directories(include)
 include_directories(src)
 

@@ -22,7 +22,6 @@ void dump_hex(const void* data, size_t size);
             err = error; \
             IF(HAS_ARGS(__VA_ARGS__))(ERROR(__VA_ARGS__)); \
             ERROR("Check `%s` failed with error `%s` at %s (%s:%d)", #expr, tdn_get_error_string(err), __FUNCTION__, __FILE__, __LINE__); \
-            __builtin_debugtrap(); \
             goto label; \
         } \
     } while (0)

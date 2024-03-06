@@ -272,6 +272,7 @@ int main() {
     TRACE("Full jit took %f seconds", time_taken);
 
     int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
+    TRACE("%p", entry_point);
     int tests_output = entry_point();
     TRACE("Tests = %d", tests_output);
     ASSERT(tests_output == 0);
