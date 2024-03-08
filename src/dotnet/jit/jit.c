@@ -503,6 +503,7 @@ static tdn_err_t jit_instruction(
     // handle prefix cleanu pfirst
     if (!ctx->LastWasPrefix) {
         ctx->VolatilePrefix = 0;
+        ctx->Constrained = NULL;
     }
     ctx->LastWasPrefix = 0;
 
@@ -516,8 +517,15 @@ static tdn_err_t jit_instruction(
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         case CEE_VOLATILE: {
+            CHECK(!ctx->LastWasPrefix);
             ctx->LastWasPrefix = 1;
             ctx->VolatilePrefix = 1;
+        } break;
+
+        case CEE_CONSTRAINED: {
+            CHECK(!ctx->LastWasPrefix);
+            ctx->LastWasPrefix = 1;
+            ctx->Constrained = inst.operand.type;
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1643,6 +1651,26 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
+        // throw an exception
+        case CEE_THROW: {
+            // pop the item
+            jit_value_t object;
+            RuntimeTypeInfo object_type;
+            CHECK_AND_RETHROW(eval_stack_pop(stack, &object_type, &object));
+
+            // make sure this is an object
+            CHECK(tdn_type_is_referencetype(object_type));
+
+            // must not be null
+            jit_emit_null_check(builder, object);
+
+            // and throw it
+            jit_builder_build_call(builder, m_builtin_throw, 1, &object);
+
+            // because we don't fall-through we clear the stack
+            eval_stack_clear(stack);
+        } break;
+
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // Stack manipulation
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2621,6 +2649,7 @@ static tdn_err_t jit_instruction(
     // all the prefixes that we had
     if (!ctx->LastWasPrefix) {
         CHECK(!ctx->VolatilePrefix);
+        CHECK(ctx->Constrained == NULL);
     }
 
 cleanup:

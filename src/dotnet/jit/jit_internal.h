@@ -313,6 +313,9 @@ typedef struct jit_context {
     // the stack of regions we are nested in
     jit_region_t** regions;
 
+    // the constrained type
+    RuntimeTypeInfo Constrained;
+
     // did we have a volatile prefix
     uint32_t LastWasPrefix : 1;
     uint32_t VolatilePrefix : 1;
