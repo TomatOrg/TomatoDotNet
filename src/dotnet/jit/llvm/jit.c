@@ -32,6 +32,7 @@ static void stub_throw_invalid_cast_exception() { ASSERT(!"throw_invalid_cast_ex
 static void stub_throw_index_out_of_range_exception() { ASSERT(!"throw_index_out_of_range_exception"); }
 static void stub_throw_overflow_exception() { ASSERT(!"throw_overflow_exception"); }
 static void stub_throw_null_reference_exception() { ASSERT(!"throw_null_reference_exception"); }
+static void stub_throw_divide_by_zero_exception() { ASSERT(!"throw_divide_by_zero_exception"); }
 static void stub_throw() { ASSERT(!"throw"); }
 static void stub_rethrow() { ASSERT(!"rethrow"); }
 static void stub_get_exception() { ASSERT(!"get_exception"); }
@@ -52,6 +53,7 @@ struct {
     { "throw_index_out_of_range_exception", stub_throw_index_out_of_range_exception },
     { "throw_overflow_exception", stub_throw_overflow_exception },
     { "throw_null_reference_exception", stub_throw_null_reference_exception },
+    { "throw_divide_by_zero_exception", stub_throw_divide_by_zero_exception },
     { "throw", stub_throw },
     { "rethrow", stub_rethrow },
     { "get_exception", stub_get_exception },

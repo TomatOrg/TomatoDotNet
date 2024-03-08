@@ -20,6 +20,18 @@
 
 //#define JIT_IL_OUTPUT
 
+//
+// If the jit does not support SEH like
+// exceptions then we will need to handle
+// it with
+//
+// same
+//
+#ifdef __JIT_LLVM__
+    #define __EXPLICIT_NULL_CHECK__
+    #define __EXPLICIT_ZERO_CHECK__
+#endif
+
 /**
  * The jit module, DON'T USE FROM WITHIN THE BUILDER
  */
@@ -49,6 +61,7 @@ static jit_function_t m_builtin_throw_invalid_cast_exception;
 static jit_function_t m_builtin_throw_index_out_of_range_exception;
 static jit_function_t m_builtin_throw_overflow_exception;
 static jit_function_t m_builtin_throw_null_reference_exception;
+static jit_function_t m_builtin_throw_divide_by_zero_exception;
 static jit_function_t m_builtin_throw;
 
 // exception control flow related
@@ -105,14 +118,19 @@ tdn_err_t tdn_jit_init() {
             0, NULL);
 
     m_builtin_throw_overflow_exception = jit_module_create_extern_function(m_jit_module,
-               "throw_overflow_exception",
-               JIT_TYPE_NONE,
-               0, NULL);
+            "throw_overflow_exception",
+            JIT_TYPE_NONE,
+            0, NULL);
 
     m_builtin_throw_null_reference_exception = jit_module_create_extern_function(m_jit_module,
-               "throw_null_reference_exception",
-               JIT_TYPE_NONE,
-               0, NULL);
+            "throw_null_reference_exception",
+            JIT_TYPE_NONE,
+            0, NULL);
+
+    m_builtin_throw_divide_by_zero_exception = jit_module_create_extern_function(m_jit_module,
+             "throw_divide_by_zero_exception",
+             JIT_TYPE_NONE,
+             0, NULL);
 
     m_builtin_throw = jit_module_create_extern_function(m_jit_module,
                 "throw",
@@ -716,6 +734,10 @@ static tdn_err_t jit_instruction(
                 // for reference to field we don't need the load
                 CHECK_AND_RETHROW(eval_stack_push(stack, value_type, field_ptr));
             } else {
+#ifdef __EXPLICIT_NULL_CHECK__
+                jit_emit_null_check(builder, obj);
+#endif
+
                 // tracks as the intermediate type
                 RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
 
@@ -774,6 +796,10 @@ static tdn_err_t jit_instruction(
             // figure the pointer to the field itself
             jit_value_t field_ptr;
             CHECK(!field->Attributes.Static); // fix if we ever get this
+
+#ifdef __EXPLICIT_NULL_CHECK__
+            jit_emit_null_check(builder, obj);
+#endif
 
             // instance field
             if (field->FieldOffset == 0) {
@@ -921,6 +947,10 @@ static tdn_err_t jit_instruction(
             RuntimeTypeInfo array_type;
             CHECK_AND_RETHROW(eval_stack_pop(stack, &array_type, &array));
 
+#ifdef __EXPLICIT_NULL_CHECK__
+            jit_emit_null_check(builder, array);
+#endif
+
             // push the length, the load automatically zero extends it
             jit_value_t length_offset = jit_builder_build_iconst(builder, JIT_TYPE_I64, offsetof(struct Array, Length));
             jit_value_t length_ptr = jit_builder_build_ptroff(builder, array, length_offset);
@@ -959,6 +989,10 @@ static tdn_err_t jit_instruction(
                 index = jit_builder_build_iext(builder, index);
                 index = jit_builder_build_sfill(builder, 32, index);
             }
+
+#ifdef __EXPLICIT_NULL_CHECK__
+            jit_emit_null_check(builder, array);
+#endif
 
             jit_block_t length_is_valid = jit_builder_create_block(builder);
             jit_block_t length_is_invalid = jit_builder_create_block(builder);
@@ -1051,6 +1085,10 @@ static tdn_err_t jit_instruction(
                 index = jit_builder_build_iext(builder, index);
                 index = jit_builder_build_sfill(builder, 32, index);
             }
+
+#ifdef __EXPLICIT_NULL_CHECK__
+            jit_emit_null_check(builder, array);
+#endif
 
             jit_block_t length_is_valid = jit_builder_create_block(builder);
             jit_block_t length_is_invalid = jit_builder_create_block(builder);
@@ -1738,6 +1776,34 @@ static tdn_err_t jit_instruction(
 
             // TODO: for floats make sure it is an instruction that can take floats
 
+#ifdef __EXPLICIT_ZERO_CHECK__
+            if (inst.opcode == CEE_DIV || inst.opcode == CEE_DIV_UN || inst.opcode == CEE_REM || inst.opcode == CEE_REM_UN) {
+
+                jit_value_type_t typ;
+                if (value2_type == tInt32) {
+                    typ = JIT_TYPE_I32;
+                } else {
+                    typ = JIT_TYPE_I64;
+                }
+
+                jit_block_t valid = jit_builder_create_block(builder);
+                jit_block_t invalid = jit_builder_create_block(builder);
+                jit_value_t zero = jit_builder_build_iconst(builder, typ, 0);
+                jit_value_t cmp = jit_builder_build_icmp(builder,
+                                                         JIT_ICMP_NE, JIT_TYPE_I64,
+                                                         zero, value2);
+                jit_builder_build_brcond(builder, cmp, valid, invalid);
+
+                // the invalid branch, throw an exception
+                jit_builder_set_block(builder, invalid);
+                jit_builder_build_call(builder, m_builtin_throw_divide_by_zero_exception, 0, NULL);
+                jit_builder_build_unreachable(builder);
+
+                // valid branch, continue forward
+                jit_builder_set_block(builder, valid);
+            }
+#endif
+
             // create the operation
             jit_value_t result_value;
             switch (inst.opcode) {
@@ -2372,6 +2438,10 @@ static tdn_err_t jit_instruction(
                 // TODO: implement the correct behaviour for reference types
                 CHECK_FAIL();
             } else {
+#ifdef __EXPLICIT_NULL_CHECK__
+                jit_emit_null_check(builder, obj);
+#endif
+
                 // we can inline the check since the type has to be the exact value type we are trying to unpack
                 // this will take care of the null check as well
                 jit_value_t object_type_offset = jit_builder_build_iconst(builder, JIT_TYPE_I64, offsetof(struct Object, ObjectType));
