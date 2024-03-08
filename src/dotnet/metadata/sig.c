@@ -515,7 +515,12 @@ cleanup:
     return err;
 }
 
-tdn_err_t sig_parse_method_def(blob_entry_t _blob, RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs, method_signature_t* signature) {
+tdn_err_t sig_parse_method_def(
+    blob_entry_t _blob,
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    method_signature_t* signature
+) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;
 
@@ -544,6 +549,36 @@ tdn_err_t sig_parse_method_def(blob_entry_t _blob, RuntimeAssembly assembly, Run
         CHECK_AND_RETHROW(sig_parse_param(blob, assembly, typeArgs, methodArgs, parameter_info));
         signature->parameters->Elements[i] = parameter_info;
     }
+
+cleanup:
+    return err;
+}
+
+
+tdn_err_t sig_parse_method_spec(
+    blob_entry_t _blob,
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeTypeInfo_Array* out_gen_args
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+    blob_entry_t* blob = &_blob;
+
+    CHECK(FETCH_BYTE == 0x0A);
+
+    // get the argument count
+    uint32_t gen_arg_count = 0;
+    CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &gen_arg_count));
+
+    // Get the Params
+    RuntimeTypeInfo_Array gen_args = GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
+    for (int i = 0; i < gen_arg_count; i++) {
+        RuntimeTypeInfo gen_arg;
+        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &gen_arg));
+        gen_args->Elements[i] = gen_arg;
+    }
+
+    *out_gen_args = gen_args;
 
 cleanup:
     return err;

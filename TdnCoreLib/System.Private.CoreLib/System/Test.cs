@@ -4,9 +4,20 @@ namespace System;
 
 public class Test
 {
-    public object Add(int? a, int? b)
+
+    public T A<T>(T a)
     {
-        return a ?? 0 + b ?? 0;
+        return a;
+    }
+
+    public int B<T>(int a)
+    {
+        return A<int>(a);
+    }
+    
+    public int Add(int a)
+    {
+        return B<int>(a);
     }
     
 }

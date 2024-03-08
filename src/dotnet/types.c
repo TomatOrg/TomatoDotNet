@@ -1,4 +1,5 @@
 #include "types.h"
+#include "util/except.h"
 
 RuntimeTypeInfo tObject = NULL;
 RuntimeTypeInfo tValueType = NULL;
@@ -277,4 +278,32 @@ bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
     }
 
     return false;
+}
+
+tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // special constraints
+    if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE) {
+        CHECK(!tdn_type_is_valuetype(arg_type));
+    }
+
+    if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
+        CHECK(tdn_type_is_valuetype(arg_type));
+    }
+
+    if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR) {
+        bool found = false;
+        for (int j = 0; j < arg_type->DeclaredConstructors->Length; j++) {
+            RuntimeConstructorInfo ctor = arg_type->DeclaredConstructors->Elements[j];
+            if (ctor->Attributes.Static) continue;
+            if (ctor->Parameters->Length != 0) continue;
+            found = true;
+            break;
+        }
+        CHECK(found);
+    }
+
+cleanup:
+    return err;
 }

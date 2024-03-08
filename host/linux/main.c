@@ -257,33 +257,42 @@ int main() {
     RuntimeAssembly corelib = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Release/net7.0/System.Private.CoreLib.dll", &corelib));
 
-    RuntimeAssembly console = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Release/net7.0/System.Console.dll", &console));
-    console->AllowExternalExports = 1;
+    RuntimeTypeInfo test;
+    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(corelib, "System", "Test", &test));
 
-    RuntimeAssembly tests = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net7.0/Tests.dll", &tests));
+    RuntimeMethodInfo method = NULL;
+    for (int i = 0; i < test->DeclaredMethods->Length; i++) {
+        if (tdn_compare_string_to_cstr(test->DeclaredMethods->Elements[i]->Name, "Add")) {
+            method = test->DeclaredMethods->Elements[i];
+        }
+    }
+    CHECK(method != NULL);
 
-//    RuntimeTypeInfo Bool_And_Op;
-//    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(tests, "Tests", "Bool_And_Op", &Bool_And_Op));
-//    dump_type(Bool_And_Op, "Sub_Funclet_153");
+    CHECK_AND_RETHROW(tdn_jit_method((RuntimeMethodBase)method));
 
-    clock_t t;
-    t = clock();
-    tdn_jit_method(tests->EntryPoint);
-    t = clock() - t;
-    double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
-    TRACE("Link took %f seconds", time_taken);
+//    RuntimeAssembly console = NULL;
+//    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Release/net7.0/System.Console.dll", &console));
+//    console->AllowExternalExports = 1;
 
-    t = clock();
-    int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
-    t = clock() - t;
-    time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
-    TRACE("Jit took %f seconds", time_taken);
-
-    int tests_output = entry_point();
-    TRACE("Tests = %d", tests_output);
-    ASSERT(tests_output == 0);
+//    RuntimeAssembly tests = NULL;
+//    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net7.0/Tests.dll", &tests));
+//
+//    clock_t t;
+//    t = clock();
+//    tdn_jit_method(tests->EntryPoint);
+//    t = clock() - t;
+//    double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
+//    TRACE("Link took %f seconds", time_taken);
+//
+//    t = clock();
+//    int (*entry_point)() = tdn_jit_get_method_address(tests->EntryPoint);
+//    t = clock() - t;
+//    time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
+//    TRACE("Jit took %f seconds", time_taken);
+//
+//    int tests_output = entry_point();
+//    TRACE("Tests = %d", tests_output);
+//    ASSERT(tests_output == 0);
 
 cleanup:
     gc_free_all();

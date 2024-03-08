@@ -17,6 +17,8 @@ public static class Program
         if (!Arrays.Run()) return 6;
         if (!ConstantFolding.Run()) return 7;
         if (!Shifts.Run()) return 8;
+
+        if (!GenericFields.Run()) return 9;
         
         return 0;
     }

@@ -270,6 +270,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
     for (size_t i = 0; i < methods_count; i++) {
         metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
         MethodAttributes attributes = { .Attributes = method_def->flags };
+        RuntimeMethodBase original_method = assembly->MethodDefs->Elements[type_def->method_list.index - 1 + i];
 
         // get the correct version
         RuntimeMethodBase base = NULL;
@@ -282,13 +283,21 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
         }
 
         // setup most of the type
+        base->MetadataToken = original_method->MetadataToken;
         base->DeclaringType = type;
-        base->MetadataToken = ((token_t){ .table = METADATA_METHOD_DEF, .index = i + 1 }).token;
-        base->Attributes = attributes;
-        base->MethodImplFlags = (MethodImplAttributes){ .Attributes = method_def->impl_flags };
         base->Module = type->Module;
+        base->Name = original_method->Name;
+        base->Attributes = attributes;
+        base->MethodImplFlags = original_method->MethodImplFlags;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
 
+        // if its generic setup the arguments and method definition
+        if (original_method->GenericMethodDefinition != NULL) {
+            base->GenericMethodDefinition = (RuntimeMethodInfo)base;
+            base->GenericArguments = original_method->GenericArguments;
+        }
+
+        // if it has a body copy it over
         if (method_def->rva != 0) {
             CHECK_AND_RETHROW(tdn_parser_method_body(assembly, method_def, base));
         }
@@ -297,7 +306,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
         method_signature_t signature = {};
         CHECK_AND_RETHROW(sig_parse_method_def(
                 method_def->signature, assembly,
-                type->GenericArguments, NULL,
+                type->GenericArguments, base->GenericArguments,
                 &signature));
         base->Parameters = signature.parameters;
         base->ReturnParameter = signature.return_parameter;
@@ -316,7 +325,7 @@ static tdn_err_t create_generic_type(RuntimeTypeInfo base, RuntimeTypeInfo_Array
 
     // create the base type
     new_type->MetadataToken = base->MetadataToken;
-    new_type->DeclaringType = NULL;
+    new_type->DeclaringType = base->DeclaringType;
     new_type->Module = base->Module;
     new_type->Namespace = base->Namespace;
     new_type->Name = base->Name;
@@ -352,31 +361,7 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
         // validate the make generic
         CHECK(base->GenericArguments->Length == args->Length);
         for (int i = 0; i < args->Length; i++) {
-            GenericParameterAttributes attributes = base->GenericArguments->Elements[i]->GenericParameterAttributes;
-            RuntimeTypeInfo arg_type = args->Elements[i];
-
-            // special constraints
-            if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE) {
-                CHECK(!tdn_type_is_valuetype(arg_type));
-            }
-
-            if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
-                CHECK(tdn_type_is_valuetype(arg_type));
-            }
-
-            if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR) {
-                bool found = false;
-                for (int j = 0; j < base->DeclaredConstructors->Length; j++) {
-                    RuntimeConstructorInfo ctor = base->DeclaredConstructors->Elements[j];
-                    if (ctor->Attributes.Static) continue;
-                    if (ctor->Parameters->Length != 0) continue;
-                    found = true;
-                    break;
-                }
-                CHECK(found);
-            }
-
-            // TODO: other type constraints
+            CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(args->Elements[i], base->GenericArguments->Elements[i]->GenericParameterAttributes));
         }
 
         // and now fill it up

@@ -58,6 +58,21 @@ tdn_err_t tdn_assembly_lookup_method(
             *method = assembly->MethodDefs->Elements[token.index - 1];
         } break;
 
+        case METADATA_METHOD_SPEC: {
+            CHECK(token.index != 0 && token.index <= assembly->Metadata->method_specs_count);
+            metadata_method_spec_t* spec = &assembly->Metadata->method_specs[token.index - 1];
+
+            // parse the generic arguments
+            RuntimeTypeInfo_Array gen_args;
+            CHECK_AND_RETHROW(sig_parse_method_spec(spec->instantiation, assembly, typeArgs, methodArgs, &gen_args));
+
+            // get the base method
+            CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, spec->method.token, typeArgs, methodArgs, method));
+
+            // expand the method
+            CHECK_AND_RETHROW(tdn_method_make_generic((RuntimeMethodInfo)*method, gen_args, (RuntimeMethodInfo*)method));
+        } break;
+
         case METADATA_MEMBER_REF: {
             CHECK(token.index != 0 && token.index <= assembly->Metadata->member_refs_count);
             metadata_member_ref_t* ref = &assembly->Metadata->member_refs[token.index - 1];

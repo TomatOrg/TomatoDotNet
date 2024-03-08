@@ -16,6 +16,12 @@ tdn_err_t sig_parse_method_def(
         RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
         method_signature_t* signature);
 
+tdn_err_t sig_parse_method_spec(
+        blob_entry_t _blob,
+        RuntimeAssembly assembly,
+        RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+        RuntimeTypeInfo_Array* out_gen_args);
+
 tdn_err_t sig_parse_field(
         blob_entry_t _blob,
         RuntimeFieldInfo field_info);

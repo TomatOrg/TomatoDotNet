@@ -7,6 +7,7 @@
 #include "util/stb_ds.h"
 #include "util/except.h"
 #include "jit_interface.h"
+#include "dotnet/types.h"
 
 /**
  * Initialize the jit backend

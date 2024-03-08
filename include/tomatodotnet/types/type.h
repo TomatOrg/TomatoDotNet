@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include "reflection.h"
 #include "tomatodotnet/except.h"
-#include "dotnet/types.h"
 
 #define TDN_TYPE_VISIBILITY_NOT_PUBLIC 0
 #define TDN_TYPE_VISIBILITY_PUBLIC 1

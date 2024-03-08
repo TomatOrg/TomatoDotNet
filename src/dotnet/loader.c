@@ -1267,7 +1267,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
                 ((RuntimeTypeInfo)last_object)->GenericTypeDefinition = last_object;
             } else {
                 // only valid on methods, not on ctors
-                CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
+                CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
                 CHECK(((Object)last_object)->ObjectType == tRuntimeMethodInfo);
                 ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
                 ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
@@ -1292,7 +1292,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
             ((RuntimeTypeInfo)last_object)->GenericTypeDefinition = last_object;
         } else {
             // only valid on methods, not on ctors
-            CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
+            CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
             CHECK(((Object)last_object)->ObjectType == tRuntimeMethodInfo);
             ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
             ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;

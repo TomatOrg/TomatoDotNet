@@ -18,7 +18,7 @@
 #include "dotnet/gc/gc.h"
 #include "util/string.h"
 
-//#define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 //
 // If the jit does not support SEH like

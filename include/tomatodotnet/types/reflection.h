@@ -238,7 +238,7 @@ typedef struct RuntimeConstructorInfo {
 }* RuntimeConstructorInfo;
 DEFINE_ARRAY(RuntimeConstructorInfo);
 
-tdn_err_t tdn_make_generic_method(RuntimeMethodInfo type,
+tdn_err_t tdn_method_make_generic(RuntimeMethodInfo method,
                                   RuntimeTypeInfo_Array arguments,
                                   RuntimeMethodInfo* instance);
 

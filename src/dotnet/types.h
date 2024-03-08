@@ -62,3 +62,5 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_compatible_with_location(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R);
+
+tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes);
