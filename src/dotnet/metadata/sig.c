@@ -155,7 +155,9 @@ cleanup:
 
 static tdn_err_t sig_parse_type(
     blob_entry_t* blob,
-    RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    bool create_mvar_type,
     RuntimeTypeInfo* type
 );
 
@@ -181,7 +183,7 @@ static tdn_err_t sig_parse_genericinst(
     RuntimeTypeInfo_Array args = GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
     for (size_t i = 0; i < gen_arg_count; i++) {
         RuntimeTypeInfo arg = NULL;
-        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &arg));
+        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, &arg));
         args->Elements[i] = arg;
     }
 
@@ -194,7 +196,9 @@ cleanup:
 
 static tdn_err_t sig_parse_type(
     blob_entry_t* blob,
-    RuntimeAssembly assembly, RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    RuntimeAssembly assembly,
+    RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    bool create_mvar_type,
     RuntimeTypeInfo* type
 ) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -233,9 +237,17 @@ static tdn_err_t sig_parse_type(
         case ELEMENT_TYPE_MVAR: {
             uint32_t number = 0;
             CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &number));
-            CHECK(methodArgs != NULL);
-            CHECK(number < methodArgs->Length);
-            *type = methodArgs->Elements[number];
+            if (methodArgs == NULL) {
+                CHECK(create_mvar_type);
+                RuntimeTypeInfo typ = GC_NEW(RuntimeTypeInfo);
+                typ->IsGenericParameter = 1;
+                typ->IsGenericMethodParameter = 1;
+                typ->GenericParameterPosition = number;
+                *type = typ;
+            } else {
+                CHECK(number < methodArgs->Length);
+                *type = methodArgs->Elements[number];
+            }
         } break;
 
         case ELEMENT_TYPE_OBJECT: *type = tObject; break;
@@ -256,7 +268,7 @@ static tdn_err_t sig_parse_type(
                 FETCH_BYTE;
                 element_type = tVoid;
             } else {
-                CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &element_type));
+                CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, create_mvar_type, &element_type));
             }
 
             // Get the pointer
@@ -275,7 +287,7 @@ static tdn_err_t sig_parse_type(
 
             // Get the element type
             RuntimeTypeInfo element_type = NULL;
-            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &element_type));
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, create_mvar_type, &element_type));
 
             // Get as array
             CHECK_AND_RETHROW(tdn_get_array_type(element_type, type));
@@ -306,6 +318,7 @@ static tdn_err_t sig_parse_ret_type(
     blob_entry_t* blob,
     RuntimeAssembly assembly,
     RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    bool create_var_type,
     ParameterInfo* out_param
 ) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -327,7 +340,7 @@ static tdn_err_t sig_parse_ret_type(
         case ELEMENT_TYPE_BYREF: {
             FETCH_BYTE;
             RuntimeTypeInfo type = NULL;
-            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, create_var_type, &type));
             CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
             parameter_info->ParameterType = type;
         } break;
@@ -344,7 +357,7 @@ static tdn_err_t sig_parse_ret_type(
 
         default: {
             RuntimeTypeInfo type = NULL;
-            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, create_var_type, &type));
             parameter_info->ParameterType = type;
         } break;
     }
@@ -359,6 +372,7 @@ static tdn_err_t sig_parse_param(
     blob_entry_t* blob,
     RuntimeAssembly assembly,
     RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    bool create_mvar_type,
     ParameterInfo parameter_info
 ) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -377,7 +391,7 @@ static tdn_err_t sig_parse_param(
         case ELEMENT_TYPE_BYREF: {
             FETCH_BYTE;
             RuntimeTypeInfo type = NULL;
-            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, create_mvar_type, &type));
             CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
             parameter_info->ParameterType = type;
         } break;
@@ -389,7 +403,7 @@ static tdn_err_t sig_parse_param(
 
         default: {
             RuntimeTypeInfo type = NULL;
-            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, create_mvar_type, &type));
             parameter_info->ParameterType = type;
         } break;
     }
@@ -423,7 +437,7 @@ tdn_err_t sig_parse_field(blob_entry_t _blob, RuntimeFieldInfo field_info) {
     }
 
     // parse the type
-    CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, NULL, &field_info->FieldType));
+    CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, NULL, false, &field_info->FieldType));
 
 cleanup:
     return err;
@@ -450,7 +464,7 @@ tdn_err_t sig_parse_field_type(
     }
 
     // parse the type
-    CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, type));
+    CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, type));
 
 cleanup:
     return err;
@@ -476,7 +490,7 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, RuntimeAssembly assembly, Runt
             if (PEEK_BYTE == ELEMENT_TYPE_VOID) {
                 CHECK_AND_RETHROW(tdn_get_pointer_type(tVoid, type));
             } else {
-                CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, type));
+                CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, type));
             }
         } break;
 
@@ -499,12 +513,32 @@ tdn_err_t sig_parse_type_spec(blob_entry_t _blob, RuntimeAssembly assembly, Runt
             }
 
             RuntimeTypeInfo elementType = NULL;
-            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &elementType));
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, &elementType));
             CHECK_AND_RETHROW(tdn_get_array_type(elementType, type));
         } break;
 
         case ELEMENT_TYPE_GENERICINST: {
             CHECK_AND_RETHROW(sig_parse_genericinst(blob, assembly, typeArgs, methodArgs, type));
+        } break;
+
+        //
+        // NOTE: both of these are not in the standard but are found in real binaries
+        //
+
+        case ELEMENT_TYPE_MVAR: {
+            uint32_t number = 0;
+            CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &number));
+            CHECK(methodArgs != NULL);
+            CHECK(number < methodArgs->Length);
+            *type = methodArgs->Elements[number];
+        } break;
+
+        case ELEMENT_TYPE_VAR: {
+            uint32_t number = 0;
+            CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &number));
+            CHECK(typeArgs != NULL);
+            CHECK(number < typeArgs->Length);
+            *type = typeArgs->Elements[number];
         } break;
 
         default:
@@ -519,6 +553,7 @@ tdn_err_t sig_parse_method_def(
     blob_entry_t _blob,
     RuntimeAssembly assembly,
     RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+    bool create_mvar_type,
     method_signature_t* signature
 ) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -539,6 +574,7 @@ tdn_err_t sig_parse_method_def(
     // Get the RetType
     CHECK_AND_RETHROW(sig_parse_ret_type(blob, assembly,
                                          typeArgs, methodArgs,
+                                         create_mvar_type,
                                          &signature->return_parameter));
 
     // Get the Params
@@ -546,7 +582,7 @@ tdn_err_t sig_parse_method_def(
     for (int i = 0; i < param_count; i++) {
         ParameterInfo parameter_info = GC_NEW(ParameterInfo);
         parameter_info->Position = i;
-        CHECK_AND_RETHROW(sig_parse_param(blob, assembly, typeArgs, methodArgs, parameter_info));
+        CHECK_AND_RETHROW(sig_parse_param(blob, assembly, typeArgs, methodArgs, create_mvar_type, parameter_info));
         signature->parameters->Elements[i] = parameter_info;
     }
 
@@ -574,7 +610,7 @@ tdn_err_t sig_parse_method_spec(
     RuntimeTypeInfo_Array gen_args = GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
     for (int i = 0; i < gen_arg_count; i++) {
         RuntimeTypeInfo gen_arg;
-        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &gen_arg));
+        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, &gen_arg));
         gen_args->Elements[i] = gen_arg;
     }
 
@@ -634,7 +670,7 @@ tdn_err_t sig_parse_local_var_sig(
 
         // parse it properly
         RuntimeTypeInfo type = NULL;
-        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, &type));
+        CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, &type));
 
         // if it was byref actually get the byref type
         if (byref) {

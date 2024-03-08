@@ -1185,6 +1185,7 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
         CHECK_AND_RETHROW(sig_parse_method_def(
                 method_def->signature, assembly,
                 type->GenericArguments, base->GenericArguments,
+                false,
                 &signature));
         base->Parameters = signature.parameters;
         base->ReturnParameter = signature.return_parameter;
@@ -1319,10 +1320,12 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         // resolve it
         if (owner.table == METADATA_TYPE_DEF) {
             CHECK(owner.index != 0 && owner.index <= assembly->TypeDefs->Length);
+            param->IsGenericTypeParameter = 1;
             param->DeclaringType = assembly->TypeDefs->Elements[owner.index - 1];
             param->DeclaringType->GenericArguments->Elements[generic_param->number] = param;
         } else if (owner.table == METADATA_METHOD_DEF) {
             CHECK(owner.index != 0 && owner.index <= assembly->MethodDefs->Length);
+            param->IsGenericMethodParameter = 1;
             param->DeclaringMethod = assembly->MethodDefs->Elements[owner.index - 1];
             param->DeclaringMethod->GenericArguments->Elements[generic_param->number] = param;
         } else {

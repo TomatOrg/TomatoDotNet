@@ -14,6 +14,7 @@ tdn_err_t sig_parse_method_def(
         blob_entry_t _blob,
         RuntimeAssembly assembly,
         RuntimeTypeInfo_Array typeArgs, RuntimeTypeInfo_Array methodArgs,
+        bool create_mvar_type,
         method_signature_t* signature);
 
 tdn_err_t sig_parse_method_spec(

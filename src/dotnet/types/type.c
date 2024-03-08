@@ -307,6 +307,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
         CHECK_AND_RETHROW(sig_parse_method_def(
                 method_def->signature, assembly,
                 type->GenericArguments, base->GenericArguments,
+                false,
                 &signature));
         base->Parameters = signature.parameters;
         base->ReturnParameter = signature.return_parameter;

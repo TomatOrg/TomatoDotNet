@@ -43,6 +43,28 @@ cleanup:
     return err;
 }
 
+static bool generic_compare_type(RuntimeTypeInfo source_type, RuntimeTypeInfo target_type) {
+    // are they the same?
+    if (source_type == target_type) {
+        return true;
+    }
+
+    // both need to be generic parameters for this check
+    if (source_type->IsGenericParameter != target_type->IsGenericParameter) {
+        return false;
+    }
+
+    if (source_type->IsGenericTypeParameter != target_type->IsGenericTypeParameter) {
+        return false;
+    }
+
+    if (source_type->IsGenericMethodParameter != target_type->IsGenericMethodParameter) {
+        return false;
+    }
+
+    return true;
+}
+
 tdn_err_t tdn_assembly_lookup_method(
     RuntimeAssembly assembly,
     int metadata_token,
@@ -82,9 +104,10 @@ tdn_err_t tdn_assembly_lookup_method(
             CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, ref->class.token, typeArgs, methodArgs, &parent));
 
             // get the expected field
+            // at this point the type args of the parent are already inside of the possible signatures
             method_signature_t signature = {0};
             blob_entry_t blob = ref->signature;
-            CHECK_AND_RETHROW(sig_parse_method_def(blob, assembly, parent->GenericArguments, NULL, &signature));
+            CHECK_AND_RETHROW(sig_parse_method_def(blob, assembly, parent->GenericArguments, NULL, true, &signature));
 
             // now search for a method with that signature
             bool found = false;
@@ -98,21 +121,36 @@ tdn_err_t tdn_assembly_lookup_method(
                     m = (RuntimeMethodBase)parent->DeclaredConstructors->Elements[i];
                 }
 
-                if (!tdn_compare_string_to_cstr(m->Name, ref->name)) continue;
-                if (m->Parameters->Length != signature.parameters->Length) continue;
-                if (m->GenericArguments != NULL) {
-                    if ((size_t)m->GenericArguments->Length != signature.generic_param_count) continue;
-                } else {
-                    if (signature.generic_param_count != 0) continue;
+                if (!tdn_compare_string_to_cstr(m->Name, ref->name)) {
+                    continue;
                 }
-                if (m->ReturnParameter->ParameterType != signature.return_parameter->ParameterType) continue;
+
+                if (m->Parameters->Length != signature.parameters->Length) {
+                    continue;
+                }
+
+                if (m->GenericArguments != NULL) {
+                    if ((size_t)m->GenericArguments->Length != signature.generic_param_count) {
+                        continue;
+                    }
+                } else {
+                    if (signature.generic_param_count != 0) {
+                        continue;
+                    }
+                }
+                if (!generic_compare_type(
+                    m->ReturnParameter->ParameterType,
+                    signature.return_parameter->ParameterType
+                )) {
+                    continue;
+                }
 
                 // compare the parameter types
                 bool valid = true;
                 for (int pi = 0; pi < m->Parameters->Length; pi++) {
                     ParameterInfo p1 = m->Parameters->Elements[pi];
                     ParameterInfo p2 = signature.parameters->Elements[pi];
-                    if (p1->ParameterType != p2->ParameterType) {
+                    if (!generic_compare_type(p1->ParameterType, p2->ParameterType)) {
                         valid = false;
                         break;
                     }

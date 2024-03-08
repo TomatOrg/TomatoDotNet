@@ -36,6 +36,7 @@ static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_A
     CHECK_AND_RETHROW(sig_parse_method_def(
             method_def->signature, assembly,
             new_method->DeclaringType->GenericArguments, new_method->GenericArguments,
+            false,
             &signature));
     new_method->Parameters = signature.parameters;
     new_method->ReturnParameter = signature.return_parameter;

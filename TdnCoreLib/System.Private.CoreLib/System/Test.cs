@@ -5,19 +5,27 @@ namespace System;
 public class Test
 {
 
-    public T A<T>(T a)
+    public class A<T>
     {
-        return a;
+
+        public static TK B<TK>(TK a, T b)
+        {
+            return default;
+        }
+        
     }
 
-    public int B<T>(int a)
+    public class Lol<T>
     {
-        return A<int>(a);
+        public static TK B<TK>(TK a, T b)
+        {
+            return A<T>.B<TK>(a, b);
+        }
     }
     
     public int Add(int a)
     {
-        return B<int>(a);
+        return Lol<object>.B<int>(a, null);
     }
     
 }
