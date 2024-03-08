@@ -13,9 +13,6 @@ list(FILTER SOURCES EXCLUDE REGEX "\/jit\/")
 add_compile_options(-Wall -Werror)
 add_compile_options(-Wno-unused-variable -Wno-constant-logical-operand -Wno-unused-parameter -Wno-unused-label -Wno-unused-but-set-variable -Wno-unused-function -Wno-format-invalid-specifier)
 add_compile_options(-fms-extensions -Wno-microsoft)
-add_compile_options(-fsanitize=address)
-
-add_link_options(-fsanitize=address)
 
 ############################################################################
 

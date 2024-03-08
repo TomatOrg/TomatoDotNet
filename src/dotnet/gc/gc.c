@@ -14,6 +14,7 @@ void gc_free_all() {
         if (obj->ObjectType == tRuntimeAssembly) {
             RuntimeAssembly assembly = (RuntimeAssembly)obj;
             assembly->Metadata->file.close_handle(assembly->Metadata->file.handle);
+            hmfree(assembly->StringTable);
             dotnet_free_file(assembly->Metadata);
             tdn_host_free(assembly->Metadata);
         } else if (obj->ObjectType == tRuntimeTypeInfo) {

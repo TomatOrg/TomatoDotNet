@@ -269,6 +269,18 @@ struct RuntimeAssembly {
 
     // The entry point of the assembly
     RuntimeMethodBase EntryPoint;
+
+    // strings loaded from the heap
+    // during jit
+    struct {
+        uint32_t key;
+        String value;
+    }* StringTable;
+
+    // Special permissions the assembly has
+    uint32_t AllowUnsafe : 1;
+    uint32_t AllowExternalExports : 1;
+    uint32_t : 30;
 };
 
 tdn_err_t tdn_assembly_lookup_type(

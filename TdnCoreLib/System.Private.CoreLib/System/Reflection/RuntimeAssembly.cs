@@ -12,5 +12,9 @@ internal sealed class RuntimeAssembly : Assembly
     private MethodBase[] _methodDefs;
     private RuntimeFieldInfo[] _fields;
 
+    private unsafe void* _stringsTable; 
+    
     private RuntimeMethodInfo _entryPoint;
+
+    private uint _flags;
 }

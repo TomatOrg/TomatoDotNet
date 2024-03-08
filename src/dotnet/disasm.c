@@ -1,8 +1,14 @@
 
 
 #include "tomatodotnet/disasm.h"
+
+#include "gc/gc.h"
+#include "metadata/metadata.h"
+#include "metadata/metadata_tables.h"
+#include "metadata/sig.h"
 #include "tomatodotnet/types/type.h"
 #include "util/except.h"
+#include "util/stb_ds.h"
 #include "util/string.h"
 
 typedef enum opcode_operand {
@@ -131,10 +137,45 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
             CHECK_FAIL("TODO: InlineSig");
 
         case InlineString: {
-            uint32_t user_string_token = FETCH(uint32_t);
+            token_t user_string_token = FETCH(token_t);
+            CHECK(user_string_token.table == 0x70);
             inst->operand_type = TDN_IL_STRING;
-            inst->operand.string = NULL;
-            WARN("TODO: InlineString(%u)", user_string_token);
+            CHECK(user_string_token.index < assembly->Metadata->us_size);
+
+            // get the string from the token
+            String string = hmget(assembly->StringTable, user_string_token.index);
+            if (string == NULL) {
+                // not found, create a new string and store it
+
+                // get the blob
+                uint32_t blob_size = 0;
+                blob_entry_t blob = {
+                    .data = assembly->Metadata->us + user_string_token.index,
+                    .size = assembly->Metadata->us_size - user_string_token.index
+                };
+                CHECK_AND_RETHROW(sig_parse_compressed_int(&blob, &blob_size));
+
+                // validate and set the length
+                CHECK(blob_size <= assembly->Metadata->blob_size - user_string_token.index);
+
+                // must be uneven
+                CHECK(blob_size % 2 == 1);
+                size_t char_count = (blob_size - 1) / 2;
+
+                // create it
+                string = gc_new(tString, sizeof(struct String) + char_count * sizeof(Char));
+                CHECK_ERROR(string != NULL, TDN_ERROR_OUT_OF_MEMORY);
+
+                // copy the bytes
+                // TODO: validate this is a valid utf16 string
+                string->Length = (int)char_count;
+                memcpy(string->Chars, blob.data, char_count * sizeof(Char));
+
+                // and store it now for future uses
+                hmput(assembly->StringTable, user_string_token.index, string);
+            }
+
+            inst->operand.string = string;
         } break;
 
         case InlineSwitch:

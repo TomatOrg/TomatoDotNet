@@ -1663,10 +1663,9 @@ static tdn_err_t jit_instruction(
 
         // push a string
         case CEE_LDSTR: {
-            // TODO: actually create the string or something
             CHECK_AND_RETHROW(eval_stack_push(stack, tString,
                                               jit_builder_build_iconst(builder,
-                                                                          JIT_TYPE_PTR, 0)));
+                                                                          JIT_TYPE_PTR, (uintptr_t)inst.operand.string)));
         } break;
 
         // Push a null object
@@ -3250,8 +3249,7 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t handl
         arrpush(params, JIT_TYPE_PTR);
     }
 
-    // handle the `this` argument, its always a
-    // pointer (byref for struct types)
+    // handle the `this` argument, its always a pointer (byref for struct types)
     if (!method->Attributes.Static) {
         arrpush(params, JIT_TYPE_PTR);
     }
@@ -3266,14 +3264,24 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t handl
     const char* name = string_builder_build(&builder);
 
     // create the function itself
-    jit_function_t func = jit_module_create_function(
-        handle,
-        name, ret_type, arrlen(params), params
-    );
+    jit_function_t func = NULL;
+    if (method->MethodBody != NULL) {
+        func = jit_module_create_function(
+            handle,
+            name, ret_type, arrlen(params), params
+        );
+    } else {
+        // make sure the assembly is allowed to have external exports
+        CHECK(method->Module->Assembly->AllowExternalExports);
+        func = jit_module_create_extern_function(
+            handle,
+            name, ret_type, arrlen(params), params
+        );
+    }
     method->JitMethodId = jit_get_function_id(func);
 
     // queue to methods to jit if we didn't start with this already
-    if (!method->JitStarted) {
+    if (!method->JitStarted && method->MethodBody != NULL) {
         arrpush(m_methods_to_jit, method);
     }
 

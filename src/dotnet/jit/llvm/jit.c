@@ -40,6 +40,14 @@ static void stub_get_exception() { ASSERT(!"get_exception"); }
 #undef memcpy
 void* memcpy(void* dest, const void* src, size_t n);
 
+static void console_write_line(String str) {
+    tdn_host_printf("%U\n", str);
+}
+
+static void console_write(String str) {
+    tdn_host_printf("%U", str);
+}
+
 struct {
     const char* name;
     void* ptr;
@@ -57,6 +65,10 @@ struct {
     { "throw", stub_throw },
     { "rethrow", stub_rethrow },
     { "get_exception", stub_get_exception },
+
+    // TODO: generic way to do this
+    { "System.Void System.Console::WriteLine(System.String)", console_write_line },
+    { "System.Void System.Console::Write(System.String)", console_write },
 };
 
 static LLVMOrcMaterializationUnitRef m_builtin_symbols;
@@ -130,6 +142,8 @@ jit_module_t jit_module_create(void) {
 }
 
 void jit_link_module(jit_module_t module) {
+    LLVMVerifyModule(module, LLVMAbortProcessAction, NULL);
+
     LLVMOrcJITDylibRef mainjd = LLVMOrcLLJITGetMainJITDylib(m_lljit);
     LLVMErrorRef error = LLVMOrcLLJITAddLLVMIRModule(m_lljit, mainjd,
                                                      LLVMOrcCreateNewThreadSafeModule(module, m_orc_context));

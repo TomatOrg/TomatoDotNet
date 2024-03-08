@@ -743,6 +743,11 @@ static void pop_type_queue() {
 // Bootstrap of the type system
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static struct {
+    const char* key;
+    RuntimeAssembly value;
+}* m_loaded_assemblies = NULL;
+
 static tdn_err_t corelib_bootstrap() {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -847,24 +852,14 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
     for (int i = 0; i < assembly->Metadata->assembly_refs_count; i++) {
         metadata_assembly_ref_t* assembly_ref = &assembly->Metadata->assembly_refs[i];
 
-        // TODO: some hashmap of known assemblies or something
-        RuntimeAssembly new_assembly = NULL;
-        if (strcmp(assembly_ref->name, "System.Private.CoreLib") == 0) {
-            // TODO: validate major version
-            CHECK(mCoreAssembly != NULL);
-            new_assembly = mCoreAssembly;
-        } else {
-            CHECK_FAIL("Unknown assembly %s", assembly_ref->name);
+        // get from the hashmap of known assemblies
+        // TODO: if not found call a callback to find and load the assembly
+        int idx = shgeti(m_loaded_assemblies, assembly_ref->name);
+        CHECK(idx >= 0, "Failed to get assembly `%s` - not found", assembly_ref->name);
 
-//            // if we can't find it ourselves we will search for it from the host
-//            CHECK(tdn_host_resolve_assembly(assembly_ref->name, assembly_ref->major_version, &current_file) == 0);
-//            CHECK_AND_RETHROW(load_assembly(current_file, &new_assembly));
-//
-//            // no longer need the file
-//            tdn_host_close_file(current_file);
-//            current_file = NULL;
-        }
-        CHECK(new_assembly != NULL);
+        // TODO: maybe this should have an array of major versions we know about
+        RuntimeAssembly new_assembly = m_loaded_assemblies[i].value;
+        CHECK(new_assembly != NULL, "Failed to get assembly `%s` - recursive dependency", assembly_ref->name);
 
         // TODO: validate the minor version
 
@@ -1394,6 +1389,19 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     CHECK_AND_RETHROW(pe_load_image(&file->file));
     CHECK_AND_RETHROW(dotnet_load_file(file));
 
+    // add the assembly to the lookup now
+    if (file->assemblies_count != 0) {
+        CHECK(file->assemblies_count == 1);
+
+        if (m_loaded_assemblies == NULL) {
+            sh_new_strdup(m_loaded_assemblies);
+        }
+
+        TRACE("Loading assembly `%s`", file->assemblies[0].name);
+        shput(m_loaded_assemblies, file->assemblies[0].name, NULL);
+    }
+
+
     // if we are loading the main assembly then bootstrap now
     if (mCoreAssembly == NULL) {
         CHECK_AND_RETHROW(corelib_bootstrap());
@@ -1404,10 +1412,19 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     RuntimeAssembly assembly = GC_NEW(RuntimeAssembly);
     assembly->Metadata = file;
 
+    // special case for core assembly
+    if (mCoreAssembly == NULL) {
+        assembly->AllowUnsafe = 1;
+        assembly->AllowExternalExports = 1;
+    }
+
     // setup the basic type
     RuntimeModule module = GC_NEW(RuntimeModule);
     module->Assembly = assembly;
     assembly->Module = module;
+
+    // must have only one module
+    CHECK(file->modules_count == 1);
 
     // start
     if (mCoreAssembly == NULL) {
@@ -1484,8 +1501,15 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, file->entry_point_token, NULL, NULL, &assembly->EntryPoint));
     }
 
+    // commit it now
+    if (file->assemblies_count != 0) {
+        shput(m_loaded_assemblies, file->assemblies[0].name, assembly);
+    }
+
     // we are success
-    *out_assembly = assembly;
+    if (out_assembly != NULL) {
+        *out_assembly = assembly;
+    }
 
 cleanup:
     if (pushed_type_queue) {
