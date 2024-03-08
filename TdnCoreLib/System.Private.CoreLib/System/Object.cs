@@ -15,6 +15,10 @@ public class Object
     private Type _type;
     private unsafe void* _next;
 
+    public Object()
+    {
+    }
+    
     ~Object()
     {
     }

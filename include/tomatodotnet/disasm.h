@@ -66,6 +66,7 @@ typedef struct tdn_il_inst {
         RuntimeTypeInfo type;
         String string;
     } operand;
+    int operand_token;
 
     // the length of the current instruction
     size_t length;

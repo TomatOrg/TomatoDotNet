@@ -7,16 +7,11 @@
 #include "util/string_builder.h"
 #include "jit_internal.h"
 
-// TODO: lock
-
-//#include <jit/jit.h>
-//#include <jit/log.h>
-//#include "jit/jit_debug.h"
-
 #include <stdbool.h>
 
 #include "dotnet/gc/gc.h"
 #include "util/string.h"
+#include "dotnet/metadata/metadata_tables.h"
 
 #define JIT_IL_OUTPUT
 
@@ -318,6 +313,153 @@ static tdn_err_t jit_prepare_type_instance(RuntimeTypeInfo type) {
 
 cleanup:
     return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Access checks
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static bool is_instance(RuntimeTypeInfo has, RuntimeTypeInfo want) {
+    while (has != want) {
+        if (has == tObject) {
+            return false;
+        }
+        has = has->BaseType;
+    }
+    return true;
+}
+
+static bool check_type_access(RuntimeMethodBase method, RuntimeTypeInfo type, int token) {
+    // can always access no matter what
+    if (method->DeclaringType == type) {
+        return true;
+    }
+
+    if (type->DeclaringType != NULL) {
+        if (!check_type_access(method, type->DeclaringType, 0)) {
+            return false;
+        }
+    }
+
+    // top level stuff
+    switch (type->Attributes.Visibility) {
+        case TDN_TYPE_VISIBILITY_NOT_PUBLIC: {
+            token_t tok = { .token = token };
+            return method->Module == type->Module && tok.table == METADATA_METHOD_DEF;
+        } break;
+
+        case TDN_TYPE_VISIBILITY_PUBLIC:
+        case TDN_TYPE_VISIBILITY_NESTED_PUBLIC: {
+            return true;
+        } break;
+
+        case TDN_TYPE_VISIBILITY_NESTED_PRIVATE: {
+            return method->DeclaringType == type->DeclaringType;
+        } break;
+
+        case TDN_TYPE_VISIBILITY_NESTED_FAMILY: {
+            return is_instance(method->DeclaringType, type->DeclaringType);
+        } break;
+
+        case TDN_TYPE_VISIBILITY_NESTED_ASSEMBLY: {
+            return method->Module == type->Module;
+        } break;
+
+        case TDN_TYPE_VISIBILITY_NESTED_FAMILY_AND_ASSEMBLY: {
+            return method->Module == type->Module && is_instance(method->DeclaringType, type->DeclaringType);
+        } break;
+
+        case TDN_TYPE_VISIBILITY_NESTED_FAMILY_OR_ASSEMBLY: {
+            return method->Module == type->Module || is_instance(method->DeclaringType, type->DeclaringType);
+        } break;
+
+        default: {
+            ASSERT(!"Invalid type access");
+        } break;
+    }
+}
+
+static bool check_field_access(RuntimeMethodBase method, RuntimeFieldInfo field, int token) {
+    // check type accessibility first
+    if (!check_type_access(method, field->DeclaringType, 0)) {
+        ERROR("Failed to access type %T from %T:%U", field->DeclaringType, method->DeclaringType, method->Name);
+        return false;
+    }
+
+    switch (field->Attributes.FieldAccess) {
+        case TDN_FIELD_ACCESS_PRIVATE_SCOPE: {
+            token_t tok = { .token = token };
+            return method->Module == field->Module && tok.table == METADATA_FIELD;
+        } break;
+
+        case TDN_FIELD_ACCESS_PRIVATE: {
+            return method->DeclaringType == field->DeclaringType;
+        } break;
+
+        case TDN_FIELD_ACCESS_FAMILY: {
+            return is_instance(method->DeclaringType, field->DeclaringType);
+        } break;
+
+        case TDN_FIELD_ACCESS_ASSEMBLY: {
+            return method->Module == field->Module;
+        } break;
+
+        case TDN_FIELD_ACCESS_FAMILY_AND_ASSEMBLY: {
+            return method->Module == field->Module && is_instance(method->DeclaringType, field->DeclaringType);
+        } break;
+
+        case TDN_FIELD_ACCESS_FAMILY_OR_ASSEMBLY: {
+            return method->Module == field->Module || is_instance(method->DeclaringType, field->DeclaringType);
+        } break;
+
+        case TDN_FIELD_ACCESS_PUBLIC: {
+            return true;
+        } break;
+
+        default:
+            ASSERT(!"Invalid field access");
+    }
+}
+
+static bool check_method_access(RuntimeMethodBase method, RuntimeMethodBase target, int token) {
+    // check type accessibility first
+    if (!check_type_access(method, target->DeclaringType, 0)) {
+        return false;
+    }
+
+    switch (target->Attributes.MemberAccess) {
+        case TDN_METHOD_ACCESS_PRIVATE_SCOPE: {
+            token_t tok = { .token = token };
+            return method->Module == target->Module && tok.table == METADATA_METHOD_DEF;
+        } break;
+
+        case TDN_METHOD_ACCESS_PRIVATE: {
+            return method->DeclaringType == target->DeclaringType;
+        } break;
+
+        case TDN_METHOD_ACCESS_FAMILY: {
+            return is_instance(method->DeclaringType, target->DeclaringType);
+        } break;
+
+        case TDN_METHOD_ACCESS_ASSEMBLY: {
+            return method->Module == target->Module;
+        } break;
+
+        case TDN_METHOD_ACCESS_FAMILY_AND_ASSEMBLY: {
+            return method->Module == target->Module && is_instance(method->DeclaringType, target->DeclaringType);
+        } break;
+
+        case TDN_METHOD_ACCESS_FAMILY_OR_ASSEMBLY: {
+            return method->Module == target->Module || is_instance(method->DeclaringType, target->DeclaringType);
+        } break;
+
+        case TDN_METHOD_ACCESS_PUBLIC: {
+            return true;
+        } break;
+
+        default:
+            ASSERT(!"Invalid method access");
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -690,12 +832,17 @@ static tdn_err_t jit_instruction(
             RuntimeFieldInfo field = inst.operand.field;
             bool ldflda = inst.opcode == CEE_LDFLDA;
 
-            // TODO: check field accessibility
-
             // pop the item
             jit_value_t obj;
             RuntimeTypeInfo obj_type;
             CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj));
+
+            // verify the field is contained within the given object
+            if (obj_type->IsByRef) {
+                CHECK(field->DeclaringType == obj_type->ElementType);
+            } else {
+                CHECK(field->DeclaringType == obj_type);
+            }
 
             // check this is either an object or a managed pointer
             CHECK(
@@ -703,8 +850,6 @@ static tdn_err_t jit_instruction(
                 tdn_type_is_referencetype(obj_type) ||
                 (jit_is_struct_type(obj_type) && !ldflda)
             );
-
-            // TODO: verify the field is contained within the given object
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
@@ -775,13 +920,18 @@ static tdn_err_t jit_instruction(
         case CEE_STFLD: {
             RuntimeFieldInfo field = inst.operand.field;
 
-            // TODO: check field accessibility
-
             // pop the item
             jit_value_t obj, value;
             RuntimeTypeInfo obj_type, value_type;
             CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value));
             CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj));
+
+            // verify the field is contained within the given object
+            if (obj_type->IsByRef) {
+                CHECK(field->DeclaringType == obj_type->ElementType);
+            } else {
+                CHECK(field->DeclaringType == obj_type);
+            }
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
@@ -794,8 +944,6 @@ static tdn_err_t jit_instruction(
                 obj_type->IsByRef ||
                 tdn_type_is_referencetype(obj_type)
             );
-
-            // TODO: verify the field is contained within the given object
 
             // get the stack type of the field
             RuntimeTypeInfo field_type = inst.operand.field->FieldType;
@@ -846,8 +994,6 @@ static tdn_err_t jit_instruction(
             RuntimeFieldInfo field = inst.operand.field;
             CHECK(field->Attributes.Static);
             bool ldsflda = inst.opcode == CEE_LDSFLDA;
-
-            // TODO: check field accessibility
 
             // get the stack type of the field
             RuntimeTypeInfo field_type = inst.operand.field->FieldType;
@@ -904,8 +1050,6 @@ static tdn_err_t jit_instruction(
         case CEE_STSFLD: {
             RuntimeFieldInfo field = inst.operand.field;
             CHECK(field->Attributes.Static);
-
-            // TODO: check field accessibility
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
@@ -1156,8 +1300,6 @@ static tdn_err_t jit_instruction(
             bool is_callvirt = inst.opcode == CEE_CALLVIRT;
             bool is_newobj = inst.opcode == CEE_NEWOBJ;
             size_t object_size = 0;
-
-            // TODO: check method accessibility
 
             // verify we can call it
             if (is_newobj) {
@@ -2938,6 +3080,25 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
         tdn_il_inst_t inst;
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
+        //
+        // Access checks
+        //
+        if (inst.operand_type == TDN_IL_FIELD) {
+            CHECK(check_field_access(method, inst.operand.field, inst.operand_token),
+                  "Failed to access %T::%U from %T::%U",
+                  inst.operand.field->DeclaringType, inst.operand.field->Name,
+                  method->DeclaringType, method->Name
+            );
+        } else if (inst.operand_type == TDN_IL_METHOD) {
+            CHECK(check_method_access(method, inst.operand.method, inst.operand_token),
+                "Failed to access %T::%U from %T::%U",
+                inst.operand.method->DeclaringType, inst.operand.method->Name,
+                method->DeclaringType, method->Name
+            );
+        } else if (inst.operand_type == TDN_IL_TYPE) {
+            CHECK(check_type_access(method, inst.operand.type, inst.operand_token));
+        }
+
 #ifdef JIT_IL_OUTPUT
         //--------------------------------------------------------------------------------------------------------------
         // debug prints
@@ -3265,8 +3426,6 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t handl
         goto cleanup;
     }
     method->JitPrepared = 1;
-
-    // TODO: external methods need special handling
 
     // prepre the type
     CHECK_AND_RETHROW(jit_prepare_type(method->DeclaringType));

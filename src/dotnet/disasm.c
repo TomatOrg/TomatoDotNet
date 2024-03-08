@@ -100,8 +100,9 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
 
         case InlineField: {
             inst->operand_type = TDN_IL_FIELD;
+            inst->operand_token = FETCH(int32_t);
             CHECK_AND_RETHROW(tdn_assembly_lookup_field(
-                    assembly, FETCH(int32_t),
+                    assembly, inst->operand_token,
                     method->DeclaringType->GenericArguments, method->GenericArguments,
                     &inst->operand.field));
         } break;
@@ -118,8 +119,9 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
 
         case InlineMethod: {
             inst->operand_type = TDN_IL_METHOD;
+            inst->operand_token = FETCH(int32_t);
             CHECK_AND_RETHROW(tdn_assembly_lookup_method(
-                    assembly, FETCH(int32_t),
+                    assembly, inst->operand_token,
                     method->DeclaringType->GenericArguments, method->GenericArguments,
                     &inst->operand.method));
         } break;
@@ -186,8 +188,9 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
 
         case InlineType: {
             inst->operand_type = TDN_IL_TYPE;
+            inst->operand_token = FETCH(int32_t);
             CHECK_AND_RETHROW(tdn_assembly_lookup_type(
-                    assembly, FETCH(int32_t),
+                    assembly, inst->operand_token,
                     method->DeclaringType->GenericArguments, method->GenericArguments,
                     &inst->operand.type));
         } break;
