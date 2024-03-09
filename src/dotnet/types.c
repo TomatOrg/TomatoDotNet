@@ -43,6 +43,7 @@ RuntimeTypeInfo tOverflowException = NULL;
 RuntimeTypeInfo tNullable = NULL;
 
 RuntimeTypeInfo tIsVolatile = NULL;
+//RuntimeTypeInfo tUnmanagedType = NULL;
 
 RuntimeTypeInfo tNull = NULL;
 
@@ -280,7 +281,17 @@ bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
     return false;
 }
 
-tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes) {
+static bool is_instance(RuntimeTypeInfo has, RuntimeTypeInfo want) {
+    while (has != want) {
+        if (has == tObject) {
+            return false;
+        }
+        has = has->BaseType;
+    }
+    return true;
+}
+
+tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes, RuntimeTypeInfo_Array constraints) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // special constraints
@@ -290,6 +301,7 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
         CHECK(tdn_type_is_valuetype(arg_type));
+        CHECK(arg_type->GenericTypeDefinition != tNullable);
     }
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR) {
@@ -302,6 +314,11 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
             break;
         }
         CHECK(found);
+    }
+
+    for (int i = 0; i < constraints->Length; i++) {
+        RuntimeTypeInfo constraint = constraints->Elements[i];
+        CHECK(is_instance(arg_type, constraint));
     }
 
 cleanup:

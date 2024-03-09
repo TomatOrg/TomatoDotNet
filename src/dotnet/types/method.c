@@ -67,7 +67,10 @@ tdn_err_t tdn_method_make_generic(
         // validate the make generic
         CHECK(base->GenericArguments->Length == args->Length);
         for (int i = 0; i < args->Length; i++) {
-            CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(args->Elements[i], base->GenericArguments->Elements[i]->GenericParameterAttributes));
+            CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(
+                    args->Elements[i],
+                    base->GenericArguments->Elements[i]->GenericParameterAttributes,
+                    base->GenericArguments->Elements[i]->GenericParameterConstraints));
         }
 
         // and now fill it up

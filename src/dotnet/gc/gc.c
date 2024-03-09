@@ -32,6 +32,23 @@ void gc_free_all() {
 void* gc_new(RuntimeTypeInfo type, size_t size) {
     if (type == NULL) {
         ERROR("Tried to allocate object with null type?");
+    } else {
+        // if this is a generic type or a generic type parameter then we
+        // can't create an instance of this object
+        if (type->IsGenericParameter) {
+            ERROR("Tried to create a generic type parameter");
+            return NULL;
+        }
+
+        if (type->GenericTypeDefinition == type) {
+            ERROR("Tried to create a generic type definition");
+            return NULL;
+        }
+
+        if (type->Attributes.Abstract) {
+            ERROR("Tried to create an abstract class");
+            return NULL;
+        }
     }
 
     Object object = tdn_host_mallocz(size);

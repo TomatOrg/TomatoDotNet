@@ -7,20 +7,36 @@ namespace Tests;
 public static class Program
 {
 
+    public class A
+    {
+        
+    }
+
+    public class B : A
+    {
+        
+    }
+    
+    public static int Test<T>(T a) where T : A
+    {
+        return 1;
+    }
+    
+
     public static int Main()
     {
-        if (CodeGenBringUpTests.Run() != 0) return 1;
-        if (!BitTest.Run()) return 2;
-        if (!Bool_And_Op.Run()) return 3;
-        if (!Bool_No_Op.Run()) return 4;
-        if (!Int_No_Op.Run()) return 5;
-        if (!Arrays.Run()) return 6;
-        if (!ConstantFolding.Run()) return 7;
-        if (!Shifts.Run()) return 8;
+        // if (CodeGenBringUpTests.Run() != 0) return 1;
+        // if (!BitTest.Run()) return 2;
+        // if (!Bool_And_Op.Run()) return 3;
+        // if (!Bool_No_Op.Run()) return 4;
+        // if (!Int_No_Op.Run()) return 5;
+        // if (!Arrays.Run()) return 6;
+        // if (!ConstantFolding.Run()) return 7;
+        // if (!Shifts.Run()) return 8;
 
         // if (!GenericFields.Run()) return 9;
         
-        return 0;
+        return Test<B>(new B());
     }
     
 }

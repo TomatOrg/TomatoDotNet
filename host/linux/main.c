@@ -255,7 +255,7 @@ int main() {
 
     // load the corelib, must come first
     RuntimeAssembly corelib = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Release/net7.0/System.Private.CoreLib.dll", &corelib));
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Release/net8.0/System.Private.CoreLib.dll", &corelib));
 
 //    RuntimeTypeInfo test;
 //    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(corelib, "System", "Test", &test));
@@ -269,11 +269,11 @@ int main() {
 //    CHECK_AND_RETHROW(tdn_jit_method((RuntimeMethodBase)method));
 
     RuntimeAssembly console = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Release/net7.0/System.Console.dll", &console));
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Release/net8.0/System.Console.dll", &console));
     console->AllowExternalExports = 1;
 
     RuntimeAssembly tests = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net7.0/Tests.dll", &tests));
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net8.0/Tests.dll", &tests));
 
     clock_t t;
     t = clock();

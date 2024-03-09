@@ -129,6 +129,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, NullReferenceException),
     LOAD_TYPE(System, OverflowException),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
+//    LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
     { "System", "Nullable`1", &tNullable },
 };
 static int m_loaded_types = 0;
@@ -1301,6 +1302,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
     }
 
     // now fill it properly
+    assembly->GenericParams = GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->generic_params_count);
     for (int i = 0; i < assembly->Metadata->generic_params_count; i++) {
         metadata_generic_param_t* generic_param = &assembly->Metadata->generic_params[i];
         token_t owner = generic_param->owner;
@@ -1317,6 +1319,9 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         }
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(generic_param->name, &param->Name));
 
+        // store it
+        assembly->GenericParams->Elements[i] = param;
+
         // resolve it
         if (owner.table == METADATA_TYPE_DEF) {
             CHECK(owner.index != 0 && owner.index <= assembly->TypeDefs->Length);
@@ -1331,6 +1336,66 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         } else {
             CHECK_FAIL();
         }
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    RuntimeTypeInfo last_object = NULL;
+    int count = 0;
+    for (int i = 0; i < assembly->Metadata->generic_param_constraints_count; i++) {
+        metadata_generic_param_constraint_t* generic_param = &assembly->Metadata->generic_param_constraints[i];
+        token_t owner = generic_param->owner;
+        CHECK(owner.table == METADATA_GENERIC_PARAM);
+        CHECK(owner.index != 0 && owner.index <= assembly->GenericParams->Length);
+        RuntimeTypeInfo current_object = assembly->GenericParams->Elements[owner.index - 1];
+
+        // and set it up properly
+        if (last_object != NULL && current_object != last_object) {
+            CHECK(last_object->GenericParameterConstraints == NULL);
+            last_object->GenericParameterConstraints = GC_NEW_ARRAY(RuntimeTypeInfo, count);
+            count = 0;
+            last_object = NULL;
+        }
+
+        // increment it
+        count++;
+        last_object = current_object;
+    }
+
+    if (count != 0) {
+        CHECK(last_object->GenericParameterConstraints == NULL);
+        last_object->GenericParameterConstraints = GC_NEW_ARRAY(RuntimeTypeInfo, count);
+    }
+
+    // now fill it properly
+    int offset = 0;
+    count = 0;
+    for (int i = 0; i < assembly->Metadata->generic_param_constraints_count; i++) {
+        metadata_generic_param_constraint_t* generic_param = &assembly->Metadata->generic_param_constraints[i];
+        RuntimeTypeInfo current_object = assembly->GenericParams->Elements[generic_param->owner.index - 1];
+
+        // move to the next object if needed, updating the offset from the start we are at
+        if (last_object != NULL && current_object != last_object) {
+            offset += count;
+            count = 0;
+            last_object = current_object;
+        }
+
+        // get the constraint
+        RuntimeTypeInfo constraint = NULL;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, generic_param->constraint.token, current_object->GenericArguments, NULL, &constraint));
+
+        // store it
+        current_object->GenericParameterConstraints->Elements[i - offset] = constraint;
+
+        // and we are done
+        count++;
+        last_object = current_object;
     }
 
 cleanup:
@@ -1468,6 +1533,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     // load all the generics type information
     CHECK_AND_RETHROW(assembly_load_generics(assembly));
+    CHECK_AND_RETHROW(assembly_load_generic_constraints(assembly));
 
     push_type_queue();
     pushed_type_queue = true;

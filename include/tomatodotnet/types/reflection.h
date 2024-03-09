@@ -263,6 +263,8 @@ struct RuntimeAssembly {
     RuntimeMethodBase_Array MethodDefs;
     RuntimeFieldInfo_Array Fields;
 
+    RuntimeTypeInfo_Array GenericParams;
+
     // the metadata of this assembly
     dotnet_file_t* Metadata;
     RuntimeModule Module;
@@ -282,6 +284,12 @@ struct RuntimeAssembly {
     uint32_t AllowExternalExports : 1;
     uint32_t : 30;
 };
+
+
+typedef struct type_modifiers {
+    uint32_t unmanaged_type : 1;
+    uint32_t : 31;
+} type_modifiers_t;
 
 tdn_err_t tdn_assembly_lookup_type(
     RuntimeAssembly assembly,

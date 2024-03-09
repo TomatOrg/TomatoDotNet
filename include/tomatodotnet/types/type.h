@@ -102,6 +102,7 @@ typedef struct RuntimeTypeInfo {
     // Generics related
     RuntimeMethodBase DeclaringMethod;
     RuntimeTypeInfo_Array GenericArguments;
+    RuntimeTypeInfo_Array GenericParameterConstraints;
     RuntimeTypeInfo GenericTypeDefinition;
     GenericParameterAttributes GenericParameterAttributes;
     uint32_t GenericParameterPosition;
