@@ -316,9 +316,11 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
         CHECK(found);
     }
 
-    for (int i = 0; i < constraints->Length; i++) {
-        RuntimeTypeInfo constraint = constraints->Elements[i];
-        CHECK(is_instance(arg_type, constraint));
+    if (constraints != NULL) {
+        for (int i = 0; i < constraints->Length; i++) {
+            RuntimeTypeInfo constraint = constraints->Elements[i];
+            CHECK(is_instance(arg_type, constraint));
+        }
     }
 
 cleanup:
