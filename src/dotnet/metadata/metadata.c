@@ -682,12 +682,14 @@ tdn_err_t dotnet_load_file(dotnet_file_t* file) {
 
         // check which one it can be
         if (strcmp(stream->name, "#Strings") == 0) {
+            CHECK(stream->size <= 0x20000000); // Ecma-335-Augments.md#heap-sizes
             file->strings = start;
             file->strings_size = stream->size;
         } else if (strcmp(stream->name, "#US") == 0) {
             file->us = start;
             file->us_size = stream->size;
         } else if (strcmp(stream->name, "#Blob") == 0) {
+            CHECK(stream->size <= 0x20000000); // Ecma-335-Augments.md#heap-sizes
             file->blob = start;
             file->blob_size = stream->size;
         } else if (strcmp(stream->name, "#GUID") == 0) {

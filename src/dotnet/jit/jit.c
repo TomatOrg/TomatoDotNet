@@ -620,6 +620,81 @@ static void jit_emit_null_check(jit_builder_t builder, jit_value_t obj) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Intrinsics
+//
+// These are emitted instead of function calls, so we can assume type
+// checking was already done on the caller
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static tdn_err_t handle_unsafe_intrinsics(
+    jit_builder_t builder,
+    RuntimeMethodBase target,
+    bool allow_unsafe,
+    RuntimeTypeInfo* types, jit_value_t* args,
+    jit_value_t* out
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (tdn_compare_string_to_cstr(target->Name, "As")) {
+        CHECK(allow_unsafe);
+        CHECK(arrlen(args) == 1);
+        *out = args[0];
+
+    } else if (tdn_compare_string_to_cstr(target->Name, "AsRef")) {
+        CHECK(allow_unsafe);
+        CHECK(arrlen(args) == 1);
+        *out = args[0];
+
+    } else if (tdn_compare_string_to_cstr(target->Name, "Add")) {
+        CHECK(allow_unsafe);
+        CHECK(arrlen(args) == 2);
+
+        jit_value_t value = args[0];
+
+        if (types[1] == tInt32) {
+            // expand into a 64bit integer
+            value = jit_builder_build_iext(builder, value);
+            value = jit_builder_build_sfill(builder, 32, value);
+        } else {
+            CHECK(types[1] == tIntPtr || types[1] == tUIntPtr);
+        }
+
+        // calculate an offset
+        size_t element_size = target->GenericArguments->Elements[0]->StackSize;
+        jit_value_t offset = jit_builder_build_imul(builder, args[1],
+                                                    jit_builder_build_iconst(builder, JIT_TYPE_I64, element_size));
+
+        // add it to the pointer
+        *out = jit_builder_build_ptroff(builder, value, offset);
+
+    } else if (tdn_compare_string_to_cstr(target->Name, "AddByteOffset")) {
+        CHECK(allow_unsafe);
+        CHECK(arrlen(args) == 2);
+
+        // calculate an offset
+        size_t element_size = target->GenericArguments->Elements[0]->StackSize;
+        jit_value_t offset = jit_builder_build_imul(builder, args[1],
+                                                    jit_builder_build_iconst(builder, JIT_TYPE_I64, element_size));
+
+        // add it to the pointer
+        *out = jit_builder_build_ptroff(builder, args[0], offset);
+
+    } else if (tdn_compare_string_to_cstr(target->Name, "AreSame")) {
+        CHECK(arrlen(args) == 2);
+
+        // NOTE: this is actually a safe instruction (we allow it in the bytecode
+        //       of CEQ), so there is no harm in allowing it
+        *out = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I32, args[0], args[1]);
+
+    } else {
+        CHECK_FAIL("Unknown method %T::%U", target->DeclaringType, target->Name);
+    }
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // The jit itself
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1413,10 +1488,29 @@ static tdn_err_t jit_instruction(
                 arrins(call_args_values, 0, ret_buffer);
             }
 
-            // emit the actual call
-            jit_value_t value = jit_builder_build_call(builder,
-                                                             jit_get_function_from_id(target->JitMethodId),
-                                                             arrlen(call_args_values), call_args_values);
+            jit_value_t value;
+            if (target->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME) {
+                if (target->DeclaringType == tUnsafe) {
+                    CHECK_AND_RETHROW(handle_unsafe_intrinsics(builder, target, method->Module->Assembly->AllowUnsafe,
+                                                               call_args_types, call_args_values, &value));
+                } else {
+                    CHECK_FAIL();
+                }
+            } else {
+                // whitelist of Unsafe functions that are considered safe by us
+                if (target->DeclaringType == tUnsafe) {
+                    if (!method->Module->Assembly->AllowUnsafe) {
+                        CHECK(
+                            tdn_compare_string_to_cstr(target->Name, "SizeOf")
+                        );
+                    }
+                }
+
+                // emit the actual call
+                value = jit_builder_build_call(builder,
+                                                           jit_get_function_from_id(target->JitMethodId),
+                                                           arrlen(call_args_values), call_args_values);
+            }
 
             // for primitive types push it now
             if (ret_type != tVoid && !jit_is_struct_type(ret_type)) {

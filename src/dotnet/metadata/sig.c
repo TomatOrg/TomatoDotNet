@@ -304,7 +304,7 @@ static tdn_err_t sig_parse_type(
         } break;
 
         default:
-            CHECK_FAIL();
+            CHECK_FAIL("Unknown type element %02x", value);
             break;
     }
 

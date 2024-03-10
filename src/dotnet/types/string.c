@@ -40,6 +40,11 @@ cleanup:
 tdn_err_t tdn_append_cstr_to_string(String str, const char* cstr, String* out_str) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    if (str == NULL) {
+        CHECK_AND_RETHROW(tdn_create_string_from_cstr(cstr, out_str));
+        goto cleanup;
+    }
+
     // count how many chars it has
     size_t len = strlen(cstr);
     CHECK(len <= INT32_MAX);

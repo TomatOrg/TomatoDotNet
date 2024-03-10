@@ -42,8 +42,8 @@ RuntimeTypeInfo tOverflowException = NULL;
 
 RuntimeTypeInfo tNullable = NULL;
 
+RuntimeTypeInfo tUnsafe = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
-//RuntimeTypeInfo tUnmanagedType = NULL;
 
 RuntimeTypeInfo tNull = NULL;
 

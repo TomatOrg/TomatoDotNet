@@ -129,7 +129,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, NullReferenceException),
     LOAD_TYPE(System, OverflowException),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
-//    LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
+    LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     { "System", "Nullable`1", &tNullable },
 };
 static int m_loaded_types = 0;

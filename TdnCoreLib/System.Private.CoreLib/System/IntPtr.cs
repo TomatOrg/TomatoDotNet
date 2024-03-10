@@ -6,6 +6,6 @@ namespace System;
 public readonly struct IntPtr
 {
     
-    // private readonly nint _value;
+    private readonly nint _value;
 
 }
