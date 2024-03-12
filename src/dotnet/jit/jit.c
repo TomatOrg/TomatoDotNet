@@ -13,7 +13,11 @@
 #include "util/string.h"
 #include "dotnet/metadata/metadata_tables.h"
 
-#define JIT_IL_OUTPUT
+//
+// If you want to output the instructions that we see as we see them
+// useful for debugging
+//
+//#define JIT_IL_OUTPUT
 
 //
 // If the jit does not support SEH like
@@ -52,11 +56,7 @@ static jit_function_t m_builtin_gc_bzero;
 static jit_function_t m_builtin_gc_memcpy;
 
 // throwing related
-static jit_function_t m_builtin_throw_invalid_cast_exception;
-static jit_function_t m_builtin_throw_index_out_of_range_exception;
-static jit_function_t m_builtin_throw_overflow_exception;
-static jit_function_t m_builtin_throw_null_reference_exception;
-static jit_function_t m_builtin_throw_divide_by_zero_exception;
+static jit_function_t m_builtin_exceptions[JIT_EXCEPTION_MAX];
 static jit_function_t m_builtin_throw;
 
 // exception control flow related
@@ -102,27 +102,27 @@ tdn_err_t tdn_jit_init() {
             JIT_TYPE_NONE,
             2, (jit_value_type_t[]){ JIT_TYPE_PTR, JIT_TYPE_PTR });
 
-    m_builtin_throw_invalid_cast_exception = jit_module_create_extern_function(m_jit_module,
+    m_builtin_exceptions[JIT_EXCEPTION_INVALID_CAST] = jit_module_create_extern_function(m_jit_module,
            "throw_invalid_cast_exception",
            JIT_TYPE_NONE,
            0, NULL);
 
-    m_builtin_throw_index_out_of_range_exception = jit_module_create_extern_function(m_jit_module,
+    m_builtin_exceptions[JIT_EXCEPTION_INDEX_OUT_OF_RANGE] = jit_module_create_extern_function(m_jit_module,
             "throw_index_out_of_range_exception",
             JIT_TYPE_NONE,
             0, NULL);
 
-    m_builtin_throw_overflow_exception = jit_module_create_extern_function(m_jit_module,
+    m_builtin_exceptions[JIT_EXCEPTION_OVERFLOW] = jit_module_create_extern_function(m_jit_module,
             "throw_overflow_exception",
             JIT_TYPE_NONE,
             0, NULL);
 
-    m_builtin_throw_null_reference_exception = jit_module_create_extern_function(m_jit_module,
+    m_builtin_exceptions[JIT_EXCEPTION_NULL_REFERENCE] = jit_module_create_extern_function(m_jit_module,
             "throw_null_reference_exception",
             JIT_TYPE_NONE,
             0, NULL);
 
-    m_builtin_throw_divide_by_zero_exception = jit_module_create_extern_function(m_jit_module,
+    m_builtin_exceptions[JIT_EXCEPTION_DIVIDE_BY_ZERO] = jit_module_create_extern_function(m_jit_module,
              "throw_divide_by_zero_exception",
              JIT_TYPE_NONE,
              0, NULL);
@@ -599,24 +599,48 @@ cleanup:
     return err;
 }
 
-static void jit_emit_null_check(jit_builder_t builder, jit_value_t obj) {
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Exception handlers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static jit_block_t jit_throw_builtin_exception(jit_context_t* ctx, jit_builder_t builder, jit_builtin_exception_t exception) {
+    if ((ctx->exceptions & (1 << exception)) == 0) {
+        jit_block_t prev_block;
+        ASSERT(jit_builder_cur_block(builder, &prev_block));
+
+        // create the new block
+        ctx->exception_blocks[exception] = jit_builder_create_block(builder);
+        ctx->exceptions |= (1 << exception);
+
+        // emit the throw
+        jit_builder_set_block(builder, ctx->exception_blocks[exception]);
+        jit_builder_build_call(builder, m_builtin_exceptions[exception], 0, NULL);
+        jit_builder_build_unreachable(builder);
+
+        // and go back to the original thing
+        jit_builder_set_block(builder, prev_block);
+    }
+
+    // TODO: add another input to the phi
+
+    // return the builtin exception
+    return ctx->exception_blocks[exception];
+}
+
+static void jit_emit_null_check(jit_context_t* ctx, jit_builder_t builder, jit_value_t obj) {
     // create the null check
     jit_block_t valid = jit_builder_create_block(builder);
-    jit_block_t invalid = jit_builder_create_block(builder);
     jit_value_t null = jit_builder_build_iconst(builder, JIT_TYPE_PTR, 0);
     jit_value_t cmp = jit_builder_build_icmp(builder,
                                              JIT_ICMP_NE, JIT_TYPE_I64,
                                              null, obj);
+
+    // get the throw block
+    jit_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_NULL_REFERENCE);
+
+    // either jump to the throw or continue
     jit_builder_build_brcond(builder, cmp, valid, invalid);
-
-    // the invalid branch, throw an exception
-    jit_builder_set_block(builder, invalid);
-    jit_builder_build_call(builder, m_builtin_throw_null_reference_exception, 0, NULL);
-    jit_builder_build_unreachable(builder);
-
-    // valid branch, continue forward
     jit_builder_set_block(builder, valid);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -634,6 +658,9 @@ static tdn_err_t handle_unsafe_intrinsics(
     jit_value_t* out
 ) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(target->ReturnParameter->ParameterType != tVoid);
+    CHECK(!tdn_type_is_valuetype(target->ReturnParameter->ParameterType));
 
     if (tdn_compare_string_to_cstr(target->Name, "As")) {
         CHECK(allow_unsafe);
@@ -718,11 +745,11 @@ static tdn_err_t jit_instruction(
     jit_value_t* call_args_values = NULL;
 
     // handle prefix cleanu pfirst
-    if (!ctx->LastWasPrefix) {
-        ctx->VolatilePrefix = 0;
-        ctx->Constrained = NULL;
+    if (!ctx->last_was_prefix) {
+        ctx->volatile_prefix = 0;
+        ctx->constrained = NULL;
     }
-    ctx->LastWasPrefix = 0;
+    ctx->last_was_prefix = 0;
 
     //
     // the main instruction jitting
@@ -734,15 +761,15 @@ static tdn_err_t jit_instruction(
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         case CEE_VOLATILE: {
-            CHECK(!ctx->LastWasPrefix);
-            ctx->LastWasPrefix = 1;
-            ctx->VolatilePrefix = 1;
+            CHECK(!ctx->last_was_prefix);
+            ctx->last_was_prefix = 1;
+            ctx->volatile_prefix = 1;
         } break;
 
         case CEE_CONSTRAINED: {
-            CHECK(!ctx->LastWasPrefix);
-            ctx->LastWasPrefix = 1;
-            ctx->Constrained = inst.operand.type;
+            CHECK(!ctx->last_was_prefix);
+            ctx->last_was_prefix = 1;
+            ctx->constrained = inst.operand.type;
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -928,8 +955,8 @@ static tdn_err_t jit_instruction(
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
-                CHECK(ctx->VolatilePrefix);
-                ctx->VolatilePrefix = 0;
+                CHECK(ctx->volatile_prefix);
+                ctx->volatile_prefix = 0;
             }
 
             // get the stack type of the field
@@ -953,7 +980,7 @@ static tdn_err_t jit_instruction(
 
             if (ldflda) {
                 // explicit null check since only loading the value
-                jit_emit_null_check(builder, obj);
+                jit_emit_null_check(ctx, builder, obj);
 
                 // tracks as a managed pointer to the verification type
                 RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
@@ -963,7 +990,7 @@ static tdn_err_t jit_instruction(
                 CHECK_AND_RETHROW(eval_stack_push(stack, value_type, field_ptr));
             } else {
 #ifdef __EXPLICIT_NULL_CHECK__
-                jit_emit_null_check(builder, obj);
+                jit_emit_null_check(ctx, builder, obj);
 #endif
 
                 // tracks as the intermediate type
@@ -1010,8 +1037,8 @@ static tdn_err_t jit_instruction(
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
-                CHECK(ctx->VolatilePrefix);
-                ctx->VolatilePrefix = 0;
+                CHECK(ctx->volatile_prefix);
+                ctx->volatile_prefix = 0;
             }
 
             // check this is either an object or a managed pointer
@@ -1029,7 +1056,7 @@ static tdn_err_t jit_instruction(
             CHECK(!field->Attributes.Static); // fix if we ever get this
 
 #ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(builder, obj);
+            jit_emit_null_check(ctx, builder, obj);
 #endif
 
             // instance field
@@ -1079,8 +1106,8 @@ static tdn_err_t jit_instruction(
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
-                CHECK(ctx->VolatilePrefix);
-                ctx->VolatilePrefix = 0;
+                CHECK(ctx->volatile_prefix);
+                ctx->volatile_prefix = 0;
             }
 
             // figure the pointer to the field itself
@@ -1128,8 +1155,8 @@ static tdn_err_t jit_instruction(
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
-                CHECK(ctx->VolatilePrefix);
-                ctx->VolatilePrefix = 0;
+                CHECK(ctx->volatile_prefix);
+                ctx->volatile_prefix = 0;
             }
 
             // pop the item
@@ -1175,7 +1202,7 @@ static tdn_err_t jit_instruction(
             CHECK_AND_RETHROW(eval_stack_pop(stack, &array_type, &array));
 
 #ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(builder, array);
+            jit_emit_null_check(ctx, builder, array);
 #endif
 
             // push the length, the load automatically zero extends it
@@ -1218,11 +1245,10 @@ static tdn_err_t jit_instruction(
             }
 
 #ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(builder, array);
+            jit_emit_null_check(ctx, builder, array);
 #endif
 
             jit_block_t length_is_valid = jit_builder_create_block(builder);
-            jit_block_t length_is_invalid = jit_builder_create_block(builder);
 
             // length check, this will also take care of the NULL check since if
             // we have a null value we will just fault in here
@@ -1231,13 +1257,9 @@ static tdn_err_t jit_instruction(
             jit_value_t length = jit_builder_build_load(builder, JIT_MEM_SIZE_4, JIT_TYPE_I64, length_ptr);
 
             // make sure the index < length
+            jit_block_t throw_index_out_of_range = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
             jit_value_t length_check = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I64, index, length);
-            jit_builder_build_brcond(builder, length_check, length_is_valid, length_is_invalid);
-
-            // perform the invalid length branch, throw an exception
-            jit_builder_set_block(builder, length_is_invalid);
-            jit_builder_build_call(builder, m_builtin_throw_index_out_of_range_exception, 0, NULL);
-            jit_builder_build_unreachable(builder);
+            jit_builder_build_brcond(builder, length_check, length_is_valid, throw_index_out_of_range);
 
             // perform the valid length branch, load the value from the array
             jit_builder_set_block(builder, length_is_valid);
@@ -1314,11 +1336,10 @@ static tdn_err_t jit_instruction(
             }
 
 #ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(builder, array);
+            jit_emit_null_check(ctx, builder, array);
 #endif
 
             jit_block_t length_is_valid = jit_builder_create_block(builder);
-            jit_block_t length_is_invalid = jit_builder_create_block(builder);
 
             // length check, this will also take care of the NULL check since if
             // we have a null value we will just fault in here
@@ -1327,13 +1348,9 @@ static tdn_err_t jit_instruction(
             jit_value_t length = jit_builder_build_load(builder, JIT_MEM_SIZE_4, JIT_TYPE_I64, length_ptr);
 
             // make sure the index < length
+            jit_block_t throw_inex_out_of_range = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
             jit_value_t length_check = jit_builder_build_icmp(builder, JIT_ICMP_SLT, JIT_TYPE_I64, index, length);
-            jit_builder_build_brcond(builder, length_check, length_is_valid, length_is_invalid);
-
-            // perform the invalid length branch, throw an exception
-            jit_builder_set_block(builder, length_is_invalid);
-            jit_builder_build_call(builder, m_builtin_throw_index_out_of_range_exception, 0, NULL);
-            jit_builder_build_unreachable(builder);
+            jit_builder_build_brcond(builder, length_check, length_is_valid, throw_inex_out_of_range);
 
             // perform the valid length branch, load the value from the array
             jit_builder_set_block(builder, length_is_valid);
@@ -1457,7 +1474,7 @@ static tdn_err_t jit_instruction(
                                 (target->Attributes.Virtual && target->Attributes.Final) // the method is final
                             )
                         ) {
-                            jit_emit_null_check(builder, call_args_values[0]);
+                            jit_emit_null_check(ctx, builder, call_args_values[0]);
                         }
                     } else {
                         target_type = target->Parameters->Elements[i - 1]->ParameterType;
@@ -1507,9 +1524,7 @@ static tdn_err_t jit_instruction(
                 }
 
                 // emit the actual call
-                value = jit_builder_build_call(builder,
-                                                           jit_get_function_from_id(target->JitMethodId),
-                                                           arrlen(call_args_values), call_args_values);
+                value = jit_builder_build_call(builder, jit_get_function_from_id(target->JitMethodId), arrlen(call_args_values), call_args_values);
             }
 
             // for primitive types push it now
@@ -1898,7 +1913,7 @@ static tdn_err_t jit_instruction(
             CHECK(tdn_type_is_referencetype(object_type));
 
             // must not be null
-            jit_emit_null_check(builder, object);
+            jit_emit_null_check(ctx, builder, object);
 
             // and throw it
             jit_builder_build_call(builder, m_builtin_throw, 1, &object);
@@ -2050,17 +2065,13 @@ static tdn_err_t jit_instruction(
                 }
 
                 jit_block_t valid = jit_builder_create_block(builder);
-                jit_block_t invalid = jit_builder_create_block(builder);
                 jit_value_t zero = jit_builder_build_iconst(builder, typ, 0);
                 jit_value_t cmp = jit_builder_build_icmp(builder,
                                                          JIT_ICMP_NE, JIT_TYPE_I64,
                                                          zero, value2);
-                jit_builder_build_brcond(builder, cmp, valid, invalid);
 
-                // the invalid branch, throw an exception
-                jit_builder_set_block(builder, invalid);
-                jit_builder_build_call(builder, m_builtin_throw_divide_by_zero_exception, 0, NULL);
-                jit_builder_build_unreachable(builder);
+                jit_block_t throw_divide_by_zero = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_DIVIDE_BY_ZERO);
+                jit_builder_build_brcond(builder, cmp, valid, throw_divide_by_zero);
 
                 // valid branch, continue forward
                 jit_builder_set_block(builder, valid);
@@ -2385,13 +2396,8 @@ static tdn_err_t jit_instruction(
 
             // perform the branch
             jit_block_t valid = jit_builder_create_block(builder);
-            jit_block_t invalid = jit_builder_create_block(builder);
+            jit_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_OVERFLOW);
             jit_builder_build_brcond(builder, cond, valid, invalid);
-
-            // invalid path, throw
-            jit_builder_set_block(builder, invalid);
-            jit_builder_build_call(builder, m_builtin_throw_overflow_exception, 0, NULL);
-            jit_builder_build_unreachable(builder);
 
             // valid path, push the new valid
             jit_builder_set_block(builder, valid);
@@ -2480,13 +2486,8 @@ static tdn_err_t jit_instruction(
 
             // perform the branch
             jit_block_t valid = jit_builder_create_block(builder);
-            jit_block_t invalid = jit_builder_create_block(builder);
+            jit_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_OVERFLOW);
             jit_builder_build_brcond(builder, cond, valid, invalid);
-
-            // invalid path, throw
-            jit_builder_set_block(builder, invalid);
-            jit_builder_build_call(builder, m_builtin_throw_overflow_exception, 0, NULL);
-            jit_builder_build_unreachable(builder);
 
             // valid path, push the new valid
             jit_builder_set_block(builder, valid);
@@ -2702,7 +2703,7 @@ static tdn_err_t jit_instruction(
                 CHECK_FAIL();
             } else {
 #ifdef __EXPLICIT_NULL_CHECK__
-                jit_emit_null_check(builder, obj);
+                jit_emit_null_check(ctx, builder, obj);
 #endif
 
                 // we can inline the check since the type has to be the exact value type we are trying to unpack
@@ -2712,16 +2713,11 @@ static tdn_err_t jit_instruction(
                 jit_value_t object_type = jit_builder_build_load(builder, JIT_MEM_SIZE_8, JIT_TYPE_PTR, object_type_ptr);
 
                 jit_block_t valid = jit_builder_create_block(builder);
-                jit_block_t invalid = jit_builder_create_block(builder);
+                jit_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INVALID_CAST);
 
                 jit_value_t wanted_type = jit_builder_build_iconst(builder, JIT_TYPE_PTR, (uint64_t)inst.operand.type);
                 jit_value_t is_wanted_type = jit_builder_build_icmp(builder, JIT_ICMP_EQ, JIT_TYPE_I64, object_type, wanted_type);
                 jit_builder_build_brcond(builder, is_wanted_type, valid, invalid);
-
-                // invalid path, throws the invalid cast
-                jit_builder_set_block(builder, invalid);
-                jit_builder_build_call(builder, m_builtin_throw_invalid_cast_exception, 0, NULL);
-                jit_builder_build_unreachable(builder);
 
                 // valid path, actually emit it
                 jit_builder_set_block(builder, valid);
@@ -2883,9 +2879,9 @@ static tdn_err_t jit_instruction(
 
     // if we did not have the prefix this time make sure that we handled
     // all the prefixes that we had
-    if (!ctx->LastWasPrefix) {
-        CHECK(!ctx->VolatilePrefix);
-        CHECK(ctx->Constrained == NULL);
+    if (!ctx->last_was_prefix) {
+        CHECK(!ctx->volatile_prefix);
+        CHECK(ctx->constrained == NULL);
     }
 
 cleanup:

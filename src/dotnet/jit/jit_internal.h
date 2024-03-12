@@ -285,6 +285,16 @@ typedef struct jit_arg {
     bool spilled;
 } jit_arg_t;
 
+typedef enum jit_builtin_exception {
+    JIT_EXCEPTION_INVALID_CAST,
+    JIT_EXCEPTION_INDEX_OUT_OF_RANGE,
+    JIT_EXCEPTION_OVERFLOW,
+    JIT_EXCEPTION_NULL_REFERENCE,
+    JIT_EXCEPTION_DIVIDE_BY_ZERO,
+
+    JIT_EXCEPTION_MAX
+} jit_builtin_exception_t;
+
 typedef struct jit_context {
     // the method we are jitting
     RuntimeMethodBase method;
@@ -306,6 +316,11 @@ typedef struct jit_context {
     // the eval stack, it is the same no matter where we are
     eval_stack_t stack;
 
+    // these locations have the calls for the exception throwing, this
+    // is meant to reduce the amount of code needed to throw an exception
+    // filled on demand
+    jit_block_t exception_blocks[JIT_EXCEPTION_MAX];
+
     // the protected and handler regions we have
     jit_region_t* protected_regions;
     jit_region_t* handler_regions;
@@ -314,12 +329,15 @@ typedef struct jit_context {
     jit_region_t** regions;
 
     // the constrained type
-    RuntimeTypeInfo Constrained;
+    RuntimeTypeInfo constrained;
+
+    // which builtin exceptions we threw so far
+    uint32_t exceptions;
 
     // did we have a volatile prefix
-    uint32_t LastWasPrefix : 1;
-    uint32_t VolatilePrefix : 1;
-    uint32_t : 30;
+    uint32_t last_was_prefix : 1;
+    uint32_t volatile_prefix : 1;
+    uint32_t  : 30;
 } jit_context_t;
 
 /**
