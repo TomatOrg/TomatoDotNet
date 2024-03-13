@@ -20,10 +20,10 @@ add_compile_options(-fms-extensions -Wno-microsoft)
 #set(SPIDIR_ENABLE_LOGGING 1)
 #add_subdirectory(libs/spidir/c-api)
 #list (APPEND SOURCES
-#    ./src/dotnet/jit/generic/jit.c
-#    ./src/dotnet/jit/generic/jit_internal.c
-#    ./src/dotnet/jit/generic/spidir/jit.c
-#    ./src/dotnet/jit/generic/spidir/platform.c
+#    ./src/dotnet/jit/jit.c
+#    ./src/dotnet/jit/jit_internal.c
+#    ./src/dotnet/jit/spidir/jit.c
+#    ./src/dotnet/jit/spidir/platform.c
 #)
 #link_libraries(spidir)
 

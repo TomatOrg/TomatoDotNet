@@ -45,6 +45,9 @@ extern RuntimeTypeInfo tOverflowException;
 extern RuntimeTypeInfo tNullable;
 
 extern RuntimeTypeInfo tUnsafe;
+extern RuntimeTypeInfo tMemoryMarshal;
+
+extern RuntimeTypeInfo tInAttribute;
 extern RuntimeTypeInfo tIsVolatile;
 
 extern RuntimeTypeInfo tNull;

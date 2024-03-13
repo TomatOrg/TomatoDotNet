@@ -49,8 +49,14 @@ static bool generic_compare_type(RuntimeTypeInfo source_type, RuntimeTypeInfo ta
         return true;
     }
 
-    // both need to be generic parameters for this check
-    if (source_type->IsGenericParameter != target_type->IsGenericParameter) {
+    // if they are both array or byref then compare the inside type
+    if ((source_type->IsArray && target_type->IsArray) ||
+        (source_type->IsByRef && target_type->IsByRef)) {
+        return generic_compare_type(source_type->ElementType, target_type->ElementType);
+    }
+
+    // if one of them is not generic
+    if (!source_type->IsGenericParameter || !target_type->IsGenericParameter) {
         return false;
     }
 
@@ -59,6 +65,10 @@ static bool generic_compare_type(RuntimeTypeInfo source_type, RuntimeTypeInfo ta
     }
 
     if (source_type->IsGenericMethodParameter != target_type->IsGenericMethodParameter) {
+        return false;
+    }
+
+    if (source_type->GenericParameterPosition != target_type->GenericParameterPosition) {
         return false;
     }
 
@@ -208,7 +218,7 @@ tdn_err_t tdn_assembly_lookup_field(
             RuntimeFieldInfo info = fields->Elements[i];
             if (tdn_compare_string_to_cstr(info->Name, ref->name)) {
                 // make sure the type matches
-                CHECK(info->FieldType == field_type);
+                CHECK(generic_compare_type(info->FieldType, field_type));
                 found = info;
                 break;
             }

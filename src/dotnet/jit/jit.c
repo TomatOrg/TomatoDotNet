@@ -344,8 +344,7 @@ static bool check_type_access(RuntimeMethodBase method, RuntimeTypeInfo type, in
     // top level stuff
     switch (type->Attributes.Visibility) {
         case TDN_TYPE_VISIBILITY_NOT_PUBLIC: {
-            token_t tok = { .token = token };
-            return method->Module == type->Module && tok.table == METADATA_METHOD_DEF;
+            return method->Module == type->Module;
         } break;
 
         case TDN_TYPE_VISIBILITY_PUBLIC:
@@ -653,7 +652,6 @@ static void jit_emit_null_check(jit_context_t* ctx, jit_builder_t builder, jit_v
 static tdn_err_t handle_unsafe_intrinsics(
     jit_builder_t builder,
     RuntimeMethodBase target,
-    bool allow_unsafe,
     RuntimeTypeInfo* types, jit_value_t* args,
     jit_value_t* out
 ) {
@@ -663,17 +661,14 @@ static tdn_err_t handle_unsafe_intrinsics(
     CHECK(!tdn_type_is_valuetype(target->ReturnParameter->ParameterType));
 
     if (tdn_compare_string_to_cstr(target->Name, "As")) {
-        CHECK(allow_unsafe);
         CHECK(arrlen(args) == 1);
         *out = args[0];
 
     } else if (tdn_compare_string_to_cstr(target->Name, "AsRef")) {
-        CHECK(allow_unsafe);
         CHECK(arrlen(args) == 1);
         *out = args[0];
 
     } else if (tdn_compare_string_to_cstr(target->Name, "Add")) {
-        CHECK(allow_unsafe);
         CHECK(arrlen(args) == 2);
 
         jit_value_t value = args[0];
@@ -695,7 +690,6 @@ static tdn_err_t handle_unsafe_intrinsics(
         *out = jit_builder_build_ptroff(builder, value, offset);
 
     } else if (tdn_compare_string_to_cstr(target->Name, "AddByteOffset")) {
-        CHECK(allow_unsafe);
         CHECK(arrlen(args) == 2);
 
         // calculate an offset
@@ -943,7 +937,11 @@ static tdn_err_t jit_instruction(
             if (obj_type->IsByRef) {
                 CHECK(field->DeclaringType == obj_type->ElementType);
             } else {
-                CHECK(field->DeclaringType == obj_type);
+                if (field->DeclaringType == tArray) {
+                    CHECK(obj_type->IsArray);
+                } else {
+                    CHECK(field->DeclaringType == obj_type);
+                }
             }
 
             // check this is either an object or a managed pointer
@@ -1505,24 +1503,24 @@ static tdn_err_t jit_instruction(
                 arrins(call_args_values, 0, ret_buffer);
             }
 
+            // restrict access to certain classes only to assemblies that can run
+            // unsafe code
+            RuntimeAssembly assembly = method->Module->Assembly;
+            RuntimeTypeInfo declaring_type = target->DeclaringType;
+            if (!assembly->AllowUnsafe) {
+                CHECK(declaring_type != tUnsafe);
+                CHECK(declaring_type != tMemoryMarshal);
+            }
+
+            // and now emit it, also handling special cases on the fly
             jit_value_t value;
             if (target->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME) {
-                if (target->DeclaringType == tUnsafe) {
-                    CHECK_AND_RETHROW(handle_unsafe_intrinsics(builder, target, method->Module->Assembly->AllowUnsafe,
-                                                               call_args_types, call_args_values, &value));
+                if (declaring_type == tUnsafe) {
+                    CHECK_AND_RETHROW(handle_unsafe_intrinsics(builder, target, call_args_types, call_args_values, &value));
                 } else {
                     CHECK_FAIL();
                 }
             } else {
-                // whitelist of Unsafe functions that are considered safe by us
-                if (target->DeclaringType == tUnsafe) {
-                    if (!method->Module->Assembly->AllowUnsafe) {
-                        CHECK(
-                            tdn_compare_string_to_cstr(target->Name, "SizeOf")
-                        );
-                    }
-                }
-
                 // emit the actual call
                 value = jit_builder_build_call(builder, jit_get_function_from_id(target->JitMethodId), arrlen(call_args_values), call_args_values);
             }
@@ -1917,6 +1915,9 @@ static tdn_err_t jit_instruction(
 
             // and throw it
             jit_builder_build_call(builder, m_builtin_throw, 1, &object);
+
+            // and we can't actually reach here
+            jit_builder_build_unreachable(builder);
 
             // because we don't fall-through we clear the stack
             eval_stack_clear(stack);
@@ -3542,7 +3543,7 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, jit_module_t handl
     const char* name = string_builder_build(&builder);
 
     // create the function itself
-    jit_function_t func = NULL;
+    jit_function_t func;
     if (method->MethodBody != NULL) {
         func = jit_module_create_function(
             handle,

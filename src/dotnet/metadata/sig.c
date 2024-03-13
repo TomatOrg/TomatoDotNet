@@ -333,8 +333,12 @@ static tdn_err_t sig_parse_ret_type(
     bool required = false;
     CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     while(cmod_type != NULL) {
-        WARN("Unknown mod %T", cmod_type);
-        CHECK(!required);
+        if (cmod_type == tInAttribute) {
+            parameter_info->IsReadonly = 1;
+        } else {
+            WARN("Unknown mod %T", cmod_type);
+            CHECK(!required);
+        }
         CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     }
 
@@ -441,8 +445,27 @@ tdn_err_t sig_parse_field(blob_entry_t _blob, RuntimeFieldInfo field_info) {
         CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, NULL, &cmod_type, &required));
     }
 
+    // check if this is a ref field
+    bool is_ref = false;
+    if (PEEK_BYTE == ELEMENT_TYPE_BYREF) {
+        FETCH_BYTE;
+        is_ref = true;
+
+        // make sure it is not defined in a class
+        CHECK(tdn_type_is_valuetype(field_info->DeclaringType));
+
+        // mark the owner as a ref-struct, we will check later if it has
+        // any other problems
+        field_info->DeclaringType->IsByRefStruct = 1;
+    }
+
     // parse the type
     CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, NULL, false, &field_info->FieldType));
+
+    if (is_ref) {
+        // get the byref type
+        CHECK_AND_RETHROW(tdn_get_byref_type(field_info->FieldType, &field_info->FieldType));
+    }
 
 cleanup:
     return err;
@@ -469,8 +492,19 @@ tdn_err_t sig_parse_field_type(
         CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     }
 
+    bool is_ref = false;
+    if (PEEK_BYTE == ELEMENT_TYPE_BYREF) {
+        FETCH_BYTE;
+        is_ref = true;
+    }
+
     // parse the type
     CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, type));
+
+    if (is_ref) {
+        // get the byref type
+        CHECK_AND_RETHROW(tdn_get_byref_type(*type, type));
+    }
 
 cleanup:
     return err;

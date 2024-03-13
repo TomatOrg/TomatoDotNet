@@ -1,6 +1,6 @@
 namespace System;
 
-public class ThrowHelper
+internal static class ThrowHelper
 {
     
     internal static void ThrowInvalidOperationException_InvalidOperation_NoValue()
@@ -8,5 +8,14 @@ public class ThrowHelper
         throw new InvalidOperationException(SR.InvalidOperation_NoValue);
     }
 
+    internal static void ThrowIndexOutOfRangeException()
+    {
+        throw new IndexOutOfRangeException();
+    }
+    
+    internal static void ThrowArgumentOutOfRangeException()
+    {
+        throw new ArgumentOutOfRangeException();
+    }
     
 }

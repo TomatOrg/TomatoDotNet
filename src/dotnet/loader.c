@@ -130,6 +130,8 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, OverflowException),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
+    LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
+    LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
     { "System", "Nullable`1", &tNullable },
 };
 static int m_loaded_types = 0;
@@ -336,6 +338,13 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
             if (tdn_type_is_referencetype(field_type) || !field_type->IsUnmanaged) {
                 is_managed = true;
             }
+
+            // make sure we don't include a byref struct inside
+            // of another byref struct
+            if (type->IsByRefStruct && field_type->IsByRef) {
+                CHECK(!field_type->ElementType->IsByRefStruct);
+            }
+
             largest_alignment = MAX(largest_alignment, fields->Elements[i]->FieldType->StackAlignment);
         }
         type->IsUnmanaged = !is_managed;

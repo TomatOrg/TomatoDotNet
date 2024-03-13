@@ -19,7 +19,7 @@ public static class Program
         if (!Shifts.Run()) return 8;
         
         // if (!GenericFields.Run()) return 9;
-        
+
         return 0;
     }
     

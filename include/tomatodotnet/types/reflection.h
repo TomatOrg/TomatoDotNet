@@ -54,6 +54,8 @@ typedef struct ParameterInfo {
     RuntimeMemberInfo Member;
     String Name;
     int Position;
+    uint32_t IsReadonly : 1;
+    uint32_t : 31;
 }* ParameterInfo;
 DEFINE_ARRAY(ParameterInfo);
 

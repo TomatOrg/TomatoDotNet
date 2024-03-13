@@ -12,11 +12,15 @@ internal class SR
     internal const string Arg_NullReferenceException = "Object reference not set to an instance of an object.";
     internal const string Arg_ArithmeticException = "Overflow or underflow in the arithmetic operation.";
     internal const string Arg_OverflowException = "Arithmetic operation resulted in an overflow.";
+    internal const string Arg_ArgumentOutOfRangeException = "Specified argument was out of the range of valid values.";
     
     internal const string ArgumentNull_Generic = "Value cannot be null.";
 
     internal const string NotSupported_SubclassOverride = "Derived classes must provide an implementation.";
     
     internal const string InvalidOperation_NoValue = "Nullable object must have a value.";
+    
+    internal const string NotSupported_CannotCallEqualsOnSpan = "Equals() on Span and ReadOnlySpan is not supported. Use operator== instead.";
+    internal const string NotSupported_CannotCallGetHashCodeOnSpan = "GetHashCode() on Span and ReadOnlySpan is not supported.";
 
 }

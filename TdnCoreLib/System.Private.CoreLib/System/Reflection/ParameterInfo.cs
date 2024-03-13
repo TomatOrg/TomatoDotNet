@@ -11,6 +11,7 @@ public class ParameterInfo
     private MemberInfo _member;
     private string _name;
     private int _position;
+    private int _flags;
     
     protected ParameterInfo()
     {

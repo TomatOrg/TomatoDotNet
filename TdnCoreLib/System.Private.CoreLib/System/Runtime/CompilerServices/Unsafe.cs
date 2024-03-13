@@ -36,4 +36,7 @@ public static unsafe class Unsafe
     [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
     public static extern ref T AsRef<T>(scoped ref readonly T source);
 
+    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
+    public static extern bool AreSame<T>(ref T left, ref T right);
+
 }
