@@ -77,6 +77,9 @@ cleanup:
 tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // can't have a byref to a byref
+    CHECK(!type->IsByRef);
+
     RuntimeTypeInfo new_type = type->ByRefType;
     if (new_type != NULL) {
         *out_type = new_type;

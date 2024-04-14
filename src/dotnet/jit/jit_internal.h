@@ -38,6 +38,17 @@ typedef struct eval_stack_item {
 
     // the value to access it
     jit_value_t value;
+
+    // is this a non-local (can be returned) reference
+    uint8_t is_nonlocal_ref : 1;
+
+    // is this reference readable
+    uint8_t is_readable : 1;
+
+    // is this reference writable
+    uint8_t is_writable : 1;
+
+    uint8_t : 5;
 } eval_stack_item_t;
 
 typedef struct eval_stack_value_instance {
@@ -51,6 +62,22 @@ typedef struct eval_stack_value_instance {
     int depth;
 } eval_stack_value_instance_t;
 
+typedef struct eval_stack_local {
+    // the index of the given local
+    uint16_t local_index;
+
+    // is this a non-local (can be returned) reference
+    uint8_t is_nonlocal_ref : 1;
+
+    // is this reference readable
+    uint8_t is_readable : 1;
+
+    // is this reference writable
+    uint8_t is_writable : 1;
+
+    uint8_t : 5;
+} local_attributes_t;
+
 typedef struct eval_stack {
     // used to track the stack items and where they are
     eval_stack_item_t* stack;
@@ -63,16 +90,11 @@ typedef struct eval_stack {
 } eval_stack_t;
 
 typedef struct eval_stack_snapshot_item {
-    // the type that was on the stack
-    RuntimeTypeInfo type;
+    eval_stack_item_t;
 
     // the phi that can be used to add more
     // inputs to the slot
     jit_phi_t phi;
-
-    // the value for accessing the item, can
-    // either be the input value or a phi node
-    jit_value_t value;
 } eval_stack_snapshot_item_t;
 
 typedef struct eval_stack_snapshot_value_instance {
@@ -117,6 +139,21 @@ tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
     RuntimeTypeInfo* out_type,
     jit_value_t* out_value
+);
+
+/**
+ * Pop a value from the stack
+ */
+tdn_err_t eval_stack_pop_item(
+    eval_stack_t* stack,
+    eval_stack_item_t* item
+);
+
+/**
+ * Get the top of the stack item, allows for modifications
+ */
+eval_stack_item_t* eval_stack_get_top(
+    eval_stack_t* stack
 );
 
 /**
@@ -279,6 +316,7 @@ typedef struct jit_arg {
     jit_value_t value;
 
     // the type of the argument
+    ParameterAttributes attributes;
     RuntimeTypeInfo type;
 
     // did we spill this argument

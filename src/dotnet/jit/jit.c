@@ -17,7 +17,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-//#define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 //
 // If the jit does not support SEH like
@@ -496,7 +496,7 @@ static void jit_emit_gc_memcpy(jit_builder_t builder, RuntimeTypeInfo type, jit_
 /**
  * Resolve the parameter type, taking into account that for non-static arg0 is the this
  */
-static tdn_err_t jit_resolve_parameter_type(RuntimeMethodBase method, int arg, RuntimeTypeInfo* type) {
+static tdn_err_t jit_resolve_parameter_type(RuntimeMethodBase method, int arg, RuntimeTypeInfo* type, ParameterAttributes* attributes) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // resolve the argument type
@@ -516,6 +516,7 @@ static tdn_err_t jit_resolve_parameter_type(RuntimeMethodBase method, int arg, R
         // get the correct argument
         CHECK(param_arg < method->Parameters->Length);
         arg_type = method->Parameters->Elements[param_arg]->ParameterType;
+        *attributes = method->Parameters->Elements[param_arg]->Attributes;
     }
 
     // return it
@@ -806,6 +807,25 @@ static tdn_err_t jit_instruction(
                     CHECK_AND_RETHROW(eval_stack_push(stack, arg_type, arg->value));
                 }
             }
+
+            // if this is a byref its non-local since it came
+            // from the outside
+            if (arg_type->IsByRef) {
+                eval_stack_item_t* item = eval_stack_get_top(stack);
+                item->is_nonlocal_ref = true;
+                if (arg->attributes.In) {
+                    item->is_writable = false;
+                    item->is_readable = true;
+
+                } else if (arg->attributes.Out) {
+                    item->is_writable = true;
+                    item->is_readable = false;
+
+                } else {
+                    item->is_writable = true;
+                    item->is_readable = true;
+                }
+            }
         } break;
 
         case CEE_LDARGA: {
@@ -814,12 +834,20 @@ static tdn_err_t jit_instruction(
             jit_arg_t* arg = &ctx->args[argi];
             CHECK(arg->spilled);
 
+            // can't take a reference to a byref parameter
+            CHECK(!arg->type->IsByRef);
+
             // get the argument we are loading
             RuntimeTypeInfo arg_type;
             CHECK_AND_RETHROW(tdn_get_byref_type(arg->type, &arg_type));
 
             // push the stack slot to the stack
             CHECK_AND_RETHROW(eval_stack_push(stack, arg_type, arg->value));
+
+            // this is readable and writable since its local
+            eval_stack_item_t* item = eval_stack_get_top(stack);
+            item->is_readable = true;
+            item->is_writable = true;
         } break;
 
         case CEE_STARG: {
@@ -827,6 +855,9 @@ static tdn_err_t jit_instruction(
             CHECK(argi < arrlen(ctx->args));
             jit_arg_t* arg = &ctx->args[argi];
             CHECK(arg->spilled);
+
+            // can't modify a byref parameter
+            CHECK(!arg->type->IsByRef);
 
             RuntimeTypeInfo value_type;
             jit_value_t value;
@@ -880,16 +911,25 @@ static tdn_err_t jit_instruction(
             }
         } break;
 
-            // load the pointer to a local variable
+        // load the pointer to a local variable
         case CEE_LDLOCA: {
             int var = inst.operand.variable;
             CHECK(var < method->MethodBody->LocalVariables->Length);
 
             RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
+
+            // can't get byref to byref
+            CHECK(!type->IsByRef);
+
             type = tdn_get_verification_type(type);
             CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
 
             CHECK_AND_RETHROW(eval_stack_push(stack, type, ctx->locals[var]));
+
+            // reference to local variables is always readable and writable
+            eval_stack_item_t* item = eval_stack_get_top(stack);
+            item->is_writable = true;
+            item->is_readable = true;
         } break;
 
         // store to a local variable
@@ -898,22 +938,27 @@ static tdn_err_t jit_instruction(
             int var = inst.operand.variable;
             CHECK(var < method->MethodBody->LocalVariables->Length);
 
-            jit_value_t value;
-            RuntimeTypeInfo value_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, &value_type, &value));
+            eval_stack_item_t value;
+            CHECK_AND_RETHROW(eval_stack_pop_item(stack, &value));
 
             // check the type
             RuntimeTypeInfo local_type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
-            CHECK(tdn_type_verifier_assignable_to(value_type, local_type));
+            CHECK(tdn_type_verifier_assignable_to(value.type, local_type));
 
-            if (jit_is_struct_type(value_type)) {
+            if (jit_is_struct_type(value.type)) {
                 // struct type, copy the stack slot to the eval stack
-                jit_emit_memcpy(builder, ctx->locals[var], value, value_type->StackSize);
+                jit_emit_memcpy(builder, ctx->locals[var], value.value, value.type->StackSize);
             } else {
+                // TODO: support readonly locals, for now we have no way to properly represent that
+                if (value.type->IsByRef) {
+                    CHECK(value.is_readable);
+                    CHECK(value.is_writable);
+                }
+
                 // not a struct type, just store it
                 jit_builder_build_store(builder,
                                            get_jit_mem_size(local_type),
-                                           value,
+                                           value.value,
                                            ctx->locals[var]);
             }
         } break;
@@ -1440,9 +1485,13 @@ static tdn_err_t jit_instruction(
                 }
 
                 // pop it
-                CHECK_AND_RETHROW(eval_stack_pop(stack, &call_args_types[i], &call_args_values[i]));
+                eval_stack_item_t item;
+                CHECK_AND_RETHROW(eval_stack_pop_item(stack, &item));
+                call_args_types[i] = item.type;
+                call_args_values[i] = item.value;
 
                 // validate the stack type
+                ParameterAttributes attributes = { .Attributes = 0 };
                 RuntimeTypeInfo target_type;
                 if (!is_static) {
                     if (i == 0) {
@@ -1476,9 +1525,26 @@ static tdn_err_t jit_instruction(
                         }
                     } else {
                         target_type = target->Parameters->Elements[i - 1]->ParameterType;
+                        attributes = target->Parameters->Elements[i - 1]->Attributes;
                     }
                 } else {
                     target_type = target->Parameters->Elements[i]->ParameterType;
+                    attributes = target->Parameters->Elements[i]->Attributes;
+                }
+
+                // verifications on byref restrictions
+                if (target_type->IsByRef) {
+                    if (attributes.In) {
+                        // in - must be readable, doesn't need to be writable
+                        CHECK(item.is_readable);
+                    } else if (attributes.Out) {
+                        // out - must be writable, doesn't need to be readable
+                        CHECK(item.is_writable);
+                    } else {
+                        // normal ref, must be readable and writable
+                        CHECK(item.is_readable);
+                        CHECK(item.is_writable);
+                    }
                 }
 
                 // check that we can do the assignment
@@ -1529,6 +1595,19 @@ static tdn_err_t jit_instruction(
             if (ret_type != tVoid && !jit_is_struct_type(ret_type)) {
                 CHECK(!is_newobj);
                 CHECK_AND_RETHROW(eval_stack_push(stack, ret_type, value));
+
+                if (ret_type->IsByRef) {
+                    eval_stack_item_t* item = eval_stack_get_top(stack);
+
+                    // we got this as a return, its readable
+                    item->is_readable = true;
+
+                    // if this is not a readonly return then
+                    // mark this as writable as well
+                    if (!target->ReturnParameter->IsReadonly) {
+                        item->is_writable = true;
+                    }
+                }
             }
         } break;
 
@@ -1706,26 +1785,41 @@ static tdn_err_t jit_instruction(
             if (wanted_ret_type == tVoid) {
                 jit_builder_build_return(builder, JIT_VALUE_INVALID);
             } else {
-                RuntimeTypeInfo ret_type;
-                jit_value_t ret_value;
-                eval_stack_pop(stack, &ret_type, &ret_value);
+                eval_stack_item_t ret;
+                eval_stack_pop_item(stack, &ret);
+
+                // validations for reference return types
+                if (ret.type->IsByRef) {
+                    // make sure this is a non-local reference, otherwise we
+                    // are not allowed to return it
+                    CHECK(ret.is_nonlocal_ref);
+
+                    // must be a readable reference if we return it
+                    CHECK(ret.is_readable);
+
+                    // if the return is not readonly, make sure it is
+                    // also a writable reference
+                    if (!method->ReturnParameter->IsReadonly) {
+                        CHECK(ret.is_writable);
+                    }
+                }
 
                 // make sure the type is a valid return target
-                CHECK(tdn_type_verifier_assignable_to(ret_type, wanted_ret_type));
+                CHECK(tdn_type_verifier_assignable_to(ret.type, wanted_ret_type));
 
-                if (jit_is_struct_type(ret_type)) {
+                if (jit_is_struct_type(ret.type)) {
                     // returning a struct, need to use the implicit
                     // ret pointer
                     jit_emit_memcpy(builder,
                                     jit_builder_build_param_ref(builder, 0),
-                                    ret_value,
-                                    ret_type->StackSize);
+                                    ret.value,
+                                    ret.type->StackSize);
 
                     // and return without a ret value
                     jit_builder_build_return(builder, JIT_VALUE_INVALID);
                 } else {
                     // returning a normal pointer sized thing
-                    jit_builder_build_return(builder, ret_value);
+                    jit_builder_build_return(builder, ret.value);
                 }
             }
 
@@ -2813,13 +2907,13 @@ static tdn_err_t jit_instruction(
         case CEE_LDIND_U1:
         case CEE_LDIND_U2:
         case CEE_LDIND_U4: {
-            jit_value_t addr;
-            RuntimeTypeInfo addr_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, &addr_type, &addr));
+            eval_stack_item_t addr;
+            CHECK_AND_RETHROW(eval_stack_pop_item(stack, &addr));
 
             // must be a ByRef
-            CHECK(addr_type->IsByRef);
-            addr_type = addr_type->ElementType;
+            CHECK(addr.type->IsByRef);
+            CHECK(addr.is_readable);
+            RuntimeTypeInfo addr_type = addr.type->ElementType;
 
             // make sure the type is verified
             CHECK(tdn_type_assignable_to(addr_type, inst.operand.type));
@@ -2827,7 +2921,7 @@ static tdn_err_t jit_instruction(
 
             jit_value_type_t mem_type = get_jit_mem_type(addr_type);
             jit_mem_size_t mem_size = get_jit_mem_size(addr_type);
-            jit_value_t result = jit_builder_build_load(builder, mem_size, mem_type, addr);
+            jit_value_t result = jit_builder_build_load(builder, mem_size, mem_type, addr.value);
 
             // sign extend as needed
             if (addr_type == tSByte) {
@@ -2843,20 +2937,22 @@ static tdn_err_t jit_instruction(
         case CEE_STIND_I2:
         case CEE_STIND_I4:
         case CEE_STIND_I8: {
-            jit_value_t val, addr;
-            RuntimeTypeInfo val_type, addr_type;
+            jit_value_t val;
+            RuntimeTypeInfo val_type;
+            eval_stack_item_t addr;
             CHECK_AND_RETHROW(eval_stack_pop(stack, &val_type, &val));
-            CHECK_AND_RETHROW(eval_stack_pop(stack, &addr_type, &addr));
+            CHECK_AND_RETHROW(eval_stack_pop_item(stack, &addr));
 
             // must be a ByRef
-            CHECK(addr_type->IsByRef);
-            addr_type = addr_type->ElementType;
+            CHECK(addr.type->IsByRef);
+            CHECK(addr.is_writable);
+            RuntimeTypeInfo addr_type = addr.type->ElementType;
 
             // make sure the type is verified
             CHECK(tdn_type_verifier_assignable_to(val_type, addr_type));
 
             jit_mem_size_t mem_size = get_jit_mem_size(addr_type);
-            jit_builder_build_store(builder, mem_size, val, addr);
+            jit_builder_build_store(builder, mem_size, val, addr.value);
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2941,10 +3037,12 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
     for (int i = 0; i < arg_count; i++) {
         // resolve the parameter type
         RuntimeTypeInfo type;
-        CHECK_AND_RETHROW(jit_resolve_parameter_type(method, i, &type));
+        ParameterAttributes attributes = { .Attributes = 0 };
+        CHECK_AND_RETHROW(jit_resolve_parameter_type(method, i, &type, &attributes));
 
         // set it up initially
         ctx.args[i].value = JIT_VALUE_INVALID;
+        ctx.args[i].attributes = attributes;
         ctx.args[i].type = type;
         ctx.args[i].spilled = false;
     }

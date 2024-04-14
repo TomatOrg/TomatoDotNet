@@ -77,12 +77,27 @@ tdn_err_t eval_stack_pop(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    eval_stack_item_t item;
+    CHECK_AND_RETHROW(eval_stack_pop_item(stack, &item));
+
+    if (out_type != NULL) *out_type = item.type;
+    if (out_value != NULL) *out_value = item.value;
+
+cleanup:
+    return err;
+}
+
+tdn_err_t eval_stack_pop_item(
+    eval_stack_t* stack,
+    eval_stack_item_t* out_item
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
     CHECK(arrlen(stack->stack) >= 1);
     eval_stack_item_t item = arrpop(stack->stack);
 
     // output important data if needed
-    if (out_type != NULL) *out_type = item.type;
-    if (out_value != NULL) *out_value = item.value;
+    *out_item = item;
 
     // check if we need to remove it from the used stack-slots list
     if (jit_is_struct_type(item.type)) {
@@ -93,6 +108,15 @@ tdn_err_t eval_stack_pop(
 
 cleanup:
     return err;
+}
+
+eval_stack_item_t* eval_stack_get_top(
+    eval_stack_t* stack
+) {
+    if (arrlen(stack->stack) == 0) {
+        return NULL;
+    }
+    return &arrlast(stack->stack);
 }
 
 tdn_err_t eval_stack_snapshot(
@@ -254,6 +278,24 @@ tdn_err_t eval_stack_merge(
             CHECK(modify);
             stack->stack[i].type = S;
             snapshot->stack[i].type = S;
+        }
+
+        // if both are not the same then force this into a non-local reference
+        if (stack->stack[i].is_nonlocal_ref != snapshot->stack[i].is_nonlocal_ref) {
+            CHECK(modify);
+            stack->stack[i].is_nonlocal_ref = false;
+        }
+
+        // if both are not the same then force this into a readonly reference
+        if (stack->stack[i].is_readable != snapshot->stack[i].is_readable) {
+            CHECK(modify);
+            stack->stack[i].is_readable = false;
+        }
+
+        // if both are not the same then force this into a readonly reference
+        if (stack->stack[i].is_writable != snapshot->stack[i].is_writable) {
+            CHECK(modify);
+            stack->stack[i].is_writable = false;
         }
 
         // add the input to the phi

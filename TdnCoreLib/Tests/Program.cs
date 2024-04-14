@@ -7,6 +7,11 @@ namespace Tests;
 public static class Program
 {
 
+    public static ref readonly int Lol(in int a)
+    {
+        return ref a;
+    }
+    
     public static int Main()
     {
         if (CodeGenBringUpTests.Run() != 0) return 1;
