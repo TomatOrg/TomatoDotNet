@@ -561,6 +561,7 @@ cleanup:
 
 static tdn_err_t dotnet_parse_metadata_tables(dotnet_file_t* file, void* stream, size_t size) {
     tdn_err_t err = TDN_NO_ERROR;
+    metadata_loader_context_t context = {};
 
     CHECK(size >= sizeof(metadata_tables_stream_header_t));
     metadata_tables_stream_header_t* header = stream;
@@ -568,12 +569,10 @@ static tdn_err_t dotnet_parse_metadata_tables(dotnet_file_t* file, void* stream,
     stream += sizeof(metadata_tables_stream_header_t);
 
     // start to setup the data we need for loading
-    metadata_loader_context_t context = {
-        .file = file,
-        .string_index_big = (header->HeapSizes & 0x01),
-        .guid_index_big = (header->HeapSizes & 0x02),
-        .blog_index_big = (header->HeapSizes & 0x04),
-    };
+    context.file = file;
+    context.string_index_big = (header->HeapSizes & 0x01);
+    context.guid_index_big = (header->HeapSizes & 0x02);
+    context.blog_index_big = (header->HeapSizes & 0x04);
 
     // setup the row count for each of the valid ones
     for (int i = 0; i < 64; i++) {

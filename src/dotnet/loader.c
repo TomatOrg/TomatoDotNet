@@ -982,6 +982,7 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
         base->MethodImplFlags = impl_attributes;
         base->Module = module;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
+        CHECK(base->Name != NULL);
 
         // save it
         assembly->MethodDefs->Elements[i] = base;
@@ -1008,6 +1009,7 @@ static tdn_err_t assembly_load_fields(RuntimeAssembly assembly) {
         // create and save the type
         RuntimeFieldInfo field_info = GC_NEW(RuntimeFieldInfo);
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(field->name, &field_info->Name));
+        CHECK(field_info->Name != NULL);
         field_info->Attributes = attributes;
         field_info->Module = module;
         field_info->MetadataToken = ((token_t){ .table = METADATA_FIELD, .index = i + 1 }).token;
@@ -1056,8 +1058,15 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                             type_def[1].method_list.index - 1) - (type_def->method_list.index - 1);
 
     // validate we have valid lists if we have a non-zero methods count
-    if (methods_count != 0) CHECK(type_def->method_list.index != 0);
-    if (fields_count != 0) CHECK(type_def->field_list.index != 0);
+    if (methods_count != 0) {
+        CHECK(type_def->method_list.index != 0);
+        CHECK(type_def->method_list.index - 1 + methods_count <= assembly->Metadata->method_defs_count);
+    }
+
+    if (fields_count != 0) {
+        CHECK(type_def->field_list.index != 0);
+        CHECK(type_def->field_list.index - 1 + fields_count <= assembly->Metadata->fields_count);
+    }
 
     // validations
     if (type == tValueType) CHECK(type->BaseType == tObject);
@@ -1208,7 +1217,11 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
         size_t params_count = (idx == assembly->Metadata->method_defs_count ?
                                assembly->Metadata->params_count :
                                method_def[1].param_list.index - 1) - (method_def->param_list.index - 1);
-        CHECK(params_count <= base->Parameters->Length + 1);
+        if (params_count != 0) {
+            CHECK(method_def->param_list.index != 0);
+            CHECK(method_def->param_list.index - 1 + params_count <= assembly->Metadata->params_count);
+        }
+        CHECK(params_count <= base->Parameters->Length + 1); // TODO: shouldn't this be equals??
         for (int pi = 0; pi < params_count; pi++) {
             metadata_param_t* param = &assembly->Metadata->params[method_def->param_list.index - 1 + pi];
             CHECK(param->sequence < base->Parameters->Length + 1);
@@ -1340,11 +1353,13 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
             CHECK(owner.index != 0 && owner.index <= assembly->TypeDefs->Length);
             param->IsGenericTypeParameter = 1;
             param->DeclaringType = assembly->TypeDefs->Elements[owner.index - 1];
+            CHECK(param->DeclaringType->GenericArguments->Length > generic_param->number);
             param->DeclaringType->GenericArguments->Elements[generic_param->number] = param;
         } else if (owner.table == METADATA_METHOD_DEF) {
             CHECK(owner.index != 0 && owner.index <= assembly->MethodDefs->Length);
             param->IsGenericMethodParameter = 1;
             param->DeclaringMethod = assembly->MethodDefs->Elements[owner.index - 1];
+            CHECK(param->DeclaringMethod->GenericArguments->Length > generic_param->number);
             param->DeclaringMethod->GenericArguments->Elements[generic_param->number] = param;
         } else {
             CHECK_FAIL();
@@ -1534,6 +1549,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         type->Module = module;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(type_def->type_name, &type->Name));
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(type_def->type_namespace, &type->Namespace));
+        CHECK(type->Name != NULL);
         type->Attributes.Value = (int)type_def->flags;
     }
 
