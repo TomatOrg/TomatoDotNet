@@ -3,6 +3,8 @@ project(tomatodotnet C)
 
 set(CMAKE_C_STANDARD 23)
 
+set(CMAKE_C_COMPILER afl-clang-fast)
+
 file(GLOB_RECURSE SOURCES ./src/*.c ./src/*.h)
 file(GLOB_RECURSE HOST_SOURCES ./host/linux/*.c ./host/linux/*.h)
 file(GLOB_RECURSE INCLUDE_HEADERS include/tomatodotnet/*.h)
@@ -13,6 +15,7 @@ list(FILTER SOURCES EXCLUDE REGEX "\/jit\/")
 add_compile_options(-Wall -Werror)
 add_compile_options(-Wno-unused-variable -Wno-constant-logical-operand -Wno-unused-parameter -Wno-unused-label -Wno-unused-but-set-variable -Wno-unused-function -Wno-format-invalid-specifier)
 add_compile_options(-fms-extensions -Wno-microsoft)
+add_compile_options(-O0 -g)
 
 ############################################################################
 

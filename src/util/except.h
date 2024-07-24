@@ -16,13 +16,19 @@ void dump_hex(const void* data, size_t size);
 #define DEFAULT_ERROR TDN_ERROR_CHECK_FAILED
 #define DEFAULT_LABEL cleanup
 
+#if 0
+    #define DEBUGGER_TRAP do { __builtin_debugtrap(); } while (0)
+#else
+    #define DEBUGGER_TRAP do { } while (0)
+#endif
+
 #define CHECK_ERROR_LABEL(expr, error, label, ...) \
     do { \
         if (!(expr)) { \
             err = error; \
             IF(HAS_ARGS(__VA_ARGS__))(ERROR(__VA_ARGS__)); \
             ERROR("Check `%s` failed with error `%s` at %s (%s:%d)", #expr, tdn_get_error_string(err), __FUNCTION__, __FILE__, __LINE__); \
-            __builtin_debugtrap(); \
+            DEBUGGER_TRAP; \
             goto label; \
         } \
     } while (0)

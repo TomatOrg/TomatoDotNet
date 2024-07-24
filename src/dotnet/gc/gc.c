@@ -15,10 +15,10 @@ void gc_free_all() {
             RuntimeAssembly assembly = (RuntimeAssembly)obj;
             if (assembly->Metadata != NULL) {
                 assembly->Metadata->file.close_handle(assembly->Metadata->file.handle);
+                dotnet_free_file(assembly->Metadata);
+                tdn_host_free(assembly->Metadata);
             }
             hmfree(assembly->StringTable);
-            dotnet_free_file(assembly->Metadata);
-            tdn_host_free(assembly->Metadata);
         } else if (obj->ObjectType == tRuntimeTypeInfo) {
             RuntimeTypeInfo type = (RuntimeTypeInfo)obj;
             hmfree(type->GenericTypeInstances);

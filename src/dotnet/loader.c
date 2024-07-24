@@ -1055,6 +1055,10 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                             assembly->Metadata->method_defs_count :
                             type_def[1].method_list.index - 1) - (type_def->method_list.index - 1);
 
+    // validate we have valid lists if we have a non-zero methods count
+    if (methods_count != 0) CHECK(type_def->method_list.index != 0);
+    if (fields_count != 0) CHECK(type_def->field_list.index != 0);
+
     // validations
     if (type == tValueType) CHECK(type->BaseType == tObject);
     if (type->Attributes.Interface) {
@@ -1461,6 +1465,7 @@ cleanup:
 static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     bool pushed_type_queue = false;
+    RuntimeAssembly assembly = NULL;
 
     // now we can actually load up the PE and dotnet metadata
     CHECK_AND_RETHROW(pe_load_image(&file->file));
@@ -1486,7 +1491,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     // now we need to create the assembly, if we are at boostrap we need
     // to do something a bit more special
-    RuntimeAssembly assembly = GC_NEW(RuntimeAssembly);
+    assembly = GC_NEW(RuntimeAssembly);
     assembly->Metadata = file;
 
     // special case for core assembly
@@ -1592,6 +1597,12 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 cleanup:
     if (pushed_type_queue) {
         pop_type_queue();
+    }
+
+    if (IS_ERROR(err) && assembly != NULL) {
+        // we don't own the metadata in
+        // the case we failed so remove it
+        assembly->Metadata = NULL;
     }
 
     return err;

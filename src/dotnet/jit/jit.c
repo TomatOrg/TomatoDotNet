@@ -17,7 +17,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-#define JIT_IL_OUTPUT
+// #define JIT_IL_OUTPUT
 
 //
 // If the jit does not support SEH like

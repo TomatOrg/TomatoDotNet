@@ -248,7 +248,7 @@ cleanup:
     return err;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
@@ -257,23 +257,17 @@ int main() {
     RuntimeAssembly corelib = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Release/net8.0/System.Private.CoreLib.dll", &corelib));
 
-//    RuntimeTypeInfo test;
-//    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(corelib, "System", "Test", &test));
-//    RuntimeMethodInfo method = NULL;
-//    for (int i = 0; i < test->DeclaredMethods->Length; i++) {
-//        if (tdn_compare_string_to_cstr(test->DeclaredMethods->Elements[i]->Name, "Add")) {
-//            method = test->DeclaredMethods->Elements[i];
-//        }
-//    }
-//    CHECK(method != NULL);
-//    CHECK_AND_RETHROW(tdn_jit_method((RuntimeMethodBase)method));
-
     RuntimeAssembly console = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Release/net8.0/System.Console.dll", &console));
     console->AllowExternalExports = 1;
 
+    const char* path = "TdnCoreLib/Tests/bin/Release/net8.0/Tests.dll";
+    if (argc == 2) {
+        path = argv[1];
+    }
+
     RuntimeAssembly tests = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net8.0/Tests.dll", &tests));
+    CHECK_AND_RETHROW(load_assembly_from_path(path, &tests));
 
     clock_t t;
     t = clock();
