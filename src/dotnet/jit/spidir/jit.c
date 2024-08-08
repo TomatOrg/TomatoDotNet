@@ -37,7 +37,6 @@ void* jit_get_function_addr(jit_function_t func) {
 
 tdn_err_t jit_init() {
     spidir_log_init(spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
     spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
     return TDN_NO_ERROR;
 }

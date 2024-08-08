@@ -3446,6 +3446,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
         }
 
         // check if there are more labels
+        bool switched_block = false;
         if (region->label_index < arrlen(region->labels)) {
             // check if we have a new label in here
             if (region->labels[region->label_index].address == pc) {
@@ -3486,6 +3487,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
                 // set the current block
                 region->has_block = true;
                 jit_builder_set_block(builder, current->block);
+                switched_block = true;
 
                 // if this has phis then update the eval stack to have
                 // the phi values instead of whatever it currently has
@@ -3496,6 +3498,16 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
                 // make sure the label is after this pc, to make sure we don't cross segments
                 CHECK(region->labels[region->label_index].address > pc);
             }
+        }
+
+        if (!switched_block) {
+            // no label? that means we must have normal non-block breaking
+            // instruction before
+            CHECK(
+                flow_control != TDN_IL_CF_RETURN &&
+                flow_control != TDN_IL_CF_BRANCH &&
+                flow_control != TDN_IL_CF_THROW
+            );
         }
 
         // convert to jit

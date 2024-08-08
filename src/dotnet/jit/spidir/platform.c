@@ -1,4 +1,5 @@
 
+#include <stdalign.h>
 #include <stddef.h>
 #include "tomatodotnet/host.h"
 #include "util/except.h"

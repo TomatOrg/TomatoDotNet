@@ -32,6 +32,7 @@ static void stub_throw_invalid_cast_exception() { ASSERT(!"throw_invalid_cast_ex
 static void stub_throw_index_out_of_range_exception() { ASSERT(!"throw_index_out_of_range_exception"); }
 static void stub_throw_overflow_exception() { ASSERT(!"throw_overflow_exception"); }
 static void stub_throw_null_reference_exception() { ASSERT(!"throw_null_reference_exception"); }
+static void stub_throw_divide_by_zero_exception() { ASSERT(!"throw_divide_by_zero_exception"); }
 static void stub_throw() { ASSERT(!"throw"); }
 static void stub_rethrow() { ASSERT(!"rethrow"); }
 static void stub_get_exception() { ASSERT(!"get_exception"); }
@@ -50,6 +51,7 @@ tdn_err_t jit_init() {
     MIR_load_external(m_mir_ctx, "throw_index_out_of_range_exception", stub_throw_index_out_of_range_exception);
     MIR_load_external(m_mir_ctx, "throw_overflow_exception", stub_throw_overflow_exception);
     MIR_load_external(m_mir_ctx, "throw_null_reference_exception", stub_throw_null_reference_exception);
+    MIR_load_external(m_mir_ctx, "throw_divide_by_zero_exception", stub_throw_divide_by_zero_exception);
     MIR_load_external(m_mir_ctx, "throw", stub_throw);
     MIR_load_external(m_mir_ctx, "rethrow", stub_rethrow);
     MIR_load_external(m_mir_ctx, "get_exception", stub_get_exception);
