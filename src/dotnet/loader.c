@@ -1637,6 +1637,7 @@ tdn_err_t tdn_load_assembly_from_memory(const void* buffer, size_t buffer_size, 
     CHECK(handle != NULL);
     handle->buffer_size = buffer_size;
     tmp_buffer = tdn_host_mallocz(buffer_size);
+    CHECK(tmp_buffer != NULL);
     memcpy(tmp_buffer, buffer, buffer_size);
     handle->buffer = tmp_buffer;
 

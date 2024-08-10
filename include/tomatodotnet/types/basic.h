@@ -34,9 +34,8 @@ typedef struct Object {
     uint32_t MonitorDepth : 24;
     uint32_t GcFlags : 8;
     RuntimeTypeInfo ObjectType;
-    struct Object* next;
 }* Object;
-//_Static_assert(sizeof(struct System_Object) <= 8 * 3, "Object size too big");
+_Static_assert(sizeof(struct Object) <= 8 * 3, "Object size too big");
 
 typedef struct String {
     struct Object;

@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 #include <stdarg.h>
-#include <bits/stdint-uintn.h>
+#include <stdint.h>
 #include "except.h"
 
 // logging helpers
@@ -22,6 +22,10 @@ void* tdn_host_mallocz(size_t size);
 void* tdn_host_realloc(void* ptr, size_t new_size);
 void tdn_host_free(void* ptr);
 
+// gc operation
+void* tdn_host_gc_alloc(size_t size);
+void tdn_host_gc_register_root(void* root);
+
 // file management
 typedef void* tdn_file_t;
 
@@ -39,7 +43,7 @@ int tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer
 /**
  * Close a file returned by tdn_host_resolve_assembly
  */
-int tdn_host_close_file(tdn_file_t file);
+void tdn_host_close_file(tdn_file_t file);
 
 /**
  * Request the host to turn an error it returned into a

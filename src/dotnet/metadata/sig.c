@@ -1,7 +1,6 @@
 #include "sig.h"
 #include "util/except.h"
 #include "dotnet/gc/gc.h"
-#include "util/murmur64.h"
 #include "util/stb_ds.h"
 
 #define FIELD 0x6

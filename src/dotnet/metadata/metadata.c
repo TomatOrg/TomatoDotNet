@@ -713,6 +713,8 @@ cleanup:
 }
 
 void dotnet_free_file(dotnet_file_t* file) {
+    if (file == NULL) return;
+
     for (size_t i = 0; i < ARRAY_LENGTH(file->tables); i++) {
         tdn_host_free(file->tables[i].entries);
         file->tables[i].entries = NULL;

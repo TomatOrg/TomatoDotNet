@@ -3092,6 +3092,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
     //------------------------------------------------------------------------------------------------------------------
 
     // get the rest of the blocks by creating the labels
+    __attribute__((unused))
     bool has_starg0_or_ldarga0 = false;
     uint32_t pc = 0;
     tdn_il_control_flow_t flow_control = TDN_IL_CF_FIRST;
@@ -3259,8 +3260,10 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
     root_region.has_block = true;
     jit_builder_set_block(builder, root_region.entry_block);
 
+#ifdef JIT_IL_OUTPUT
     // for debug
     int indent = 0;
+#endif
 
     pc = 0;
     flow_control = TDN_IL_CF_FIRST;
@@ -3366,7 +3369,7 @@ static void jit_method_callback(jit_builder_t builder, void* _ctx) {
 
         // check if we entered a new region or not
         int start_index = region->clause_index == -1 ? 0 : region->clause_index;
-        for (int i = 0; i <= region->clause_index; i++) {
+        for (int i = 0; i <= start_index; i++) {
             jit_region_t* protected_region = &ctx.protected_regions[i];
             jit_region_t* handler_region = &ctx.handler_regions[i];
 

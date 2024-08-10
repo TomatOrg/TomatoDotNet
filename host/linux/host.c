@@ -81,10 +81,8 @@ int tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer
     return 0;
 }
 
-int tdn_host_close_file(tdn_file_t file) {
-    if (fclose(file) != 0)
-        return errno;
-    return 0;
+void tdn_host_close_file(tdn_file_t file) {
+    fclose(file);
 }
 
 const char* tdn_host_error_to_string(int error) {
