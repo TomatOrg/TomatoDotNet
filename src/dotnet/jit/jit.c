@@ -18,7 +18,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-// #define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 /**
  * The jit module, DON'T USE FROM WITHIN THE BUILDER
