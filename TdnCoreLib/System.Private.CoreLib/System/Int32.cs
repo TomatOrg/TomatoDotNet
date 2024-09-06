@@ -15,9 +15,4 @@ public readonly struct Int32
     {
         return _value;
     }
-
-    public override string ToString()
-    {
-        return base.ToString();
-    }
 }

@@ -3365,7 +3365,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
         // check if we entered a new region or not
         int start_index = region->clause_index == -1 ? 0 : region->clause_index;
-        for (int i = 0; i <= start_index; i++) {
+        for (int i = 0; i < start_index; i++) {
             jit_region_t* protected_region = &ctx.protected_regions[i];
             jit_region_t* handler_region = &ctx.handler_regions[i];
 
