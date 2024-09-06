@@ -3564,7 +3564,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // get the new last region for the while condition to get
             // updated
-            region = arrlast(ctx.regions);
+            if (arrlen(ctx.regions) != 0) {
+                region = arrlast(ctx.regions);
+            } else {
+                region = NULL;
+            }
         }
 
 #ifdef JIT_IL_OUTPUT
