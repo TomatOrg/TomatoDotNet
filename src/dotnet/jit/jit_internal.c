@@ -2,13 +2,11 @@
 #include "util/except.h"
 #include "tomatodotnet/types/type.h"
 
-#include "dotnet/jit/spidir/spidir_debug.h"
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Evaluation stack
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, jit_value_t value) {
+tdn_err_t eval_stack_push(eval_stack_t* stack, RuntimeTypeInfo type, spidir_value_t value) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK(type != NULL);
@@ -34,7 +32,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t eval_stack_alloc(eval_stack_t* stack, jit_builder_t builder, RuntimeTypeInfo type, jit_value_t* out_value) {
+tdn_err_t eval_stack_alloc(eval_stack_t* stack, spidir_builder_handle_t builder, RuntimeTypeInfo type, spidir_value_t* out_value) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // make sure we can push more
@@ -51,7 +49,7 @@ tdn_err_t eval_stack_alloc(eval_stack_t* stack, jit_builder_t builder, RuntimeTy
 
     // get the next location, if non-available allocate a new one
     if (alloc->depth == arrlen(alloc->stack)) {
-        jit_value_t new = jit_builder_build_stackslot(builder, type->StackSize, type->StackAlignment);
+        spidir_value_t new = spidir_builder_build_stackslot(builder, type->StackSize, type->StackAlignment);
         arrpush(alloc->stack, new);
     }
     CHECK(alloc->depth < arrlen(alloc->stack));
@@ -73,7 +71,7 @@ cleanup:
 tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
     RuntimeTypeInfo* out_type,
-    jit_value_t* out_value
+    spidir_value_t* out_value
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -120,7 +118,7 @@ eval_stack_item_t* eval_stack_get_top(
 }
 
 tdn_err_t eval_stack_snapshot(
-    jit_builder_t builder,
+    spidir_builder_handle_t builder,
     eval_stack_t* stack,
     jit_label_t* target
 ) {
@@ -128,22 +126,22 @@ tdn_err_t eval_stack_snapshot(
     eval_stack_snapshot_t* snapshot = &target->snapshot;
 
     // get the current block if we need to modify the target one 
-    jit_block_t current_block;
-    CHECK(jit_builder_cur_block(builder, &current_block));
-    bool target_is_current = JIT_IS_SAME_BLOCK(target->block, current_block);
+    spidir_block_t current_block;
+    CHECK(spidir_builder_cur_block(builder, &current_block));
+    bool target_is_current = target->block.id == current_block.id;
 
     CHECK(!snapshot->initialized);
 
     // we are going to create phis on the target block, switch to it
     if (!target_is_current && target->needs_phi) {
-        jit_builder_set_block(builder, target->block);
+        spidir_builder_set_block(builder, target->block);
     }
 
     // copy all of the types on the stack, and figure the correct value to use
     arrsetlen(snapshot->stack, arrlen(stack->stack));
     for (int i = 0; i < arrlen(stack->stack); i++) {
         eval_stack_snapshot_item_t* item = &snapshot->stack[i];
-        jit_value_t input_value = stack->stack[i].value;
+        spidir_value_t input_value = stack->stack[i].value;
 
         // copy the type over
         item->type = stack->stack[i].type;
@@ -151,18 +149,18 @@ tdn_err_t eval_stack_snapshot(
         // create a phi if need be, otherwise just use the value as-is
         if (target->needs_phi) {
             // figure the node type, default is ptr
-            jit_value_type_t type = JIT_TYPE_PTR;
+            spidir_value_type_t type = SPIDIR_TYPE_PTR;
             if (item->type == tInt32) {
-                type = JIT_TYPE_I32;
+                type = SPIDIR_TYPE_I32;
             } else if (item->type == tInt64 || item->type == tIntPtr) {
-                type = JIT_TYPE_I64;
+                type = SPIDIR_TYPE_I64;
             }
 
             // create the phi
-            item->value = jit_builder_build_phi(builder, type, 1, &input_value, &item->phi);
+            item->value = spidir_builder_build_phi(builder, type, 1, &input_value, &item->phi);
         } else {
             // just copy the value
-            item->phi = JIT_INIT_PHI;
+            item->phi = (spidir_phi_t){ .id = -1 };
             item->value = input_value;
         }
     }
@@ -174,7 +172,7 @@ tdn_err_t eval_stack_snapshot(
 
     // return to the current block
     if (!target_is_current && target->needs_phi) {
-        jit_builder_set_block(builder, current_block);
+        spidir_builder_set_block(builder, current_block);
     }
 
     // mark this as initialized
@@ -244,7 +242,7 @@ static RuntimeTypeInfo eval_stack_compare(RuntimeTypeInfo S, RuntimeTypeInfo T) 
 }
 
 tdn_err_t eval_stack_merge(
-    jit_builder_t builder,
+    spidir_builder_handle_t builder,
     eval_stack_t* stack,
     jit_label_t* target,
     bool modify
@@ -299,7 +297,7 @@ tdn_err_t eval_stack_merge(
         }
 
         // add the input to the phi
-        jit_builder_add_phi_input(builder, snapshot->stack[i].phi, stack->stack[i].value);
+        spidir_builder_add_phi_input(builder, snapshot->stack[i].phi, stack->stack[i].value);
     }
 
 cleanup:

@@ -89,3 +89,10 @@ const char* tdn_host_error_to_string(int error) {
     return strerror(error);
 }
 
+void* tdn_host_gc_alloc(size_t size) {
+    return calloc(1, size);
+}
+
+void tdn_host_gc_register_root(void* root) {
+    (void)root;
+}

@@ -6,8 +6,9 @@
 
 #include "util/stb_ds.h"
 #include "util/except.h"
-#include "jit_interface.h"
 #include "dotnet/types.h"
+
+#include <spidir/spidir.h>
 
 /**
  * Initialize the jit backend
@@ -37,7 +38,7 @@ typedef struct eval_stack_item {
     RuntimeTypeInfo type;
 
     // the value to access it
-    jit_value_t value;
+    spidir_value_t value;
 
     // is this a non-local (can be returned) reference
     uint8_t is_nonlocal_ref : 1;
@@ -56,7 +57,7 @@ typedef struct eval_stack_value_instance {
     RuntimeTypeInfo key;
 
     // list of stack-slots for this type
-    jit_value_t* stack;
+    spidir_value_t* stack;
 
     // how much are currently in use
     int depth;
@@ -94,7 +95,7 @@ typedef struct eval_stack_snapshot_item {
 
     // the phi that can be used to add more
     // inputs to the slot
-    jit_phi_t phi;
+    spidir_phi_t phi;
 } eval_stack_snapshot_item_t;
 
 typedef struct eval_stack_snapshot_value_instance {
@@ -119,7 +120,7 @@ typedef struct eval_stack_snapshot {
 tdn_err_t eval_stack_push(
     eval_stack_t* stack,
     RuntimeTypeInfo type,
-    jit_value_t value
+    spidir_value_t value
 );
 
 /**
@@ -127,9 +128,9 @@ tdn_err_t eval_stack_push(
  */
 tdn_err_t eval_stack_alloc(
     eval_stack_t* stack,
-    jit_builder_t builder,
+    spidir_builder_handle_t builder,
     RuntimeTypeInfo type,
-    jit_value_t* out_value
+    spidir_value_t* out_value
 );
 
 /**
@@ -138,7 +139,7 @@ tdn_err_t eval_stack_alloc(
 tdn_err_t eval_stack_pop(
     eval_stack_t* stack,
     RuntimeTypeInfo* out_type,
-    jit_value_t* out_value
+    spidir_value_t* out_value
 );
 
 /**
@@ -161,7 +162,7 @@ eval_stack_item_t* eval_stack_get_top(
  * assuming we are coming from the current label
  */
 tdn_err_t eval_stack_snapshot(
-    jit_builder_t builder,
+    spidir_builder_handle_t builder,
     eval_stack_t* stack,
     jit_label_t* target
 );
@@ -191,7 +192,7 @@ tdn_err_t eval_stack_update_phis(
  * we already jitted.
  */
 tdn_err_t eval_stack_merge(
-    jit_builder_t builder,
+    spidir_builder_handle_t builder,
     eval_stack_t* stack,
     jit_label_t* target,
     bool modify
@@ -216,7 +217,7 @@ typedef struct jit_label {
     uint32_t address;
 
     // the spidir block of the label
-    jit_block_t block;
+    spidir_block_t block;
 
     // the stack snapshot at the label's location
     eval_stack_snapshot_t snapshot;
@@ -264,7 +265,7 @@ typedef struct jit_region {
     uint32_t pc_end;
 
     // the block to use when entering the region
-    jit_block_t entry_block;
+    spidir_block_t entry_block;
 
     // is this the handler part of the clause
     bool is_handler;
@@ -284,7 +285,7 @@ typedef struct jit_region {
 
     // if this is a finally path then this is the next
     // block we need to go to after this finally
-    jit_block_t next_block;
+    spidir_block_t next_block;
     bool has_next_block;
 } jit_region_t;
 
@@ -313,7 +314,7 @@ typedef struct jit_label_location {
 typedef struct jit_arg {
     // the value to get the argument, either a param-ref
     // or a stackslot, depending on spilled
-    jit_value_t value;
+    spidir_value_t value;
 
     // the type of the argument
     ParameterAttributes attributes;
@@ -338,7 +339,7 @@ typedef struct jit_context {
     RuntimeMethodBase method;
 
     // the current builder
-    jit_builder_t builder;
+    spidir_builder_handle_t builder;
 
     // the locations where labels reside, only used
     // as a reference from the first global pass
@@ -349,7 +350,7 @@ typedef struct jit_context {
 
     // the stack-slots for each of the local variables
     // of this function
-    jit_value_t* locals;
+    spidir_value_t* locals;
 
     // the eval stack, it is the same no matter where we are
     eval_stack_t stack;
@@ -357,7 +358,7 @@ typedef struct jit_context {
     // these locations have the calls for the exception throwing, this
     // is meant to reduce the amount of code needed to throw an exception
     // filled on demand
-    jit_block_t exception_blocks[JIT_EXCEPTION_MAX];
+    spidir_block_t exception_blocks[JIT_EXCEPTION_MAX];
 
     // the protected and handler regions we have
     jit_region_t* protected_regions;

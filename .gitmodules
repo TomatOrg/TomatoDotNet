@@ -1,6 +1,3 @@
 [submodule "libs/spidir"]
 	path = libs/spidir
 	url = git@github.com:nmraz/spidir.git
-[submodule "libs/mir"]
-	path = libs/mir
-	url = git@github.com:vnmakarov/mir.git

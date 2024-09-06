@@ -3,8 +3,6 @@
 #include <stddef.h>
 #include "../types.h"
 
-void gc_free_all();
-
 void* gc_new(RuntimeTypeInfo type, size_t size);
 
 void* gc_raw_alloc(size_t size);

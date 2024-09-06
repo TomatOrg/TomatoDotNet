@@ -12,8 +12,19 @@
 
 #define CACHE_PADDED __attribute__((aligned(64)))
 
-#define ALIGN_UP(x, align)      __builtin_align_up(x, align)
-#define ALIGN_DOWN(x, align)    __builtin_align_down(x, align)
+#define ALIGN_UP(x, align) ({ \
+__typeof(x) _x = x; \
+__typeof(align) _align = align; \
+__typeof(_x) _result = (__typeof(_x))((_x + _align - 1) & ~(_align - 1)); \
+_result; \
+})
+
+#define ALIGN_DOWN(x, align) ({ \
+__typeof(x) _x = x; \
+__typeof(align) _align = align; \
+__typeof(_x) _result = (__typeof(_x))(((uintptr_t)_x) & ~(_align - 1)); \
+_result; \
+})
 
 #define ARRAY_LENGTH(array) (sizeof((array))/sizeof((array)[0]))
 
