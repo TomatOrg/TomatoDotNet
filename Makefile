@@ -24,8 +24,8 @@ CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
 
 ifeq ($(DEBUG),1)
 	CFLAGS	+= -Og -g
-	CFLAGS	+= -fsanitize=undefined,address
-	CFLAGS 	+= -fno-sanitize=alignment
+#	CFLAGS	+= -fsanitize=undefined,address
+#	CFLAGS 	+= -fno-sanitize=alignment
 	CFLAGS 	+= -fstack-protector-all
 else
 	CFLAGS	+= -O3 -g -flto
@@ -49,6 +49,7 @@ LDFLAGS		:= $(CFLAGS)
 # The DLLs required, we will build them as part of TDN
 #
 DLLS 	:= TdnCoreLib/System.Private.CoreLib/bin/Debug/net8.0/System.Private.CoreLib.dll
+DLLS	+= TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll
 
 all: $(BIN_DIR)/tdn.elf $(DLLS)
 
@@ -84,6 +85,9 @@ $(BUILD_DIR)/%.c.o: %.c
 
 TdnCoreLib/System.Private.CoreLib/bin/Debug/net8.0/System.Private.CoreLib.dll: force
 	cd TdnCoreLib/System.Private.CoreLib && dotnet build
+
+TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll: force
+	cd TdnCoreLib/Tests && dotnet build
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Spidir lib

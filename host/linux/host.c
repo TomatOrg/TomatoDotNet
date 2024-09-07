@@ -6,6 +6,8 @@
 #include <string.h>
 #include "tomatodotnet/host.h"
 
+#include <util/except.h>
+
 void tdn_host_log_trace(const char* format, ...) {
     printf("[*] ");
     va_list va;
@@ -95,4 +97,18 @@ void* tdn_host_gc_alloc(size_t size) {
 
 void tdn_host_gc_register_root(void* root) {
     (void)root;
+}
+
+#include <sys/mman.h>
+
+void* tdn_host_map(size_t size) {
+    void* ptr = mmap(tdn_host_map, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    if (ptr == MAP_FAILED) {
+        return NULL;
+    }
+    return ptr;
+}
+
+void tdn_host_map_rx(void* ptr, size_t size) {
+    mprotect(ptr, size, PROT_READ | PROT_EXEC);
 }

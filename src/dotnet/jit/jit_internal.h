@@ -329,7 +329,6 @@ typedef enum jit_builtin_exception {
     JIT_EXCEPTION_INDEX_OUT_OF_RANGE,
     JIT_EXCEPTION_OVERFLOW,
     JIT_EXCEPTION_NULL_REFERENCE,
-    JIT_EXCEPTION_DIVIDE_BY_ZERO,
 
     JIT_EXCEPTION_MAX
 } jit_builtin_exception_t;
