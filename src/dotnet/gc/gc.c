@@ -33,6 +33,11 @@ void* gc_new(RuntimeTypeInfo type, size_t size) {
     if (type == NULL) {
         ERROR("Tried to allocate object with null type?");
     } else {
+        if (type->TypeId == 0) {
+            ERROR("Tried to allocate object with invalid type id");
+            return NULL;
+        }
+
         // if this is a generic type or a generic type parameter then we
         // can't create an instance of this object
         if (type->IsGenericParameter) {
@@ -56,7 +61,7 @@ void* gc_new(RuntimeTypeInfo type, size_t size) {
         return NULL;
     }
 
-    object->ObjectType = type;
+    object->TypeId = type->TypeId;
     return object;
 }
 

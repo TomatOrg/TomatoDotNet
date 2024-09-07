@@ -90,7 +90,7 @@ tdn_err_t tdn_jit_init() {
     m_builtin_gc_new = spidir_module_create_extern_function(m_jit_module,
             "gc_new",
             SPIDIR_TYPE_PTR,
-            2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
+            2, (spidir_value_type_t[]){ SPIDIR_TYPE_I32, SPIDIR_TYPE_I64 });
 
     m_builtin_gc_memcpy = spidir_module_create_extern_function(m_jit_module,
             "gc_memcpy",
@@ -1028,10 +1028,6 @@ static tdn_err_t jit_instruction(
                 // for reference to field we don't need the load
                 CHECK_AND_RETHROW(eval_stack_push(stack, value_type, field_ptr));
             } else {
-#ifdef __EXPLICIT_NULL_CHECK__
-                jit_emit_null_check(ctx, builder, obj);
-#endif
-
                 // tracks as the intermediate type
                 RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
 
@@ -1093,10 +1089,6 @@ static tdn_err_t jit_instruction(
             // figure the pointer to the field itself
             spidir_value_t field_ptr;
             CHECK(!field->Attributes.Static); // fix if we ever get this
-
-#ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(ctx, builder, obj);
-#endif
 
             // instance field
             if (field->FieldOffset == 0) {
@@ -1240,10 +1232,6 @@ static tdn_err_t jit_instruction(
             RuntimeTypeInfo array_type;
             CHECK_AND_RETHROW(eval_stack_pop(stack, &array_type, &array));
 
-#ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(ctx, builder, array);
-#endif
-
             // push the length, the load automatically zero extends it
             spidir_value_t length_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length));
             spidir_value_t length_ptr = spidir_builder_build_ptroff(builder, array, length_offset);
@@ -1282,10 +1270,6 @@ static tdn_err_t jit_instruction(
                 index = spidir_builder_build_iext(builder, index);
                 index = spidir_builder_build_sfill(builder, 32, index);
             }
-
-#ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(ctx, builder, array);
-#endif
 
             spidir_block_t length_is_valid = spidir_builder_create_block(builder);
 
@@ -1374,10 +1358,6 @@ static tdn_err_t jit_instruction(
                 index = spidir_builder_build_sfill(builder, 32, index);
             }
 
-#ifdef __EXPLICIT_NULL_CHECK__
-            jit_emit_null_check(ctx, builder, array);
-#endif
-
             spidir_block_t length_is_valid = spidir_builder_create_block(builder);
 
             // length check, this will also take care of the NULL check since if
@@ -1465,7 +1445,7 @@ static tdn_err_t jit_instruction(
                         // call gc_new to allocate it
                         target_this_type = target->DeclaringType;
                         obj = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
-                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)target_this_type),
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, target_this_type->TypeId),
                             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, object_size)
                         });
                         CHECK_AND_RETHROW(eval_stack_push(stack, target->DeclaringType, obj));
@@ -2145,30 +2125,6 @@ static tdn_err_t jit_instruction(
 
             // TODO: for floats make sure it is an instruction that can take floats
 
-#ifdef __EXPLICIT_ZERO_CHECK__
-            if (inst.opcode == CEE_DIV || inst.opcode == CEE_DIV_UN || inst.opcode == CEE_REM || inst.opcode == CEE_REM_UN) {
-
-                spidir_value_type_t typ;
-                if (value2_type == tInt32) {
-                    typ = SPIDIR_TYPE_I32;
-                } else {
-                    typ = SPIDIR_TYPE_I64;
-                }
-
-                spidir_block_t valid = spidir_builder_create_block(builder);
-                spidir_value_t zero = spidir_builder_build_iconst(builder, typ, 0);
-                spidir_value_t cmp = spidir_builder_build_icmp(builder,
-                                                         SPIDIR_ICMP_NE, SPIDIR_TYPE_I64,
-                                                         zero, value2);
-
-                spidir_block_t throw_divide_by_zero = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_DIVIDE_BY_ZERO);
-                spidir_builder_build_brcond(builder, cmp, valid, throw_divide_by_zero);
-
-                // valid branch, continue forward
-                spidir_builder_set_block(builder, valid);
-            }
-#endif
-
             // create the operation
             spidir_value_t result_value;
             switch (inst.opcode) {
@@ -2631,7 +2587,7 @@ static tdn_err_t jit_instruction(
 
             // call the gc_new to allocate the new object
             spidir_value_t array = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
-                spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)array_type), array_size
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, array_type->TypeId), array_size
             });
 
             // and finally set the length of the array
@@ -2727,7 +2683,7 @@ static tdn_err_t jit_instruction(
 
                 // allocate it
                 spidir_value_t args[2] = {
-                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst.operand.type),
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->TypeId),
                     spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, sizeof(struct Object) + inst.operand.type->HeapSize),
                 };
                 spidir_value_t obj = spidir_builder_build_call(builder, m_builtin_gc_new, 2, args);
@@ -2793,20 +2749,16 @@ static tdn_err_t jit_instruction(
                 // TODO: implement the correct behaviour for reference types
                 CHECK_FAIL();
             } else {
-#ifdef __EXPLICIT_NULL_CHECK__
-                jit_emit_null_check(ctx, builder, obj);
-#endif
-
                 // we can inline the check since the type has to be the exact value type we are trying to unpack
                 // this will take care of the null check as well
-                spidir_value_t object_type_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Object, ObjectType));
+                spidir_value_t object_type_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Object, TypeId));
                 spidir_value_t object_type_ptr = spidir_builder_build_ptroff(builder, obj, object_type_offset);
-                spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, object_type_ptr);
+                spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, object_type_ptr);
 
                 spidir_block_t valid = spidir_builder_create_block(builder);
                 spidir_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INVALID_CAST);
 
-                spidir_value_t wanted_type = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst.operand.type);
+                spidir_value_t wanted_type = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->TypeId);
                 spidir_value_t is_wanted_type = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I64, object_type, wanted_type);
                 spidir_builder_build_brcond(builder, is_wanted_type, valid, invalid);
 

@@ -35,6 +35,7 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // table
     //
     new_type = GC_NEW(RuntimeTypeInfo);
+    tdn_register_type(new_type);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -95,6 +96,7 @@ tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // table
     //
     new_type = GC_NEW(RuntimeTypeInfo);
+    tdn_register_type(new_type);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -149,6 +151,7 @@ tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) 
     // table
     //
     new_type = GC_NEW(RuntimeTypeInfo);
+    tdn_register_type(new_type);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -359,6 +362,7 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
         // create it and set it incase we need it again
         // for expansion
         RuntimeTypeInfo new_type = GC_NEW(RuntimeTypeInfo);
+        tdn_register_type(new_type);
 
         hmput(base->GenericTypeInstances, hash, new_type);
 

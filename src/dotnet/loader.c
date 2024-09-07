@@ -142,6 +142,16 @@ static int m_loaded_types = 0;
 static RuntimeAssembly mCoreAssembly = NULL;
 
 /**
+ * All the types loaded in
+ */
+static RuntimeTypeInfo* mTypes = NULL;
+
+void tdn_register_type(RuntimeTypeInfo type) {
+    arrpush(mTypes, type);
+    type->TypeId = arrlen(mTypes);
+}
+
+/**
  * Searches for both init-types and load-types for the given type, if it is found then it will be created
  * and returned, otherwise a null is returned out
  */
@@ -157,6 +167,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(init_type->name, type_def->type_name) == 0
         ) {
             RuntimeTypeInfo type = *init_type->dest ?: GC_NEW(RuntimeTypeInfo);
+            tdn_register_type(type);
             type->StackSize = init_type->stack_size;
             type->StackAlignment = init_type->stack_alignment;
             type->HeapSize = init_type->heap_size;
@@ -182,6 +193,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(load_type->name, type_def->type_name) == 0
         ) {
             RuntimeTypeInfo type = *load_type->dest ?: GC_NEW(RuntimeTypeInfo);
+            tdn_register_type(type);
             type->QueuedTypeInit = 1;
             *load_type->dest = type;
             *out_type = type;
@@ -765,11 +777,20 @@ static tdn_err_t corelib_bootstrap() {
     tRuntimeTypeInfo = gc_raw_alloc(sizeof(struct RuntimeTypeInfo));
     CHECK_ERROR(tRuntimeTypeInfo != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
+    // make sure to set its type id properly
+    tdn_register_type(tRuntimeTypeInfo);
+    tRuntimeTypeInfo->Object.TypeId = tRuntimeTypeInfo->TypeId;
+
     // hard-code types we require for proper bootstrap
     tArray = GC_NEW(RuntimeTypeInfo); // for creating a Type[]
     tString = GC_NEW(RuntimeTypeInfo); // for creating a string
     tRuntimeAssembly = GC_NEW(RuntimeTypeInfo); // for creating the main assembly
     tRuntimeModule = GC_NEW(RuntimeTypeInfo); // for creating the main module
+
+    tdn_register_type(tArray);
+    tdn_register_type(tString);
+    tdn_register_type(tRuntimeAssembly);
+    tdn_register_type(tRuntimeModule);
 
     // setup the basic type so GC_NEW_ARRAY can work
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("RuntimeTimeInfo", &tRuntimeTypeInfo->Name));
@@ -1296,7 +1317,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
             } else {
                 // only valid on methods, not on ctors
                 CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
-                CHECK(((Object)last_object)->ObjectType == tRuntimeMethodInfo);
+                CHECK(((Object)last_object)->TypeId == tRuntimeMethodInfo->TypeId);
                 ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
                 ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
             }
@@ -1321,7 +1342,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         } else {
             // only valid on methods, not on ctors
             CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
-            CHECK(((Object)last_object)->ObjectType == tRuntimeMethodInfo);
+            CHECK(((Object)last_object)->TypeId == tRuntimeMethodInfo->TypeId);
             ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
             ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
         }
@@ -1542,6 +1563,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
             type = assembly->TypeDefs->Elements[i];
         } else {
             type = GC_NEW(RuntimeTypeInfo);
+            tdn_register_type(type);
             assembly->TypeDefs->Elements[i] = type;
         }
 

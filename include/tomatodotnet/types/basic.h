@@ -27,13 +27,11 @@ typedef struct {} Void;
 
 typedef struct Object {
     uint32_t VTable;
-    uint32_t ITable;
+    uint32_t TypeId;
     uint8_t MonitorLock;
     uint8_t MonitorCondVar;
-    uint16_t MonitorOwnerThreadId;
-    uint32_t MonitorDepth : 24;
-    uint32_t GcFlags : 8;
-    RuntimeTypeInfo ObjectType;
+    uint16_t _reserved1;
+    uint32_t _reserved2;
 }* Object;
 _Static_assert(sizeof(struct Object) <= 8 * 3, "Object size too big");
 
