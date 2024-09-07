@@ -151,6 +151,13 @@ void tdn_register_type(RuntimeTypeInfo type) {
     type->TypeId = arrlen(mTypes);
 }
 
+RuntimeTypeInfo tdn_get_type_by_id(int type_id) {
+    if (type_id <= 0 || type_id > arrlen(mTypes)) {
+        return NULL;
+    }
+    return mTypes[type_id - 1];
+}
+
 /**
  * Searches for both init-types and load-types for the given type, if it is found then it will be created
  * and returned, otherwise a null is returned out

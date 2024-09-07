@@ -1,8 +1,10 @@
 #pragma once
 
+#include <stdint.h>
+
 void jit_bzero();
 void jit_memcpy();
-void jit_gc_new();
+void* jit_gc_new(int type_id, uint64_t size);
 void jit_gc_memcpy();
 void jit_gc_bzero();
 void jit_throw_invalid_cast_exception();
