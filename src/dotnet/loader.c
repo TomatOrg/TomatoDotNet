@@ -883,14 +883,21 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
     for (int i = 0; i < assembly->Metadata->assembly_refs_count; i++) {
         metadata_assembly_ref_t* assembly_ref = &assembly->Metadata->assembly_refs[i];
 
+        const char* name = assembly_ref->name;
+
+        // TODO: how to handle this correctly
+        if (strcmp(name, "System.Runtime") == 0) {
+            name = "System.Private.CoreLib";
+        }
+
         // get from the hashmap of known assemblies
         // TODO: if not found call a callback to find and load the assembly
-        int idx = shgeti(m_loaded_assemblies, assembly_ref->name);
-        CHECK(idx >= 0, "Failed to get assembly `%s` - not found", assembly_ref->name);
+        int idx = shgeti(m_loaded_assemblies, name);
+        CHECK(idx >= 0, "Failed to get assembly `%s` - not found", name);
 
         // TODO: maybe this should have an array of major versions we know about
         RuntimeAssembly new_assembly = m_loaded_assemblies[i].value;
-        CHECK(new_assembly != NULL, "Failed to get assembly `%s` - recursive dependency", assembly_ref->name);
+        CHECK(new_assembly != NULL, "Failed to get assembly `%s` - recursive dependency", name);
 
         // TODO: validate the minor version
 
@@ -925,7 +932,10 @@ static tdn_err_t assembly_load_type_refs(RuntimeAssembly assembly) {
                 for (int j = 0; j < scope->TypeDefs->Length; j++) {
                     RuntimeTypeInfo type = scope->TypeDefs->Elements[j];
                     if (
-                        tdn_compare_string_to_cstr(type->Namespace, type_ref->type_namespace) &&
+                        (
+                            (type->Namespace == NULL && type_ref->type_namespace[0] == '\0') ||
+                            tdn_compare_string_to_cstr(type->Namespace, type_ref->type_namespace)
+                        ) &&
                         tdn_compare_string_to_cstr(type->Name, type_ref->type_name)
                     ) {
                         wanted_type = type;
@@ -934,8 +944,31 @@ static tdn_err_t assembly_load_type_refs(RuntimeAssembly assembly) {
                 }
             } break;
 
+            // find type from another type
+            case METADATA_TYPE_REF: {
+                // get the parent type
+                CHECK(resolution_scope.index <= i);
+                RuntimeTypeInfo type = assembly->TypeRefs->Elements[resolution_scope.index - 1];
+
+                // try to search under it
+                RuntimeTypeInfo nested = type->DeclaredNestedTypes;
+                while (nested != NULL) {
+                    if (
+                        (
+                            (nested->Namespace == NULL && type_ref->type_namespace[0] == '\0') ||
+                            tdn_compare_string_to_cstr(nested->Namespace, type_ref->type_namespace)
+                        ) &&
+                        tdn_compare_string_to_cstr(nested->Name, type_ref->type_name)
+                    ) {
+                        wanted_type = nested;
+                        break;
+                    }
+                    nested = nested->NextNestedType;
+                }
+            } break;
+
             default:
-                CHECK_FAIL();
+                CHECK_FAIL("%02x (%s.%s)", resolution_scope.table, type_ref->type_namespace, type_ref->type_name);
         }
 
         CHECK(wanted_type != NULL, "Couldn't resolve type %s.%s!", type_ref->type_namespace, type_ref->type_name);
@@ -1461,7 +1494,10 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
         CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, nest->enclosing_class.token, NULL, NULL, &enclosing));
         CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, nest->nested_class.token, NULL, NULL, &nested));
         nested->DeclaringType = enclosing;
-        // TODO: append to the correct class
+
+        // append to the singly linked list of nested types
+        nested->NextNestedType = enclosing->DeclaredNestedTypes;
+        enclosing->DeclaredNestedTypes = nested;
     }
 
     // connect class layout

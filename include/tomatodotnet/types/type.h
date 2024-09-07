@@ -88,6 +88,10 @@ typedef struct RuntimeTypeInfo {
     RuntimeMethodInfo_Array DeclaredMethods;
     RuntimeFieldInfo_Array DeclaredFields;
 
+    // the first nested type
+    RuntimeTypeInfo DeclaredNestedTypes;
+    RuntimeTypeInfo NextNestedType;
+
     // elements
     RuntimeTypeInfo ElementType;
     RuntimeTypeInfo EnumUnderlyingType;
