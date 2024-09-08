@@ -3,10 +3,15 @@
 #include <dotnet/loader.h>
 #include <dotnet/gc/gc.h>
 #include <util/except.h>
+#include <util/string.h>
 
-void jit_bzero() { ASSERT(!"jit_bzero"); }
+void jit_bzero(void* ptr, size_t size) {
+    memset(ptr, 0, size);
+}
 
-void jit_memcpy() { ASSERT(!"jit_memcpy"); }
+void jit_memcpy(void* dst, void* src, size_t size) {
+    memcpy(dst, src, size);
+}
 
 void* jit_gc_new(int type_id, uint64_t size) {
     RuntimeTypeInfo type = tdn_get_type_by_id(type_id);

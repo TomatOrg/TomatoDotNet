@@ -1,9 +1,10 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
-void jit_bzero();
-void jit_memcpy();
+void jit_bzero(void* ptr, size_t size);
+void jit_memcpy(void* dst, void* src, size_t size);
 void* jit_gc_new(int type_id, uint64_t size);
 void jit_gc_memcpy();
 void jit_gc_bzero();

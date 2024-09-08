@@ -33,7 +33,7 @@ typedef struct Object {
     uint16_t _reserved1;
     uint32_t _reserved2;
 }* Object;
-_Static_assert(sizeof(struct Object) <= 8 * 3, "Object size too big");
+_Static_assert(sizeof(struct Object) == 8 * 2, "Object size too big");
 
 typedef struct String {
     struct Object;
@@ -45,11 +45,10 @@ typedef struct String {
 typedef struct Array {
     struct Object;
     int Length;
-    uint8_t _padding[12];
 }* Array;
 
 #define DEFINE_ARRAY(Type) \
-    typedef struct __attribute__((packed)) Type##_Array { \
+    typedef struct Type##_Array { \
         struct Array; \
         Type Elements[]; \
     }* Type##_Array;

@@ -8,7 +8,7 @@
 #include "util/except.h"
 #include "dotnet/types.h"
 
-#include <spidir/spidir.h>
+#include <spidir/module.h>
 
 /**
  * Initialize the jit backend

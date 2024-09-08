@@ -7,13 +7,11 @@ public class Object
 {
 
     private uint _vtable;
-    private uint _itable;
-    internal byte _monitorLock;
-    internal byte _monitorCondVar;
-    internal ushort _monitorOwnerThreadId;
-    internal uint _monitorDepthAndGcFlags;
-    private Type _type;
-    private unsafe void* _next;
+    private uint _typeId;
+    private byte _monitorLock;
+    private byte _monitorCondVar;
+    private ushort _reserved0;
+    private uint _reserved1;
 
     public Object()
     {
@@ -25,7 +23,7 @@ public class Object
 
     public Type GetType()
     {
-        return _type;
+        return null;
     }
     
     public virtual string? ToString()

@@ -258,7 +258,7 @@ int main(int argc, char* argv[]) {
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Debug/net8.0/System.Private.CoreLib.dll", &corelib));
 
     RuntimeAssembly tests = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll", &tests));
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Release/net8.0/Tests.dll", &tests));
 
     clock_t t;
     t = clock();

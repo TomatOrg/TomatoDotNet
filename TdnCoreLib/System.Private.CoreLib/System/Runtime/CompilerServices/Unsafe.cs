@@ -3,11 +3,8 @@ namespace System.Runtime.CompilerServices;
 public static unsafe class Unsafe
 {
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int SizeOf<T>()
-    {
-        return sizeof(T);
-    }
+    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
+    public static extern int SizeOf<T>();
 
     [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
     public static extern T As<T>(object? o) where T : class?;

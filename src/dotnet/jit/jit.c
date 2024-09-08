@@ -21,7 +21,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-// #define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 /**
  * The machine used for jitting
@@ -89,7 +89,7 @@ tdn_err_t tdn_jit_init() {
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
 
     spidir_log_init(spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
 
 #ifdef __x86_64__
     m_jit_machine = spidir_codegen_create_x64_machine();
@@ -690,7 +690,11 @@ static tdn_err_t handle_unsafe_intrinsics(
     CHECK(target->ReturnParameter->ParameterType != tVoid);
     CHECK(!tdn_type_is_valuetype(target->ReturnParameter->ParameterType));
 
-    if (tdn_compare_string_to_cstr(target->Name, "As")) {
+    if (tdn_compare_string_to_cstr(target->Name, "SizeOf")) {
+        CHECK(arrlen(args) == 1);
+        *out = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, types[0]->StackSize);
+
+    } else if (tdn_compare_string_to_cstr(target->Name, "As")) {
         CHECK(arrlen(args) == 1);
         *out = args[0];
 
@@ -736,6 +740,31 @@ static tdn_err_t handle_unsafe_intrinsics(
         // NOTE: this is actually a safe instruction (we allow it in the bytecode
         //       of CEQ), so there is no harm in allowing it
         *out = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, args[0], args[1]);
+
+    } else {
+        CHECK_FAIL("Unknown method %T::%U", target->DeclaringType, target->Name);
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t handle_memory_marshal_intrinsics(
+    spidir_builder_handle_t builder,
+    RuntimeMethodBase target,
+    RuntimeTypeInfo* types, spidir_value_t* args,
+    spidir_value_t* out
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(target->ReturnParameter->ParameterType != tVoid);
+    CHECK(!tdn_type_is_valuetype(target->ReturnParameter->ParameterType));
+
+    if (tdn_compare_string_to_cstr(target->Name, "GetArrayDataReference")) {
+        CHECK(arrlen(args) == 1);
+
+        spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, ALIGN_UP(sizeof(struct Array), types[0]->StackAlignment));
+        *out = spidir_builder_build_ptroff(builder, args[0], array_size);
 
     } else {
         CHECK_FAIL("Unknown method %T::%U", target->DeclaringType, target->Name);
@@ -1320,7 +1349,7 @@ static tdn_err_t jit_instruction(
             // perform the valid length branch, load the value from the array
             spidir_builder_set_block(builder, length_is_valid);
             spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, type->StackSize);
-            spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tArray->HeapSize);
+            spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, ALIGN_UP(sizeof(struct Array), type->StackAlignment));
             spidir_value_t byte_offset = spidir_builder_build_imul(builder, element_size, index);
             spidir_value_t abs_offset = spidir_builder_build_iadd(builder, array_size, byte_offset);
             spidir_value_t element_ptr = spidir_builder_build_ptroff(builder, array, abs_offset);
@@ -1407,7 +1436,7 @@ static tdn_err_t jit_instruction(
             // perform the valid length branch, load the value from the array
             spidir_builder_set_block(builder, length_is_valid);
             spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, T->StackSize);
-            spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tArray->HeapSize);
+            spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, ALIGN_UP(sizeof(struct Array), T->StackAlignment));
             spidir_value_t byte_offset = spidir_builder_build_imul(builder, element_size, index);
             spidir_value_t abs_offset = spidir_builder_build_iadd(builder, array_size, byte_offset);
             spidir_value_t element_ptr = spidir_builder_build_ptroff(builder, array, abs_offset);
@@ -1592,6 +1621,8 @@ static tdn_err_t jit_instruction(
             if (target->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME) {
                 if (declaring_type == tUnsafe) {
                     CHECK_AND_RETHROW(handle_unsafe_intrinsics(builder, target, call_args_types, call_args_values, &value));
+                } else if (declaring_type == tMemoryMarshal) {
+
                 } else {
                     CHECK_FAIL();
                 }
@@ -2610,13 +2641,11 @@ static tdn_err_t jit_instruction(
             CHECK_AND_RETHROW(tdn_get_array_type(inst.operand.type, &array_type));
 
             // calculate the array size we will need
-            spidir_value_t array_size = spidir_builder_build_imul(builder, num_elems,
-                                                                  spidir_builder_build_iconst(builder,
-                                                                                              SPIDIR_TYPE_I64,
-                                                                                              inst.operand.type->StackSize));
-            array_size = spidir_builder_build_iadd(builder, array_size, spidir_builder_build_iconst(builder,
-                                                                                                    SPIDIR_TYPE_I64,
-                                                                                                    sizeof(struct Array)));
+            RuntimeTypeInfo element_type = inst.operand.type;
+            spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, element_type->StackSize);
+            spidir_value_t elements_size = spidir_builder_build_imul(builder, num_elems, element_size);
+            spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, ALIGN_UP(sizeof(struct Array), element_type->StackAlignment));
+            array_size = spidir_builder_build_iadd(builder, array_size, elements_size);
 
             // call the gc_new to allocate the new object
             spidir_value_t array = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
@@ -3715,6 +3744,11 @@ cleanup:
 // High-level apis
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+spidir_dump_status_t dump_callback(const char* data, size_t size, void* ctx) {
+    tdn_host_printf("%.*s", size, data);
+    return SPIDIR_DUMP_CONTINUE;
+}
+
 static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -3772,7 +3806,12 @@ static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
                 case SPIDIR_RELOC_X64_PC32: {
                     intptr_t value = (intptr_t)F + A - (intptr_t)P;
                     CHECK(INT32_MIN <= value && value <= INT32_MAX);
-                    *(uint32_t*)P = (uint32_t)value;
+                    uint32_t pc32 = (uint32_t)value;
+                    memcpy(P, &pc32, 4);
+                } break;
+
+                case SPIDIR_RELOC_X64_ABS64: {
+                    memcpy(P, &F, sizeof(void*));
                 } break;
 
                 default:
@@ -3781,8 +3820,12 @@ static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
 #else
 #error Unknown arch
 #endif
+
         }
     }
+
+    TRACE("------------------------");
+    spidir_module_dump(module, dump_callback, NULL);
 
     // map it as rx now
     tdn_host_map_rx(ptr, map_size);

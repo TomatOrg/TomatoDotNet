@@ -1,3 +1,6 @@
 [submodule "libs/spidir"]
 	path = libs/spidir
 	url = git@github.com:nmraz/spidir.git
+[submodule "libs/zydis"]
+	path = libs/zydis
+	url = git@github.com:zyantific/zydis.git
