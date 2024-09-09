@@ -375,7 +375,7 @@ jit_label_t* jit_get_label(jit_region_t* ctx, uint32_t address) {
     return label;
 }
 
-int jit_get_label_location_index(jit_context_t* ctx, uint32_t address, bool exact) {
+int jit_get_label_location_index(jit_method_context_t* ctx, uint32_t address, bool exact) {
     int low = 0;
     int high = arrlen(ctx->labels);
 
@@ -395,7 +395,7 @@ int jit_get_label_location_index(jit_context_t* ctx, uint32_t address, bool exac
     }
 }
 
-void jit_add_label_location(jit_context_t* ctx, uint32_t address) {
+void jit_add_label_location(jit_method_context_t* ctx, uint32_t address) {
     int index = jit_get_label_location_index(ctx, address, false);
     if (index < arrlen(ctx->labels)) {
         // adding inside the array, check if we already have this entry or not

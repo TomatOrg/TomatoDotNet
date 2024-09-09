@@ -333,7 +333,7 @@ typedef enum jit_builtin_exception {
     JIT_EXCEPTION_MAX
 } jit_builtin_exception_t;
 
-typedef struct jit_context {
+typedef struct jit_method_context {
     // the method we are jitting
     RuntimeMethodBase method;
 
@@ -376,14 +376,14 @@ typedef struct jit_context {
     uint32_t last_was_prefix : 1;
     uint32_t volatile_prefix : 1;
     uint32_t  : 30;
-} jit_context_t;
+} jit_method_context_t;
 
 /**
  * Get the index of a label location by its address
  */
-int jit_get_label_location_index(jit_context_t* ctx, uint32_t address, bool exact);
+int jit_get_label_location_index(jit_method_context_t* ctx, uint32_t address, bool exact);
 
 /**
  * Create a new label location
  */
-void jit_add_label_location(jit_context_t* ctx, uint32_t address);
+void jit_add_label_location(jit_method_context_t* ctx, uint32_t address);

@@ -13,7 +13,7 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo);
  * Jit a type instance, this is needed when an instance of a type is created to make sure
  * that the vtable/itables are filled properly
  */
-tdn_err_t tdn_jit_type(RuntimeTypeInfo type);
+// tdn_err_t tdn_jit_type(RuntimeTypeInfo type);
 
 /**
  * Get the address of the method that was jitted before, or NULL if not jitted yet

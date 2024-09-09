@@ -21,55 +21,60 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-#define JIT_IL_OUTPUT
+// #define JIT_IL_OUTPUT
+
+typedef struct jit_context {
+    // the spidir module handle for this jit session
+    spidir_module_handle_t module;
+
+    // Stack of methods that we need to jit and are already
+    // prepared
+    RuntimeMethodBase* methods_to_jit;
+
+    // Lookup from a spidir function to a method
+    struct {
+        spidir_function_t key;
+        RuntimeMethodBase value;
+    }* method_lookup;
+
+    // The opposite of method_lookup
+    struct {
+        RuntimeMethodBase key;
+        spidir_function_t value;
+    }* function_lookup;
+
+    // lookup between a method and a builtin
+    struct {
+        spidir_function_t key;
+        void* value;
+    }* builtin_lookup;
+
+    // memory manipulation (mainly used for structs)
+    spidir_function_t builtin_bzero;
+    spidir_function_t builtin_memcpy;
+
+    // GC related
+    spidir_function_t builtin_gc_new;
+    spidir_function_t builtin_gc_bzero;
+    spidir_function_t builtin_gc_memcpy;
+
+    // throwing related
+    spidir_function_t builtin_exceptions[JIT_EXCEPTION_MAX];
+    spidir_function_t builtin_throw;
+
+    // exception control flow related
+    spidir_function_t builtin_rethrow;
+    spidir_function_t builtin_get_exception;
+} jit_context_t;
 
 /**
  * The machine used for jitting
  */
 static spidir_codegen_machine_handle_t m_jit_machine;
 
-/**
- * Stack of methods that we need to jit and are already
- * prepared
- */
-static RuntimeMethodBase* m_methods_to_jit = NULL;
-
-/**
- * Lookup from a spidir function to a method
- */
-static struct {
-    spidir_function_t key;
-    RuntimeMethodBase value;
-}* m_method_lookup = NULL;
-
-/**
- * Lookup from spidir function to a builtin method
- */
-static struct {
-    spidir_function_t key;
-    void* value;
-}* m_builtin_lookup = NULL;
-
 //
 // builtin functions
 //
-
-// memory manipulation (mainly used for structs)
-static spidir_function_t m_builtin_bzero;
-static spidir_function_t m_builtin_memcpy;
-
-// GC related
-static spidir_function_t m_builtin_gc_new;
-static spidir_function_t m_builtin_gc_bzero;
-static spidir_function_t m_builtin_gc_memcpy;
-
-// throwing related
-static spidir_function_t m_builtin_exceptions[JIT_EXCEPTION_MAX];
-static spidir_function_t m_builtin_throw;
-
-// exception control flow related
-static spidir_function_t m_builtin_rethrow;
-static spidir_function_t m_builtin_get_exception;
 
 static void spidir_log_callback(spidir_log_level_t level, const char* module, size_t module_len, const char* message, size_t message_len) {
     switch (level) {
@@ -89,7 +94,7 @@ tdn_err_t tdn_jit_init() {
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
 
     spidir_log_init(spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
 
 #ifdef __x86_64__
     m_jit_machine = spidir_codegen_create_x64_machine();
@@ -101,82 +106,91 @@ cleanup:
     return err;
 }
 
-static spidir_module_handle_t create_jit_module() {
-    spidir_module_handle_t jit_module = spidir_module_create();
+static void init_jit_context(jit_context_t* ctx) {
+    ctx->module = spidir_module_create();
 
-    m_builtin_bzero = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_bzero = spidir_module_create_extern_function(ctx->module,
             "bzero",
             SPIDIR_TYPE_NONE,
             2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
-    hmput(m_builtin_lookup, m_builtin_bzero, jit_bzero);
+    hmput(ctx->builtin_lookup, ctx->builtin_bzero, jit_bzero);
 
-    m_builtin_memcpy = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_memcpy = spidir_module_create_extern_function(ctx->module,
             "memcpy",
             SPIDIR_TYPE_NONE,
             3, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
-    hmput(m_builtin_lookup, m_builtin_memcpy, jit_memcpy);
+    hmput(ctx->builtin_lookup, ctx->builtin_memcpy, jit_memcpy);
 
-    m_builtin_gc_new = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_gc_new = spidir_module_create_extern_function(ctx->module,
             "gc_new",
             SPIDIR_TYPE_PTR,
             2, (spidir_value_type_t[]){ SPIDIR_TYPE_I32, SPIDIR_TYPE_I64 });
-    hmput(m_builtin_lookup, m_builtin_gc_new, jit_gc_new);
+    hmput(ctx->builtin_lookup, ctx->builtin_gc_new, jit_gc_new);
 
-    m_builtin_gc_memcpy = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_gc_memcpy = spidir_module_create_extern_function(ctx->module,
             "gc_memcpy",
             SPIDIR_TYPE_NONE,
             3, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR });
-    hmput(m_builtin_lookup, m_builtin_gc_memcpy, jit_gc_memcpy);
+    hmput(ctx->builtin_lookup, ctx->builtin_gc_memcpy, jit_gc_memcpy);
 
-    m_builtin_gc_bzero = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_gc_bzero = spidir_module_create_extern_function(ctx->module,
             "gc_bzero",
             SPIDIR_TYPE_NONE,
             2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR });
-    hmput(m_builtin_lookup, m_builtin_gc_bzero, jit_gc_bzero);
+    hmput(ctx->builtin_lookup, ctx->builtin_gc_bzero, jit_gc_bzero);
 
-    m_builtin_exceptions[JIT_EXCEPTION_INVALID_CAST] = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_exceptions[JIT_EXCEPTION_INVALID_CAST] = spidir_module_create_extern_function(ctx->module,
            "throw_invalid_cast_exception",
            SPIDIR_TYPE_NONE,
            0, NULL);
-    hmput(m_builtin_lookup, m_builtin_exceptions[JIT_EXCEPTION_INVALID_CAST], jit_throw_invalid_cast_exception);
+    hmput(ctx->builtin_lookup, ctx->builtin_exceptions[JIT_EXCEPTION_INVALID_CAST], jit_throw_invalid_cast_exception);
 
-    m_builtin_exceptions[JIT_EXCEPTION_INDEX_OUT_OF_RANGE] = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_exceptions[JIT_EXCEPTION_INDEX_OUT_OF_RANGE] = spidir_module_create_extern_function(ctx->module,
             "throw_index_out_of_range_exception",
             SPIDIR_TYPE_NONE,
             0, NULL);
-    hmput(m_builtin_lookup, m_builtin_exceptions[JIT_EXCEPTION_INDEX_OUT_OF_RANGE], jit_throw_index_out_of_range_exception);
+    hmput(ctx->builtin_lookup, ctx->builtin_exceptions[JIT_EXCEPTION_INDEX_OUT_OF_RANGE], jit_throw_index_out_of_range_exception);
 
-    m_builtin_exceptions[JIT_EXCEPTION_OVERFLOW] = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_exceptions[JIT_EXCEPTION_OVERFLOW] = spidir_module_create_extern_function(ctx->module,
             "throw_overflow_exception",
             SPIDIR_TYPE_NONE,
             0, NULL);
-    hmput(m_builtin_lookup, m_builtin_exceptions[JIT_EXCEPTION_OVERFLOW], jit_throw_overflow_exception);
+    hmput(ctx->builtin_lookup, ctx->builtin_exceptions[JIT_EXCEPTION_OVERFLOW], jit_throw_overflow_exception);
 
-    m_builtin_exceptions[JIT_EXCEPTION_NULL_REFERENCE] = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_exceptions[JIT_EXCEPTION_NULL_REFERENCE] = spidir_module_create_extern_function(ctx->module,
             "throw_null_reference_exception",
             SPIDIR_TYPE_NONE,
             0, NULL);
-    hmput(m_builtin_lookup, m_builtin_exceptions[JIT_EXCEPTION_NULL_REFERENCE], jit_throw_null_reference_exception);
+    hmput(ctx->builtin_lookup, ctx->builtin_exceptions[JIT_EXCEPTION_NULL_REFERENCE], jit_throw_null_reference_exception);
 
-    m_builtin_throw = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_throw = spidir_module_create_extern_function(ctx->module,
                 "throw",
                 SPIDIR_TYPE_NONE,
                 1, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR });
-    hmput(m_builtin_lookup, m_builtin_throw, jit_throw);
+    hmput(ctx->builtin_lookup, ctx->builtin_throw, jit_throw);
 
-    m_builtin_rethrow = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_rethrow = spidir_module_create_extern_function(ctx->module,
                 "rethrow",
                 SPIDIR_TYPE_NONE,
                 0, NULL);
-    hmput(m_builtin_lookup, m_builtin_rethrow, jit_rethrow);
+    hmput(ctx->builtin_lookup, ctx->builtin_rethrow, jit_rethrow);
 
-    m_builtin_get_exception = spidir_module_create_extern_function(jit_module,
+    ctx->builtin_get_exception = spidir_module_create_extern_function(ctx->module,
                 "get_exception",
                 SPIDIR_TYPE_PTR,
                 0, NULL);
-    hmput(m_builtin_lookup, m_builtin_get_exception, jit_get_exception);
+    hmput(ctx->builtin_lookup, ctx->builtin_get_exception, jit_get_exception);
+}
 
-    return jit_module;
+static void destroy_jit_context(jit_context_t* ctx) {
+    // free all the lookups that we had
+    hmfree(ctx->builtin_lookup);
+    hmfree(ctx->function_lookup);
+    hmfree(ctx->method_lookup);
+    arrfree(ctx->methods_to_jit);
+
+    // destroy the module itself
+    spidir_module_destroy(ctx->module);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -263,7 +277,7 @@ static spidir_value_type_t get_jit_mem_type(RuntimeTypeInfo info) {
 // Jit prepare helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static tdn_err_t jit_prepare_method(RuntimeMethodBase method, spidir_module_handle_t module);
+static tdn_err_t jit_prepare_method(jit_context_t* ctx, spidir_module_handle_t module, RuntimeMethodBase method);
 
 static void register_struct_fields(RuntimeTypeInfo type, void* base) {
     // go over the struct fields and register them
@@ -501,24 +515,19 @@ static bool check_method_access(RuntimeMethodBase method, RuntimeMethodBase targ
         b = __temp; \
     } while (0)
 
-/**
- * Emit a memcpy with a known size
- */
-static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
-    // TODO:
-    spidir_builder_build_call(builder, m_builtin_memcpy, 3,
+static void jit_emit_memcpy(jit_context_t* jctx, jit_method_context_t* mctx, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
+    spidir_builder_build_call(mctx->builder, jctx->builtin_memcpy, 3,
                               (spidir_value_t[]){
-                                      ptr1, ptr2,
-                                      spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, size)
+                                  ptr1, ptr2,
+                                  spidir_builder_build_iconst(mctx->builder, SPIDIR_TYPE_I64, size)
                               });
 }
 
-static void jit_emit_gc_memcpy(spidir_builder_handle_t builder, RuntimeTypeInfo type, spidir_value_t ptr1, spidir_value_t ptr2) {
-    // TODO: if struct is small enough inline it manually
-    spidir_builder_build_call(builder, m_builtin_gc_memcpy, 3,
+static void jit_emit_gc_memcpy(jit_context_t* jctx, jit_method_context_t* mctx, RuntimeTypeInfo type, spidir_value_t ptr1, spidir_value_t ptr2) {
+    spidir_builder_build_call(mctx->builder, jctx->builtin_gc_memcpy, 3,
                               (spidir_value_t[]){
-                                      spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)type),
-                                      ptr1, ptr2,
+                                  spidir_builder_build_iconst(mctx->builder, SPIDIR_TYPE_PTR, (uint64_t)type),
+                                  ptr1, ptr2,
                               });
 }
 
@@ -558,7 +567,7 @@ cleanup:
 /**
  * Create the labels of all the jump locations in the given region
  */
-static tdn_err_t create_region_labels(jit_context_t* ctx, jit_region_t* region) {
+static tdn_err_t create_region_labels(jit_method_context_t* ctx, jit_region_t* region) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK(region->labels == NULL);
@@ -601,7 +610,7 @@ cleanup:
  *
  */
 static tdn_err_t resolve_and_verify_branch_target(
-    jit_context_t* ctx,
+    jit_method_context_t* ctx,
     jit_region_t* region,
     uint32_t target,
     jit_label_t** out_label
@@ -632,7 +641,7 @@ cleanup:
 // Exception handlers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static spidir_block_t jit_throw_builtin_exception(jit_context_t* ctx, spidir_builder_handle_t builder, jit_builtin_exception_t exception) {
+static spidir_block_t jit_throw_builtin_exception(jit_context_t* jctx, jit_method_context_t* ctx, spidir_builder_handle_t builder, jit_builtin_exception_t exception) {
     if ((ctx->exceptions & (1 << exception)) == 0) {
         spidir_block_t prev_block;
         ASSERT(spidir_builder_cur_block(builder, &prev_block));
@@ -643,7 +652,7 @@ static spidir_block_t jit_throw_builtin_exception(jit_context_t* ctx, spidir_bui
 
         // emit the throw
         spidir_builder_set_block(builder, ctx->exception_blocks[exception]);
-        spidir_builder_build_call(builder, m_builtin_exceptions[exception], 0, NULL);
+        spidir_builder_build_call(builder, jctx->builtin_exceptions[exception], 0, NULL);
         spidir_builder_build_unreachable(builder);
 
         // and go back to the original thing
@@ -656,7 +665,7 @@ static spidir_block_t jit_throw_builtin_exception(jit_context_t* ctx, spidir_bui
     return ctx->exception_blocks[exception];
 }
 
-static void jit_emit_null_check(jit_context_t* ctx, spidir_builder_handle_t builder, spidir_value_t obj) {
+static void jit_emit_null_check(jit_context_t* jctx, jit_method_context_t* ctx, spidir_builder_handle_t builder, spidir_value_t obj) {
     // create the null check
     spidir_block_t valid = spidir_builder_create_block(builder);
     spidir_value_t null = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
@@ -665,7 +674,7 @@ static void jit_emit_null_check(jit_context_t* ctx, spidir_builder_handle_t buil
                                              null, obj);
 
     // get the throw block
-    spidir_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_NULL_REFERENCE);
+    spidir_block_t invalid = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_NULL_REFERENCE);
 
     // either jump to the throw or continue
     spidir_builder_build_brcond(builder, cmp, valid, invalid);
@@ -783,7 +792,8 @@ cleanup:
  * logic and make the code more readable
  */
 static tdn_err_t jit_instruction(
-    jit_context_t* ctx,
+    jit_context_t* jctx,
+    jit_method_context_t* ctx,
     jit_region_t* region,
     tdn_il_inst_t inst,
     uint32_t pc
@@ -844,7 +854,7 @@ static tdn_err_t jit_instruction(
                     // use memcpy
                     spidir_value_t location;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, arg_type, &location));
-                    jit_emit_memcpy(builder, location, arg->value, arg_type->StackSize);
+                    jit_emit_memcpy(jctx, ctx, location, arg->value, arg_type->StackSize);
                 } else {
                     // use a proper load
                     CHECK_AND_RETHROW(eval_stack_push(stack, arg_type,
@@ -859,7 +869,7 @@ static tdn_err_t jit_instruction(
                     // passed by pointer, memcpy to the stack
                     spidir_value_t location;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, arg_type, &location));
-                    jit_emit_memcpy(builder, location, arg->value, arg_type->StackSize);
+                    jit_emit_memcpy(jctx, ctx, location, arg->value, arg_type->StackSize);
                 } else {
                     // just push it
                     CHECK_AND_RETHROW(eval_stack_push(stack, arg_type, arg->value));
@@ -927,7 +937,7 @@ static tdn_err_t jit_instruction(
             // was spilled, this is a stack slot
             if (jit_is_struct_type(value_type)) {
                 // use memcpy
-                jit_emit_memcpy(builder, arg->value, value, value_type->StackSize);
+                jit_emit_memcpy(jctx, ctx, arg->value, value, value_type->StackSize);
             } else {
                 // use a proper load
                 spidir_builder_build_store(builder,
@@ -953,7 +963,7 @@ static tdn_err_t jit_instruction(
                 // struct type, copy the stack slot to the eval stack
                 spidir_value_t loc;
                 CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, type, &loc));
-                jit_emit_memcpy(builder, loc, ctx->locals[var], type->StackSize);
+                jit_emit_memcpy(jctx, ctx, loc, ctx->locals[var], type->StackSize);
             } else {
                 // not a struct type, load it from the stack slot
                 spidir_value_t value = spidir_builder_build_load(builder,
@@ -1005,7 +1015,7 @@ static tdn_err_t jit_instruction(
 
             if (jit_is_struct_type(value.type)) {
                 // struct type, copy the stack slot to the eval stack
-                jit_emit_memcpy(builder, ctx->locals[var], value.value, value.type->StackSize);
+                jit_emit_memcpy(jctx, ctx, ctx->locals[var], value.value, value.type->StackSize);
             } else {
                 // TODO: support readonly locals, for now we have no way to properly represent that
                 if (value.type->IsByRef) {
@@ -1081,7 +1091,7 @@ static tdn_err_t jit_instruction(
 
             if (ldflda) {
                 // explicit null check since only loading the value
-                jit_emit_null_check(ctx, builder, obj);
+                jit_emit_null_check(jctx, ctx, builder, obj);
 
                 // tracks as a managed pointer to the verification type
                 RuntimeTypeInfo value_type = tdn_get_verification_type(field_type);
@@ -1098,7 +1108,7 @@ static tdn_err_t jit_instruction(
                     // we are copying a struct to the stack
                     spidir_value_t value;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, value_type, &value));
-                    jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
+                    jit_emit_memcpy(jctx, ctx, value, field_ptr, field_type->StackSize);
                 } else {
                     // we are copying a simpler value
                     spidir_value_t value = spidir_builder_build_load(builder,
@@ -1167,9 +1177,9 @@ static tdn_err_t jit_instruction(
             // perform the actual store
             if (jit_is_struct_type(field_type)) {
                 if (field_type->IsUnmanaged) {
-                    jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
+                    jit_emit_memcpy(jctx, ctx, field_ptr, value, field_type->StackSize);
                 } else {
-                    jit_emit_gc_memcpy(builder, field_type, field_ptr, value);
+                    jit_emit_gc_memcpy(jctx, ctx, field_type, field_ptr, value);
                 }
             } else {
                 // we are copying a simpler value
@@ -1224,7 +1234,7 @@ static tdn_err_t jit_instruction(
                     // we are copying a struct to the stack
                     spidir_value_t value;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, value_type, &value));
-                    jit_emit_memcpy(builder, value, field_ptr, field_type->StackSize);
+                    jit_emit_memcpy(jctx, ctx, value, field_ptr, field_type->StackSize);
                 } else {
                     // we are copying a simpler value
                     spidir_value_t value = spidir_builder_build_load(builder,
@@ -1273,7 +1283,7 @@ static tdn_err_t jit_instruction(
             // perform the actual store
             if (jit_is_struct_type(field_type)) {
                 // we are copying a struct to the stack
-                jit_emit_memcpy(builder, field_ptr, value, field_type->StackSize);
+                jit_emit_memcpy(jctx, ctx, field_ptr, value, field_type->StackSize);
             } else {
                 // we are copying a simpler value
                 spidir_builder_build_store(builder,
@@ -1342,7 +1352,7 @@ static tdn_err_t jit_instruction(
             spidir_value_t length = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, length_ptr);
 
             // make sure the index < length
-            spidir_block_t throw_index_out_of_range = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
+            spidir_block_t throw_index_out_of_range = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
             spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I64, index, length);
             spidir_builder_build_brcond(builder, length_check, length_is_valid, throw_index_out_of_range);
 
@@ -1370,7 +1380,7 @@ static tdn_err_t jit_instruction(
                     // we are copying a struct to the stack
                     spidir_value_t value;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, tracked, &value));
-                    jit_emit_memcpy(builder, value, element_ptr, tracked->StackSize);
+                    jit_emit_memcpy(jctx, ctx, value, element_ptr, tracked->StackSize);
                 } else {
                     // we are copying a simpler value
                     spidir_value_t value = spidir_builder_build_load(builder,
@@ -1429,7 +1439,7 @@ static tdn_err_t jit_instruction(
             spidir_value_t length = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, length_ptr);
 
             // make sure the index < length
-            spidir_block_t throw_inex_out_of_range = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
+            spidir_block_t throw_inex_out_of_range = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
             spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I64, index, length);
             spidir_builder_build_brcond(builder, length_check, length_is_valid, throw_inex_out_of_range);
 
@@ -1447,9 +1457,9 @@ static tdn_err_t jit_instruction(
             if (jit_is_struct_type(T)) {
                 // we are copying a struct to the stack
                 if (T->IsUnmanaged) {
-                    jit_emit_memcpy(builder, element_ptr, value, T->StackSize);
+                    jit_emit_memcpy(jctx, ctx, element_ptr, value, T->StackSize);
                 } else {
-                    jit_emit_gc_memcpy(builder, T, element_ptr, value);
+                    jit_emit_gc_memcpy(jctx, ctx, T, element_ptr, value);
                 }
             } else {
                 // we are copying a simpler value
@@ -1506,7 +1516,7 @@ static tdn_err_t jit_instruction(
                     if (tdn_type_is_referencetype(target->DeclaringType)) {
                         // call gc_new to allocate it
                         target_this_type = target->DeclaringType;
-                        obj = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
+                        obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 2, (spidir_value_t[]){
                             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, target_this_type->TypeId),
                             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, object_size)
                         });
@@ -1559,7 +1569,7 @@ static tdn_err_t jit_instruction(
                                 (target->Attributes.Virtual && target->Attributes.Final) // the method is final
                             )
                         ) {
-                            jit_emit_null_check(ctx, builder, call_args_values[0]);
+                            jit_emit_null_check(jctx, ctx, builder, call_args_values[0]);
                         }
                     } else {
                         target_type = target->Parameters->Elements[i - 1]->ParameterType;
@@ -1593,7 +1603,7 @@ static tdn_err_t jit_instruction(
             // TODO: indirect calls, de-virt
 
             // make sure that we can actually call the target
-            CHECK_AND_RETHROW(jit_prepare_method(target, spidir_builder_get_module(builder)));
+            CHECK_AND_RETHROW(jit_prepare_method(jctx, spidir_builder_get_module(builder), target));
 
             RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
 
@@ -1850,7 +1860,7 @@ static tdn_err_t jit_instruction(
                 if (jit_is_struct_type(ret.type)) {
                     // returning a struct, need to use the implicit
                     // ret pointer
-                    jit_emit_memcpy(builder,
+                    jit_emit_memcpy(jctx, ctx,
                                     spidir_builder_build_param_ref(builder, 0),
                                     ret.value,
                                     ret.type->StackSize);
@@ -2016,7 +2026,7 @@ static tdn_err_t jit_instruction(
                         // we got to the root region, meaning there is nothing
                         // else in the fault path to handle, so just rethrow the
                         // error
-                        spidir_builder_build_call(builder, m_builtin_rethrow, 0, NULL);
+                        spidir_builder_build_call(builder, jctx->builtin_rethrow, 0, NULL);
                         spidir_builder_build_unreachable(builder);
                     } else {
                         jit_region_t* handler = &ctx->handler_regions[ctx->regions[i]->clause_index];
@@ -2045,10 +2055,10 @@ static tdn_err_t jit_instruction(
             CHECK(tdn_type_is_referencetype(object_type));
 
             // must not be null
-            jit_emit_null_check(ctx, builder, object);
+            jit_emit_null_check(jctx, ctx, builder, object);
 
             // and throw it
-            spidir_builder_build_call(builder, m_builtin_throw, 1, &object);
+            spidir_builder_build_call(builder, jctx->builtin_throw, 1, &object);
 
             // and we can't actually reach here
             spidir_builder_build_unreachable(builder);
@@ -2507,7 +2517,7 @@ static tdn_err_t jit_instruction(
 
             // perform the branch
             spidir_block_t valid = spidir_builder_create_block(builder);
-            spidir_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_OVERFLOW);
+            spidir_block_t invalid = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_OVERFLOW);
             spidir_builder_build_brcond(builder, cond, valid, invalid);
 
             // valid path, push the new valid
@@ -2597,7 +2607,7 @@ static tdn_err_t jit_instruction(
 
             // perform the branch
             spidir_block_t valid = spidir_builder_create_block(builder);
-            spidir_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_OVERFLOW);
+            spidir_block_t invalid = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_OVERFLOW);
             spidir_builder_build_brcond(builder, cond, valid, invalid);
 
             // valid path, push the new valid
@@ -2648,7 +2658,7 @@ static tdn_err_t jit_instruction(
             array_size = spidir_builder_build_iadd(builder, array_size, elements_size);
 
             // call the gc_new to allocate the new object
-            spidir_value_t array = spidir_builder_build_call(builder, m_builtin_gc_new, 2, (spidir_value_t[]){
+            spidir_value_t array = spidir_builder_build_call(builder, jctx->builtin_gc_new, 2, (spidir_value_t[]){
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, array_type->TypeId), array_size
             });
 
@@ -2748,7 +2758,7 @@ static tdn_err_t jit_instruction(
                     spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->TypeId),
                     spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, sizeof(struct Object) + inst.operand.type->HeapSize),
                 };
-                spidir_value_t obj = spidir_builder_build_call(builder, m_builtin_gc_new, 2, args);
+                spidir_value_t obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 2, args);
                 spidir_value_t obj_value = spidir_builder_build_ptroff(builder, obj,
                                                                        spidir_builder_build_iconst(builder,
                                                                                                    SPIDIR_TYPE_I64,
@@ -2765,9 +2775,9 @@ static tdn_err_t jit_instruction(
                     spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, val, obj_value);
                 } else {
                     if (val_type->IsUnmanaged) {
-                        jit_emit_memcpy(builder, obj_value, val, val_type->StackSize);
+                        jit_emit_memcpy(jctx, ctx, obj_value, val, val_type->StackSize);
                     } else {
-                        jit_emit_gc_memcpy(builder, val_type, obj_value, val);
+                        jit_emit_gc_memcpy(jctx, ctx, val_type, obj_value, val);
                     }
                 }
 
@@ -2818,7 +2828,7 @@ static tdn_err_t jit_instruction(
                 spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, object_type_ptr);
 
                 spidir_block_t valid = spidir_builder_create_block(builder);
-                spidir_block_t invalid = jit_throw_builtin_exception(ctx, builder, JIT_EXCEPTION_INVALID_CAST);
+                spidir_block_t invalid = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INVALID_CAST);
 
                 spidir_value_t wanted_type = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->TypeId);
                 spidir_value_t is_wanted_type = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I64, object_type, wanted_type);
@@ -2841,7 +2851,7 @@ static tdn_err_t jit_instruction(
                     if (jit_is_struct_type(obj_type)) {
                         spidir_value_t location;
                         CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, inst.operand.type, &location));
-                        jit_emit_memcpy(builder, location, value_type_ptr, inst.operand.type->StackSize);
+                        jit_emit_memcpy(jctx, ctx, location, value_type_ptr, inst.operand.type->StackSize);
                     } else {
                         spidir_value_t value = spidir_builder_build_load(builder,
                                                                    get_jit_mem_size(inst.operand.type),
@@ -2895,14 +2905,14 @@ static tdn_err_t jit_instruction(
                                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0), dest);
 
             } else if (dest_type->IsUnmanaged) {
-                spidir_builder_build_call(builder, m_builtin_bzero, 2,
+                spidir_builder_build_call(builder, jctx->builtin_bzero, 2,
                                           (spidir_value_t[]){
                                               dest,
                                               spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, dest_type->StackSize)
                                           });
 
             } else {
-                spidir_builder_build_call(builder, m_builtin_gc_bzero, 2,
+                spidir_builder_build_call(builder, jctx->builtin_gc_bzero, 2,
                                           (spidir_value_t[]){
                                                   spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)dest_type),
                                                   dest,
@@ -3000,6 +3010,7 @@ cleanup:
 
 typedef struct jit_builder_ctx {
     RuntimeMethodBase method;
+    jit_context_t* ctx;
     tdn_err_t err;
 } jit_builder_ctx_t;
 
@@ -3014,10 +3025,11 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 #endif
 
     // setup the context that will be used for this method jitting
-    jit_context_t ctx = {
+    jit_method_context_t ctx = {
         .method = method,
         .builder = builder,
     };
+    jit_context_t* jctx = builder_ctx->ctx;
     eval_stack_t* stack = &ctx.stack;
     stack->max_depth = method->MethodBody->MaxStackSize;
 
@@ -3081,7 +3093,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
             // clear it
             if (jit_is_struct_type(var->LocalType)) {
-                spidir_builder_build_call(builder, m_builtin_bzero, 2,
+                spidir_builder_build_call(builder, jctx->builtin_bzero, 2,
                                           (spidir_value_t[]){
                                                   ctx.locals[i],
                                                   spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, var->LocalType->StackSize)
@@ -3142,7 +3154,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 // store it, if its a value-type we need to copy it instead
                 spidir_value_t param_ref = spidir_builder_build_param_ref(builder, args_offset + arg);
                 if (jit_is_struct_type(type)) {
-                    jit_emit_memcpy(builder,
+                    jit_emit_memcpy(jctx, &ctx,
                                     ctx.args[arg].value,
                                     param_ref,
                                     type->StackSize);
@@ -3439,7 +3451,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                 if (handler_region->clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
                     CHECK_AND_RETHROW(eval_stack_push(stack, new_region->clause->CatchType,
                                     spidir_builder_build_call(builder,
-                                                              m_builtin_get_exception, 0, NULL)));
+                                                              jctx->builtin_get_exception, 0, NULL)));
                 }
             } else {
                 // continue on
@@ -3526,7 +3538,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
         // convert to jit
         tdn_normalize_inst(&inst);
         CHECK(region->has_block);
-        CHECK_AND_RETHROW(jit_instruction(&ctx, region, inst, pc));
+        CHECK_AND_RETHROW(jit_instruction(jctx, &ctx, region, inst, pc));
 
         //--------------------------------------------------------------------------------------------------------------
         // last handling
@@ -3633,8 +3645,11 @@ cleanup:
 /**
  * Prepares a method for jitting, this essentially creates the jit function
  * so it will be ready for when we call it
+ *
+ * NOTE: the module handle must come from the builder if we
+ *       are currently inside of a builder!
  */
-static tdn_err_t jit_prepare_method(RuntimeMethodBase method, spidir_module_handle_t handle) {
+static tdn_err_t jit_prepare_method(jit_context_t* ctx, spidir_module_handle_t module, RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_type_t* params = NULL;
     string_builder_t builder = {};
@@ -3673,23 +3688,24 @@ static tdn_err_t jit_prepare_method(RuntimeMethodBase method, spidir_module_hand
     spidir_function_t func;
     if (method->MethodBody != NULL) {
         func = spidir_module_create_function(
-            handle,
+            module,
             name, ret_type, arrlen(params), params
         );
     } else {
         // make sure the assembly is allowed to have external exports
         CHECK(method->Module->Assembly->AllowExternalExports);
         func = spidir_module_create_extern_function(
-            handle,
+            module,
             name, ret_type, arrlen(params), params
         );
     }
     method->JitMethodId = func.id;
-    hmput(m_method_lookup, func, method);
+    hmput(ctx->method_lookup, func, method);
+    hmput(ctx->function_lookup, method, func);
 
     // queue to methods to jit if we didn't start with this already
     if (!method->JitStarted && method->MethodBody != NULL) {
-        arrpush(m_methods_to_jit, method);
+        arrpush(ctx->methods_to_jit, method);
     }
 
 cleanup:
@@ -3702,7 +3718,7 @@ cleanup:
 /**
  * Actually jits a method, prepares it if needed
  */
-static tdn_err_t jit_method(RuntimeMethodBase method, spidir_module_handle_t module) {
+static tdn_err_t jit_method(jit_context_t* context, RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // check if already jitted
@@ -3718,9 +3734,10 @@ static tdn_err_t jit_method(RuntimeMethodBase method, spidir_module_handle_t mod
     spidir_function_t function = {method->JitMethodId};
     jit_builder_ctx_t ctx = {
         .method = method,
+        .ctx = context,
         .err = TDN_NO_ERROR
     };
-    spidir_module_build_function(module,
+    spidir_module_build_function(ctx.ctx->module,
                                  function,
                                  jit_method_callback, &ctx);
     CHECK_AND_RETHROW(ctx.err);
@@ -3729,7 +3746,7 @@ static tdn_err_t jit_method(RuntimeMethodBase method, spidir_module_handle_t mod
     spidir_codegen_blob_handle_t blob;
     spidir_codegen_status_t status = spidir_codegen_emit_function(
         m_jit_machine,
-        module,
+        ctx.ctx->module,
         function,
         &blob
     );
@@ -3749,14 +3766,14 @@ spidir_dump_status_t dump_callback(const char* data, size_t size, void* ctx) {
     return SPIDIR_DUMP_CONTINUE;
 }
 
-static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
+static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // and now dequeue all the methods we need to jit
     size_t map_size = 0;
-    while (arrlen(m_methods_to_jit) != 0) {
-        RuntimeMethodBase method = arrpop(m_methods_to_jit);
-        CHECK_AND_RETHROW(jit_method(method, module));
+    while (arrlen(ctx->methods_to_jit) != 0) {
+        RuntimeMethodBase method = arrpop(ctx->methods_to_jit);
+        CHECK_AND_RETHROW(jit_method(ctx, method));
 
         spidir_codegen_blob_handle_t blob = method->JitCodegenHandle;
         method->MethodPtr = (void*)map_size;
@@ -3770,8 +3787,8 @@ static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
     CHECK_ERROR(ptr != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // now fix the method pointer of all the jitted methods
-    for (int i = 0; i < hmlen(m_method_lookup); i++) {
-        RuntimeMethodBase method = m_method_lookup[i].value;
+    for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
+        RuntimeMethodBase method = ctx->method_lookup[i].value;
         method->MethodPtr = ptr + (uintptr_t)method->MethodPtr;
 
         spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
@@ -3779,8 +3796,8 @@ static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
     }
 
     // and now we can actually relocate the entire code
-    for (int i = 0; i < hmlen(m_method_lookup); i++) {
-        RuntimeMethodBase method = m_method_lookup[i].value;
+    for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
+        RuntimeMethodBase method = ctx->method_lookup[i].value;
         spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
 
         const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(handle);
@@ -3788,9 +3805,9 @@ static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
         for (size_t j = 0; j < reloc_count; j++) {
             // resolve the function we are linking against
             void* F = NULL;
-            RuntimeMethodBase target = hmget(m_method_lookup, relocs[j].target);
+            RuntimeMethodBase target = hmget(ctx->method_lookup, relocs[j].target);
             if (target == NULL) {
-                F = hmget(m_builtin_lookup, relocs[j].target);
+                F = hmget(ctx->builtin_lookup, relocs[j].target);
                 CHECK(F != NULL);
             } else {
                 F = target->MethodPtr;
@@ -3824,25 +3841,12 @@ static tdn_err_t tdn_jit_method_internal(spidir_module_handle_t module) {
         }
     }
 
-    TRACE("------------------------");
-    spidir_module_dump(module, dump_callback, NULL);
+    // spidir_module_dump(ctx->module, dump_callback, NULL);
 
     // map it as rx now
     tdn_host_map_rx(ptr, map_size);
 
 cleanup:
-    // free the methods to jit array
-    arrfree(m_methods_to_jit);
-
-    // free the method lookup and all the codegen handles
-    for (int i = 0; i < hmlen(m_method_lookup); i++) {
-        RuntimeMethodBase method = m_method_lookup[i].value;
-        spidir_codegen_blob_destroy(method->JitCodegenHandle);
-        method->JitCodegenHandle = NULL;
-        method->JitMethodId = 0;
-    }
-    hmfree(m_method_lookup);
-
     return err;
 }
 
@@ -3850,49 +3854,47 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // create the module with all required imports
-    spidir_module_handle_t module = create_jit_module();
+    jit_context_t ctx = {0};
+    init_jit_context(&ctx);
 
     // prepare it, this should queue the method
-    CHECK_AND_RETHROW(jit_prepare_method(methodInfo, module));
+    CHECK_AND_RETHROW(jit_prepare_method(&ctx, ctx.module, methodInfo));
 
     // actually jit it
-    CHECK_AND_RETHROW(tdn_jit_method_internal(module));
+    CHECK_AND_RETHROW(tdn_jit_method_internal(&ctx));
 
 cleanup:
-    spidir_module_destroy(module);
+    destroy_jit_context(&ctx);
 
     return err;
 }
 
-void* tdn_jit_get_method_address(RuntimeMethodBase methodInfo) {
-    return NULL;
-}
+// static spidir_dump_status_t stdout_dump_callback(const char* s, size_t size, void* ctx) {
+//     (void) ctx;
+//     tdn_host_printf("%.*s", size, s);
+//     return SPIDIR_DUMP_CONTINUE;
+// }
 
-static spidir_dump_status_t stdout_dump_callback(const char* s, size_t size, void* ctx) {
-    (void) ctx;
-    tdn_host_printf("%.*s", size, s);
-    return SPIDIR_DUMP_CONTINUE;
-}
-
-tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    // create the module with all required imports
-    spidir_module_handle_t module = create_jit_module();
-
-    // jit all the virtual methods, as those are the one that can be called
-    // by other stuff unknowingly, the rest are going to be jitted lazyily
-    for (int i = 0; i < type->DeclaredMethods->Length; i++) {
-        RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[i];
-        if (!method->Attributes.Virtual) continue;
-        CHECK_AND_RETHROW(jit_prepare_method(method, module));
-    }
-
-    // actually jit it
-    CHECK_AND_RETHROW(tdn_jit_method_internal(module));
-
-cleanup:
-    spidir_module_destroy(module);
-
-    return err;
-}
+// tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
+//     tdn_err_t err = TDN_NO_ERROR;
+//
+//     // create the module with all required imports
+//     jit_context_t ctx = {};
+//     init_jit_context(&ctx);
+//
+//     // jit all the virtual methods, as those are the one that can be called
+//     // by other stuff unknowingly, the rest are going to be jitted lazyily
+//     for (int i = 0; i < type->DeclaredMethods->Length; i++) {
+//         RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[i];
+//         if (!method->Attributes.Virtual) continue;
+//         CHECK_AND_RETHROW(jit_prepare_method(&ctx, method));
+//     }
+//
+//     // actually jit it
+//     CHECK_AND_RETHROW(tdn_jit_method_internal(module));
+//
+// cleanup:
+//     destroy_jit_context(&ctx);
+//
+//     return err;
+// }

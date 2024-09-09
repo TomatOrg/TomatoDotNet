@@ -17,7 +17,7 @@ BUILD_DIR	:= $(OUT_DIR)/build
 #-----------------------------------------------------------------------------------------------------------------------
 
 CFLAGS 		:= -target x86_64-pc-linux-elf
-#CFLAGS		+= -Werror -std=gnu17
+CFLAGS		+= -Werror -std=gnu17
 CFLAGS 		+= -Wno-unused-label
 CFLAGS 		+= -Wno-address-of-packed-member
 CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
