@@ -6,6 +6,8 @@
 #include <string.h>
 #include "tomatodotnet/host.h"
 
+#include <sys/mman.h>
+
 #include <util/except.h>
 
 void tdn_host_log_trace(const char* format, ...) {
@@ -62,6 +64,23 @@ void tdn_host_free(void* ptr) {
     free(ptr);
 }
 
+static void* m_low_memory = NULL;
+
+void* tdn_host_mallocz_low(size_t size) {
+    if (m_low_memory == NULL) {
+        m_low_memory = mmap((void*)BASE_2GB, SIZE_2GB, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+        ASSERT(m_low_memory != MAP_FAILED);
+        ASSERT((uintptr_t)m_low_memory == BASE_2GB);
+    }
+    void* ptr = m_low_memory;
+    m_low_memory += ALIGN_UP(size, 8);
+    return ptr;
+}
+
+void tdn_host_free_low(void* ptr) {
+
+}
+
 size_t tdn_host_strnlen(const char* string, size_t maxlen) {
     return strnlen(string, maxlen);
 }
@@ -91,7 +110,7 @@ const char* tdn_host_error_to_string(int error) {
     return strerror(error);
 }
 
-void* tdn_host_gc_alloc(size_t size) {
+void* tdn_host_gc_alloc(size_t size, size_t alignment) {
     return calloc(1, size);
 }
 
@@ -99,10 +118,8 @@ void tdn_host_gc_register_root(void* root) {
     (void)root;
 }
 
-#include <sys/mman.h>
-
 void* tdn_host_map(size_t size) {
-    void* ptr = mmap(tdn_host_map, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    void* ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (ptr == MAP_FAILED) {
         return NULL;
     }

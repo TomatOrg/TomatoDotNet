@@ -35,7 +35,6 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // table
     //
     new_type = GC_NEW(RuntimeTypeInfo);
-    tdn_register_type(new_type);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -61,12 +60,17 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     new_type->FillingStackSize = 1;
     new_type->IsArray = 1;
 
+    // TODO: handle the vtable correctly....
+    new_type->JitVTable = tArray->JitVTable;
+
     // set the array type, because in the mean time someone could
     // have created the instance already, we are going to just let
     // the GC clean after ourselves and use the real one
     RuntimeTypeInfo result = NULL;
     if (atomic_compare_exchange_strong(&type->ArrayType, &result, new_type)) {
         result = new_type;
+    } else {
+        tdn_host_free_low(new_type->JitVTable);
     }
 
     *out_type = result;
@@ -96,7 +100,6 @@ tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // table
     //
     new_type = GC_NEW(RuntimeTypeInfo);
-    tdn_register_type(new_type);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -151,7 +154,6 @@ tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) 
     // table
     //
     new_type = GC_NEW(RuntimeTypeInfo);
-    tdn_register_type(new_type);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -362,7 +364,6 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
         // create it and set it incase we need it again
         // for expansion
         RuntimeTypeInfo new_type = GC_NEW(RuntimeTypeInfo);
-        tdn_register_type(new_type);
 
         hmput(base->GenericTypeInstances, hash, new_type);
 
@@ -377,7 +378,7 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
 
         // and now fill it up
         CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
-        CHECK_AND_RETHROW(tdn_size_init(new_type));
+        CHECK_AND_RETHROW(tdn_type_init(new_type));
 
         // and out it goes
         *type = new_type;

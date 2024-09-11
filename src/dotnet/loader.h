@@ -11,14 +11,4 @@ tdn_err_t tdn_parser_method_body(
     RuntimeMethodBase methodBase
 );
 
-tdn_err_t tdn_size_init(RuntimeTypeInfo type);
-
-/**
- * Register a type into the system, setting its ID
- */
-void tdn_register_type(RuntimeTypeInfo type);
-
-/**
- * Get a type from its type id
- */
-RuntimeTypeInfo tdn_get_type_by_id(int type_id);
+tdn_err_t tdn_type_init(RuntimeTypeInfo type);

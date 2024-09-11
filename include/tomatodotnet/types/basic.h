@@ -25,20 +25,36 @@ typedef struct {} ValueType;
 typedef struct {} Enum;
 typedef struct {} Void;
 
+typedef struct ObjectVTable {
+    // The full runtime type of the type
+    RuntimeTypeInfo Type;
+
+    // The hierarchy encoding, used for checking
+    // quickly is an instance of this type
+    uint64_t TypeHierarchy;
+
+    // the type's interface product, used for
+    // checking quickly if implementing some type
+    uint64_t InterfaceProduct;
+
+    // the actual functions come now
+    void* Functions[];
+} ObjectVTable;
+
 typedef struct Object {
     uint32_t VTable;
-    uint32_t TypeId;
     uint8_t MonitorLock;
     uint8_t MonitorCondVar;
-    uint16_t _reserved1;
-    uint32_t _reserved2;
+    uint8_t GCFlags;
+    uint8_t _reserved;
 }* Object;
-_Static_assert(sizeof(struct Object) == 8 * 2, "Object size too big");
+_Static_assert(sizeof(struct Object) == 8, "Object size too big");
+
+static inline ObjectVTable* object_get_vtable(Object object) { return (void*)(uintptr_t)object->VTable; }
 
 typedef struct String {
     struct Object;
     int Length;
-    uint8_t _padding[4];
     Char Chars[];
 }* String;
 

@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace System;
@@ -7,11 +9,10 @@ public class Object
 {
 
     private uint _vtable;
-    private uint _typeId;
     private byte _monitorLock;
     private byte _monitorCondVar;
-    private ushort _reserved0;
-    private uint _reserved1;
+    private byte _gcFlags;
+    private byte _reserved;
 
     public Object()
     {
@@ -21,10 +22,8 @@ public class Object
     {
     }
 
-    public Type GetType()
-    {
-        return null;
-    }
+    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
+    public extern Type GetType();
     
     public virtual string? ToString()
     {

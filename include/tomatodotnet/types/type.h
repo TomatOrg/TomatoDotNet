@@ -88,6 +88,10 @@ typedef struct RuntimeTypeInfo {
     RuntimeMethodInfo_Array DeclaredMethods;
     RuntimeFieldInfo_Array DeclaredFields;
 
+    // The vtable, and the jitted vtable
+    RuntimeMethodInfo_Array VTable;
+    ObjectVTable* JitVTable;
+
     // the first nested type
     RuntimeTypeInfo DeclaredNestedTypes;
     RuntimeTypeInfo NextNestedType;
@@ -102,7 +106,6 @@ typedef struct RuntimeTypeInfo {
     uint32_t HeapSize;
     uint32_t HeapAlignment;
     uint32_t Packing;
-    uint32_t TypeId;
 
     // Generics related
     RuntimeMethodBase DeclaringMethod;
@@ -117,6 +120,8 @@ typedef struct RuntimeTypeInfo {
     uint32_t EndFillingStackSize : 1;
     uint32_t FillingHeapSize : 1;
     uint32_t EndFillingHeapSize : 1;
+    uint32_t FillingVtable : 1;
+    uint32_t EndFillingVtable : 1;
     uint32_t QueuedTypeInit : 1;
     uint32_t IsGenericParameter : 1;
     uint32_t IsGenericTypeParameter : 1;
@@ -125,7 +130,7 @@ typedef struct RuntimeTypeInfo {
     uint32_t IsArray : 1;
     uint32_t IsPointer : 1;
     uint32_t IsByRefStruct : 1;
-    uint32_t : 17;
+    uint32_t : 15;
     uint32_t JitStartedInstance : 1;
     uint32_t JitStartedStatic : 1;
     uint32_t IsUnmanaged : 1;

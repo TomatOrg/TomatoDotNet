@@ -141,21 +141,18 @@ static int m_loaded_types = 0;
  */
 static RuntimeAssembly mCoreAssembly = NULL;
 
-/**
- * All the types loaded in
- */
-static RuntimeTypeInfo* mTypes = NULL;
+static tdn_err_t create_vtable(RuntimeTypeInfo type, int count) {
+    tdn_err_t err = TDN_NO_ERROR;
 
-void tdn_register_type(RuntimeTypeInfo type) {
-    arrpush(mTypes, type);
-    type->TypeId = arrlen(mTypes);
-}
+    // create the jit vtable
+    type->JitVTable = tdn_host_mallocz_low(sizeof(ObjectVTable) + count * sizeof(void*));
+    CHECK_ERROR(type->JitVTable != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
-RuntimeTypeInfo tdn_get_type_by_id(int type_id) {
-    if (type_id <= 0 || type_id > arrlen(mTypes)) {
-        return NULL;
-    }
-    return mTypes[type_id - 1];
+    // set the type in the vtable
+    type->JitVTable->Type = type;
+
+cleanup:
+    return err;
 }
 
 /**
@@ -173,8 +170,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(init_type->namespace, type_def->type_namespace) == 0 &&
             strcmp(init_type->name, type_def->type_name) == 0
         ) {
-            RuntimeTypeInfo type = *init_type->dest ?: GC_NEW(RuntimeTypeInfo);
-            tdn_register_type(type);
+            RuntimeTypeInfo type = *init_type->dest ? *init_type->dest : GC_NEW(RuntimeTypeInfo);
             type->StackSize = init_type->stack_size;
             type->StackAlignment = init_type->stack_alignment;
             type->HeapSize = init_type->heap_size;
@@ -199,8 +195,9 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(load_type->namespace, type_def->type_namespace) == 0 &&
             strcmp(load_type->name, type_def->type_name) == 0
         ) {
-            RuntimeTypeInfo type = *load_type->dest ?: GC_NEW(RuntimeTypeInfo);
-            tdn_register_type(type);
+            RuntimeTypeInfo type = *load_type->dest ? *load_type->dest : GC_NEW(RuntimeTypeInfo);
+            CHECK_AND_RETHROW(create_vtable(type, 4));
+
             type->QueuedTypeInit = 1;
             *load_type->dest = type;
             *out_type = type;
@@ -369,7 +366,7 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
         type->IsUnmanaged = !is_managed;
 
         // align the alignment nicely, and then align the base of our own data
-        size_t alignment = MIN(largest_alignment, type->Packing ?: _Alignof(size_t));
+        size_t alignment = MIN(largest_alignment, type->Packing ? type->Packing : _Alignof(size_t));
         if (alignment > 64) alignment = 128;
         else if (alignment > 32) alignment = 64;
         else if (alignment > 16) alignment = 32;
@@ -428,6 +425,133 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
     }
 
     type->EndFillingHeapSize = 1;
+
+cleanup:
+    return err;
+}
+
+static RuntimeMethodInfo find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
+    while (type != NULL) {
+        // Use normal inheritance (I.8.10.4)
+        for (int i = 0; i < type->DeclaredMethods->Length; i++) {
+            RuntimeMethodInfo info = type->DeclaredMethods->Elements[i];
+
+            // not virtual, continue
+            if (!info->Attributes.Virtual)
+                continue;
+
+            // match the name
+            if (!tdn_compare_string(info->Name, method->Name))
+                continue;
+
+            // check the return type
+            if (info->ReturnParameter->ParameterType != method->ReturnParameter->ParameterType)
+                continue;
+
+            // Check parameter count matches
+            if (info->Parameters->Length != method->Parameters->Length)
+                continue;
+
+            // check the parameters
+            bool signatureMatch = true;
+            for (int j = 0; j < info->Parameters->Length; j++) {
+                ParameterInfo paramA = info->Parameters->Elements[j];
+                ParameterInfo paramB = method->Parameters->Elements[j];
+                if (paramA->ParameterType != paramB->ParameterType) {
+                    signatureMatch = false;
+                    break;
+                }
+            }
+            if (!signatureMatch)
+                continue;
+
+            // set the offset
+            return info;
+        }
+
+        // get the parent for next iteration
+        type = type->BaseType;
+    }
+
+    return NULL;
+}
+
+static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // finished already
+    if (info->EndFillingVtable) {
+        goto cleanup;
+    }
+
+    // prevent recursion
+    CHECK(!info->FillingVtable);
+    info->FillingVtable = true;
+
+    // fill the vtable of the base class
+    if (info->BaseType != NULL) {
+        CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));
+    }
+
+    for (int i = 0; i < info->DeclaredMethods->Length; i++) {
+        RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
+        if (!method->Attributes.Virtual) {
+            continue;
+        }
+
+        // default to allocating a new slot
+        method->VTableOffset = -1;
+        if (!method->Attributes.VtableNewSlot) {
+            // might override something else
+            RuntimeMethodInfo parent = find_overriden_method(info->BaseType, method);
+            if (parent != NULL) {
+                CHECK(!parent->Attributes.Final);
+                if (parent->Attributes.Strict) {
+                    // TODO: check accessibility
+                }
+                CHECK(parent->VTableOffset >= 0);
+                method->VTableOffset = parent->VTableOffset;
+            }
+        }
+    }
+
+    // get the offset from the child
+    int vtable_offset = info->BaseType ? (info->BaseType->VTable ? info->BaseType->VTable->Length : 0) : 0;
+    int vtable_size = vtable_offset;
+    for (int i = 0; i < info->DeclaredMethods->Length; i++) {
+        RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
+        if (method->VTableOffset < 0) {
+            method->VTableOffset = vtable_size++;
+        }
+    }
+
+    // now allocate the new vtable
+    info->VTable = GC_NEW_ARRAY(RuntimeMethodInfo, vtable_size);
+
+    if (info->JitVTable == NULL) {
+        CHECK_AND_RETHROW(create_vtable(info, vtable_size));
+    } else {
+        CHECK(vtable_size == 4);
+    }
+
+    // copy entries from the parent
+    if (info->BaseType != NULL) {
+        // TODO: replace with gc_memcpy
+        memcpy(info->VTable->Elements, info->BaseType->VTable->Elements, vtable_offset * sizeof(void*));
+    }
+
+    // TODO: handle everything to do with interfaces
+
+    // and now replace with all the methods overriden in this class
+    for (int i = 0; i < info->DeclaredMethods->Length; i++) {
+        RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
+        if (method->Attributes.Virtual) {
+            info->VTable->Elements[method->VTableOffset] = method;
+        }
+    }
+
+    // we done
+    info->EndFillingVtable = true;
 
 cleanup:
     return err;
@@ -715,13 +839,14 @@ static void push_type_queue() {
     arrpush(m_type_queues, (type_queue_t){});
 }
 
-tdn_err_t tdn_size_init(RuntimeTypeInfo type) {
+tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
     if (arrlen(m_type_queues) == 0) {
         // no delay, just calculate it
         CHECK_AND_RETHROW(fill_stack_size(type));
         CHECK_AND_RETHROW(fill_heap_size(type));
+        CHECK_AND_RETHROW(fill_virtual_methods(type));
     } else {
         // delayed for later
         arrpush(arrlast(m_type_queues).types, type);
@@ -743,6 +868,7 @@ static tdn_err_t drain_type_queue() {
         RuntimeTypeInfo type = arrpop(queue.types);
         CHECK_AND_RETHROW(fill_stack_size(type));
         CHECK_AND_RETHROW(fill_heap_size(type));
+        CHECK_AND_RETHROW(fill_virtual_methods(type));
     }
 
 cleanup:
@@ -785,8 +911,8 @@ static tdn_err_t corelib_bootstrap() {
     CHECK_ERROR(tRuntimeTypeInfo != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // make sure to set its type id properly
-    tdn_register_type(tRuntimeTypeInfo);
-    tRuntimeTypeInfo->Object.TypeId = tRuntimeTypeInfo->TypeId;
+    CHECK_AND_RETHROW(create_vtable(tRuntimeTypeInfo, 4));
+    tRuntimeTypeInfo->Object.VTable = (uint32_t)(uintptr_t)tRuntimeTypeInfo->JitVTable;
 
     // hard-code types we require for proper bootstrap
     tArray = GC_NEW(RuntimeTypeInfo); // for creating a Type[]
@@ -794,13 +920,14 @@ static tdn_err_t corelib_bootstrap() {
     tRuntimeAssembly = GC_NEW(RuntimeTypeInfo); // for creating the main assembly
     tRuntimeModule = GC_NEW(RuntimeTypeInfo); // for creating the main module
 
-    tdn_register_type(tArray);
-    tdn_register_type(tString);
-    tdn_register_type(tRuntimeAssembly);
-    tdn_register_type(tRuntimeModule);
+    // hard code to the correct amount of entries
+    CHECK_AND_RETHROW(create_vtable(tArray, 4));
+    CHECK_AND_RETHROW(create_vtable(tString, 4));
+    CHECK_AND_RETHROW(create_vtable(tRuntimeAssembly, 4));
+    CHECK_AND_RETHROW(create_vtable(tRuntimeModule, 4));
 
     // setup the basic type so GC_NEW_ARRAY can work
-    CHECK_AND_RETHROW(tdn_create_string_from_cstr("RuntimeTimeInfo", &tRuntimeTypeInfo->Name));
+    CHECK_AND_RETHROW(tdn_create_string_from_cstr("RuntimeTypeInfo", &tRuntimeTypeInfo->Name));
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("System.Reflection", &tRuntimeTypeInfo->Namespace));
 
 cleanup:
@@ -861,19 +988,19 @@ static tdn_err_t corelib_jit_types(RuntimeAssembly assembly) {
 
     CHECK_AND_RETHROW(tdn_jit_init());
 
-    // for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
-    //     RuntimeTypeInfo type = *m_load_types[i].dest;
-    //
-    //     // skip generic types
-    //     if (type->GenericTypeDefinition == type) {
-    //         continue;
-    //     }
-    //     CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
-    // }
-    //
-    // for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
-    //     CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
-    // }
+    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
+        RuntimeTypeInfo type = *m_load_types[i].dest;
+
+        // skip generic types
+        if (type->GenericTypeDefinition == type) {
+            continue;
+        }
+        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
+    }
+
+    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
+        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
+    }
 
 cleanup:
     return err;
@@ -1357,7 +1484,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
             } else {
                 // only valid on methods, not on ctors
                 CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
-                CHECK(((Object)last_object)->TypeId == tRuntimeMethodInfo->TypeId);
+                CHECK(object_get_vtable(last_object)->Type == tRuntimeMethodInfo);
                 ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
                 ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
             }
@@ -1382,7 +1509,8 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         } else {
             // only valid on methods, not on ctors
             CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
-            CHECK(((Object)last_object)->TypeId == tRuntimeMethodInfo->TypeId);
+            CHECK(object_get_vtable(last_object)->Type == tRuntimeMethodInfo,
+                "%T != %T", object_get_vtable(last_object)->Type, tRuntimeMethodInfo);
             ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
             ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
         }
@@ -1606,7 +1734,6 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
             type = assembly->TypeDefs->Elements[i];
         } else {
             type = GC_NEW(RuntimeTypeInfo);
-            tdn_register_type(type);
             assembly->TypeDefs->Elements[i] = type;
         }
 
@@ -1645,7 +1772,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // calculate the size of all the basic types
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
-        CHECK_AND_RETHROW(tdn_size_init(type));
+        CHECK_AND_RETHROW(tdn_type_init(type));
     }
 
     // connect all the misc classes

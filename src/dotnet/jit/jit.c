@@ -31,6 +31,10 @@ typedef struct jit_context {
     // prepared
     RuntimeMethodBase* methods_to_jit;
 
+    // the types that we prepared that we will
+    // need to properly fill their vtable
+    RuntimeTypeInfo* types_prepared;
+
     // Lookup from a spidir function to a method
     struct {
         spidir_function_t key;
@@ -55,6 +59,7 @@ typedef struct jit_context {
 
     // GC related
     spidir_function_t builtin_gc_new;
+    spidir_function_t builtin_gc_newarr;
     spidir_function_t builtin_gc_bzero;
     spidir_function_t builtin_gc_memcpy;
 
@@ -124,8 +129,14 @@ static void init_jit_context(jit_context_t* ctx) {
     ctx->builtin_gc_new = spidir_module_create_extern_function(ctx->module,
             "gc_new",
             SPIDIR_TYPE_PTR,
-            2, (spidir_value_type_t[]){ SPIDIR_TYPE_I32, SPIDIR_TYPE_I64 });
+            1, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR });
     hmput(ctx->builtin_lookup, ctx->builtin_gc_new, jit_gc_new);
+
+    ctx->builtin_gc_newarr = spidir_module_create_extern_function(ctx->module,
+            "gc_newarr",
+            SPIDIR_TYPE_PTR,
+            2, (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 });
+    hmput(ctx->builtin_lookup, ctx->builtin_gc_newarr, jit_gc_newarr);
 
     ctx->builtin_gc_memcpy = spidir_module_create_extern_function(ctx->module,
             "gc_memcpy",
@@ -183,6 +194,15 @@ static void init_jit_context(jit_context_t* ctx) {
 }
 
 static void destroy_jit_context(jit_context_t* ctx) {
+    // go over all the jitted methods and make sure that no
+    // codegen blob was left behind
+    for (int i = 0; i < hmlen(ctx->function_lookup); i++) {
+        RuntimeMethodBase base = ctx->function_lookup[i].key;
+        if (base->JitCodegenHandle != NULL) {
+            spidir_codegen_blob_destroy(base->JitCodegenHandle);
+        }
+    }
+
     // free all the lookups that we had
     hmfree(ctx->builtin_lookup);
     hmfree(ctx->function_lookup);
@@ -278,6 +298,7 @@ static spidir_value_type_t get_jit_mem_type(RuntimeTypeInfo info) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static tdn_err_t jit_prepare_method(jit_context_t* ctx, spidir_module_handle_t module, RuntimeMethodBase method);
+static spidir_value_type_t* jit_prepare_argument_types(RuntimeMethodBase method);
 
 static void register_struct_fields(RuntimeTypeInfo type, void* base) {
     // go over the struct fields and register them
@@ -343,7 +364,7 @@ cleanup:
  * Prepares an instance of a type, this takes care of vtable and itable functions
  * that have to be generated to complete the object
  */
-static tdn_err_t jit_prepare_type_instance(RuntimeTypeInfo type) {
+static tdn_err_t jit_prepare_type_instance(jit_context_t* ctx, spidir_module_handle_t module, RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // check if already jitted
@@ -352,6 +373,16 @@ static tdn_err_t jit_prepare_type_instance(RuntimeTypeInfo type) {
     }
     type->JitStartedInstance = 1;
 
+    // prepare all the virtual methods
+    for (int i = 0; i < type->VTable->Length; i++) {
+        RuntimeMethodInfo method = type->VTable->Elements[i];
+        CHECK_AND_RETHROW(jit_prepare_method(ctx, module, (RuntimeMethodBase)method));
+    }
+
+    // add to list of types that we will need to handle
+    arrpush(ctx->types_prepared, type);
+
+    // also initialize it statically since it might be required
     CHECK_AND_RETHROW(jit_prepare_type(type));
 
 cleanup:
@@ -396,7 +427,8 @@ static bool check_type_access(RuntimeMethodBase method, RuntimeTypeInfo type, in
         } break;
 
         case TDN_TYPE_VISIBILITY_NESTED_PRIVATE: {
-            return method->DeclaringType == type->DeclaringType;
+            return method->DeclaringType == type->DeclaringType ||
+                    method->DeclaringType->DeclaringType == type->DeclaringType;
         } break;
 
         case TDN_TYPE_VISIBILITY_NESTED_FAMILY: {
@@ -515,19 +547,19 @@ static bool check_method_access(RuntimeMethodBase method, RuntimeMethodBase targ
         b = __temp; \
     } while (0)
 
-static void jit_emit_memcpy(jit_context_t* jctx, jit_method_context_t* mctx, spidir_value_t ptr1, spidir_value_t ptr2, size_t size) {
+static void jit_emit_memcpy(jit_context_t* jctx, jit_method_context_t* mctx, spidir_value_t dst, spidir_value_t src, size_t size) {
     spidir_builder_build_call(mctx->builder, jctx->builtin_memcpy, 3,
                               (spidir_value_t[]){
-                                  ptr1, ptr2,
+                                  dst, src,
                                   spidir_builder_build_iconst(mctx->builder, SPIDIR_TYPE_I64, size)
                               });
 }
 
-static void jit_emit_gc_memcpy(jit_context_t* jctx, jit_method_context_t* mctx, RuntimeTypeInfo type, spidir_value_t ptr1, spidir_value_t ptr2) {
+static void jit_emit_gc_memcpy(jit_context_t* jctx, jit_method_context_t* mctx, RuntimeTypeInfo type, spidir_value_t dst, spidir_value_t src) {
     spidir_builder_build_call(mctx->builder, jctx->builtin_gc_memcpy, 3,
                               (spidir_value_t[]){
                                   spidir_builder_build_iconst(mctx->builder, SPIDIR_TYPE_PTR, (uint64_t)type),
-                                  ptr1, ptr2,
+                                  dst, src,
                               });
 }
 
@@ -781,6 +813,31 @@ static tdn_err_t handle_memory_marshal_intrinsics(
 
 cleanup:
     return err;
+}
+
+static tdn_err_t handle_object_intrinsics(
+    spidir_builder_handle_t builder,
+    RuntimeMethodBase target,
+    RuntimeTypeInfo* types, spidir_value_t* args,
+    spidir_value_t* out
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(target->ReturnParameter->ParameterType != tVoid);
+    CHECK(!tdn_type_is_valuetype(target->ReturnParameter->ParameterType));
+
+    if (tdn_compare_string_to_cstr(target->Name, "GetType")) {
+        CHECK(arrlen(args) == 1);
+
+        // just double deref to get the type object
+        spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, args[0]);
+        *out = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, vtable_ptr);
+    } else {
+        CHECK_FAIL("Unknown method %T::%U", target->DeclaringType, target->Name);
+    }
+
+    cleanup:
+        return err;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1482,7 +1539,6 @@ static tdn_err_t jit_instruction(
             bool is_call = inst.opcode == CEE_CALL;
             bool is_callvirt = inst.opcode == CEE_CALLVIRT;
             bool is_newobj = inst.opcode == CEE_NEWOBJ;
-            size_t object_size = 0;
 
             // verify we can call it
             if (is_newobj) {
@@ -1493,8 +1549,10 @@ static tdn_err_t jit_instruction(
                 // ctor must be a special name
                 CHECK(target->Attributes.RTSpecialName);
 
-                // TODO: for strings we need to calculate the string size
-                object_size = target->DeclaringType->HeapSize;
+                // know that we need all the virtual methods potentially
+                // TODO: we could probably do something more lazy but that is too annoying
+                CHECK_AND_RETHROW(jit_prepare_type_instance(jctx, spidir_builder_get_module(builder), target->DeclaringType));
+
             } else if (is_callvirt) {
                 // callvirt can not call static methods
                 CHECK(!target->Attributes.Static);
@@ -1516,9 +1574,8 @@ static tdn_err_t jit_instruction(
                     if (tdn_type_is_referencetype(target->DeclaringType)) {
                         // call gc_new to allocate it
                         target_this_type = target->DeclaringType;
-                        obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 2, (spidir_value_t[]){
-                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, target_this_type->TypeId),
-                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, object_size)
+                        obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 1, (spidir_value_t[]){
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, (uintptr_t)target_this_type),
                         });
                         CHECK_AND_RETHROW(eval_stack_push(stack, target->DeclaringType, obj));
                     } else {
@@ -1543,12 +1600,34 @@ static tdn_err_t jit_instruction(
                 RuntimeTypeInfo target_type;
                 if (!is_static) {
                     if (i == 0) {
-                        // if we are in a callvirt update the target
-                        // to be from the instance type, this will
-                        // help us to perform a de-virt in case the
-                        // class is either sealed or the method is final
-                        if (is_callvirt) {
-                            // TODO: this
+                        // handle the constrained prefix
+                        if (ctx->constrained != NULL) {
+                            CHECK(call_args_types[i]->IsByRef);
+                            RuntimeTypeInfo typ = call_args_types[i]->ElementType;
+                            CHECK(typ == ctx->constrained);
+                            ctx->constrained = NULL;
+
+                            if (tdn_type_is_referencetype(typ)) {
+                                // Dereference the pointer as pass as the this
+                                call_args_types[i] = typ;
+                                call_args_values[i] = spidir_builder_build_load(builder,
+                                    SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+                                    call_args_values[i]
+                                );
+                            } else {
+                                // we didn't yet verify that the target and the type on the stack
+                                // can actually be used together, we will do very soon tho
+                                CHECK(typ->VTable->Length > target->VTableOffset);
+
+                                // if the struct implements the method then change the target to be it
+                                if (typ->VTable->Elements[target->VTableOffset] != (RuntimeMethodInfo)target) {
+                                    target = (RuntimeMethodBase)typ->VTable->Elements[target->VTableOffset];
+
+                                } else {
+                                    // TODO: box the value type
+                                    CHECK_FAIL();
+                                }
+                            }
                         }
 
                         // figure the correct one for value types
@@ -1600,8 +1679,6 @@ static tdn_err_t jit_instruction(
                       "%T verifier-assignable-to %T", call_args_types[i], target_type);
             }
 
-            // TODO: indirect calls, de-virt
-
             // make sure that we can actually call the target
             CHECK_AND_RETHROW(jit_prepare_method(jctx, spidir_builder_get_module(builder), target));
 
@@ -1632,13 +1709,43 @@ static tdn_err_t jit_instruction(
                 if (declaring_type == tUnsafe) {
                     CHECK_AND_RETHROW(handle_unsafe_intrinsics(builder, target, call_args_types, call_args_values, &value));
                 } else if (declaring_type == tMemoryMarshal) {
-
+                    CHECK_AND_RETHROW(handle_memory_marshal_intrinsics(builder, target, call_args_types, call_args_values, &value));
+                } else if (declaring_type == tObject) {
+                    CHECK_AND_RETHROW(handle_object_intrinsics(builder, target, call_args_types, call_args_values, &value));
                 } else {
                     CHECK_FAIL();
                 }
             } else {
                 // emit the actual call
-                value = spidir_builder_build_call(builder, (spidir_function_t){ target->JitMethodId }, arrlen(call_args_values), call_args_values);
+                if (is_callvirt && !target->Attributes.Final && !target->DeclaringType->Attributes.Sealed) {
+                    // load the vtable pointer
+                    spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, call_args_values[0]);
+                    spidir_value_t vtable_off = spidir_builder_build_ptroff(builder, vtable_ptr,
+                        spidir_builder_build_iconst(
+                            builder, SPIDIR_TYPE_I64,
+                            offsetof(ObjectVTable, Functions) + (sizeof(void*) * target->VTableOffset)
+                        )
+                    );
+                    spidir_value_t function_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, vtable_off);
+
+                    // get the params list for the callind
+                    spidir_value_type_t* params = jit_prepare_argument_types(target);
+
+                    // actually emit the indirect call
+                    value = spidir_builder_build_callind(
+                        builder,
+                        get_jit_return_type(target->ReturnParameter->ParameterType),
+                        arrlen(call_args_values),
+                        params,
+                        function_ptr,
+                        call_args_values
+                    );
+                    arrfree(params);
+                } else {
+                    int idx = hmgeti(jctx->function_lookup, target);
+                    CHECK(idx >= 0);
+                    value = spidir_builder_build_call(builder, jctx->function_lookup[idx].value, arrlen(call_args_values), call_args_values);
+                }
             }
 
             // for primitive types push it now
@@ -2650,16 +2757,10 @@ static tdn_err_t jit_instruction(
             RuntimeTypeInfo array_type = NULL;
             CHECK_AND_RETHROW(tdn_get_array_type(inst.operand.type, &array_type));
 
-            // calculate the array size we will need
-            RuntimeTypeInfo element_type = inst.operand.type;
-            spidir_value_t element_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, element_type->StackSize);
-            spidir_value_t elements_size = spidir_builder_build_imul(builder, num_elems, element_size);
-            spidir_value_t array_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, ALIGN_UP(sizeof(struct Array), element_type->StackAlignment));
-            array_size = spidir_builder_build_iadd(builder, array_size, elements_size);
-
             // call the gc_new to allocate the new object
-            spidir_value_t array = spidir_builder_build_call(builder, jctx->builtin_gc_new, 2, (spidir_value_t[]){
-                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, array_type->TypeId), array_size
+            spidir_value_t array = spidir_builder_build_call(builder, jctx->builtin_gc_newarr, 2, (spidir_value_t[]){
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)array_type),
+                num_elems
             });
 
             // and finally set the length of the array
@@ -2746,7 +2847,7 @@ static tdn_err_t jit_instruction(
                     } else if (val_type == tInt32) {
                         val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32, value_ptr);
                     } else if (val_type == tInt64) {
-                        val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I32, value_ptr);
+                        val = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I64, value_ptr);
                     } else {
                         // otherwise it is just the pointer since its a struct
                         val = value_ptr;
@@ -2754,11 +2855,10 @@ static tdn_err_t jit_instruction(
                 }
 
                 // allocate it
-                spidir_value_t args[2] = {
-                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->TypeId),
-                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, sizeof(struct Object) + inst.operand.type->HeapSize),
+                spidir_value_t args[1] = {
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst.operand.type),
                 };
-                spidir_value_t obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 2, args);
+                spidir_value_t obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 1, args);
                 spidir_value_t obj_value = spidir_builder_build_ptroff(builder, obj,
                                                                        spidir_builder_build_iconst(builder,
                                                                                                    SPIDIR_TYPE_I64,
@@ -2823,14 +2923,12 @@ static tdn_err_t jit_instruction(
             } else {
                 // we can inline the check since the type has to be the exact value type we are trying to unpack
                 // this will take care of the null check as well
-                spidir_value_t object_type_offset = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Object, TypeId));
-                spidir_value_t object_type_ptr = spidir_builder_build_ptroff(builder, obj, object_type_offset);
-                spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, object_type_ptr);
+                spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, obj);
 
                 spidir_block_t valid = spidir_builder_create_block(builder);
                 spidir_block_t invalid = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INVALID_CAST);
 
-                spidir_value_t wanted_type = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->TypeId);
+                spidir_value_t wanted_type = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (uintptr_t)inst.operand.type->JitVTable);
                 spidir_value_t is_wanted_type = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I64, object_type, wanted_type);
                 spidir_builder_build_brcond(builder, is_wanted_type, valid, invalid);
 
@@ -3642,6 +3740,29 @@ cleanup:
     builder_ctx->err = err;
 }
 
+static spidir_value_type_t* jit_prepare_argument_types(RuntimeMethodBase method) {
+    spidir_value_type_t* params = NULL;
+
+    // handle the return value, we have a special case of returning a struct, if it can't be returned
+    // by value then it will be returned by passing an implicit pointer
+    spidir_value_type_t ret_type = get_jit_return_type(method->ReturnParameter->ParameterType);
+    if (ret_type == SPIDIR_TYPE_NONE && method->ReturnParameter->ParameterType != tVoid) {
+        arrpush(params, SPIDIR_TYPE_PTR);
+    }
+
+    // handle the `this` argument, its always a pointer (byref for struct types)
+    if (!method->Attributes.Static) {
+        arrpush(params, SPIDIR_TYPE_PTR);
+    }
+
+    // handle the arguments
+    for (size_t i = 0; i < method->Parameters->Length; i++) {
+        arrpush(params, get_jit_argument_type(method->Parameters->Elements[i]->ParameterType));
+    }
+
+    return params;
+}
+
 /**
  * Prepares a method for jitting, this essentially creates the jit function
  * so it will be ready for when we call it
@@ -3661,24 +3782,12 @@ static tdn_err_t jit_prepare_method(jit_context_t* ctx, spidir_module_handle_t m
     method->JitPrepared = 1;
 
     // prepre the type
+    spidir_value_type_t ret_type = get_jit_return_type(method->ReturnParameter->ParameterType);
     CHECK_AND_RETHROW(jit_prepare_type(method->DeclaringType));
 
     // handle the return value, we have a special case of returning a struct, if it can't be returned
     // by value then it will be returned by passing an implicit pointer
-    spidir_value_type_t ret_type = get_jit_return_type(method->ReturnParameter->ParameterType);
-    if (ret_type == SPIDIR_TYPE_NONE && method->ReturnParameter->ParameterType != tVoid) {
-        arrpush(params, SPIDIR_TYPE_PTR);
-    }
-
-    // handle the `this` argument, its always a pointer (byref for struct types)
-    if (!method->Attributes.Static) {
-        arrpush(params, SPIDIR_TYPE_PTR);
-    }
-
-    // handle the arguments
-    for (size_t i = 0; i < method->Parameters->Length; i++) {
-        arrpush(params, get_jit_argument_type(method->Parameters->Elements[i]->ParameterType));
-    }
+    params = jit_prepare_argument_types(method);
 
     // generate the name
     string_builder_push_method_signature(&builder, method, true);
@@ -3766,8 +3875,62 @@ spidir_dump_status_t dump_callback(const char* data, size_t size, void* ctx) {
     return SPIDIR_DUMP_CONTINUE;
 }
 
+static tdn_err_t jit_apply_relocations(jit_context_t* ctx, RuntimeMethodBase method) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the handle if any
+    spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
+    CHECK(handle != NULL);
+
+    // iterate all the relocations
+    const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(handle);
+    size_t reloc_count = spidir_codegen_blob_get_reloc_count(handle);
+    for (size_t j = 0; j < reloc_count; j++) {
+        // resolve the function we are linking against
+        void* F = NULL;
+        RuntimeMethodBase target = hmget(ctx->method_lookup, relocs[j].target);
+        if (target == NULL) {
+            F = hmget(ctx->builtin_lookup, relocs[j].target);
+            CHECK(F != NULL);
+        } else {
+            F = target->MethodPtr;
+        }
+
+        // other information from the relocation
+        size_t A = relocs[j].addend;
+        void* P = method->MethodPtr + relocs[j].offset;
+
+        // now check the kind
+        switch (relocs[j].kind) {
+            case SPIDIR_RELOC_X64_PC32: {
+                intptr_t value = (intptr_t)F + A - (intptr_t)P;
+                CHECK(INT32_MIN <= value && value <= INT32_MAX);
+                uint32_t pc32 = (uint32_t)value;
+                memcpy(P, &pc32, sizeof(pc32));
+            } break;
+
+            case SPIDIR_RELOC_X64_ABS64: {
+                uint64_t value = (uint64_t)(F + A);
+                memcpy(P, &value, sizeof(value));
+            } break;
+
+            default:
+                CHECK_FAIL();
+        }
+
+    }
+
+    // we can now free the handle
+    spidir_codegen_blob_destroy(handle);
+    method->JitCodegenHandle = NULL;
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     tdn_err_t err = TDN_NO_ERROR;
+    void* ptr = NULL;
 
     // and now dequeue all the methods we need to jit
     size_t map_size = 0;
@@ -3779,72 +3942,63 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
         method->MethodPtr = (void*)map_size;
         map_size += spidir_codegen_blob_get_code_size(blob);
     }
-    CHECK(map_size > 0);
+
     CHECK(map_size <= SIZE_2GB);
 
     // now allocate the entire blob
-    void* ptr = tdn_host_map(map_size);
-    CHECK_ERROR(ptr != NULL, TDN_ERROR_OUT_OF_MEMORY);
+    if (map_size != 0) {
+        ptr = tdn_host_map(map_size);
+        CHECK_ERROR(ptr != NULL, TDN_ERROR_OUT_OF_MEMORY);
+    }
 
     // now fix the method pointer of all the jitted methods
     for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
         RuntimeMethodBase method = ctx->method_lookup[i].value;
         method->MethodPtr = ptr + (uintptr_t)method->MethodPtr;
+        if (method->JitCodegenHandle == NULL) {
+            continue;
+        }
 
         spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
-        memcpy(method->MethodPtr, spidir_codegen_blob_get_code(handle), spidir_codegen_blob_get_code_size(handle));
+        method->MethodSize = spidir_codegen_blob_get_code_size(handle);
+        memcpy(method->MethodPtr, spidir_codegen_blob_get_code(handle), method->MethodSize);
     }
 
-    // and now we can actually relocate the entire code
-    for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
-        RuntimeMethodBase method = ctx->method_lookup[i].value;
-        spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
+    //
+    // All the methods were jitted, we can now do post-processing
+    //
 
-        const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(handle);
-        size_t reloc_count = spidir_codegen_blob_get_reloc_count(handle);
-        for (size_t j = 0; j < reloc_count; j++) {
-            // resolve the function we are linking against
-            void* F = NULL;
-            RuntimeMethodBase target = hmget(ctx->method_lookup, relocs[j].target);
-            if (target == NULL) {
-                F = hmget(ctx->builtin_lookup, relocs[j].target);
-                CHECK(F != NULL);
-            } else {
-                F = target->MethodPtr;
-            }
+    // prepare the vtables of everything
+    for (int i = 0; i < arrlen(ctx->types_prepared); i++) {
+        RuntimeTypeInfo type = ctx->types_prepared[i];
 
-            // other information from the relocation
-            size_t A = relocs[j].addend;
-            void* P = method->MethodPtr + relocs[j].offset;
-
-            // now check the kind
-#ifdef __x86_64__
-            switch (relocs[j].kind) {
-                case SPIDIR_RELOC_X64_PC32: {
-                    intptr_t value = (intptr_t)F + A - (intptr_t)P;
-                    CHECK(INT32_MIN <= value && value <= INT32_MAX);
-                    uint32_t pc32 = (uint32_t)value;
-                    memcpy(P, &pc32, 4);
-                } break;
-
-                case SPIDIR_RELOC_X64_ABS64: {
-                    memcpy(P, &F, sizeof(void*));
-                } break;
-
-                default:
-                    CHECK_FAIL();
-            }
-#else
-#error Unknown arch
-#endif
-
+        // fill the vtable of this type
+        for (int j = 0; j < type->VTable->Length; j++) {
+            RuntimeMethodInfo method = type->VTable->Elements[j];
+            CHECK(method->MethodPtr != NULL);
+            type->JitVTable->Functions[j] = method->MethodPtr;
         }
     }
 
-    // spidir_module_dump(ctx->module, dump_callback, NULL);
+    // apply relocations to everything
+    for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
+        RuntimeMethodBase method = ctx->method_lookup[i].value;
+        if (method->JitCodegenHandle == NULL) {
+            continue;
+        }
+
+        // for debugging
+        TRACE("%p-%p %T::%U",
+            method->MethodPtr, method->MethodPtr + method->MethodSize,
+            method->DeclaringType, method->Name
+        );
+        CHECK_AND_RETHROW(jit_apply_relocations(ctx, method));
+    }
 
     // map it as rx now
-    tdn_host_map_rx(ptr, map_size);
+    if (map_size != 0) {
+        tdn_host_map_rx(ptr, map_size);
+    }
 
 cleanup:
     return err;
@@ -3875,26 +4029,21 @@ cleanup:
 //     return SPIDIR_DUMP_CONTINUE;
 // }
 
-// tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
-//     tdn_err_t err = TDN_NO_ERROR;
-//
-//     // create the module with all required imports
-//     jit_context_t ctx = {};
-//     init_jit_context(&ctx);
-//
-//     // jit all the virtual methods, as those are the one that can be called
-//     // by other stuff unknowingly, the rest are going to be jitted lazyily
-//     for (int i = 0; i < type->DeclaredMethods->Length; i++) {
-//         RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[i];
-//         if (!method->Attributes.Virtual) continue;
-//         CHECK_AND_RETHROW(jit_prepare_method(&ctx, method));
-//     }
-//
-//     // actually jit it
-//     CHECK_AND_RETHROW(tdn_jit_method_internal(module));
-//
-// cleanup:
-//     destroy_jit_context(&ctx);
-//
-//     return err;
-// }
+tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // create the module with all required imports
+    jit_context_t ctx = {};
+    init_jit_context(&ctx);
+
+    // prepare the type as if its a type instance
+    CHECK_AND_RETHROW(jit_prepare_type_instance(&ctx, ctx.module, type));
+
+    // actually jit it
+    CHECK_AND_RETHROW(tdn_jit_method_internal(&ctx));
+
+cleanup:
+    destroy_jit_context(&ctx);
+
+    return err;
+}

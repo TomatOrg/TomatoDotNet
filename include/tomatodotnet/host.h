@@ -22,6 +22,10 @@ void* tdn_host_mallocz(size_t size);
 void* tdn_host_realloc(void* ptr, size_t new_size);
 void tdn_host_free(void* ptr);
 
+// allocate memory that is located between 2gb and 4gb
+void* tdn_host_mallocz_low(size_t size);
+void tdn_host_free_low(void* ptr);
+
 /**
  * Request a new mapping, the mapping starts as read-write
  */
@@ -33,7 +37,7 @@ void* tdn_host_map(size_t size);
 void tdn_host_map_rx(void* ptr, size_t size);
 
 // gc operation
-void* tdn_host_gc_alloc(size_t size);
+void* tdn_host_gc_alloc(size_t size, size_t alignment);
 void tdn_host_gc_register_root(void* root);
 
 // file management
