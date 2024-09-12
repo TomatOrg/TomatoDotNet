@@ -34,6 +34,11 @@ void* jit_gc_newarr(RuntimeTypeInfo type, uint64_t element_count) {
     return gc_new(type, size);
 }
 
+void jit_throw(Object exception) {
+    ERROR("Exception of type %T thrown", object_get_vtable(exception)->Type);
+    ASSERT(!"jit_throw");
+}
+
 void jit_gc_memcpy() { ASSERT(!"jit_gc_memcpy"); }
 
 void jit_gc_bzero() { ASSERT(!"jit_gc_bzero"); }
@@ -45,8 +50,6 @@ void jit_throw_index_out_of_range_exception() { ASSERT(!"jit_throw_index_out_of_
 void jit_throw_overflow_exception() { ASSERT(!"jit_throw_overflow_exception"); }
 
 void jit_throw_null_reference_exception() { ASSERT(!"jit_throw_null_reference_exception"); }
-
-void jit_throw() { ASSERT(!"jit_throw"); }
 
 void jit_rethrow() { ASSERT(!"jit_rethrow"); }
 

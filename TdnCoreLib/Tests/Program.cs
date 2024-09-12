@@ -18,7 +18,7 @@ public static class Program
         // if (!ConstantFolding.Run()) return 7;
         // if (!Shifts.Run()) return 8;
         
-        // if (!GenericFields.Run()) return 9;
+        if (!GenericFields.Run()) return 9;
 
         return 0;
     }

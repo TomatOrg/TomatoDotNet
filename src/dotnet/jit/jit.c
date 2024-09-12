@@ -21,7 +21,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-// #define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 typedef struct jit_context {
     // the spidir module handle for this jit session
@@ -99,7 +99,7 @@ tdn_err_t tdn_jit_init() {
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
 
     spidir_log_init(spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
 
 #ifdef __x86_64__
     m_jit_machine = spidir_codegen_create_x64_machine();
@@ -194,15 +194,6 @@ static void init_jit_context(jit_context_t* ctx) {
 }
 
 static void destroy_jit_context(jit_context_t* ctx) {
-    // go over all the jitted methods and make sure that no
-    // codegen blob was left behind
-    for (int i = 0; i < hmlen(ctx->function_lookup); i++) {
-        RuntimeMethodBase base = ctx->function_lookup[i].key;
-        if (base->JitCodegenHandle != NULL) {
-            spidir_codegen_blob_destroy(base->JitCodegenHandle);
-        }
-    }
-
     // free all the lookups that we had
     hmfree(ctx->builtin_lookup);
     hmfree(ctx->function_lookup);
@@ -1257,18 +1248,20 @@ static tdn_err_t jit_instruction(
             CHECK(field->Attributes.Static);
             bool ldsflda = inst.opcode == CEE_LDSFLDA;
 
-            // get the stack type of the field
-            RuntimeTypeInfo field_type = inst.operand.field->FieldType;
-
             // Make sure the type is initialized properly
-            // TODO: lazy init static fields?
-            CHECK_AND_RETHROW(jit_prepare_type(field_type));
+            CHECK_AND_RETHROW(jit_prepare_type(inst.operand.field->DeclaringType));
+
+            // make sure we hvae the field prepared
+            CHECK(field->JitFieldPtr != NULL);
 
             // validate we had a volatile prefix for volatile fields
             if (field->IsVolatile) {
                 CHECK(ctx->volatile_prefix);
                 ctx->volatile_prefix = 0;
             }
+
+            // get the stack type of the field
+            RuntimeTypeInfo field_type = inst.operand.field->FieldType;
 
             // figure the pointer to the field itself
             CHECK(!inst.operand.field->Attributes.HasFieldRVA);
@@ -3775,11 +3768,15 @@ static tdn_err_t jit_prepare_method(jit_context_t* ctx, spidir_module_handle_t m
     spidir_value_type_t* params = NULL;
     string_builder_t builder = {};
 
-    // check if already jitted
-    if (method->JitPrepared) {
+    // if this is runtime generated then ignore it
+    if (method->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME) {
         goto cleanup;
     }
-    method->JitPrepared = 1;
+
+    // if we already have the function then ignore it
+    if (hmgeti(ctx->function_lookup, method) >= 0) {
+        goto cleanup;
+    }
 
     // prepre the type
     spidir_value_type_t ret_type = get_jit_return_type(method->ReturnParameter->ParameterType);
@@ -3808,12 +3805,11 @@ static tdn_err_t jit_prepare_method(jit_context_t* ctx, spidir_module_handle_t m
             name, ret_type, arrlen(params), params
         );
     }
-    method->JitMethodId = func.id;
     hmput(ctx->method_lookup, func, method);
     hmput(ctx->function_lookup, method, func);
 
     // queue to methods to jit if we didn't start with this already
-    if (!method->JitStarted && method->MethodBody != NULL) {
+    if (method->MethodBody != NULL) {
         arrpush(ctx->methods_to_jit, method);
     }
 
@@ -3830,17 +3826,10 @@ cleanup:
 static tdn_err_t jit_method(jit_context_t* context, RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // check if already jitted
-    if (method->JitStarted) {
-        goto cleanup;
-    }
-    method->JitStarted = 1;
-
-    // make sure the method is already prepared at this point
-    CHECK(method->JitPrepared);
-
     // now call the builder so we can actually build it
-    spidir_function_t function = {method->JitMethodId};
+    int idx = hmgeti(context->function_lookup, method);
+    CHECK(idx >= 0);
+    spidir_function_t function = context->function_lookup[idx].value;
     jit_builder_ctx_t ctx = {
         .method = method,
         .ctx = context,
@@ -3850,17 +3839,6 @@ static tdn_err_t jit_method(jit_context_t* context, RuntimeMethodBase method) {
                                  function,
                                  jit_method_callback, &ctx);
     CHECK_AND_RETHROW(ctx.err);
-
-    // perform codegen
-    spidir_codegen_blob_handle_t blob;
-    spidir_codegen_status_t status = spidir_codegen_emit_function(
-        m_jit_machine,
-        ctx.ctx->module,
-        function,
-        &blob
-    );
-    CHECK(status == SPIDIR_CODEGEN_OK, "Codegen failed - %d", status);
-    method->JitCodegenHandle = blob;
 
 cleanup:
     return err;
@@ -3875,12 +3853,8 @@ spidir_dump_status_t dump_callback(const char* data, size_t size, void* ctx) {
     return SPIDIR_DUMP_CONTINUE;
 }
 
-static tdn_err_t jit_apply_relocations(jit_context_t* ctx, RuntimeMethodBase method) {
+static tdn_err_t jit_apply_relocations(jit_context_t* ctx, RuntimeMethodBase method, spidir_codegen_blob_handle_t handle) {
     tdn_err_t err = TDN_NO_ERROR;
-
-    // get the handle if any
-    spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
-    CHECK(handle != NULL);
 
     // iterate all the relocations
     const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(handle);
@@ -3920,10 +3894,6 @@ static tdn_err_t jit_apply_relocations(jit_context_t* ctx, RuntimeMethodBase met
 
     }
 
-    // we can now free the handle
-    spidir_codegen_blob_destroy(handle);
-    method->JitCodegenHandle = NULL;
-
 cleanup:
     return err;
 }
@@ -3931,21 +3901,61 @@ cleanup:
 static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     tdn_err_t err = TDN_NO_ERROR;
     void* ptr = NULL;
+    spidir_codegen_blob_handle_t* blobs = NULL;
 
-    // and now dequeue all the methods we need to jit
-    size_t map_size = 0;
+    //
+    // start by going over all the methods that we need to jit and jit them, this
+    // will just convert them to IR
+    //
     while (arrlen(ctx->methods_to_jit) != 0) {
         RuntimeMethodBase method = arrpop(ctx->methods_to_jit);
         CHECK_AND_RETHROW(jit_method(ctx, method));
-
-        spidir_codegen_blob_handle_t blob = method->JitCodegenHandle;
-        method->MethodPtr = (void*)map_size;
-        map_size += spidir_codegen_blob_get_code_size(blob);
     }
 
+    //
+    // Optimizations
+    //
+
+    // TODO: at this stage we would run optimizations
+
+    //
+    // Now we are going to jit each of the methods, map a region for the code to live in
+    // and then finally copy it into that section
+    //
+
+    size_t map_size = 0;
+    for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
+        spidir_function_t function = ctx->method_lookup[i].key;
+        RuntimeMethodBase method = ctx->method_lookup[i].value;
+
+        // if already jitted then ignore the method, push
+        // a null handle so it will know we can ignore it
+        if (method->MethodPtr != NULL) {
+            arrpush(blobs, NULL);
+            continue;
+        }
+
+        // actually emit the function
+        spidir_codegen_blob_handle_t handle;
+        spidir_codegen_status_t status = spidir_codegen_emit_function(m_jit_machine, ctx->module, function, &handle);
+        switch (status) {
+            case SPIDIR_CODEGEN_OK: break;
+            case SPIDIR_CODEGEN_ERROR_ISEL: CHECK_FAIL("Got error during instruction-selection");
+            case SPIDIR_CODEGEN_ERROR_REGALLOC: CHECK_FAIL("Got error during regalloc");
+            default: CHECK_FAIL("Got unknown error %d", status);
+        }
+
+        // add to the blob list
+        arrpush(blobs, handle);
+
+        // setup the offset for after we map it
+        method->MethodPtr = (void*)map_size;
+        method->MethodSize = spidir_codegen_blob_get_code_size(handle);
+        map_size += method->MethodSize;
+    }
     CHECK(map_size <= SIZE_2GB);
 
-    // now allocate the entire blob
+    // now allocate the entire blob, only if we have anything to map obviously
     if (map_size != 0) {
         ptr = tdn_host_map(map_size);
         CHECK_ERROR(ptr != NULL, TDN_ERROR_OUT_OF_MEMORY);
@@ -3954,18 +3964,19 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     // now fix the method pointer of all the jitted methods
     for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
         RuntimeMethodBase method = ctx->method_lookup[i].value;
-        method->MethodPtr = ptr + (uintptr_t)method->MethodPtr;
-        if (method->JitCodegenHandle == NULL) {
+        spidir_codegen_blob_handle_t blob = blobs[i];
+        if (blob == NULL) {
             continue;
         }
 
-        spidir_codegen_blob_handle_t handle = method->JitCodegenHandle;
-        method->MethodSize = spidir_codegen_blob_get_code_size(handle);
-        memcpy(method->MethodPtr, spidir_codegen_blob_get_code(handle), method->MethodSize);
+        // and now setup the full pointer and copy the code to it
+        method->MethodPtr = ptr + (uintptr_t)method->MethodPtr;
+        memcpy(method->MethodPtr, spidir_codegen_blob_get_code(blobs[i]), method->MethodSize);
     }
 
     //
-    // All the methods were jitted, we can now do post-processing
+    // All the methods were jitted, we can now do post-processing, this will
+    // mainly include relocations and vtable generation
     //
 
     // prepare the vtables of everything
@@ -3983,7 +3994,8 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     // apply relocations to everything
     for (int i = 0; i < hmlen(ctx->method_lookup); i++) {
         RuntimeMethodBase method = ctx->method_lookup[i].value;
-        if (method->JitCodegenHandle == NULL) {
+        spidir_codegen_blob_handle_t blob = blobs[i];
+        if (blob == NULL) {
             continue;
         }
 
@@ -3992,7 +4004,7 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
             method->MethodPtr, method->MethodPtr + method->MethodSize,
             method->DeclaringType, method->Name
         );
-        CHECK_AND_RETHROW(jit_apply_relocations(ctx, method));
+        CHECK_AND_RETHROW(jit_apply_relocations(ctx, method, blob));
     }
 
     // map it as rx now
@@ -4001,6 +4013,13 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     }
 
 cleanup:
+    for (int i = 0; i < arrlen(blobs); i++) {
+        if (blobs[i] != NULL) {
+            spidir_codegen_blob_destroy(blobs[i]);
+        }
+    }
+    arrfree(blobs);
+
     return err;
 }
 

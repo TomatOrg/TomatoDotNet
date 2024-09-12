@@ -222,20 +222,12 @@ typedef struct RuntimeMethodBase {
     RuntimeMethodInfo GenericMethodDefinition;
     generic_method_instance_t* GenericMethodInstances;
 
-    // TODO: remove these I think
-    uint64_t JitMethodId;
-    void* JitCodegenHandle;
-
     // The jitted method
     void* MethodPtr;
     size_t MethodSize;
 
     // the offset inside the vtable if this is a virtual
     int32_t VTableOffset;
-
-    // flags
-    uint32_t JitPrepared : 1;
-    uint32_t JitStarted : 1;
 }* RuntimeMethodBase;
 DEFINE_ARRAY(RuntimeMethodBase);
 

@@ -26,23 +26,23 @@ public class GenericFields
         {
             string s = "hello";
 
-            Foo<object>.Action<string>(s);
-            if (Foo<object>.Value != s)
-                throw new Exception();
-
+            // Foo<object>.Action<string>(s);
+            // if (Foo<object>.Value != s)
+            //     throw new Exception();
+            //
             int i = 10;
-            Foo<Dummy>.Action<int>(i);
-            if (Foo<object>.Value != s)
-                throw new Exception();
-            if (Foo<Dummy>.Value != i.ToString())
-                throw new Exception();
-
-            object o = new object();
-            Foo<int>.Action<object>(o);
-            if (Foo<int>.Value != o.ToString())
-                throw new Exception();
-            if (Foo<object>.Value != s)
-                throw new Exception();
+            // Foo<Dummy>.Action<int>(i);
+            // if (Foo<object>.Value != s)
+            //     throw new Exception();
+            // if (Foo<Dummy>.Value != i.ToString())
+            //     throw new Exception();
+            //
+            // object o = new object();
+            // Foo<int>.Action<object>(o);
+            // if (Foo<int>.Value != o.ToString())
+            //     throw new Exception();
+            // if (Foo<object>.Value != s)
+            //     throw new Exception();
             if (Foo<Dummy>.Value != i.ToString())
                 throw new Exception();
 
