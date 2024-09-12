@@ -145,6 +145,7 @@ static tdn_err_t create_vtable(RuntimeTypeInfo type, int count) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // create the jit vtable
+    CHECK(type->JitVTable == NULL);
     type->JitVTable = tdn_host_mallocz_low(sizeof(ObjectVTable) + count * sizeof(void*));
     CHECK_ERROR(type->JitVTable != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
@@ -196,7 +197,9 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(load_type->name, type_def->type_name) == 0
         ) {
             RuntimeTypeInfo type = *load_type->dest ? *load_type->dest : GC_NEW(RuntimeTypeInfo);
-            CHECK_AND_RETHROW(create_vtable(type, 4));
+            if (type->JitVTable == NULL) {
+                CHECK_AND_RETHROW(create_vtable(type, 4));
+            }
 
             type->QueuedTypeInit = 1;
             *load_type->dest = type;

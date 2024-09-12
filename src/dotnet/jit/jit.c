@@ -21,7 +21,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-#define JIT_IL_OUTPUT
+// #define JIT_IL_OUTPUT
 
 typedef struct jit_context {
     // the spidir module handle for this jit session
@@ -99,7 +99,7 @@ tdn_err_t tdn_jit_init() {
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("<null>", &tNull->Name));
 
     spidir_log_init(spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
 
 #ifdef __x86_64__
     m_jit_machine = spidir_codegen_create_x64_machine();
