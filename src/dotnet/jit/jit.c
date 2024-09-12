@@ -1403,7 +1403,7 @@ static tdn_err_t jit_instruction(
 
             // make sure the index < length
             spidir_block_t throw_index_out_of_range = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
-            spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I64, index, length);
+            spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_ULT, SPIDIR_TYPE_I64, index, length);
             spidir_builder_build_brcond(builder, length_check, length_is_valid, throw_index_out_of_range);
 
             // perform the valid length branch, load the value from the array
@@ -1490,7 +1490,7 @@ static tdn_err_t jit_instruction(
 
             // make sure the index < length
             spidir_block_t throw_inex_out_of_range = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INDEX_OUT_OF_RANGE);
-            spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I64, index, length);
+            spidir_value_t length_check = spidir_builder_build_icmp(builder, SPIDIR_ICMP_ULT, SPIDIR_TYPE_I64, index, length);
             spidir_builder_build_brcond(builder, length_check, length_is_valid, throw_inex_out_of_range);
 
             // perform the valid length branch, load the value from the array
