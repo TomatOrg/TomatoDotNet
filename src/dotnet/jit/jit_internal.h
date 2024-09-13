@@ -387,3 +387,58 @@ int jit_get_label_location_index(jit_method_context_t* ctx, uint32_t address, bo
  * Create a new label location
  */
 void jit_add_label_location(jit_method_context_t* ctx, uint32_t address);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The top-level jit context
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+typedef struct jit_context {
+    // the spidir module handle for this jit session
+    // NOTE: DONT USE THIS FROM WITHIN THE BUILDER,
+    //       USE THE GET_MODULE FUNCTION
+    spidir_module_handle_t module;
+
+    // Stack of methods that we need to jit and are already
+    // prepared
+    RuntimeMethodBase* methods_to_jit;
+
+    // the types that we prepared that we will
+    // need to properly fill their vtable
+    RuntimeTypeInfo* types_prepared;
+
+    // Lookup from a spidir function to a method
+    struct {
+        spidir_function_t key;
+        RuntimeMethodBase value;
+    }* method_lookup;
+
+    // The opposite of method_lookup
+    struct {
+        RuntimeMethodBase key;
+        spidir_function_t value;
+    }* function_lookup;
+
+    // lookup between a method and a builtin
+    struct {
+        spidir_function_t key;
+        void* value;
+    }* builtin_lookup;
+
+    // memory manipulation (mainly used for structs)
+    spidir_function_t builtin_bzero;
+    spidir_function_t builtin_memcpy;
+
+    // GC related
+    spidir_function_t builtin_gc_new;
+    spidir_function_t builtin_gc_newarr;
+    spidir_function_t builtin_gc_bzero;
+    spidir_function_t builtin_gc_memcpy;
+
+    // throwing related
+    spidir_function_t builtin_exceptions[JIT_EXCEPTION_MAX];
+    spidir_function_t builtin_throw;
+
+    // exception control flow related
+    spidir_function_t builtin_rethrow;
+    spidir_function_t builtin_get_exception;
+} jit_context_t;

@@ -23,54 +23,7 @@
 //
 // #define JIT_IL_OUTPUT
 
-typedef struct jit_context {
-    // the spidir module handle for this jit session
-    spidir_module_handle_t module;
 
-    // Stack of methods that we need to jit and are already
-    // prepared
-    RuntimeMethodBase* methods_to_jit;
-
-    // the types that we prepared that we will
-    // need to properly fill their vtable
-    RuntimeTypeInfo* types_prepared;
-
-    // Lookup from a spidir function to a method
-    struct {
-        spidir_function_t key;
-        RuntimeMethodBase value;
-    }* method_lookup;
-
-    // The opposite of method_lookup
-    struct {
-        RuntimeMethodBase key;
-        spidir_function_t value;
-    }* function_lookup;
-
-    // lookup between a method and a builtin
-    struct {
-        spidir_function_t key;
-        void* value;
-    }* builtin_lookup;
-
-    // memory manipulation (mainly used for structs)
-    spidir_function_t builtin_bzero;
-    spidir_function_t builtin_memcpy;
-
-    // GC related
-    spidir_function_t builtin_gc_new;
-    spidir_function_t builtin_gc_newarr;
-    spidir_function_t builtin_gc_bzero;
-    spidir_function_t builtin_gc_memcpy;
-
-    // throwing related
-    spidir_function_t builtin_exceptions[JIT_EXCEPTION_MAX];
-    spidir_function_t builtin_throw;
-
-    // exception control flow related
-    spidir_function_t builtin_rethrow;
-    spidir_function_t builtin_get_exception;
-} jit_context_t;
 
 /**
  * The machine used for jitting
@@ -1710,7 +1663,12 @@ static tdn_err_t jit_instruction(
                 }
             } else {
                 // emit the actual call
-                if (is_callvirt && !target->Attributes.Final && !target->DeclaringType->Attributes.Sealed) {
+                if (
+                    is_callvirt &&
+                    target->Attributes.Virtual &&
+                    !target->Attributes.Final &&
+                    !target->DeclaringType->Attributes.Sealed
+                ) {
                     // load the vtable pointer
                     spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, call_args_values[0]);
                     spidir_value_t vtable_off = spidir_builder_build_ptroff(builder, vtable_ptr,
@@ -3112,7 +3070,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
     RuntimeExceptionHandlingClause_Array clauses = method->MethodBody->ExceptionHandlingClauses;
 
 #ifdef JIT_IL_OUTPUT
-    TRACE("%U::%U", method->DeclaringType->Name, method->Name);
+    TRACE("%T::%U", method->DeclaringType, method->Name);
 #endif
 
     // setup the context that will be used for this method jitting
@@ -4041,12 +3999,6 @@ cleanup:
 
     return err;
 }
-
-// static spidir_dump_status_t stdout_dump_callback(const char* s, size_t size, void* ctx) {
-//     (void) ctx;
-//     tdn_host_printf("%.*s", size, s);
-//     return SPIDIR_DUMP_CONTINUE;
-// }
 
 tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;

@@ -49,7 +49,7 @@ LDFLAGS		:= $(CFLAGS)
 # The DLLs required, we will build them as part of TDN
 #
 DLLS 	:= TdnCoreLib/System.Private.CoreLib/bin/Debug/net8.0/System.Private.CoreLib.dll
-DLLS	+= TdnCoreLib/Tests/bin/Release/net8.0/Tests.dll
+DLLS	+= TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll
 
 all: $(BIN_DIR)/tdn.elf $(DLLS)
 
