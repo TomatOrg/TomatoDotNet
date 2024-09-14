@@ -22,7 +22,7 @@ void gc_register_root(void* ptr);
         size_t ___array_length = (count); \
         RuntimeTypeInfo ___array_type = NULL; \
         CHECK_AND_RETHROW(tdn_get_array_type(t##type, &___array_type)); \
-        type##_Array ___ptr = gc_new(___array_type, sizeof(struct Array) + sizeof(struct type) * (___array_length)); \
+        type##_Array ___ptr = gc_new(___array_type, ALIGN_UP(sizeof(struct Array), _Alignof(type)) + sizeof(type) * (___array_length)); \
         CHECK_ERROR(___ptr != NULL, TDN_ERROR_OUT_OF_MEMORY); \
         ___ptr->Length = ___array_length; \
         ___ptr; \

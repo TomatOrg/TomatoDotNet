@@ -774,7 +774,8 @@ static tdn_err_t handle_object_intrinsics(
         CHECK(arrlen(args) == 1);
 
         // just double deref to get the type object
-        spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, args[0]);
+        spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, args[0]);
+        vtable_ptr = spidir_builder_build_inttoptr(builder, vtable_ptr);
         *out = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, vtable_ptr);
     } else {
         CHECK_FAIL("Unknown method %T::%U", target->DeclaringType, target->Name);
@@ -1521,7 +1522,7 @@ static tdn_err_t jit_instruction(
                         // call gc_new to allocate it
                         target_this_type = target->DeclaringType;
                         obj = spidir_builder_build_call(builder, jctx->builtin_gc_new, 1, (spidir_value_t[]){
-                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, (uintptr_t)target_this_type),
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)target_this_type),
                         });
                         CHECK_AND_RETHROW(eval_stack_push(stack, target->DeclaringType, obj));
                     } else {
@@ -1669,8 +1670,9 @@ static tdn_err_t jit_instruction(
                     !target->Attributes.Final &&
                     !target->DeclaringType->Attributes.Sealed
                 ) {
-                    // load the vtable pointer
-                    spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, call_args_values[0]);
+                    // load the vtable pointer, zero-extend by default
+                    spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, call_args_values[0]);
+                    vtable_ptr = spidir_builder_build_inttoptr(builder, vtable_ptr);
                     spidir_value_t vtable_off = spidir_builder_build_ptroff(builder, vtable_ptr,
                         spidir_builder_build_iconst(
                             builder, SPIDIR_TYPE_I64,
@@ -2133,7 +2135,7 @@ static tdn_err_t jit_instruction(
         case CEE_LDC_I4: {
             CHECK_AND_RETHROW(eval_stack_push(stack, tInt32,
                                               spidir_builder_build_iconst(builder,
-                                                                          SPIDIR_TYPE_I32, inst.operand.int32)));
+                                                                          SPIDIR_TYPE_I32, (uint32_t)inst.operand.int32)));
         } break;
 
         // Push an int64
@@ -3894,7 +3896,10 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
 
         // actually emit the function
         spidir_codegen_blob_handle_t handle;
-        spidir_codegen_status_t status = spidir_codegen_emit_function(m_jit_machine, ctx->module, function, &handle);
+        spidir_codegen_config_t config = {
+            .verify_ir = true // TODO: maybe disable on release
+        };
+        spidir_codegen_status_t status = spidir_codegen_emit_function(m_jit_machine, &config, ctx->module, function, &handle);
         switch (status) {
             case SPIDIR_CODEGEN_OK: break;
             case SPIDIR_CODEGEN_ERROR_ISEL: CHECK_FAIL("Got error during instruction-selection");

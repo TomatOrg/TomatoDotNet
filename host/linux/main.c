@@ -275,3 +275,6 @@ int main(int argc, char* argv[]) {
 cleanup:
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
+
+// TODO: remove once we have a GC
+const char* __asan_default_options() { return "detect_leaks=0"; }

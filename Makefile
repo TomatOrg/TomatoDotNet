@@ -24,8 +24,9 @@ CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
 
 ifeq ($(DEBUG),1)
 	CFLAGS	+= -Og -g
-#	CFLAGS	+= -fsanitize=undefined,address
-#	CFLAGS 	+= -fno-sanitize=alignment
+	CFLAGS	+= -fsanitize=undefined
+	CFLAGS 	+= -fno-sanitize=alignment
+	CFLAGS	+= -fsanitize=address
 	CFLAGS 	+= -fstack-protector-all
 else
 	CFLAGS	+= -O3 -g -flto
