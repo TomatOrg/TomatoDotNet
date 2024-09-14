@@ -2813,7 +2813,7 @@ static tdn_err_t jit_instruction(
                 spidir_value_t obj_value = spidir_builder_build_ptroff(builder, obj,
                                                                        spidir_builder_build_iconst(builder,
                                                                                                    SPIDIR_TYPE_I64,
-                                                                                                   sizeof(struct Object)));
+                                                                                                   ALIGN_UP(sizeof(struct Object), inst.operand.type->HeapAlignment)));
 
                 // copy it, if its an integer copy properly, which will most likely truncate it
                 if (val_type == tByte) {
@@ -2874,7 +2874,7 @@ static tdn_err_t jit_instruction(
             } else {
                 // we can inline the check since the type has to be the exact value type we are trying to unpack
                 // this will take care of the null check as well
-                spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_PTR, obj);
+                spidir_value_t object_type = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32, obj);
 
                 spidir_block_t valid = spidir_builder_create_block(builder);
                 spidir_block_t invalid = jit_throw_builtin_exception(jctx, ctx, builder, JIT_EXCEPTION_INVALID_CAST);
@@ -2887,7 +2887,7 @@ static tdn_err_t jit_instruction(
                 spidir_builder_set_block(builder, valid);
 
                 // compute the address of the pointer
-                spidir_value_t object_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, sizeof(struct Object));
+                spidir_value_t object_size = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, ALIGN_UP(sizeof(struct Object), inst.operand.type->HeapAlignment));
                 spidir_value_t value_type_ptr = spidir_builder_build_ptroff(builder, obj, object_size);
 
                 if (inst.opcode == CEE_UNBOX) {
@@ -2911,7 +2911,6 @@ static tdn_err_t jit_instruction(
                     }
                 }
             }
-
         } break;
 
         ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3944,8 +3943,15 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
         // fill the vtable of this type
         for (int j = 0; j < type->VTable->Length; j++) {
             RuntimeMethodInfo method = type->VTable->Elements[j];
-            CHECK(method->MethodPtr != NULL);
-            type->JitVTable->Functions[j] = method->MethodPtr;
+            void* ptr = method->MethodPtr;
+            CHECK(ptr != NULL);
+
+            // if we have an instance stub then call it instead
+            if (method->StubMethodPtr) {
+                ptr = method->StubMethodPtr;
+            }
+
+            type->JitVTable->Functions[j] = ptr;
         }
     }
 
@@ -3993,6 +3999,8 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
 
     // actually jit it
     CHECK_AND_RETHROW(tdn_jit_method_internal(&ctx));
+
+    // spidir_module_dump(ctx.module, dump_callback, NULL);
 
 cleanup:
     destroy_jit_context(&ctx);

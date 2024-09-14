@@ -222,9 +222,16 @@ typedef struct RuntimeMethodBase {
     RuntimeMethodInfo GenericMethodDefinition;
     generic_method_instance_t* GenericMethodInstances;
 
-    // The jitted method
+    // The jitted method, this is what you want to call normally
     void* MethodPtr;
     size_t MethodSize;
+
+    // A stub for calling the method, if this is on an instance
+    // method then it strips the object header to give the struct,
+    // if its on a static method it strips the first parameter to
+    // convert from a this call with null argument to a static call
+    void* StubMethodPtr;
+    size_t StubMethodSize;
 
     // the offset inside the vtable if this is a virtual
     int32_t VTableOffset;
