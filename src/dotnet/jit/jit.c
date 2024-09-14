@@ -287,6 +287,7 @@ static tdn_err_t jit_prepare_type(RuntimeTypeInfo type) {
         CHECK(!field->Attributes.HasFieldRVA);
 
         // allocate the field
+        CHECK(field->JitFieldPtr == NULL);
         field->JitFieldPtr = tdn_host_mallocz(field->FieldType->StackSize);
         CHECK_ERROR(field->JitFieldPtr != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
@@ -316,6 +317,9 @@ static tdn_err_t jit_prepare_type_instance(jit_context_t* ctx, spidir_module_han
         goto cleanup;
     }
     type->JitStartedInstance = 1;
+
+    // must not be abstract
+    CHECK(!type->Attributes.Abstract);
 
     // prepare all the virtual methods
     for (int i = 0; i < type->VTable->Length; i++) {
@@ -1496,10 +1500,11 @@ static tdn_err_t jit_instruction(
                 // ctor must be a special name
                 CHECK(target->Attributes.RTSpecialName);
 
-                // know that we need all the virtual methods potentially
-                // TODO: we could probably do something more lazy but that is too annoying
-                CHECK_AND_RETHROW(jit_prepare_type_instance(jctx, spidir_builder_get_module(builder), target->DeclaringType));
-
+                // if we are constructing a reference type jit all its virtual
+                // methods so we can construct its vtable later
+                if (tdn_type_is_referencetype(target->DeclaringType)) {
+                   CHECK_AND_RETHROW(jit_prepare_type_instance(jctx, spidir_builder_get_module(builder), target->DeclaringType));
+                }
             } else if (is_callvirt) {
                 // callvirt can not call static methods
                 CHECK(!target->Attributes.Static);
@@ -2807,6 +2812,10 @@ static tdn_err_t jit_instruction(
                     }
                 }
 
+                // we are boxing a value type, make sure its virtual methods
+                // are jitted so we can initialize its vtable
+                CHECK_AND_RETHROW(jit_prepare_type_instance(jctx, spidir_builder_get_module(builder), val_type));
+
                 // allocate it
                 spidir_value_t args[1] = {
                     spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst.operand.type),
@@ -3859,7 +3868,7 @@ cleanup:
 
 static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
     tdn_err_t err = TDN_NO_ERROR;
-    void* ptr = NULL;
+    void* mapped_code = NULL;
     spidir_codegen_blob_handle_t* blobs = NULL;
 
     //
@@ -3910,17 +3919,29 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
         // add to the blob list
         arrpush(blobs, handle);
 
+        // check if we need a thunk
+        if (method->Attributes.Virtual && !tdn_type_is_referencetype(method->DeclaringType)) {
+            method->ThunkSize = 3 + 4;
+            map_size += method->ThunkSize;
+        }
+
         // setup the offset for after we map it
+        map_size = ALIGN_UP(map_size, 16);
         method->MethodPtr = (void*)map_size;
         method->MethodSize = spidir_codegen_blob_get_code_size(handle);
         map_size += method->MethodSize;
+
+        // the thunk is placed right before the aligned method
+        if (method->Attributes.Virtual && !tdn_type_is_referencetype(method->DeclaringType)) {
+            method->ThunkPtr = method->MethodPtr - method->ThunkSize;
+        }
     }
     CHECK(map_size <= SIZE_2GB);
 
     // now allocate the entire blob, only if we have anything to map obviously
     if (map_size != 0) {
-        ptr = tdn_host_map(map_size);
-        CHECK_ERROR(ptr != NULL, TDN_ERROR_OUT_OF_MEMORY);
+        mapped_code = tdn_host_map(map_size);
+        CHECK_ERROR(mapped_code != NULL, TDN_ERROR_OUT_OF_MEMORY);
     }
 
     // now fix the method pointer of all the jitted methods
@@ -3931,8 +3952,29 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
             continue;
         }
 
+        // if we have a thunk relocate it
+        if (method->ThunkPtr != NULL) {
+            method->ThunkPtr = mapped_code + (uintptr_t)method->ThunkPtr;
+
+            if (method->Attributes.Virtual && !tdn_type_is_referencetype(method->DeclaringType)) {
+                // this thunk is going to move the this pointer forward so the function
+                // can access it as a reference to the value and not as an object
+                static const uint8_t add_rdi_imm32[] = {
+                    0x48, 0x81, 0xC7
+                };
+                uint32_t offset_to_value = ALIGN_UP(sizeof(struct Object), method->DeclaringType->StackAlignment);
+                CHECK(sizeof(add_rdi_imm32) + sizeof(offset_to_value) == method->ThunkSize);
+
+                // and now emit the opcodes
+                memcpy(method->ThunkPtr, add_rdi_imm32, sizeof(add_rdi_imm32));
+                memcpy(method->ThunkPtr + sizeof(add_rdi_imm32), &offset_to_value, sizeof(offset_to_value));
+            } else {
+                CHECK_FAIL();
+            }
+        }
+
         // and now setup the full pointer and copy the code to it
-        method->MethodPtr = ptr + (uintptr_t)method->MethodPtr;
+        method->MethodPtr = mapped_code + (uintptr_t)method->MethodPtr;
         memcpy(method->MethodPtr, spidir_codegen_blob_get_code(blobs[i]), method->MethodSize);
     }
 
@@ -3948,13 +3990,13 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
         // fill the vtable of this type
         for (int j = 0; j < type->VTable->Length; j++) {
             RuntimeMethodInfo method = type->VTable->Elements[j];
-            void* ptr = method->MethodPtr;
-            CHECK(ptr != NULL);
 
-            // if we have an instance stub then call it instead
-            if (method->StubMethodPtr) {
-                ptr = method->StubMethodPtr;
+            // if we have a thunk use that instead
+            void* ptr = method->MethodPtr;
+            if (method->ThunkPtr != NULL) {
+                ptr = method->ThunkPtr;
             }
+            CHECK(ptr != NULL);
 
             type->JitVTable->Functions[j] = ptr;
         }
@@ -3978,7 +4020,7 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
 
     // map it as rx now
     if (map_size != 0) {
-        tdn_host_map_rx(ptr, map_size);
+        tdn_host_map_rx(mapped_code, map_size);
     }
 
 cleanup:

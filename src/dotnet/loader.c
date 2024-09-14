@@ -125,9 +125,6 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Reflection, RuntimeTypeInfo),
     LOAD_TYPE(System.Reflection, ParameterInfo),
     LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
-    LOAD_TYPE(System, IndexOutOfRangeException),
-    LOAD_TYPE(System, NullReferenceException),
-    LOAD_TYPE(System, OverflowException),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
@@ -991,19 +988,23 @@ static tdn_err_t corelib_jit_types(RuntimeAssembly assembly) {
 
     CHECK_AND_RETHROW(tdn_jit_init());
 
-    for (int i = 0; i < ARRAY_LENGTH(m_load_types); i++) {
-        RuntimeTypeInfo type = *m_load_types[i].dest;
+    //
+    // jit the vtables of all the types that we have
+    //
 
-        // skip generic types
-        if (type->GenericTypeDefinition == type) {
-            continue;
-        }
-        CHECK_AND_RETHROW(tdn_jit_type(*m_load_types[i].dest));
-    }
+    CHECK_AND_RETHROW(tdn_jit_type(tArray));
+    CHECK_AND_RETHROW(tdn_jit_type(tString));
 
-    for (int i = 0; i < ARRAY_LENGTH(m_init_types); i++) {
-        CHECK_AND_RETHROW(tdn_jit_type(*m_init_types[i].dest));
-    }
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeAssembly));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeModule));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeFieldInfo));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeMethodBody));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeMethodInfo));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeConstructorInfo));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeLocalVariableInfo));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeTypeInfo));
+    CHECK_AND_RETHROW(tdn_jit_type(tParameterInfo));
+    CHECK_AND_RETHROW(tdn_jit_type(tRuntimeExceptionHandlingClause));
 
 cleanup:
     return err;

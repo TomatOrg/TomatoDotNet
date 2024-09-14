@@ -230,8 +230,8 @@ typedef struct RuntimeMethodBase {
     // method then it strips the object header to give the struct,
     // if its on a static method it strips the first parameter to
     // convert from a this call with null argument to a static call
-    void* StubMethodPtr;
-    size_t StubMethodSize;
+    void* ThunkPtr;
+    size_t ThunkSize;
 
     // the offset inside the vtable if this is a virtual
     int32_t VTableOffset;

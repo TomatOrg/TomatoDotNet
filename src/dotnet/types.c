@@ -36,10 +36,6 @@ RuntimeTypeInfo tRuntimeTypeInfo = NULL;
 RuntimeTypeInfo tParameterInfo = NULL;
 RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
 
-RuntimeTypeInfo tIndexOutOfRangeException = NULL;
-RuntimeTypeInfo tNullReferenceException = NULL;
-RuntimeTypeInfo tOverflowException = NULL;
-
 RuntimeTypeInfo tNullable = NULL;
 
 RuntimeTypeInfo tUnsafe = NULL;

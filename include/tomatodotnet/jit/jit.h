@@ -14,8 +14,3 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo);
  * that the vtable/itables are filled properly
  */
 tdn_err_t tdn_jit_type(RuntimeTypeInfo type);
-
-/**
- * Get the address of the method that was jitted before, or NULL if not jitted yet
- */
-void* tdn_jit_get_method_address(RuntimeMethodBase methodInfo);

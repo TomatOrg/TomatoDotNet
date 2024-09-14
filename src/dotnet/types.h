@@ -38,10 +38,6 @@ extern RuntimeTypeInfo tRuntimeTypeInfo;
 extern RuntimeTypeInfo tParameterInfo;
 extern RuntimeTypeInfo tRuntimeExceptionHandlingClause;
 
-extern RuntimeTypeInfo tIndexOutOfRangeException;
-extern RuntimeTypeInfo tNullReferenceException;
-extern RuntimeTypeInfo tOverflowException;
-
 extern RuntimeTypeInfo tNullable;
 
 extern RuntimeTypeInfo tUnsafe;
