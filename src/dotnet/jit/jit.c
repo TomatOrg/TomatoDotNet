@@ -250,7 +250,7 @@ static void register_struct_fields(RuntimeTypeInfo type, void* base) {
         RuntimeFieldInfo field = type->DeclaredFields->Elements[i];
         if (field->Attributes.Static) continue;
 
-        if (jit_is_struct_type(type)) {
+        if (jit_is_struct_like(type)) {
             // if its a struct recurse
             register_struct_fields(field->FieldType, base + field->FieldOffset);
         } else if (tdn_type_is_referencetype(type)) {
@@ -292,7 +292,7 @@ static tdn_err_t jit_prepare_type(RuntimeTypeInfo type) {
         CHECK_ERROR(field->JitFieldPtr != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
         // register gc fields
-        if (jit_is_struct_type(type)) {
+        if (jit_is_struct_like(type)) {
             register_struct_fields(field->FieldType, field->JitFieldPtr);
         } else if (tdn_type_is_referencetype(type)) {
             gc_register_root(field->JitFieldPtr);
@@ -856,7 +856,7 @@ static tdn_err_t jit_instruction(
 
             if (arg->spilled) {
                 // was spilled, this is a stack slot
-                if (jit_is_struct_type(arg_type)) {
+                if (jit_is_struct_like(arg_type)) {
                     // use memcpy
                     spidir_value_t location;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, arg_type, &location));
@@ -871,7 +871,7 @@ static tdn_err_t jit_instruction(
                 }
             } else {
                 // was not spilled, this is a param-ref
-                if (jit_is_struct_type(arg_type)) {
+                if (jit_is_struct_like(arg_type)) {
                     // passed by pointer, memcpy to the stack
                     spidir_value_t location;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, arg_type, &location));
@@ -941,7 +941,7 @@ static tdn_err_t jit_instruction(
             CHECK(tdn_type_verifier_assignable_to(value_type, arg->type));
 
             // was spilled, this is a stack slot
-            if (jit_is_struct_type(value_type)) {
+            if (jit_is_struct_like(value_type)) {
                 // use memcpy
                 jit_emit_memcpy(jctx, ctx, arg->value, value, value_type->StackSize);
             } else {
@@ -965,7 +965,7 @@ static tdn_err_t jit_instruction(
             RuntimeTypeInfo type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
             RuntimeTypeInfo tracked_type = tdn_get_intermediate_type(type);
 
-            if (jit_is_struct_type(type)) {
+            if (jit_is_struct_like(type)) {
                 // struct type, copy the stack slot to the eval stack
                 spidir_value_t loc;
                 CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, type, &loc));
@@ -1019,7 +1019,40 @@ static tdn_err_t jit_instruction(
             RuntimeTypeInfo local_type = method->MethodBody->LocalVariables->Elements[var]->LocalType;
             CHECK(tdn_type_verifier_assignable_to(value.type, local_type));
 
-            if (jit_is_struct_type(value.type)) {
+            if (!jit_is_interface(value.type) && jit_is_interface(local_type)) {
+                // object -> interface, need to expand the fat pointer
+
+                // store the instance
+                STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+                spidir_builder_build_store(builder,
+                                           SPIDIR_MEM_SIZE_8,
+                                           value.value,
+                                           ctx->locals[var]);
+
+                // get the offset of the vtable inside the fat pointer
+                spidir_value_t vtable_off = spidir_builder_build_ptroff(builder, ctx->locals[var],
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable)));
+
+                // get the pointer to the vtable part which has the interface functions
+                // TODO: when we can know concrete types also de-virt them in here
+                int vtable_offset = hmget(value.type->InterfaceImpls, local_type);
+                CHECK(vtable_offset > 0);
+                spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, value.value);
+                vtable_ptr = spidir_builder_build_inttoptr(builder, vtable_ptr);
+                vtable_ptr = spidir_builder_build_ptroff(builder, vtable_ptr,
+                    spidir_builder_build_iconst(
+                        builder, SPIDIR_TYPE_I64,
+                        offsetof(ObjectVTable, Functions) + (sizeof(void*) * vtable_offset)
+                    )
+                );
+
+                // and now store it
+                spidir_builder_build_store(builder,
+                                           SPIDIR_MEM_SIZE_8,
+                                           vtable_ptr,
+                                           vtable_off);
+
+            } else if (jit_is_struct_like(value.type)) {
                 // struct type, copy the stack slot to the eval stack
                 jit_emit_memcpy(jctx, ctx, ctx->locals[var], value.value, value.type->StackSize);
             } else {
@@ -1067,7 +1100,7 @@ static tdn_err_t jit_instruction(
             CHECK(
                 obj_type->IsByRef ||
                 tdn_type_is_referencetype(obj_type) ||
-                (jit_is_struct_type(obj_type) && !ldflda)
+                (jit_is_struct_like(obj_type) && !ldflda)
             );
 
             // validate we had a volatile prefix for volatile fields
@@ -1110,7 +1143,7 @@ static tdn_err_t jit_instruction(
                 RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
 
                 // perform the actual load
-                if (jit_is_struct_type(field_type)) {
+                if (jit_is_struct_like(field_type)) {
                     // we are copying a struct to the stack
                     spidir_value_t value;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, value_type, &value));
@@ -1181,7 +1214,7 @@ static tdn_err_t jit_instruction(
             }
 
             // perform the actual store
-            if (jit_is_struct_type(field_type)) {
+            if (jit_is_struct_like(field_type)) {
                 if (field_type->IsUnmanaged) {
                     jit_emit_memcpy(jctx, ctx, field_ptr, value, field_type->StackSize);
                 } else {
@@ -1238,7 +1271,7 @@ static tdn_err_t jit_instruction(
                 RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
 
                 // perform the actual load
-                if (jit_is_struct_type(field_type)) {
+                if (jit_is_struct_like(field_type)) {
                     // we are copying a struct to the stack
                     spidir_value_t value;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, value_type, &value));
@@ -1289,7 +1322,7 @@ static tdn_err_t jit_instruction(
                                                              (uint64_t)field->JitFieldPtr);
 
             // perform the actual store
-            if (jit_is_struct_type(field_type)) {
+            if (jit_is_struct_like(field_type)) {
                 // we are copying a struct to the stack
                 jit_emit_memcpy(jctx, ctx, field_ptr, value, field_type->StackSize);
             } else {
@@ -1384,7 +1417,7 @@ static tdn_err_t jit_instruction(
                 RuntimeTypeInfo tracked = tdn_get_intermediate_type(type);
 
                 // perform the actual load
-                if (jit_is_struct_type(tracked)) {
+                if (jit_is_struct_like(tracked)) {
                     // we are copying a struct to the stack
                     spidir_value_t value;
                     CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, tracked, &value));
@@ -1462,7 +1495,7 @@ static tdn_err_t jit_instruction(
             // TODO: perform write barrier as needed
 
             // perform the actual store
-            if (jit_is_struct_type(T)) {
+            if (jit_is_struct_like(T)) {
                 // we are copying a struct to the stack
                 if (T->IsUnmanaged) {
                     jit_emit_memcpy(jctx, ctx, element_ptr, value, T->StackSize);
@@ -1632,12 +1665,14 @@ static tdn_err_t jit_instruction(
             }
 
             // make sure that we can actually call the target
-            CHECK_AND_RETHROW(jit_prepare_method(jctx, spidir_builder_get_module(builder), target));
+            if (target->MethodBody != NULL) {
+                CHECK_AND_RETHROW(jit_prepare_method(jctx, spidir_builder_get_module(builder), target));
+            }
 
             RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
 
             // for struct instances allocate and push it beforehand
-            if (ret_type != tVoid && jit_is_struct_type(ret_type)) {
+            if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
                 // need to allocate the space in the caller, insert it as the first argument, already pushed
                 // to the stack
                 CHECK(!is_newobj);
@@ -1675,13 +1710,30 @@ static tdn_err_t jit_instruction(
                     !target->Attributes.Final &&
                     !target->DeclaringType->Attributes.Sealed
                 ) {
-                    // load the vtable pointer, zero-extend by default
-                    spidir_value_t vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, call_args_values[0]);
-                    vtable_ptr = spidir_builder_build_inttoptr(builder, vtable_ptr);
+                    // load the vtable pointer
+                    spidir_value_t vtable_ptr;
+                    size_t base_offset = 0;
+                    if (jit_is_interface(declaring_type)) {
+                        // get the vtable from the fat pointer
+                        vtable_ptr = spidir_builder_build_ptroff(builder, call_args_values[0],
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))
+                        );
+                        vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, vtable_ptr);
+
+                        // and get the instance type from the fat pointer
+                        call_args_values[0] = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, call_args_values[0]);
+                    } else {
+                        // normal type
+                        vtable_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, call_args_values[0]);
+                        vtable_ptr = spidir_builder_build_inttoptr(builder, vtable_ptr);
+                        base_offset = offsetof(ObjectVTable, Functions);
+                    }
+
+                    // now calculate the offset itself
                     spidir_value_t vtable_off = spidir_builder_build_ptroff(builder, vtable_ptr,
                         spidir_builder_build_iconst(
                             builder, SPIDIR_TYPE_I64,
-                            offsetof(ObjectVTable, Functions) + (sizeof(void*) * target->VTableOffset)
+                            base_offset + (sizeof(void*) * target->VTableOffset)
                         )
                     );
                     spidir_value_t function_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, vtable_off);
@@ -1707,7 +1759,7 @@ static tdn_err_t jit_instruction(
             }
 
             // for primitive types push it now
-            if (ret_type != tVoid && !jit_is_struct_type(ret_type)) {
+            if (ret_type != tVoid && !jit_is_struct_like(ret_type)) {
                 CHECK(!is_newobj);
                 CHECK_AND_RETHROW(eval_stack_push(stack, ret_type, value));
 
@@ -1922,7 +1974,7 @@ static tdn_err_t jit_instruction(
                 // make sure the type is a valid return target
                 CHECK(tdn_type_verifier_assignable_to(ret.type, wanted_ret_type));
 
-                if (jit_is_struct_type(ret.type)) {
+                if (jit_is_struct_like(ret.type)) {
                     // returning a struct, need to use the implicit
                     // ret pointer
                     jit_emit_memcpy(jctx, ctx,
@@ -2908,7 +2960,7 @@ static tdn_err_t jit_instruction(
                     CHECK_AND_RETHROW(eval_stack_push(stack, ref_type, value_type_ptr));
                 } else {
                     // for unbox.any deref it as well
-                    if (jit_is_struct_type(obj_type)) {
+                    if (jit_is_struct_like(obj_type)) {
                         spidir_value_t location;
                         CHECK_AND_RETHROW(eval_stack_alloc(stack, builder, inst.operand.type, &location));
                         jit_emit_memcpy(jctx, ctx, location, value_type_ptr, inst.operand.type->StackSize);
@@ -3151,7 +3203,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
                                                            var->LocalType->StackAlignment);
 
             // clear it
-            if (jit_is_struct_type(var->LocalType)) {
+            if (jit_is_struct_like(var->LocalType)) {
                 spidir_builder_build_call(builder, jctx->builtin_bzero, 2,
                                           (spidir_value_t[]){
                                                   ctx.locals[i],
@@ -3212,7 +3264,7 @@ static void jit_method_callback(spidir_builder_handle_t builder, void* _ctx) {
 
                 // store it, if its a value-type we need to copy it instead
                 spidir_value_t param_ref = spidir_builder_build_param_ref(builder, args_offset + arg);
-                if (jit_is_struct_type(type)) {
+                if (jit_is_struct_like(type)) {
                     jit_emit_memcpy(jctx, &ctx,
                                     ctx.args[arg].value,
                                     param_ref,

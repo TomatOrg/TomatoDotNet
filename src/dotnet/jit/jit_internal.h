@@ -15,10 +15,22 @@
  */
 tdn_err_t tdn_jit_init();
 
+static inline bool jit_is_interface(RuntimeTypeInfo type) {
+    return type->Attributes.Interface;
+}
+
 /**
  * Helper to check if a type is a struct type and not any other type
  */
-static inline bool jit_is_struct_type(RuntimeTypeInfo type) {
+static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
+    // interfaces are fat pointers, so very similar to
+    // struct types
+    if (jit_is_interface(type)) {
+        return true;
+    }
+
+    // Anything which is not a value type but not a
+    // native type is a struct
     type = tdn_get_intermediate_type(type);
     return tdn_type_is_valuetype(type) &&
             type != tInt32 &&

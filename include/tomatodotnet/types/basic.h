@@ -50,6 +50,11 @@ typedef struct Object {
 }* Object;
 _Static_assert(sizeof(struct Object) == 8, "Object size too big");
 
+typedef struct Interface {
+    Object Instance;
+    void** VTable;
+} Interface;
+
 static inline ObjectVTable* object_get_vtable(Object object) { return (void*)(uintptr_t)object->VTable; }
 
 typedef struct String {

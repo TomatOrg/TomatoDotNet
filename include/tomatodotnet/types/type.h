@@ -67,6 +67,11 @@ typedef struct generic_type_instance {
     RuntimeTypeInfo value;
 } generic_type_instance_t;
 
+typedef struct interface_impl {
+    RuntimeTypeInfo key;
+    int value;
+} interface_impl_t;
+
 typedef struct RuntimeTypeInfo {
     struct RuntimeMemberInfo;
 
@@ -75,6 +80,13 @@ typedef struct RuntimeTypeInfo {
     _Atomic(RuntimeTypeInfo) ByRefType;
     _Atomic(RuntimeTypeInfo) PointerType;
 
+    // for interfaces this is their prime
+    // for types this is the id relative to the parent
+    uint64_t TypeId;
+
+    // the TypeId generator for reference types
+    uint64_t TypeIdGen;
+
     // The namespace of the type
     String Namespace;
     TypeAttributes Attributes;
@@ -82,6 +94,9 @@ typedef struct RuntimeTypeInfo {
     // The base of the type
     RuntimeTypeInfo BaseType;
     generic_type_instance_t* GenericTypeInstances;
+
+    // the interfaces this type implements
+    interface_impl_t* InterfaceImpls;
 
     // the declared stuff
     RuntimeConstructorInfo_Array DeclaredConstructors;

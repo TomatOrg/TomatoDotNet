@@ -12,6 +12,7 @@
 #include "tomatodotnet/jit/jit.h"
 #include "dotnet/jit/jit_internal.h"
 #include <tomatodotnet/types/type.h>
+#include <util/prime.h>
 
 typedef struct memory_file_handle {
      void* buffer;
@@ -268,10 +269,15 @@ static tdn_err_t fill_stack_size(RuntimeTypeInfo type) {
         CHECK_AND_RETHROW(fill_heap_size(type));
         type->StackSize = type->HeapSize;
         type->StackAlignment = type->HeapAlignment;
+    } else if (type->Attributes.Interface) {
+        type->StackAlignment = _Alignof(Interface);
+        type->StackSize = sizeof(Interface);
     } else {
         type->StackAlignment = _Alignof(Object);
         type->StackSize = sizeof(Object);
     }
+
+    CHECK(type->StackSize <= SIZE_1MB);
 
     type->EndFillingStackSize = 1;
 
@@ -309,6 +315,17 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
             count++;
         }
     }
+
+    // interface can't have instance fields
+    if (type->Attributes.Interface) {
+        // put invalid values so it will never be taken into account
+        type->HeapAlignment = UINT32_MAX;
+        type->HeapSize = UINT32_MAX;
+
+        CHECK(count == 0);
+        goto skip_field_allocation;
+    }
+
     RuntimeFieldInfo_Array fields = GC_NEW_ARRAY(RuntimeFieldInfo, count);
     count = 0;
     for (int i = 0; i < type->DeclaredFields->Length; i++) {
@@ -418,11 +435,15 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
         }
     }
 
+    CHECK(type->HeapSize <= SIZE_2GB);
+
     // and now that we are done, if this is a value type
     // then also fill the stack size
     if (tdn_type_is_valuetype(type) && !type->FillingStackSize) {
         CHECK_AND_RETHROW(fill_stack_size(type));
     }
+
+skip_field_allocation:
 
     type->EndFillingHeapSize = 1;
 
@@ -493,60 +514,148 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));
     }
 
+    // allocate all interface offsets for the type
+    RuntimeAssembly assembly = info->Module->Assembly;
+    dotnet_file_t* metadata = assembly->Metadata;
+
+    // the current offset of the vtable
+    int vtable_offset = info->BaseType ? (info->BaseType->VTable ? info->BaseType->VTable->Length : 0) : 0;
+
+    // ignore anything not of this type
+    uint64_t interface_product = 1;
+    for (int i = 0; i < metadata->interface_impls_count; i++) {
+        metadata_interface_impl_t* impl = &metadata->interface_impls[i];
+        if (impl->class.token != info->MetadataToken) {
+            continue;
+        }
+
+        // get the interface type
+        RuntimeTypeInfo interface;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->interface.token, info->GenericArguments, NULL, &interface));
+
+        // check if the parent already implemented this interface
+        int parent_offset = -1;
+        if (info->BaseType != NULL) {
+            int idx = hmgeti(info->BaseType->InterfaceImpls, interface);
+            if (idx >= 0) {
+                parent_offset = info->BaseType->InterfaceImpls[idx].value;
+            }
+        }
+
+        // TODO: maybe also go over all the interfaces that this interface exports and try
+        //       to allocate area for them
+
+        // if no offset was already allocated, allocate a new one
+        if (parent_offset == -1) {
+            CHECK_AND_RETHROW(fill_virtual_methods(interface));
+            parent_offset = vtable_offset;
+            vtable_offset += interface->VTable->Length;
+        }
+
+        // and now insert it
+        hmput(info->InterfaceImpls, interface, parent_offset);
+
+        // calculate the product and make sure it doesn't overflow
+        CHECK(!__builtin_mul_overflow(interface_product, interface->TypeId, &interface_product));
+    }
+
+    // go over all the virtual methods and allocate vtable slots to all of them,
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
         if (!method->Attributes.Virtual) {
             continue;
         }
 
+        // if we already have an offset for
+        // this one then we can ignore it
+        if (method->VTableOffset >= 0) {
+            continue;
+        }
+
         // default to allocating a new slot
-        method->VTableOffset = -1;
         if (!method->Attributes.VtableNewSlot) {
             // might override something else
             RuntimeMethodInfo parent = find_overriden_method(info->BaseType, method);
-            if (parent != NULL) {
-                CHECK(!parent->Attributes.Final);
-                if (parent->Attributes.Strict) {
-                    // TODO: check accessibility
-                }
-                CHECK(parent->VTableOffset >= 0);
-                method->VTableOffset = parent->VTableOffset;
+            CHECK(parent != NULL);
+
+            CHECK(!parent->Attributes.Final);
+            if (parent->Attributes.Strict) {
+                // TODO: check accessibility
             }
+            CHECK(parent->VTableOffset >= 0);
+            method->VTableOffset = parent->VTableOffset;
+        } else {
+            method->VTableOffset = VTABLE_ALLOCATE_SLOT;
         }
     }
 
     // get the offset from the child
-    int vtable_offset = info->BaseType ? (info->BaseType->VTable ? info->BaseType->VTable->Length : 0) : 0;
-    int vtable_size = vtable_offset;
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
-        if (method->VTableOffset < 0) {
-            method->VTableOffset = vtable_size++;
+        if (!method->Attributes.Virtual) continue;
+
+        if (method->VTableOffset == VTABLE_ALLOCATE_SLOT) {
+            method->VTableOffset = vtable_offset++;
+        } else {
+            CHECK(method->VTableOffset >= 0, "%d", method->VTableOffset);
         }
     }
 
     // now allocate the new vtable
-    info->VTable = GC_NEW_ARRAY(RuntimeMethodInfo, vtable_size);
+    info->VTable = GC_NEW_ARRAY(RuntimeMethodInfo, vtable_offset);
 
+    // allocate the native vtable
     if (info->JitVTable == NULL) {
-        CHECK_AND_RETHROW(create_vtable(info, vtable_size));
+        CHECK_AND_RETHROW(create_vtable(info, vtable_offset));
     } else {
-        CHECK(vtable_size == 4);
+        CHECK(vtable_offset == 4, "Got invalid VTABLE size %d", vtable_offset);
     }
+
+    // set the type id information
+    info->JitVTable->InterfaceProduct = interface_product;
 
     // copy entries from the parent
     if (info->BaseType != NULL) {
         // TODO: replace with gc_memcpy
-        memcpy(info->VTable->Elements, info->BaseType->VTable->Elements, vtable_offset * sizeof(void*));
+        for (int vi = 0; vi < info->BaseType->VTable->Length; vi++) {
+            info->VTable->Elements[vi] = info->BaseType->VTable->Elements[vi];
+        }
     }
 
-    // TODO: handle everything to do with interfaces
+    // find all the implementations of the interfaces
+    for (int i = 0; i < hmlen(info->InterfaceImpls); i++) {
+        interface_impl_t* interface = &info->InterfaceImpls[i];
 
-    // and now replace with all the methods overriden in this class
+        for (int vi = 0; vi < interface->key->VTable->Length; vi++) {
+            RuntimeMethodInfo base = interface->key->VTable->Elements[vi];
+
+            // TODO: check for explicit implementations
+
+            // fallback to normal rules
+            RuntimeMethodInfo impl = find_overriden_method(info, base);
+            CHECK(impl != NULL);
+
+            // and now place it in the correct place
+            info->VTable->Elements[interface->value + base->VTableOffset] = impl;
+        }
+    }
+
+    // and now fill the normal slots as well
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
         if (method->Attributes.Virtual) {
             info->VTable->Elements[method->VTableOffset] = method;
+        }
+    }
+
+    // make sure everything was implemented correctly
+    for (int i = 0; i < info->VTable->Length; i++) {
+        RuntimeMethodInfo method = info->VTable->Elements[i];
+        CHECK(method != NULL, "vtable slot %d in %T not filled", i, info);
+
+        if (!info->Attributes.Abstract) {
+            CHECK(!method->Attributes.Abstract, "%T::%U used by %T",
+                method->DeclaringType, method->Name, info);
         }
     }
 
@@ -839,6 +948,24 @@ static void push_type_queue() {
     arrpush(m_type_queues, (type_queue_t){});
 }
 
+/**
+ * Used to generate primes for interfaces
+ */
+static prime_generator_t m_interface_prime_generator;
+
+static tdn_err_t fill_type_id(RuntimeTypeInfo info) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (info->Attributes.Interface) {
+        info->TypeId = prime_generate(&m_interface_prime_generator);
+    } else {
+        // TODO: this
+    }
+
+cleanup:
+    return err;
+}
+
 tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -846,6 +973,7 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
         // no delay, just calculate it
         CHECK_AND_RETHROW(fill_stack_size(type));
         CHECK_AND_RETHROW(fill_heap_size(type));
+        CHECK_AND_RETHROW(fill_type_id(type));
         CHECK_AND_RETHROW(fill_virtual_methods(type));
     } else {
         // delayed for later
@@ -868,6 +996,7 @@ static tdn_err_t drain_type_queue() {
         RuntimeTypeInfo type = arrpop(queue.types);
         CHECK_AND_RETHROW(fill_stack_size(type));
         CHECK_AND_RETHROW(fill_heap_size(type));
+        CHECK_AND_RETHROW(fill_type_id(type));
         CHECK_AND_RETHROW(fill_virtual_methods(type));
     }
 
@@ -1173,6 +1302,7 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
         base->Attributes = attributes;
         base->MethodImplFlags = impl_attributes;
         base->Module = module;
+        base->VTableOffset = VTABLE_INVALID;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
         CHECK(base->Name != NULL);
 

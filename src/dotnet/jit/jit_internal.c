@@ -98,7 +98,7 @@ tdn_err_t eval_stack_pop_item(
     *out_item = item;
 
     // check if we need to remove it from the used stack-slots list
-    if (jit_is_struct_type(item.type)) {
+    if (jit_is_struct_like(item.type)) {
         eval_stack_value_instance_t* alloc = hmgetp_null(stack->instance_stacks, item.type);
         CHECK(alloc != NULL);
         alloc->depth--;

@@ -23,7 +23,7 @@ CFLAGS 		+= -Wno-address-of-packed-member
 CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
 
 ifeq ($(DEBUG),1)
-	CFLAGS	+= -Og -g
+	CFLAGS	+= -O0 -g
 	CFLAGS	+= -fsanitize=undefined
 	CFLAGS 	+= -fno-sanitize=alignment
 	CFLAGS	+= -fsanitize=address

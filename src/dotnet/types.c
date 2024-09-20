@@ -268,7 +268,11 @@ bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
 
     // TODO: 6 need boxed
 
-    // TODO: 7 need boxed
+    // 7. T is boxed V and U is an interface directly implemented by V.
+    // TODO: handle boxed information
+    if (U->Attributes.Interface && (T->JitVTable->InterfaceProduct % U->TypeId) == 0) {
+        return true;
+    }
 
     // TODO: 8 need boxed
 

@@ -215,7 +215,7 @@ static bool is_module_type(RuntimeTypeInfo type) {
     return tdn_compare_string_to_cstr(type->Name, "<Module>") && type->Namespace == NULL;
 }
 
-static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
+static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo original_type) {
     tdn_err_t err = TDN_NO_ERROR;
     token_t token = { .token = type->MetadataToken };
     RuntimeAssembly assembly = type->Module->Assembly;
@@ -321,6 +321,11 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type) {
         base->ReturnParameter = signature.return_parameter;
     }
 
+    // the nested types are just copied over without
+    // actually applying the generic construction on
+    // them
+    type->DeclaredNestedTypes = original_type;
+
 cleanup:
     return err;
 }
@@ -346,7 +351,7 @@ static tdn_err_t create_generic_type(RuntimeTypeInfo base, RuntimeTypeInfo_Array
     // get all the other stuff
     token_t token = { .token = base->MetadataToken };
     CHECK(token.table == METADATA_TYPE_DEF && token.index != 0);
-    CHECK_AND_RETHROW(expand_type_from_typedef(new_type));
+    CHECK_AND_RETHROW(expand_type_from_typedef(new_type, base));
 
 cleanup:
     return err;

@@ -238,6 +238,9 @@ typedef struct RuntimeMethodBase {
 }* RuntimeMethodBase;
 DEFINE_ARRAY(RuntimeMethodBase);
 
+#define VTABLE_ALLOCATE_SLOT    -1
+#define VTABLE_INVALID          -2
+
 struct RuntimeMethodInfo {
     struct RuntimeMethodBase;
 };

@@ -209,7 +209,7 @@ tdn_err_t tdn_assembly_lookup_field(
 
         // resolve the field type
         RuntimeTypeInfo field_type;
-        CHECK_AND_RETHROW(sig_parse_field_type(ref->signature, assembly, typeArgs, methodArgs, &field_type));
+        CHECK_AND_RETHROW(sig_parse_field_type(ref->signature, assembly, type->GenericArguments, methodArgs, &field_type));
 
         // search for a field with that name
         RuntimeFieldInfo found = NULL;
