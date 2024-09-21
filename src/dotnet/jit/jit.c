@@ -3958,7 +3958,8 @@ static tdn_err_t tdn_jit_method_internal(jit_context_t* ctx) {
         // actually emit the function
         spidir_codegen_blob_handle_t handle;
         spidir_codegen_config_t config = {
-            .verify_ir = true // TODO: maybe disable on release
+            .verify_ir = true, // TODO: maybe disable on release
+            .verify_regalloc = true,
         };
         spidir_codegen_status_t status = spidir_codegen_emit_function(m_jit_machine, &config, ctx->module, function, &handle);
         switch (status) {
