@@ -36,4 +36,6 @@ public static unsafe class Unsafe
     [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
     public static extern bool AreSame<T>(ref T left, ref T right);
 
+    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
+    public static extern void InitBlockUnaligned(ref byte startAddress, byte value, uint byteCount);
 }

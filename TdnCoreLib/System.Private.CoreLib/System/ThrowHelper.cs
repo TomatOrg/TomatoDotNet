@@ -18,4 +18,9 @@ internal static class ThrowHelper
         throw new ArgumentOutOfRangeException();
     }
     
+    internal static void ThrowArgumentException_DestinationTooShort()
+    {
+        throw new ArgumentException(SR.Argument_DestinationTooShort, "destination");
+    }
+    
 }

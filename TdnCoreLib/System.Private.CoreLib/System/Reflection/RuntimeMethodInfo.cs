@@ -5,6 +5,10 @@ namespace System.Reflection;
 [StructLayout(LayoutKind.Sequential)]
 internal sealed class RuntimeMethodInfo : MethodInfo
 {
+    private RuntimeTypeInfo _declaringType;
+    private RuntimeModule _module;
+    private string _name;
+    private int _metadataToken;
     
     private ParameterInfo[] _parameters;
     private MethodAttributes _attributes;
@@ -14,9 +18,15 @@ internal sealed class RuntimeMethodInfo : MethodInfo
 
     private RuntimeTypeInfo[] _genericArguments;
     private RuntimeMethodInfo _genericMethodDefinition;
-    private unsafe void* _genericMethodInstances;
+    private ulong _genericMethodInstances;
 
-    private ulong _jitMethod;
-    private uint _flags;
+    private ulong _methodPtr;
+    private ulong _methodSize;
 
+    private ulong _thunkPtr;
+    private ulong _thunkSize;
+    
+    private uint _vtableOffset;
+
+    public override string Name => _name;
 }

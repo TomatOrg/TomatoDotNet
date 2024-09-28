@@ -15,6 +15,7 @@ internal class SR
     internal const string Arg_ArgumentOutOfRangeException = "Specified argument was out of the range of valid values.";
     
     internal const string ArgumentNull_Generic = "Value cannot be null.";
+    internal const string Argument_DestinationTooShort = "Destination is too short.";
 
     internal const string NotSupported_SubclassOverride = "Derived classes must provide an implementation.";
     

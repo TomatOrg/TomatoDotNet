@@ -48,7 +48,9 @@ internal sealed class RuntimeTypeInfo : TypeInfo
     private uint _genericParameterPosition;
 
     private uint _flags;
-    
+
+    public override string Name => _name;
+
     public override string ToString()
     {
         // TODO: something more correct or idk

@@ -17,4 +17,5 @@ internal sealed class RuntimeFieldInfo : FieldInfo
     private int _fieldOffset;
     private uint _flags;
 
+    public override string Name => _name;
 }

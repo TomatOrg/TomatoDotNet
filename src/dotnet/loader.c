@@ -509,6 +509,11 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     CHECK(!info->FillingVtable);
     info->FillingVtable = true;
 
+    // if this is an interface then ignore
+    if (info->Attributes.Interface) {
+        goto cleanup;
+    }
+
     // fill the vtable of the base class
     if (info->BaseType != NULL) {
         CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));

@@ -1,6 +1,6 @@
 namespace System.Reflection;
 
-public class FieldInfo : MemberInfo
+public abstract class FieldInfo : MemberInfo
 {
 
 }
