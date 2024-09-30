@@ -121,6 +121,7 @@ typedef struct RuntimeTypeInfo {
     uint32_t HeapSize;
     uint32_t HeapAlignment;
     uint32_t Packing;
+    uint32_t VTableSize;
 
     // Generics related
     RuntimeMethodBase DeclaringMethod;

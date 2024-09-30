@@ -21,7 +21,7 @@
 // If you want to output the instructions that we see as we see them
 // useful for debugging
 //
-// #define JIT_IL_OUTPUT
+#define JIT_IL_OUTPUT
 
 
 
@@ -1081,9 +1081,10 @@ static tdn_err_t jit_instruction(
             bool ldflda = inst.opcode == CEE_LDFLDA;
 
             // pop the item
-            spidir_value_t obj;
-            RuntimeTypeInfo obj_type;
-            CHECK_AND_RETHROW(eval_stack_pop(stack, &obj_type, &obj));
+            eval_stack_item_t obj_item;
+            CHECK_AND_RETHROW(eval_stack_pop_item(stack, &obj_item));
+            spidir_value_t obj = obj_item.value;
+            RuntimeTypeInfo obj_type = obj_item.type;
 
             // verify the field is contained within the given object
             if (obj_type->IsByRef) {
@@ -1138,6 +1139,12 @@ static tdn_err_t jit_instruction(
 
                 // for reference to field we don't need the load
                 CHECK_AND_RETHROW(eval_stack_push(stack, value_type, field_ptr));
+
+                // copy the attributes from the caller, and only be writable if its also
+                // a writable field
+                eval_stack_get_top(stack)->is_nonlocal_ref = obj_item.is_nonlocal_ref;
+                eval_stack_get_top(stack)->is_readable = obj_item.is_readable;
+                eval_stack_get_top(stack)->is_writable = obj_item.is_writable && !field->Attributes.InitOnly;
             } else {
                 // tracks as the intermediate type
                 RuntimeTypeInfo value_type = tdn_get_intermediate_type(field_type);
@@ -1159,7 +1166,22 @@ static tdn_err_t jit_instruction(
                     } else if (field_type == tInt16) {
                         value = spidir_builder_build_sfill(builder, 16, value);
                     }
+
                     CHECK_AND_RETHROW(eval_stack_push(stack, value_type, value));
+
+                    if (value_type->IsByRef) {
+                        CHECK(obj_type->ElementType->IsByRefStruct);
+
+                        // we are loading a byref from a byref struct, the ref inside of it
+                        // fully depends on the properties of the field
+                        // NOTE: we assume that ref in a byref struct is always non-local, this is
+                        //       NOT correct, but we are restricting ref types to only unsafe code
+                        //       anyways
+                        eval_stack_item_t* item = eval_stack_get_top(stack);
+                        item->is_nonlocal_ref = true;
+                        item->is_readable = true;
+                        item->is_writable = true;
+                    }
                 }
             }
         } break;
@@ -1547,6 +1569,7 @@ static tdn_err_t jit_instruction(
             }
 
             // get all the arguments
+            bool result_can_be_nonlocal = true;
             int call_args_count = target->Parameters->Length + (is_static ? 0 : 1);
             arrsetlen(call_args_types, call_args_count);
             arrsetlen(call_args_values, call_args_count);
@@ -1579,6 +1602,14 @@ static tdn_err_t jit_instruction(
                 CHECK_AND_RETHROW(eval_stack_pop_item(stack, &item));
                 call_args_types[i] = item.type;
                 call_args_values[i] = item.value;
+
+                // if we have a byref parameter, then the result can only be a non-local
+                // ref if this is also a nonlocal ref, otherwise we risk leaking a local
+                // pointer, but if there are no nonlocal refs then it can only return
+                // nonlocal ref itself
+                if (item.type->IsByRef) {
+                    result_can_be_nonlocal = item.is_nonlocal_ref;
+                }
 
                 // validate the stack type
                 ParameterAttributes attributes = { .Attributes = 0 };
@@ -1774,6 +1805,10 @@ static tdn_err_t jit_instruction(
                     if (!target->ReturnParameter->IsReadonly) {
                         item->is_writable = true;
                     }
+
+                    // if we had only non-local ref parameters or no byref parameters
+                    // at all then the result can be a non-local ref
+                    item->is_nonlocal_ref = result_can_be_nonlocal;
                 }
             }
         } break;

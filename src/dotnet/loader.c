@@ -54,6 +54,7 @@ typedef struct load_type {
     const char* namespace;
     const char* name;
     RuntimeTypeInfo* dest;
+    size_t vtable_size;
 } load_type_t;
 
 #define INIT_VALUE_TYPE(namespace, name, is_unmanaged) \
@@ -106,8 +107,18 @@ static int m_inited_types = 0;
     { \
         #namespace, \
         #name, \
-        &t##name \
+        &t##name, \
+        4 \
     }
+
+#define LOAD_TYPE_VTABLE(namespace, name, vtable) \
+    { \
+        #namespace, \
+        #name, \
+        &t##name, \
+        vtable \
+    }
+
 /**
  * Types to load so the runtime can access them
  */
@@ -115,22 +126,22 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, Object),
     LOAD_TYPE(System, Array),
     LOAD_TYPE(System, String),
-    LOAD_TYPE(System.Reflection, MethodBase),
+    LOAD_TYPE_VTABLE(System.Reflection, MethodBase, 5),
     LOAD_TYPE(System.Reflection, RuntimeAssembly),
     LOAD_TYPE(System.Reflection, RuntimeModule),
-    LOAD_TYPE(System.Reflection, RuntimeFieldInfo),
+    LOAD_TYPE_VTABLE(System.Reflection, RuntimeFieldInfo, 5),
     LOAD_TYPE(System.Reflection, RuntimeMethodBody),
-    LOAD_TYPE(System.Reflection, RuntimeMethodInfo),
+    LOAD_TYPE_VTABLE(System.Reflection, RuntimeMethodInfo, 5),
     LOAD_TYPE(System.Reflection, RuntimeConstructorInfo),
     LOAD_TYPE(System.Reflection, RuntimeLocalVariableInfo),
-    LOAD_TYPE(System.Reflection, RuntimeTypeInfo),
+    LOAD_TYPE_VTABLE(System.Reflection, RuntimeTypeInfo, 5),
     LOAD_TYPE(System.Reflection, ParameterInfo),
     LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
     LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
-    { "System", "Nullable`1", &tNullable },
+    { "System", "Nullable`1", &tNullable, 4 },
 };
 static int m_loaded_types = 0;
 
@@ -149,6 +160,9 @@ static tdn_err_t create_vtable(RuntimeTypeInfo type, int count) {
 
     // set the type in the vtable
     type->JitVTable->Type = type;
+
+    // for verification later
+    type->VTableSize = count;
 
 cleanup:
     return err;
@@ -196,7 +210,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
         ) {
             RuntimeTypeInfo type = *load_type->dest ? *load_type->dest : GC_NEW(RuntimeTypeInfo);
             if (type->JitVTable == NULL) {
-                CHECK_AND_RETHROW(create_vtable(type, 4));
+                CHECK_AND_RETHROW(create_vtable(type, load_type->vtable_size));
             }
 
             type->QueuedTypeInit = 1;
@@ -262,6 +276,12 @@ static tdn_err_t fill_stack_size(RuntimeTypeInfo type) {
 
     CHECK(!type->FillingStackSize);
     type->FillingStackSize = 1;
+
+    // don't allow byref structs in unverified assemblies
+    // otherwise we can have a very bad time
+    if (type->IsByRefStruct) {
+        CHECK(type->Module->Assembly->AllowUnsafe);
+    }
 
     // value types have the same size as the heap size, while
     // reference types always have the size of a pointer
@@ -376,6 +396,11 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
             // of another byref struct
             if (type->IsByRefStruct && field_type->IsByRef) {
                 CHECK(!field_type->ElementType->IsByRefStruct);
+            }
+
+            // make sure a byref is only inside of a byref struct
+            if (field_type->IsByRef) {
+                CHECK(type->IsByRefStruct);
             }
 
             largest_alignment = MAX(largest_alignment, fields->Elements[i]->FieldType->StackAlignment);
@@ -509,11 +534,6 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     CHECK(!info->FillingVtable);
     info->FillingVtable = true;
 
-    // if this is an interface then ignore
-    if (info->Attributes.Interface) {
-        goto cleanup;
-    }
-
     // fill the vtable of the base class
     if (info->BaseType != NULL) {
         CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));
@@ -613,7 +633,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     if (info->JitVTable == NULL) {
         CHECK_AND_RETHROW(create_vtable(info, vtable_offset));
     } else {
-        CHECK(vtable_offset == 4, "Got invalid VTABLE size %d", vtable_offset);
+        CHECK(vtable_offset == info->VTableSize, "Got invalid VTABLE size %d/%d - %T", vtable_offset, info->VTableSize, info);
     }
 
     // set the type id information
@@ -633,14 +653,27 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
 
         for (int vi = 0; vi < interface->key->VTable->Length; vi++) {
             RuntimeMethodInfo base = interface->key->VTable->Elements[vi];
-
-            // TODO: check for explicit implementations
+            RuntimeMethodInfo impl;
 
             // fallback to normal rules
-            RuntimeMethodInfo impl = find_overriden_method(info, base);
+            if (info->Attributes.Interface) {
+                // for interface just store the original one
+                impl = base;
+
+            } else {
+                // TODO: check for explicit implementations
+
+                // fallback to normal override rules
+                impl = find_overriden_method(info, base);
+
+                // if the class is abstract and there is no implementation
+                // then just
+                if (info->Attributes.Abstract && impl == NULL) {
+                    impl = base;
+                }
+            }
             CHECK(impl != NULL);
 
-            // and now place it in the correct place
             info->VTable->Elements[interface->value + base->VTableOffset] = impl;
         }
     }
@@ -1045,7 +1078,7 @@ static tdn_err_t corelib_bootstrap() {
     CHECK_ERROR(tRuntimeTypeInfo != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // make sure to set its type id properly
-    CHECK_AND_RETHROW(create_vtable(tRuntimeTypeInfo, 4));
+    CHECK_AND_RETHROW(create_vtable(tRuntimeTypeInfo, 5));
     tRuntimeTypeInfo->Object.VTable = (uint32_t)(uintptr_t)tRuntimeTypeInfo->JitVTable;
 
     // hard-code types we require for proper bootstrap
