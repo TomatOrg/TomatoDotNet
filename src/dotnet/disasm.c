@@ -2,6 +2,8 @@
 
 #include "tomatodotnet/disasm.h"
 
+#include <util/string_builder.h>
+
 #include "gc/gc.h"
 #include "metadata/metadata.h"
 #include "metadata/metadata_tables.h"
@@ -311,4 +313,85 @@ void tdn_normalize_inst(tdn_il_inst_t* inst) {
         case CEE_LEAVE_S: inst->opcode = CEE_LEAVE; break;
         default: break;
     }
+}
+
+int tdn_disasm_print_start(RuntimeMethodBody body, uint32_t pc, tdn_il_inst_t inst, int indent) {
+    for (int i = 0; body->ExceptionHandlingClauses != NULL && i < body->ExceptionHandlingClauses->Length; i++) {
+        RuntimeExceptionHandlingClause c = body->ExceptionHandlingClauses->Elements[i];
+        if (c->TryOffset == pc) {
+            tdn_host_printf("[*] \t\t\t%*s.try\n", indent, "");
+            tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
+            indent += 4;
+
+        } else if (c->HandlerOffset == pc) {
+            if (c->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                string_builder_t temp_builder = {};
+                string_builder_push_type_signature(&temp_builder, c->CatchType);
+                tdn_host_printf("[*] \t\t\t%*scatch %s\n", indent, "", string_builder_build(&temp_builder));
+                string_builder_free(&temp_builder);
+            } else if (c->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+                tdn_host_printf("[*] \t\t\t%*sfinally\n", indent, "");
+            } else {
+                ASSERT(!"TODO");
+            }
+            tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
+            indent += 4;
+        }
+    }
+
+    // check if we are getting nested
+
+    tdn_host_printf("[*] \t\t\t%*sIL_%04x: %s", indent, "", pc, tdn_get_opcode_name(inst.opcode));
+    switch (inst.operand_type) {
+        case TDN_IL_BRANCH_TARGET: tdn_host_printf(" IL_%04x", inst.operand.branch_target); break;
+        case TDN_IL_NO_OPERAND: break;
+        case TDN_IL_VARIABLE: tdn_host_printf(" %d", inst.operand.variable); break;
+        case TDN_IL_INT8: tdn_host_printf(" %d", inst.operand.int8); break;
+        case TDN_IL_INT32: tdn_host_printf(" %d", inst.operand.int32); break;
+        case TDN_IL_INT64: tdn_host_printf(" %lld", (long long int)inst.operand.int64); break;
+        case TDN_IL_FLOAT32: tdn_host_printf(" %f", inst.operand.float32); break;
+        case TDN_IL_FLOAT64: tdn_host_printf(" %f", inst.operand.float64); break;
+
+        case TDN_IL_METHOD: {
+            string_builder_t tmp_builder = {};
+            string_builder_push_method_signature(&tmp_builder, inst.operand.method, true);
+            tdn_host_printf(" %s", string_builder_build(&tmp_builder));
+            string_builder_free(&tmp_builder);
+        } break;
+
+        case TDN_IL_FIELD: {
+            string_builder_t tmp_builder = {};
+            string_builder_push_type_signature(&tmp_builder, inst.operand.field->DeclaringType);
+            tdn_host_printf(" %s::%U", string_builder_build(&tmp_builder), inst.operand.field->Name);
+            string_builder_free(&tmp_builder);
+        } break;
+
+        case TDN_IL_TYPE: {
+            string_builder_t tmp_builder = {};
+            string_builder_push_type_signature(&tmp_builder, inst.operand.type);
+            tdn_host_printf(" %s", string_builder_build(&tmp_builder));
+            string_builder_free(&tmp_builder);
+        } break;
+
+        case TDN_IL_STRING: tdn_host_printf(" %U", inst.operand.string); break;
+        case TDN_IL_SWITCH: ASSERT(!"TODO: switch");
+    }
+    tdn_host_printf("\n");
+
+    return indent;
+}
+
+int tdn_disasm_print_end(RuntimeMethodBody body, uint32_t pc, int indent) {
+    for (int i = 0; body->ExceptionHandlingClauses != NULL && i < body->ExceptionHandlingClauses->Length; i++) {
+        RuntimeExceptionHandlingClause c = body->ExceptionHandlingClauses->Elements[i];
+        if (c->TryOffset + c->TryLength == pc) {
+            indent -= 4;
+            tdn_host_printf("[*] \t\t\t%*s} // end .try - %04x\n", indent, "");
+        } else if (c->HandlerOffset + c->HandlerLength == pc) {
+            indent -= 4;
+            tdn_host_printf("[*] \t\t\t%*s} // end handler\n", indent, "");
+        }
+    }
+
+    return indent;
 }

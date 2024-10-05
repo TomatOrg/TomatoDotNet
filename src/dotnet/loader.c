@@ -10,9 +10,10 @@
 #include "dotnet/metadata/sig.h"
 #include "util/stb_ds.h"
 #include "tomatodotnet/jit/jit.h"
-#include "dotnet/jit/jit_internal.h"
 #include <tomatodotnet/types/type.h>
 #include <util/prime.h>
+
+#include "jit/jit.h"
 
 typedef struct memory_file_handle {
      void* buffer;

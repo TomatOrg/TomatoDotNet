@@ -299,10 +299,10 @@ public readonly ref struct Span<T>
     /// </summary>
     public override string ToString()
     {
-        if (typeof(T) == typeof(char))
-        {
-            return new string(new ReadOnlySpan<char>(ref Unsafe.As<T, char>(ref _reference), _length));
-        }
+        // if (typeof(T) == typeof(char))
+        // {
+            // return new string(new ReadOnlySpan<char>(ref Unsafe.As<T, char>(ref _reference), _length));
+        // }
         // return $"System.Span<{typeof(T).Name}>[{_length}]";
         return null;
     }

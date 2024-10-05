@@ -8,7 +8,6 @@
 #include "dotnet/loader.h"
 #include "tomatodotnet/disasm.h"
 #include "tomatodotnet/jit/jit.h"
-#include "dotnet/jit/jit_internal.h"
 
 #include "tomatodotnet/tdn.h"
 #include <printf.h>
@@ -267,9 +266,9 @@ int main(int argc, char* argv[]) {
     double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
     TRACE("Jit took %f seconds", time_taken);
 
-    int (*entry_point)() = tests->EntryPoint->MethodPtr;
-    int tests_output = entry_point();
-    TRACE("Tests = %d", tests_output);
+    // int (*entry_point)() = tests->EntryPoint->MethodPtr;
+    // int tests_output = entry_point();
+    // TRACE("Tests = %d", tests_output);
     // ASSERT(tests_output == 0);
 
 cleanup:

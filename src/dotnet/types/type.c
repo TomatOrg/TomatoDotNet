@@ -15,7 +15,7 @@ bool tdn_type_is_valuetype(RuntimeTypeInfo type) {
 }
 
 bool tdn_type_is_referencetype(RuntimeTypeInfo type) {
-    return !tdn_type_is_valuetype(type);
+    return type == NULL || !tdn_type_is_valuetype(type);
 }
 
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {

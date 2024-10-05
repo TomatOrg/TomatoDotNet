@@ -44,8 +44,6 @@ RuntimeTypeInfo tMemoryMarshal = NULL;
 RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
 
-RuntimeTypeInfo tNull = NULL;
-
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
         return false;
@@ -277,7 +275,7 @@ bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
     // TODO: 8 need boxed
 
     // 9.
-    if (T == tNull && tdn_type_is_referencetype(U)) {
+    if (T == NULL && tdn_type_is_referencetype(U)) {
         return true;
     }
 

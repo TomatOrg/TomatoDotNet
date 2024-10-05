@@ -83,3 +83,9 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
  * Convert to a more generic version for easier processing
  */
 void tdn_normalize_inst(tdn_il_inst_t* inst);
+
+//
+// Print helpers
+//
+int tdn_disasm_print_start(RuntimeMethodBody body, uint32_t pc, tdn_il_inst_t inst, int indent);
+int tdn_disasm_print_end(RuntimeMethodBody body, uint32_t pc, int indent);
