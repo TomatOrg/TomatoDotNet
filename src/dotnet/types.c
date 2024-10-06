@@ -44,6 +44,8 @@ RuntimeTypeInfo tMemoryMarshal = NULL;
 RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
 
+RuntimeTypeInfo tRuntimeTypeHandle = NULL;
+
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
         return false;

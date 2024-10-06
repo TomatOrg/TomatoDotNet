@@ -5,7 +5,7 @@
 #include <tomatodotnet/types/reflection.h>
 
 // enable printing while verifying
-// #define JIT_VERBOSE_VERIFY
+#define JIT_VERBOSE_VERIFY
 // #define JIT_DEBUG_VERIFY
 
 #ifdef JIT_VERBOSE_VERIFY

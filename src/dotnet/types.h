@@ -46,6 +46,8 @@ extern RuntimeTypeInfo tMemoryMarshal;
 extern RuntimeTypeInfo tInAttribute;
 extern RuntimeTypeInfo tIsVolatile;
 
+extern RuntimeTypeInfo tRuntimeTypeHandle;
+
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_reduced_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_verification_type(RuntimeTypeInfo type);

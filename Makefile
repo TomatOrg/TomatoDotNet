@@ -6,7 +6,14 @@ CC 			:= ccache clang
 LD			:= clang
 
 # Build in debug or release mode
-DEBUG		:= 1
+DEBUG		?= 1
+
+# Should we optimize
+ifeq ($(DEBUG),1)
+OPTIMIZE	?= 0
+else
+OPTIMIZE	?= 1
+endif
 
 OUT_DIR		:= out
 BIN_DIR		:= $(OUT_DIR)/bin
@@ -21,15 +28,22 @@ CFLAGS		+= -Werror -std=gnu17
 CFLAGS 		+= -Wno-unused-label
 CFLAGS 		+= -Wno-address-of-packed-member
 CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
+CFLAGS		+= -g
 
+# Check if we need optimization flags
+ifeq ($(OPTIMIZE),1)
+	CFLAGS	+= -O3 -flto
+else
+	CFLAGS	+= -O0
+endif
+
+# Check if we need debugging flags
 ifeq ($(DEBUG),1)
-	CFLAGS	+= -O0 -g
 	CFLAGS	+= -fsanitize=undefined
 	CFLAGS 	+= -fno-sanitize=alignment
 	CFLAGS	+= -fsanitize=address
 	CFLAGS 	+= -fstack-protector-all
 else
-	CFLAGS	+= -O3 -g -flto
 	CFLAGS 	+= -DNDEBUG
 endif
 

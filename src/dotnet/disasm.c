@@ -185,8 +185,14 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
         case InlineSwitch:
             CHECK_FAIL("TODO: InlineSwitch");
 
-        case InlineTok:
-            CHECK_FAIL("TODO: InlineTok");
+        case InlineTok: {
+            inst->operand_type = TDN_IL_TYPE;
+            inst->operand_token = FETCH(int32_t);
+            CHECK_AND_RETHROW(tdn_assembly_lookup_type(
+                    assembly, inst->operand_token,
+                    method->DeclaringType->GenericArguments, method->GenericArguments,
+                    &inst->operand.type));
+        } break;
 
         case InlineType: {
             inst->operand_type = TDN_IL_TYPE;

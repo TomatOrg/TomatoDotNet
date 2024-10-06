@@ -329,13 +329,18 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             // Argument access
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_LDARG: {
+            case CEE_LDARG:
+            case CEE_LDARGA: {
                 int index = inst.operand.variable;
+                bool is_ldarga = inst.opcode == CEE_LDARGA;
 
                 jit_item_attrs_t attrs = {};
                 RuntimeTypeInfo arg_type = NULL;
 
                 if (this_type != NULL && index == 0) {
+                    // we don't allow to load this as a refernece
+                    CHECK(!is_ldarga);
+
                     // this is the this type
                     attrs.this_ptr = true;
 
@@ -352,24 +357,35 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     }
                     CHECK(index < method->Parameters->Length);
                     ParameterInfo arg_info = method->Parameters->Elements[index];
-                    arg_type = tdn_get_intermediate_type(arg_info->ParameterType);
+                    if (is_ldarga) {
+                        // get the by-ref of the field
+                        CHECK_AND_RETHROW(tdn_get_byref_type(arg_info->ParameterType, &arg_type));
+                        arg_type = tdn_get_intermediate_type(arg_type);
 
-                    if (arg_info->Attributes.In) {
-                        // if this is a in make sure we have a byref
-                        // and set it as readable only
-                        CHECK(arg_type->IsByRef);
-                        attrs.readable = true;
-
-                    } else if (arg_info->Attributes.Out) {
-                        // if this is a out make sure we have a byref
-                        // and set it writable
-                        CHECK(arg_type->IsByRef);
-                        attrs.writable = true;
-
-                    } else if (arg_type->IsByRef) {
-                        // otherwise a normal ref
+                        // always readable and writable since its a reference
+                        // to a local variable
                         attrs.readable = true;
                         attrs.writable = true;
+                    } else {
+                        arg_type = tdn_get_intermediate_type(arg_info->ParameterType);
+
+                        if (arg_info->Attributes.In) {
+                            // if this is a in make sure we have a byref
+                            // and set it as readable only
+                            CHECK(arg_type->IsByRef);
+                            attrs.readable = true;
+
+                        } else if (arg_info->Attributes.Out) {
+                            // if this is a out make sure we have a byref
+                            // and set it writable
+                            CHECK(arg_type->IsByRef);
+                            attrs.writable = true;
+
+                        } else if (arg_type->IsByRef) {
+                            // otherwise a normal ref
+                            attrs.readable = true;
+                            attrs.writable = true;
+                        }
                     }
                 }
 
@@ -443,14 +459,16 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             // Field access
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_STFLD: {
+            case CEE_STFLD:
+            case CEE_STSFLD: {
                 RuntimeFieldInfo field = inst.operand.field;
-                bool is_static = inst.opcode == CEE_LDSFLD;
+                bool is_static = inst.opcode == CEE_STSFLD;
 
                 jit_stack_value_t value = EVAL_STACK_POP();
 
                 // make sure that the field is in the same inheritance tree
-                CHECK(verifier_is_assignable(value.type, field->FieldType));
+                RuntimeTypeInfo field_type = tdn_get_intermediate_type(field->FieldType);
+                CHECK(verifier_is_assignable(value.type, field_type));
 
                 if (is_static) {
                     CHECK(field->Attributes.Static);
@@ -594,7 +612,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     jit_stack_value_t value = EVAL_STACK_POP();
 
                     // check that we can pass the value
-                    RuntimeTypeInfo declared = tdn_get_verification_type(info->ParameterType);
+                    RuntimeTypeInfo declared = tdn_get_intermediate_type(info->ParameterType);
                     CHECK(verifier_is_assignable(value.type, declared));
 
                     // reference readability/writability checks
@@ -800,6 +818,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
             case CEE_LDNULL: {
                 EVAL_STACK_PUSH(NULL);
+            } break;
+
+            case CEE_LDTOKEN: {
+                EVAL_STACK_PUSH(tRuntimeTypeHandle);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
