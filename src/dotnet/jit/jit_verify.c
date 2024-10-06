@@ -344,10 +344,14 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     // this is the this type
                     attrs.this_ptr = true;
 
-                    // TODO: readonly structs should get a readonly reference
                     if (this_type->IsByRef) {
                         attrs.readable = true;
-                        attrs.writable = true;
+
+                        // if this is a readonly method then we have
+                        // a readonly this
+                        if (!method->IsReadOnly) {
+                            attrs.writable = true;
+                        }
                     }
 
                     arg_type = this_type;
@@ -507,8 +511,6 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     // make sure that the field is in the same inheritance tree
                     CHECK(verifier_is_assignable(type, field->DeclaringType));
                 }
-
-
             } break;
 
             case CEE_LDFLD:
@@ -651,10 +653,14 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     CHECK(verifier_is_assignable(value.type, target_this_type));
 
                     // check the readable/writable attributes
-                    // TODO: support for custom attribute IsReadOnlyAttribute
                     if (target_this_type->IsByRef) {
                         CHECK(value.attrs.readable);
-                        CHECK(value.attrs.writable);
+
+                        // if calling non-readonly method make sure that we pass
+                        // to it a writable reference
+                        if (!target->IsReadOnly) {
+                            CHECK(value.attrs.writable);
+                        }
                     }
 
                     // if we use a call on a virtual function then it must be done on `this` instance

@@ -235,6 +235,9 @@ typedef struct RuntimeMethodBase {
 
     // the offset inside the vtable if this is a virtual
     int32_t VTableOffset;
+
+    uint32_t IsReadOnly : 1;
+    uint32_t : 31;
 }* RuntimeMethodBase;
 DEFINE_ARRAY(RuntimeMethodBase);
 

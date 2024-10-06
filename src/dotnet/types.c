@@ -35,6 +35,7 @@ RuntimeTypeInfo tRuntimeLocalVariableInfo = NULL;
 RuntimeTypeInfo tRuntimeTypeInfo = NULL;
 RuntimeTypeInfo tParameterInfo = NULL;
 RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
+RuntimeTypeInfo tRuntimeTypeHandle = NULL;
 
 RuntimeTypeInfo tNullable = NULL;
 
@@ -43,8 +44,7 @@ RuntimeTypeInfo tMemoryMarshal = NULL;
 
 RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
-
-RuntimeTypeInfo tRuntimeTypeHandle = NULL;
+RuntimeTypeInfo tIsReadOnlyAttribute = NULL;
 
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {

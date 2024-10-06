@@ -25,6 +25,7 @@ static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_A
     new_method->GenericArguments = args;
     new_method->Attributes = base->Attributes;
     new_method->MethodImplFlags = base->MethodImplFlags;
+    new_method->IsReadOnly = base->IsReadOnly;
 
     // if it has a body copy it over
     if (method_def->rva != 0) {

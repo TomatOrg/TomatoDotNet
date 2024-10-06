@@ -138,6 +138,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE_VTABLE(System.Reflection, RuntimeTypeInfo, 5),
     LOAD_TYPE(System.Reflection, ParameterInfo),
     LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
+    LOAD_TYPE(System.Runtime.CompilerServices, IsReadOnlyAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
@@ -334,6 +335,13 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
     int count = 0;
     for (int i = 0; i < type->DeclaredFields->Length; i++) {
         if (!type->DeclaredFields->Elements[i]->Attributes.Static) {
+
+            // if the type is readonly make sure all the fields are also readonly
+            // (aka InitOnlt)
+            if (type->IsReadOnly) {
+                CHECK(type->DeclaredFields->Elements[i]->Attributes.InitOnly);
+            }
+
             count++;
         }
     }
@@ -589,6 +597,12 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     // go over all the virtual methods and allocate vtable slots to all of them,
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
+
+        // fixup readonly if the parent is readonly on the way
+        if (info->IsReadOnly && !method->Attributes.Static) {
+            method->IsReadOnly = true;
+        }
+
         if (!method->Attributes.Virtual) {
             continue;
         }
@@ -1837,6 +1851,38 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
         // save it for later
         type->Packing = layout->packing_size;
         type->HeapSize = layout->class_size;
+    }
+
+    // connect jit related custom attributes
+    for (int i = 0; i < assembly->Metadata->custom_attribute_count; i++) {
+        metadata_custom_attribute_t* attr = &assembly->Metadata->custom_attributes[i];
+        RuntimeMethodBase method;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->type.token, NULL, NULL, &method));
+        CHECK(object_get_vtable(&method->Object)->Type == tRuntimeConstructorInfo);
+        RuntimeTypeInfo type = method->DeclaringType;
+
+        if (type == tIsReadOnlyAttribute) {
+            switch (attr->parent.table) {
+                case METADATA_TYPE_DEF: {
+                    RuntimeTypeInfo parent_type;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, attr->parent.token, NULL, NULL, &parent_type));
+                    parent_type->IsReadOnly = true;
+                } break;
+
+                case METADATA_METHOD_DEF: {
+                    RuntimeMethodBase parent_type;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->parent.token, NULL, NULL, &parent_type));
+                    parent_type->IsReadOnly = true;
+                } break;
+
+                case METADATA_PARAM: {
+                    // we get the required information from the in attribute
+                } break;
+
+                default:
+                    WARN("Found IsReadOnlyAttribute on unknown token %02x", attr->parent.table);
+            }
+        }
     }
 
 cleanup:
