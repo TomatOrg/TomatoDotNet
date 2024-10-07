@@ -68,8 +68,6 @@ tdn_err_t jit_find_basic_blocks(jit_method_t* jmethod) {
             jit_add_basic_block(jmethod, clause->HandlerOffset);
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                 jit_add_basic_block(jmethod, clause->FilterOffset);
-            } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-                arrlast(jmethod->basic_blocks).dummy = true;
             }
         }
     }

@@ -3,10 +3,22 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 
+#include <spidir/log.h>
+
 #include "jit_basic_block.h"
 #include "jit_emit.h"
 #include "jit_verify.h"
 
+static void jit_spidir_log_callback(spidir_log_level_t level, const char* module, size_t module_len, const char* message, size_t message_len) {
+    switch (level) {
+        case SPIDIR_LOG_LEVEL_ERROR: ERROR("spidir/%.*s: %.*s", module_len, module, message_len, message); break;
+        case SPIDIR_LOG_LEVEL_WARN: WARN("spidir/%.*s: %.*s", module_len, module, message_len, message); break;
+        case SPIDIR_LOG_LEVEL_INFO:
+        case SPIDIR_LOG_LEVEL_DEBUG:
+        case SPIDIR_LOG_LEVEL_TRACE:
+        default: TRACE("spidir/%.*s: %.*s", module_len, module, message_len, message); break;
+    }
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Top level dispatching
@@ -17,6 +29,9 @@ tdn_err_t tdn_jit_init() {
 
     // initialize the emit backend
     CHECK_AND_RETHROW(jit_init_emit());
+
+    spidir_log_init(jit_spidir_log_callback);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
 
 cleanup:
     return err;
@@ -34,7 +49,7 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     CHECK_AND_RETHROW(jit_verify_method(methodInfo));
 
     // emit everything
-    // CHECK_AND_RETHROW(jit_emit());
+    CHECK_AND_RETHROW(jit_emit());
 
 cleanup:
     // we can now clean the session
@@ -54,7 +69,7 @@ tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
     CHECK_AND_RETHROW(jit_verify_type(type));
 
     // emit everything
-    // CHECK_AND_RETHROW(jit_emit());
+    CHECK_AND_RETHROW(jit_emit());
 
 cleanup:
     // we can now clean the session

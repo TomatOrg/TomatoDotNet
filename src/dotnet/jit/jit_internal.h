@@ -5,7 +5,7 @@
 #include <tomatodotnet/types/reflection.h>
 
 // enable printing while verifying
-#define JIT_VERBOSE_VERIFY
+// #define JIT_VERBOSE_VERIFY
 // #define JIT_DEBUG_VERIFY
 
 #ifdef JIT_VERBOSE_VERIFY
@@ -13,7 +13,12 @@
 #endif
 
 // enable printing while emitting
+#define JIT_VERBOSE_EMIT
 // #define JIT_DEBUG_EMIT
+
+#ifdef JIT_VERBOSE_EMIT
+    #define JIT_DEBUG_EMIT
+#endif
 
 typedef struct jit_item_attrs {
     // the known type, only set if we know this is the exact
@@ -45,16 +50,19 @@ typedef struct jit_stack_value {
 
 typedef enum jit_basic_block_state {
     // not processed yet
-    JIT_NONE,
+    JIT_BLOCK_NONE,
 
     // pending for verification
-    JIT_PENDING,
+    JIT_BLOCK_PENDING_VERIFY,
 
     // verified
-    JIT_VERIFIED,
+    JIT_BLOCK_VERIFIED,
 
-    // jitted the block fully
-    JIT_FINISHED,
+    // pending for emit
+    JIT_BLOCK_PENDING_EMIT,
+
+    // the block is emitted
+    JIT_BLOCK_FINISHED,
 } jit_basic_block_state_t;
 
 typedef struct jit_basic_block {
@@ -74,11 +82,8 @@ typedef struct jit_basic_block {
     // is this block verified
     jit_basic_block_state_t state;
 
-    // is this a dummy basic block, it should not be
-    // jitted (used by finally handlers since these
-    // need to be duplicated multiple times depending
-    // on the exit path)
-    bool dummy;
+    // the jit block
+    spidir_block_t block;
 } jit_basic_block_t;
 
 typedef struct jit_method {

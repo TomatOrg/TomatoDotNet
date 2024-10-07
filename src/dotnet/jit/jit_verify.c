@@ -162,8 +162,8 @@ static bool jit_merge_attrs(jit_item_attrs_t* wanted, jit_item_attrs_t* actual) 
 }
 
 static void verify_queue_basic_block(jit_method_t* ctx, jit_basic_block_t* block) {
-    if (block->state != JIT_PENDING) {
-        block->state = JIT_PENDING;
+    if (block->state != JIT_BLOCK_PENDING_VERIFY) {
+        block->state = JIT_BLOCK_PENDING_VERIFY;
 
         long bi = block - ctx->basic_blocks;
         arrpush(ctx->block_queue, bi);
@@ -254,7 +254,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
     // pre-mark as verified, if we jump to ourselves we might need
     // to re-queue the block
-    block->state = JIT_VERIFIED;
+    block->state = JIT_BLOCK_VERIFIED;
 
     // the context
     jit_stack_value_t* stack = NULL;
@@ -959,7 +959,7 @@ static tdn_err_t verify_method(jit_method_t* method) {
     tdn_err_t err = TDN_NO_ERROR;
 
 #ifdef JIT_DEBUG_VERIFY
-    TRACE("%T::%U -- %p", method->method->DeclaringType, method->method->Name, method);
+    TRACE("%T::%U", method->method->DeclaringType, method->method->Name);
 #endif
 
     // start by finding all the basic blocks so we can verify the method
