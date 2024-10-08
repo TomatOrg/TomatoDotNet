@@ -210,6 +210,10 @@ static tdn_err_t jit_merge_basic_block(jit_method_t* method, uint32_t target_pc,
             if (jit_merge_attrs(&wanted->attrs, &actual->attrs)) {
                 verify_queue_basic_block(method, target);
             }
+
+            // remember that we need a phi
+            // for this basic block
+            wanted->need_phi = true;
         }
 
         // merge the locals attributes
@@ -263,10 +267,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
     // figure the this type if this is a non-static method
     if (!method->Attributes.Static) {
-        this_type = method->DeclaringType;
-        if (tdn_type_is_valuetype(this_type)) {
-            CHECK_AND_RETHROW(tdn_get_byref_type(this_type, &this_type));
-        }
+        this_type = jmethod->args[0].type;
     }
 
     // initialize the context
@@ -370,6 +371,12 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                         // to a local variable
                         attrs.readable = true;
                         attrs.writable = true;
+
+                        // if this is a primitive value then we need
+                        // to spill it for ldarga to work
+                        if (!jit_is_struct_like(arg_type)) {
+                            jmethod->args[inst.operand.variable].spill_required = true;
+                        }
                     } else {
                         arg_type = tdn_get_intermediate_type(arg_info->ParameterType);
 
@@ -955,6 +962,41 @@ cleanup:
     return err;
 }
 
+static tdn_err_t prepare_method(jit_method_t* jmethod) {
+    tdn_err_t err = TDN_NO_ERROR;
+    RuntimeMethodBase method = jmethod->method;
+    RuntimeMethodBody body = method->MethodBody;
+
+    // start by finding all the basic blocks so we can verify the method
+    CHECK_AND_RETHROW(jit_find_basic_blocks(jmethod));
+
+    // if we have a this add it to the local
+    if (!method->Attributes.Static) {
+        RuntimeTypeInfo this_type = method->DeclaringType;
+        if (tdn_type_is_valuetype(this_type)) {
+            CHECK_AND_RETHROW(tdn_get_byref_type(this_type, &this_type));
+        }
+        arrpush(jmethod->args, (jit_arg_t){ .type = this_type });
+    }
+
+    // now prepare the rest of the arguments
+    for (int i = 0; i < method->Parameters->Length; i++) {
+        ParameterInfo info = method->Parameters->Elements[i];
+        arrpush(jmethod->args, (jit_arg_t){ .type = info->ParameterType });
+    }
+
+    // and now prepare the locals
+    if (body->LocalVariables != NULL) {
+        for (int i = 0; i < body->LocalVariables->Length; i++) {
+            RuntimeLocalVariableInfo info = body->LocalVariables->Elements[i];
+            arrpush(jmethod->locals, (jit_local_t){ .type = info->LocalType });
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_method(jit_method_t* method) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -962,8 +1004,7 @@ static tdn_err_t verify_method(jit_method_t* method) {
     TRACE("%T::%U", method->method->DeclaringType, method->method->Name);
 #endif
 
-    // start by finding all the basic blocks so we can verify the method
-    CHECK_AND_RETHROW(jit_find_basic_blocks(method));
+    CHECK_AND_RETHROW(prepare_method(method));
 
     // push the first block
     verify_queue_basic_block(method, &method->basic_blocks[0]);

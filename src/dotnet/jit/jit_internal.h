@@ -39,13 +39,21 @@ typedef struct jit_item_attrs {
     size_t this_ptr : 1;
 } jit_item_attrs_t;
 
-
 typedef struct jit_stack_value {
     // the type on the verification stack
     RuntimeTypeInfo type;
 
     // the attributes of this slot
     jit_item_attrs_t attrs;
+
+    // the jit value of this
+    spidir_value_t value;
+
+    // the phi we created for this slot
+    spidir_phi_t phi;
+
+    // do we need a phi for this stack value
+    bool need_phi;
 } jit_stack_value_t;
 
 typedef enum jit_basic_block_state {
@@ -86,6 +94,26 @@ typedef struct jit_basic_block {
     spidir_block_t block;
 } jit_basic_block_t;
 
+typedef struct jit_arg {
+    // the type of the argument
+    RuntimeTypeInfo type;
+
+    // the value, either the spill location if
+    // was spilled or the argument reference itself
+    spidir_value_t value;
+
+    // is this the this type
+    bool spill_required;
+} jit_arg_t;
+
+typedef struct jit_local {
+    // the type of the local
+    RuntimeTypeInfo type;
+
+    // The value of the local
+    spidir_value_t value;
+} jit_local_t;
+
 typedef struct jit_method {
     // the C# method we are handling right now
     RuntimeMethodBase method;
@@ -98,6 +126,12 @@ typedef struct jit_method {
 
     // the method's state
     bool verifying;
+
+    // the locals of the method
+    jit_local_t* locals;
+
+    // the args of the method
+    jit_arg_t* args;
 
     // list of labels, from pc -> basic block index
     // this is used to find jump targets
