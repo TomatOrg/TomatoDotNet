@@ -170,7 +170,7 @@ static void verify_queue_basic_block(jit_method_t* ctx, jit_basic_block_t* block
     }
 }
 
-static tdn_err_t jit_merge_basic_block(jit_method_t* method, uint32_t target_pc, jit_stack_value_t* stack, jit_item_attrs_t* locals) {
+static tdn_err_t verify_merge_basic_block(jit_method_t* method, uint32_t target_pc, jit_stack_value_t* stack, jit_item_attrs_t* locals) {
     tdn_err_t err = TDN_NO_ERROR;
 
     int bi = hmgeti(method->labels, target_pc);
@@ -210,11 +210,9 @@ static tdn_err_t jit_merge_basic_block(jit_method_t* method, uint32_t target_pc,
             if (jit_merge_attrs(&wanted->attrs, &actual->attrs)) {
                 verify_queue_basic_block(method, target);
             }
-
-            // remember that we need a phi
-            // for this basic block
-            wanted->need_phi = true;
         }
+
+        target->needs_phi = true;
 
         // merge the locals attributes
         for (int i = 0; i < arrlen(locals); i++) {
@@ -279,18 +277,18 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
     if (block->initialized) {
         // copy the initial locals state
-        if (body->LocalVariables != NULL) {
-            memcpy(locals, block->locals, sizeof(*locals) * body->LocalVariables->Length);
-        }
+        memcpy(locals, block->locals, sizeof(*locals) * arrlen(locals));
 
         // copy the initial stack
         arrsetlen(stack, arrlen(block->stack));
         memcpy(stack, block->stack, arrlen(block->stack) * sizeof(*block->stack));
     } else {
         // start with no attributes on any local
-        if (body->LocalVariables != NULL) {
-            memset(locals, 0, sizeof(*locals) * body->LocalVariables->Length);
-        }
+        memset(locals, 0, sizeof(*locals) * arrlen(locals));
+
+        // also initialize the locals in the block
+        arrsetlen(block->locals, arrlen(locals));
+        memset(block->locals, 0, sizeof(*block->locals) * arrlen(block->locals));
     }
     block->initialized = true;
 
@@ -825,6 +823,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 EVAL_STACK_PUSH(tInt32);
             } break;
 
+            case CEE_LDC_I8: {
+                EVAL_STACK_PUSH(tInt64);
+            } break;
+
             case CEE_LDSTR: {
                 EVAL_STACK_PUSH(tString);
             } break;
@@ -843,7 +845,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
             case CEE_BR: {
                 // just a branch, merge with the block target
-                CHECK_AND_RETHROW(jit_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals));
+                CHECK_AND_RETHROW(verify_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals));
             } break;
 
             case CEE_BEQ:
@@ -861,10 +863,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 CHECK(verifier_is_binary_comparable(value1.type, value2.type, inst.opcode));
 
                 // merge with the target
-                jit_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals);
+                verify_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals);
 
                 // merge with the next block
-                jit_merge_basic_block(jmethod, pc, stack, locals);
+                verify_merge_basic_block(jmethod, pc, stack, locals);
             } break;
 
             case CEE_BRFALSE:
@@ -881,10 +883,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 );
 
                 // merge with the target
-                jit_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals);
+                verify_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals);
 
                 // merge with the next block
-                jit_merge_basic_block(jmethod, pc, stack, locals);
+                verify_merge_basic_block(jmethod, pc, stack, locals);
             } break;
 
             case CEE_RET: {

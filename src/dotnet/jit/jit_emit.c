@@ -101,8 +101,8 @@ static void jit_queue_block(jit_emit_ctx_t* ctx, spidir_builder_handle_t builder
         block->block = spidir_builder_create_block(builder);
 
         // create the phis for this block
-        for (int i = 0; i < arrlen(block->stack); i++) {
-            if (block->stack[i].need_phi) {
+        if (block->needs_phi) {
+            for (int i = 0; i < arrlen(block->stack); i++) {
                 block->stack[i].value = spidir_builder_build_phi(
                     builder,
                     get_spidir_type(block->stack[i].type),
@@ -118,10 +118,41 @@ static void jit_queue_block(jit_emit_ctx_t* ctx, spidir_builder_handle_t builder
     }
 }
 
-#define EVAL_STACK_PUSH(_type, _value) \
+static tdn_err_t emit_merge_basic_block(jit_emit_ctx_t* ctx, spidir_builder_handle_t builder, uint32_t target_pc, jit_stack_value_t* stack, spidir_block_t* block) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    int bi = hmgeti(ctx->method->labels, target_pc);
+    CHECK(bi != 0);
+    jit_basic_block_t* target = &ctx->method->basic_blocks[ctx->method->labels[bi].value];
+
+    // queue the block, will also handle creating the phi if required
+    jit_queue_block(ctx, builder, target);
+
+    // add all the phi inputs
+    // TODO: in theory we only need to do this on the entries that are at the top
+    //       of the stack to the lowest this block goes
+    if (target->needs_phi) {
+        for (int i = 0; i < arrlen(stack); i++) {
+            spidir_builder_add_phi_input(builder,
+                target->stack[i].phi,
+                stack[i].value);
+        }
+    } else {
+        // copy all of the stack over
+        memcpy(target->stack, stack, arrlen(stack) * sizeof(*stack));
+    }
+
+    // output the block if this entry
+    *block = target->block;
+
+cleanup:
+    return err;
+}
+
+#define EVAL_STACK_PUSH(_type, _value, ...) \
     do { \
         CHECK(arrlen(stack) < body->MaxStackSize); \
-        jit_stack_value_t __item = { .type = tdn_get_intermediate_type(_type), .value = _value }; \
+        jit_stack_value_t __item = { .type = tdn_get_intermediate_type(_type), .value = _value, ## __VA_ARGS__ }; \
         arrpush(stack, __item); \
     } while (0)
 
@@ -132,7 +163,11 @@ static void jit_queue_block(jit_emit_ctx_t* ctx, spidir_builder_handle_t builder
     })
 
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst, spidir_value_t src, size_t size) {
-    // TODO: this
+    ASSERT(!"TODO: jit_emit_memcpy");
+}
+
+static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, size_t size) {
+    ASSERT(!"TODO: jit_emit_bzero");
 }
 
 static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_ctx_t* ctx, jit_basic_block_t* block) {
@@ -152,6 +187,10 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
             CHECK_AND_RETHROW(tdn_get_byref_type(this_type, &this_type));
         }
     }
+
+    // copy the initial stack
+    arrsetlen(stack, arrlen(block->stack));
+    memcpy(stack, block->stack, arrlen(block->stack) * sizeof(*stack));
 
     // move to the block we are emitting
     spidir_builder_set_block(builder, block->block);
@@ -205,6 +244,66 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 }
 
                 EVAL_STACK_PUSH(arg->type, value);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Local variable access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDLOC: {
+                jit_item_attrs_t* local_attrs = &block->locals[inst.operand.variable];
+                jit_local_t* local = &ctx->method->locals[inst.operand.variable];
+
+                // load the local
+                spidir_value_t value;
+                if (jit_is_struct_like(local->type)) {
+                    CHECK_FAIL();
+                } else {
+                    value = spidir_builder_build_load(builder,
+                        get_spidir_size(local->type),
+                        get_spidir_type(local->type),
+                        local->value);
+                }
+
+                // we are going to pass the known type if any
+                EVAL_STACK_PUSH(local->type, value, .attrs.known_type = local_attrs->known_type);
+            } break;
+
+            case CEE_LDLOCA: {
+                jit_item_attrs_t* local_attrs = &block->locals[inst.operand.variable];
+                jit_local_t* local = &ctx->method->locals[inst.operand.variable];
+
+                // load the local with its attributes to the stack, this will fail
+                // if this is already a byref
+                RuntimeTypeInfo local_type = tdn_get_intermediate_type(local->type);
+                CHECK_AND_RETHROW(tdn_get_byref_type(local_type, &local_type));
+
+                // if we know the exact type then also set it
+                RuntimeTypeInfo known_type = NULL;
+                if (local_attrs->known_type != NULL) {
+                    CHECK_AND_RETHROW(tdn_get_byref_type(local_attrs->known_type, &known_type));
+                }
+
+                // we are going to pass the known type if any
+                EVAL_STACK_PUSH(local_type, local->value, .attrs.known_type = known_type);
+            } break;
+
+            case CEE_STLOC: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                // save the known type for later use
+                block->locals[inst.operand.variable].known_type = value.attrs.known_type;
+
+                // and now store it in the local
+                jit_local_t* local = &ctx->method->locals[inst.operand.variable];
+                if (jit_is_struct_like(local->type)) {
+                    jit_emit_memcpy(builder, local->value, value.value, local->type->StackSize);
+                } else {
+                    spidir_builder_build_store(builder,
+                        get_spidir_size(local->type),
+                        value.value,
+                        local->value);
+                }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -308,8 +407,118 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Math
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_ADD:
+            case CEE_SUB:
+            case CEE_MUL:
+            case CEE_DIV:
+            case CEE_REM:
+            case CEE_AND:
+            case CEE_OR:
+            case CEE_XOR:
+            case CEE_DIV_UN:
+            case CEE_REM_UN: {
+                jit_stack_value_t op1 = EVAL_STACK_POP();
+                jit_stack_value_t op2 = EVAL_STACK_POP();
+
+                // check the inputs and get the result type
+                RuntimeTypeInfo result = NULL;
+                if (op1.type == tInt32) {
+                    if (op2.type == tInt32) {
+                        result = tInt32;
+                    } else if (op2.type == tIntPtr) {
+                        result = tIntPtr;
+                    } else {
+                        CHECK_FAIL();
+                    }
+
+                } else if (op1.type == tInt64) {
+                    CHECK(op2.type == tInt64);
+
+                } else if (op1.type == tIntPtr) {
+                    CHECK(op2.type == tInt32 || op2.type == tIntPtr);
+                    result = tIntPtr;
+
+                } else {
+                    CHECK_FAIL();
+                }
+
+                spidir_value_t value;
+                switch (inst.opcode) {
+                    case CEE_ADD: value = spidir_builder_build_iadd(builder, op1.value, op2.value); break;
+                    case CEE_SUB: value = spidir_builder_build_isub(builder, op1.value, op2.value); break;
+                    case CEE_MUL: value = spidir_builder_build_imul(builder, op1.value, op2.value); break;
+                    case CEE_DIV: value = spidir_builder_build_sdiv(builder, op1.value, op2.value); break;
+                    case CEE_REM: value = spidir_builder_build_srem(builder, op1.value, op2.value); break;
+                    case CEE_AND: value = spidir_builder_build_and(builder, op1.value, op2.value); break;
+                    case CEE_OR: value = spidir_builder_build_or(builder, op1.value, op2.value); break;
+                    case CEE_XOR: value = spidir_builder_build_xor(builder, op1.value, op2.value); break;
+                    case CEE_DIV_UN: value = spidir_builder_build_udiv(builder, op1.value, op2.value); break;
+                    case CEE_REM_UN: value = spidir_builder_build_urem(builder, op1.value, op2.value); break;
+                    default: CHECK_FAIL();
+                }
+
+                EVAL_STACK_PUSH(result, value);
+            } break;
+
+            case CEE_CEQ:
+            case CEE_CGT:
+            case CEE_CLT:
+            case CEE_CGT_UN:
+            case CEE_CLT_UN: {
+                jit_stack_value_t value1 = EVAL_STACK_POP();
+                jit_stack_value_t value2 = EVAL_STACK_POP();
+
+                spidir_icmp_kind_t kind;
+                spidir_value_t val1 = value1.value;
+                spidir_value_t val2 = value2.value;
+                switch (inst.opcode) {
+                    case CEE_CEQ: kind = SPIDIR_ICMP_EQ; break;
+                    case CEE_CGT: val1 = value2.value; val2 = value1.value;
+                    case CEE_CLT: kind = SPIDIR_ICMP_SLT; break;
+                    case CEE_CGT_UN: val1 = value2.value; val2 = value1.value;
+                    case CEE_CLT_UN: kind = SPIDIR_ICMP_ULT; break;
+                    default: CHECK_FAIL();
+                }
+                spidir_value_t value = spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, val1, val2);
+
+                EVAL_STACK_PUSH(tInt32, value);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Stack manipulation
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDC_I4: {
+                spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (uint32_t)inst.operand.int32);
+                EVAL_STACK_PUSH(tInt32, value);
+            } break;
+
+            case CEE_LDC_I8: {
+                spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst.operand.int64);
+                EVAL_STACK_PUSH(tInt64, value);
+            } break;
+
+            case CEE_LDNULL: {
+                spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
+                EVAL_STACK_PUSH(NULL, value);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Branching
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_BR: {
+                // resolve the branch target
+                spidir_block_t target;
+                CHECK_AND_RETHROW(emit_merge_basic_block(ctx, builder,
+                    inst.operand.branch_target, stack, &target));
+
+                // and now jump to it
+                spidir_builder_build_branch(builder, target);
+            } break;
 
             case CEE_RET: {
                 RuntimeTypeInfo return_type = tdn_get_intermediate_type(method->ReturnParameter->ParameterType);
@@ -378,6 +587,28 @@ static bool jit_prepare_args(spidir_builder_handle_t builder, jit_method_t* meth
             arg->value = spidir_builder_build_param_ref(builder, i);
         }
     }
+
+    return modified_block;
+}
+
+static bool jit_prepare_locals(spidir_builder_handle_t builder, jit_method_t* method) {
+    bool modified_block = false;
+
+    for (int i = 0; i < arrlen(method->locals); i++) {
+        jit_local_t* arg = &method->locals[i];
+
+        arg->value = spidir_builder_build_stackslot(builder, arg->type->StackSize, arg->type->StackAlignment);
+        if (jit_is_struct_like(arg->type)) {
+            jit_emit_bzero(builder, arg->value, arg->type->StackSize);
+        } else {
+            spidir_builder_build_store(builder,
+                get_spidir_size(arg->type),
+                spidir_builder_build_iconst(builder, get_spidir_type(arg->type), 0),
+                arg->value
+            );
+        }
+    }
+
     return modified_block;
 }
 
@@ -385,8 +616,6 @@ static void jit_emit_spidir_from_il(spidir_builder_handle_t builder, void* _ctx)
     tdn_err_t err = TDN_NO_ERROR;
     jit_emit_ctx_t* ctx = _ctx;
     jit_method_t* jmethod = ctx->method;
-    // RuntimeMethodBase method = jmethod->method;
-    // RuntimeMethodBody body = method->MethodBody;;
 
     // start from the first block
     jit_queue_block(ctx, builder, &jmethod->basic_blocks[0]);
@@ -402,7 +631,10 @@ static void jit_emit_spidir_from_il(spidir_builder_handle_t builder, void* _ctx)
         modified_block = true;
     }
 
-    // TODO: spill all of the args that are taken by-ref
+    // prepare te locals
+    if (jit_prepare_locals(builder, jmethod)) {
+        modified_block = true;
+    }
 
     // did we modify the block? if so we need to allocate a new block
     // to be used for the main block

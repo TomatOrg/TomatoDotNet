@@ -6,7 +6,7 @@
 
 // enable printing while verifying
 // #define JIT_VERBOSE_VERIFY
-// #define JIT_DEBUG_VERIFY
+#define JIT_DEBUG_VERIFY
 
 #ifdef JIT_VERBOSE_VERIFY
     #define JIT_DEBUG_VERIFY
@@ -14,7 +14,7 @@
 
 // enable printing while emitting
 #define JIT_VERBOSE_EMIT
-// #define JIT_DEBUG_EMIT
+#define JIT_DEBUG_EMIT
 
 #ifdef JIT_VERBOSE_EMIT
     #define JIT_DEBUG_EMIT
@@ -51,9 +51,6 @@ typedef struct jit_stack_value {
 
     // the phi we created for this slot
     spidir_phi_t phi;
-
-    // do we need a phi for this stack value
-    bool need_phi;
 } jit_stack_value_t;
 
 typedef enum jit_basic_block_state {
@@ -84,14 +81,17 @@ typedef struct jit_basic_block {
     // the attributes of all the locals at the entry point
     jit_item_attrs_t* locals;
 
-    // is this block initialized
-    bool initialized;
-
     // is this block verified
     jit_basic_block_state_t state;
 
     // the jit block
     spidir_block_t block;
+
+    // is this block initialized
+    bool initialized;
+
+    // do we need a phi on the stack entries
+    bool needs_phi;
 } jit_basic_block_t;
 
 typedef struct jit_arg {
