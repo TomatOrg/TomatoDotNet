@@ -23,7 +23,7 @@ BUILD_DIR	:= $(OUT_DIR)/build
 # General configurations
 #-----------------------------------------------------------------------------------------------------------------------
 
-CFLAGS 		:= -target x86_64-pc-linux-elf
+CFLAGS 		:=
 CFLAGS		+= -Werror -std=gnu17
 CFLAGS 		+= -Wno-unused-label
 CFLAGS 		+= -Wno-address-of-packed-member
@@ -39,9 +39,9 @@ endif
 
 # Check if we need debugging flags
 ifeq ($(DEBUG),1)
-#	CFLAGS	+= -fsanitize=undefined
-#	CFLAGS 	+= -fno-sanitize=alignment
-#	CFLAGS	+= -fsanitize=address
+	CFLAGS	+= -fsanitize=undefined
+	CFLAGS 	+= -fno-sanitize=alignment
+	CFLAGS	+= -fsanitize=address
 	CFLAGS 	+= -fstack-protector-all
 else
 	CFLAGS 	+= -DNDEBUG
