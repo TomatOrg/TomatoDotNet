@@ -724,9 +724,8 @@ cleanup:
 }
 
 static spidir_function_t create_spidir_function(RuntimeMethodBase method, bool external) {
-
     // build the name
-    string_builder_t builder;
+    string_builder_t builder = {};
     string_builder_push_method_signature(&builder, method, true);
     const char* name = string_builder_build(&builder);
 
