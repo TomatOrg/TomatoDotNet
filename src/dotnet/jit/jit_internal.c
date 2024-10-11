@@ -3,6 +3,7 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 
+#include "jit_basic_block.h"
 #include "jit_emit.h"
 
 static struct {
@@ -30,6 +31,8 @@ tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** resu
 
     jmethod->method = method;
 
+    // TODO: maybe we should just have a way to save the optimized spidir
+    //       instead of re-emitting every time...
     if (method->MethodPtr != NULL && method->MethodBody == NULL) {
         // the method is implemented by the runtime/host, so
         // emit it as an extern
@@ -50,12 +53,6 @@ tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** resu
     } else {
         // just a normal method
         jit_queue_emit(jmethod);
-
-        // if it was already jitted before we can skip the verification
-        // and we can skip it
-        if (method->MethodPtr != NULL) {
-            jmethod->verifying = true;
-        }
     }
 
     // we can now put the function -> method lookup for later use

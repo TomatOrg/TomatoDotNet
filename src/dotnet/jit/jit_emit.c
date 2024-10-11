@@ -12,10 +12,61 @@
 #include <util/string.h>
 #include <util/string_builder.h>
 
+#include "jit_builtin.h"
+#include "jit_helpers.h"
+
 /**
  * The module used for jitting
  */
 static spidir_module_handle_t m_jit_module = NULL;
+
+static spidir_function_t m_jit_bzero;
+static spidir_function_t m_jit_memcpy;
+static spidir_function_t m_jit_gc_new;
+
+static struct {
+    spidir_function_t key;
+    void* value;
+}* m_jit_helper_lookup = NULL;
+
+static void create_jit_helpers() {
+    m_jit_bzero = spidir_module_create_extern_function(m_jit_module,
+        "jit_bzero",
+        SPIDIR_TYPE_NONE,
+        2,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR,
+            SPIDIR_TYPE_I64
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_bzero, jit_bzero);
+
+    m_jit_memcpy = spidir_module_create_extern_function(m_jit_module,
+        "jit_memcpy",
+        SPIDIR_TYPE_NONE,
+        3,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR,
+            SPIDIR_TYPE_PTR,
+            SPIDIR_TYPE_I64
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_memcpy, jit_memcpy);
+
+    m_jit_gc_new = spidir_module_create_extern_function(m_jit_module,
+        "jit_gc_new",
+        SPIDIR_TYPE_PTR,
+        1,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_gc_new, jit_gc_new);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The code emitting itself
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct jit_emit_ctx {
     // the method we are working on
@@ -32,6 +83,7 @@ typedef struct jit_emit_ctx {
 } jit_emit_ctx_t;
 
 static spidir_value_type_t get_spidir_type(RuntimeTypeInfo info) {
+    info = tdn_get_intermediate_type(info);
     if (info == tInt32) {
         return SPIDIR_TYPE_I32;
     } else if (info == tInt64 || info == tIntPtr) {
@@ -41,7 +93,7 @@ static spidir_value_type_t get_spidir_type(RuntimeTypeInfo info) {
     }
 }
 
-static spidir_mem_size_t get_spidir_size(RuntimeTypeInfo info) {
+static spidir_mem_size_t get_spidir_mem_size(RuntimeTypeInfo info) {
     switch (info->StackSize) {
         case 1: return SPIDIR_MEM_SIZE_1;
         case 2: return SPIDIR_MEM_SIZE_2;
@@ -74,15 +126,10 @@ static spidir_value_type_t* get_spidir_arg_types(RuntimeMethodBase method) {
         arrpush(types, SPIDIR_TYPE_PTR);
     }
 
+    // and now all of the arguments
     for (int i = 0; i < method->Parameters->Length; i++) {
-        RuntimeTypeInfo type = tdn_get_intermediate_type(method->ReturnParameter->ParameterType);
-        if (type == tInt32) {
-            arrpush(types, SPIDIR_TYPE_I32);
-        } else if (type == tInt64 || type == tIntPtr) {
-            arrpush(types, SPIDIR_TYPE_I64);
-        } else {
-            arrpush(types, SPIDIR_TYPE_PTR);
-        }
+        spidir_value_type_t type = get_spidir_type(method->Parameters->Elements[i]->ParameterType);
+        arrpush(types, type);
     }
 
     // implicit retval pointer
@@ -94,7 +141,7 @@ static spidir_value_type_t* get_spidir_arg_types(RuntimeMethodBase method) {
 }
 
 static void jit_queue_block(jit_emit_ctx_t* ctx, spidir_builder_handle_t builder, jit_basic_block_t* block) {
-    if (block->state == JIT_BLOCK_VERIFIED) {
+    if (block->state <= JIT_BLOCK_VERIFIED) {
         block->state = JIT_BLOCK_PENDING_EMIT;
 
         // create the block
@@ -162,12 +209,42 @@ cleanup:
         arrpop(stack); \
     })
 
-static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst, spidir_value_t src, size_t size) {
-    ASSERT(!"TODO: jit_emit_memcpy");
+static spidir_value_t jit_push_struct(spidir_builder_handle_t builder, RuntimeTypeInfo type) {
+    // TODO: how should we handle this the best
+    return spidir_builder_build_stackslot(builder, type->StackSize, type->StackAlignment);
 }
 
-static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, size_t size) {
-    ASSERT(!"TODO: jit_emit_bzero");
+static void jit_pop_struct(RuntimeTypeInfo type) {
+    if (jit_is_struct_like(type)) {
+        // TODO: remove from the struct stack
+    }
+}
+
+static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst, spidir_value_t src, RuntimeTypeInfo type) {
+    // TODO: replace with a jit builtin-memcpy
+    // TODO: use gc_memcpy in case contains a refernce
+    spidir_builder_build_call(builder,
+        m_jit_memcpy,
+        3,
+        (spidir_value_t[]){
+            dst,
+            src,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, type->StackSize)
+        }
+    );
+}
+
+static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, RuntimeTypeInfo type) {
+    // TODO: replace with a jit builtin-bzero/memset
+    // TODO: use gc_bzero in case contains a refernce
+    spidir_builder_build_call(builder,
+        m_jit_bzero,
+        2,
+        (spidir_value_t[]){
+            dst,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, type->StackSize)
+        }
+    );
 }
 
 static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_ctx_t* ctx, jit_basic_block_t* block) {
@@ -229,7 +306,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 if (arg->spill_required) {
                     // load from the spill
                     value = spidir_builder_build_load(builder,
-                        get_spidir_size(arg->type),
+                        get_spidir_mem_size(arg->type),
                         get_spidir_type(arg->type),
                         arg->value);
 
@@ -257,10 +334,11 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 // load the local
                 spidir_value_t value;
                 if (jit_is_struct_like(local->type)) {
-                    CHECK_FAIL();
+                    value = jit_push_struct(builder, local->type);
+                    jit_emit_memcpy(builder, value, local->value, local->type);
                 } else {
                     value = spidir_builder_build_load(builder,
-                        get_spidir_size(local->type),
+                        get_spidir_mem_size(local->type),
                         get_spidir_type(local->type),
                         local->value);
                 }
@@ -297,19 +375,87 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 // and now store it in the local
                 jit_local_t* local = &ctx->method->locals[inst.operand.variable];
                 if (jit_is_struct_like(local->type)) {
-                    jit_emit_memcpy(builder, local->value, value.value, local->type->StackSize);
+                    jit_pop_struct(local->type);
+                    jit_emit_memcpy(builder, local->value, value.value, local->type);
                 } else {
                     spidir_builder_build_store(builder,
-                        get_spidir_size(local->type),
+                        get_spidir_mem_size(local->type),
                         value.value,
                         local->value);
                 }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Field access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFLD:
+            case CEE_LDFLDA: {
+                bool is_ldflda = inst.opcode == CEE_LDFLDA;
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // load the local with its attributes to the stack, this will fail
+                // if this is already a byref
+                RuntimeTypeInfo type = inst.operand.field->FieldType;
+                spidir_value_t ptr = obj.value;
+
+                // if we have a non-zero offset then add it to the ptr
+                if (inst.operand.field->FieldOffset != 0) {
+                    ptr = spidir_builder_build_ptroff(builder, ptr,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst.operand.field->FieldOffset));
+                }
+
+                if (is_ldflda) {
+                    // just need the address
+                    CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+                    EVAL_STACK_PUSH(type, ptr);
+                } else {
+                    // load the ptr
+                    spidir_value_t value;
+                    if (jit_is_struct_like(type)) {
+                        CHECK_FAIL();
+                    } else {
+                        value = spidir_builder_build_load(builder,
+                            get_spidir_mem_size(type),
+                            get_spidir_type(type),
+                            ptr);
+                    }
+                    EVAL_STACK_PUSH(type, value);
+                }
+            } break;
+
+            case CEE_STFLD: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // load the local with its attributes to the stack, this will fail
+                // if this is already a byref
+                RuntimeTypeInfo type = inst.operand.field->FieldType;
+                spidir_value_t ptr = obj.value;
+
+                // if we have a non-zero offset then add it to the ptr
+                if (inst.operand.field->FieldOffset != 0) {
+                    ptr = spidir_builder_build_ptroff(builder, ptr,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst.operand.field->FieldOffset));
+                }
+
+                // load the ptr
+                if (jit_is_struct_like(type)) {
+                    jit_pop_struct(value.type);
+                    jit_emit_memcpy(builder, ptr, value.value, value.type);
+                } else {
+                    spidir_builder_build_store(builder,
+                        get_spidir_mem_size(type),
+                        ptr, value.value);
+                }
+            } break;
+
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Method calling
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_NEWOBJ:
             case CEE_CALL:
             case CEE_CALLVIRT: {
                 RuntimeMethodBase target = inst.operand.method;
@@ -324,7 +470,27 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
 
                 // pass the this
-                if (method_type != NULL) {
+                if (inst.opcode == CEE_NEWOBJ) {
+                    spidir_value_t obj;
+                    if (jit_is_struct(method_type)) {
+                        obj = jit_push_struct(builder, method_type);
+                    } else {
+                        // TODO: replace with an extern
+                        spidir_value_t type = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)method_type);
+
+                        // call the gc new to create the object
+                        obj = spidir_builder_build_call(builder,
+                            m_jit_gc_new,
+                            1,
+                            (spidir_value_t[]){
+                                type
+                            }
+                        );
+                    }
+
+                    // and add it
+                    arrpush(args, obj);
+                } else if (method_type != NULL) {
                     jit_stack_value_t value = EVAL_STACK_POP();
                     arrpush(args, value.value);
 
@@ -344,7 +510,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
 
                 // pass the implicit return attribute
                 RuntimeTypeInfo return_type = target->ReturnParameter->ParameterType;
-                if (jit_is_struct_like(return_type)) {
+                if (return_type != tVoid && jit_is_struct_like(return_type)) {
                     // TODO: this
                     CHECK_FAIL();
                 }
@@ -401,9 +567,42 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 }
 
                 // push the result
-                if (return_type != tVoid && !jit_is_struct_like(return_type)) {
+                if (inst.opcode == CEE_NEWOBJ) {
+                    EVAL_STACK_PUSH(method_type, args[0]);
+                } else if (return_type != tVoid && !jit_is_struct_like(return_type)) {
                     EVAL_STACK_PUSH(return_type, result);
                 }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Indirect access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDIND_I1:
+            case CEE_LDIND_U1:
+            case CEE_LDIND_I2:
+            case CEE_LDIND_U2:
+            case CEE_LDIND_I4:
+            case CEE_LDIND_U4:
+            case CEE_LDIND_I8:
+            case CEE_LDIND_I:
+            case CEE_LDIND_REF: {
+                jit_stack_value_t address = EVAL_STACK_POP();
+
+                RuntimeTypeInfo type = address.type->ElementType;
+                spidir_value_t value;
+                if (jit_is_struct_like(type)) {
+                    value = jit_push_struct(builder, type);
+                    jit_emit_memcpy(builder, value, address.value, type);
+                } else {
+                    value = spidir_builder_build_load(builder,
+                        get_spidir_mem_size(type),
+                        get_spidir_type(type),
+                        address.value
+                    );
+                }
+
+                EVAL_STACK_PUSH(type, value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -471,6 +670,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 jit_stack_value_t value1 = EVAL_STACK_POP();
                 jit_stack_value_t value2 = EVAL_STACK_POP();
 
+                // now choose the compare kind, we need to swap
+                // for some cases
                 spidir_icmp_kind_t kind;
                 spidir_value_t val1 = value1.value;
                 spidir_value_t val2 = value2.value;
@@ -503,7 +704,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
 
             case CEE_LDNULL: {
                 spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
-                EVAL_STACK_PUSH(NULL, value);
+                EVAL_STACK_PUSH(tObject, value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -520,6 +721,72 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 spidir_builder_build_branch(builder, target);
             } break;
 
+            case CEE_BEQ:
+            case CEE_BGE:
+            case CEE_BGT:
+            case CEE_BLE:
+            case CEE_BLT:
+            case CEE_BNE_UN:
+            case CEE_BGE_UN:
+            case CEE_BGT_UN:
+            case CEE_BLE_UN:
+            case CEE_BLT_UN: {
+                jit_stack_value_t value1 = EVAL_STACK_POP();
+                jit_stack_value_t value2 = EVAL_STACK_POP();
+
+                // now choose the compare kind, we need to swap
+                // for some cases
+                spidir_icmp_kind_t kind;
+                spidir_value_t val1 = value1.value;
+                spidir_value_t val2 = value2.value;
+                switch (inst.opcode) {
+                    case CEE_BEQ: kind = SPIDIR_ICMP_EQ; break;
+                    case CEE_BNE_UN: kind = SPIDIR_ICMP_NE; break;
+
+                    case CEE_BGE: val1 = value2.value; val2 = value1.value;
+                    case CEE_BLE: kind = SPIDIR_ICMP_SLE; break;
+
+                    case CEE_BGT: val1 = value2.value; val2 = value1.value;
+                    case CEE_BLT: kind = SPIDIR_ICMP_SLT; break;
+
+                    case CEE_BGE_UN: val1 = value2.value; val2 = value1.value;
+                    case CEE_BLE_UN: kind = SPIDIR_ICMP_ULE; break;
+
+                    case CEE_BGT_UN: val1 = value2.value; val2 = value1.value;
+                    case CEE_BLT_UN: kind = SPIDIR_ICMP_ULT; break;
+
+                    default: CHECK_FAIL();
+                }
+                spidir_value_t value = spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, val1, val2);
+
+                // resolve target
+                spidir_block_t true_block;
+                CHECK_AND_RETHROW(emit_merge_basic_block(ctx, builder, inst.operand.branch_target, stack, &true_block));
+
+                // resolve next
+                spidir_block_t false_block;
+                CHECK_AND_RETHROW(emit_merge_basic_block(ctx, builder, pc, stack, &false_block));
+
+                // and now emit the brcond
+                spidir_builder_build_brcond(builder, value, true_block, false_block);
+            } break;
+
+            case CEE_BRTRUE:
+            case CEE_BRFALSE: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                // resolve target
+                spidir_block_t true_block;
+                CHECK_AND_RETHROW(emit_merge_basic_block(ctx, builder, inst.operand.branch_target, stack, &true_block));
+
+                // resolve next
+                spidir_block_t false_block;
+                CHECK_AND_RETHROW(emit_merge_basic_block(ctx, builder, pc, stack, &false_block));
+
+                // and now emit the brcond
+                spidir_builder_build_brcond(builder, value.value, true_block, false_block);
+            } break;
+
             case CEE_RET: {
                 RuntimeTypeInfo return_type = tdn_get_intermediate_type(method->ReturnParameter->ParameterType);
 
@@ -530,7 +797,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
 
                     if (jit_is_struct_like(value.type)) {
                         spidir_value_t ret_ptr = spidir_builder_build_param_ref(builder, 0);
-                        jit_emit_memcpy(builder, ret_ptr, value.value, value.type->StackSize);
+                        jit_pop_struct(value.type);
+                        jit_emit_memcpy(builder, ret_ptr, value.value, value.type);
                         spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
 
                     } else {
@@ -578,7 +846,7 @@ static bool jit_prepare_args(spidir_builder_handle_t builder, jit_method_t* meth
 
             // and store the value to it
             spidir_value_t value = spidir_builder_build_param_ref(builder, i);
-            spidir_mem_size_t size = get_spidir_size(arg->type);
+            spidir_mem_size_t size = get_spidir_mem_size(arg->type);
             spidir_builder_build_store(builder, size, arg->value, value);
 
             modified_block = true;
@@ -599,10 +867,10 @@ static bool jit_prepare_locals(spidir_builder_handle_t builder, jit_method_t* me
 
         arg->value = spidir_builder_build_stackslot(builder, arg->type->StackSize, arg->type->StackAlignment);
         if (jit_is_struct_like(arg->type)) {
-            jit_emit_bzero(builder, arg->value, arg->type->StackSize);
+            jit_emit_bzero(builder, arg->value, arg->type);
         } else {
             spidir_builder_build_store(builder,
-                get_spidir_size(arg->type),
+                get_spidir_mem_size(arg->type),
                 spidir_builder_build_iconst(builder, get_spidir_type(arg->type), 0),
                 arg->value
             );
@@ -663,19 +931,31 @@ static tdn_err_t jit_emit_method(jit_method_t* method) {
 #endif
 
     // TODO: implement runtime methods
-    CHECK(method->method->MethodBody != NULL);
-
-    jit_emit_ctx_t ctx = {
-        .method = method,
-        .err = TDN_NO_ERROR
-    };
-    spidir_module_build_function(
-        m_jit_module,
-        method->function,
-        jit_emit_spidir_from_il,
-        &ctx
-    );
-    CHECK_AND_RETHROW(ctx.err);
+    if (method->method->MethodBody == NULL) {
+        jit_builtin_context_t ctx = {
+            .method = method->method,
+            .err = TDN_NO_ERROR
+        };
+        spidir_module_build_function(
+            m_jit_module,
+            method->function,
+            jit_emit_builtin,
+            &ctx
+        );
+        CHECK_AND_RETHROW(ctx.err);
+    } else {
+        jit_emit_ctx_t ctx = {
+            .method = method,
+            .err = TDN_NO_ERROR
+        };
+        spidir_module_build_function(
+            m_jit_module,
+            method->function,
+            jit_emit_spidir_from_il,
+            &ctx
+        );
+        CHECK_AND_RETHROW(ctx.err);
+    }
 
 cleanup:
     return err;
@@ -749,7 +1029,13 @@ static spidir_function_t create_spidir_function(RuntimeMethodBase method, bool e
 void jit_queue_emit(jit_method_t* method) {
     // if required create a new spidir module
     if (m_jit_module == NULL) {
+        TRACE("~~~ JIT START ~~~");
+
+        // create the module
         m_jit_module = spidir_module_create();
+
+        // create all the helpers we might need
+        create_jit_helpers();
     }
 
     // emit it
@@ -763,6 +1049,7 @@ void jit_queue_emit_extern(jit_method_t* method) {
     // if required create a new spidir module
     if (m_jit_module == NULL) {
         m_jit_module = spidir_module_create();
+
     }
 
     // create the function itself
@@ -773,66 +1060,8 @@ void jit_queue_emit_type(RuntimeTypeInfo type) {
     arrpush(m_types_to_emit, type);
 }
 
-tdn_err_t jit_emit(void) {
+static tdn_err_t jit_map_and_relocate(size_t map_size) {
     tdn_err_t err = TDN_NO_ERROR;
-
-    // if there were no methods that need to be jitted don't do anything
-    if (arrlen(m_methods_to_emit) == 0) {
-        goto cleanup;
-    }
-
-    // emit all the methods, do it inline since its simpler
-    for (int i = 0; i < arrlen(m_methods_to_emit); i++) {
-        jit_method_t* method = m_methods_to_emit[i];
-        CHECK_AND_RETHROW(jit_emit_method(method));
-    }
-
-    //
-    // TODO: this is where we need to enable optimizations and such
-    //
-
-    // perform the codegen
-    // TODO: do this in parallel in the future
-    arrsetlen(m_method_jit_results, arrlen(m_methods_to_emit));
-    for (int i = 0; i < arrlen(m_methods_to_emit); i++) {
-        jit_method_t* method = m_methods_to_emit[i];
-
-        // if already was jitted before then don't jit it again
-        if (method->method->MethodPtr != NULL) {
-            continue;
-        }
-
-        spidir_codegen_config_t config = {
-            .verify_ir = true,
-            .verify_regalloc = true
-        };
-        spidir_codegen_status_t status = spidir_codegen_emit_function(
-            m_spidir_machine, &config,
-            m_jit_module,
-            method->function,
-            &m_method_jit_results[i].blob
-        );
-        CHECK(status == SPIDIR_CODEGEN_OK, "Failed to jit: %d", status);
-    }
-
-    // now that all the codegen is finished we can sum up the size
-    // required and map it
-    size_t map_size = 0;
-    for (int i = 0; i < arrlen(m_method_jit_results); i++) {
-        jit_method_result_t* blob = &m_method_jit_results[i];
-
-        // skip if there is no blob
-        if (blob->blob == NULL) {
-            continue;
-        }
-
-        // TODO: generate method thunks
-
-        // align methods to 16 bytes
-        map_size = ALIGN_UP(map_size, 16);
-        blob->offset = map_size;
-        map_size += spidir_codegen_blob_get_code_size(blob->blob);
-    }
 
     // map it as read-write
     void* map = tdn_host_map(map_size);
@@ -875,8 +1104,19 @@ tdn_err_t jit_emit(void) {
         const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(blob->blob);
         for (size_t j = 0; j < reloc_count; j++) {
             uint64_t P = (uint64_t)(method->method->MethodPtr + relocs[j].offset);
-            uint64_t F = (uint64_t)(jit_get_method_from_function(relocs[j].target)->method->MethodPtr);
             int64_t A = relocs[j].addend;
+
+            // resolve the target, will either be a builtin or a
+            // method pointer we jitted
+            uint64_t F;
+            jit_method_t* target = jit_get_method_from_function(relocs[j].target);
+            if (method == NULL) {
+                void* ptr = hmget(m_jit_helper_lookup, relocs[j].target);
+                CHECK(ptr != NULL);
+                F = (uint64_t)ptr;
+            } else {
+                F = (uint64_t)(target->method->MethodPtr);
+            }
 
             switch (relocs[j].kind) {
                 case SPIDIR_RELOC_X64_PC32: {
@@ -899,6 +1139,77 @@ tdn_err_t jit_emit(void) {
 
     // now remap it as read-execute
     tdn_host_map_rx(map, map_size);
+
+cleanup:
+    return err;
+}
+
+tdn_err_t jit_emit(void) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // if there were no methods that need to be jitted don't do anything
+    if (arrlen(m_methods_to_emit) == 0) {
+        goto cleanup;
+    }
+
+    // emit all the methods, do it inline since its simpler
+    for (int i = 0; i < arrlen(m_methods_to_emit); i++) {
+        jit_method_t* method = m_methods_to_emit[i];
+        CHECK_AND_RETHROW(jit_emit_method(method));
+    }
+
+    //
+    // TODO: this is where we need to enable optimizations and such
+    //
+
+    // perform the codegen
+    // TODO: do this in parallel in the future
+    arrsetlen(m_method_jit_results, arrlen(m_methods_to_emit));
+    memset(m_method_jit_results, 0, arrlen(m_method_jit_results) * sizeof(*m_method_jit_results));
+
+    for (int i = 0; i < arrlen(m_methods_to_emit); i++) {
+        jit_method_t* method = m_methods_to_emit[i];
+
+        // if already was jitted before then don't jit it again
+        if (method->method->MethodPtr != NULL) {
+            continue;
+        }
+
+        spidir_codegen_config_t config = {
+            .verify_ir = true,
+            .verify_regalloc = true
+        };
+        spidir_codegen_status_t status = spidir_codegen_emit_function(
+            m_spidir_machine, &config,
+            m_jit_module,
+            method->function,
+            &m_method_jit_results[i].blob
+        );
+        CHECK(status == SPIDIR_CODEGEN_OK, "Failed to jit: %d", status);
+    }
+
+    // now that all the codegen is finished we can sum up the size
+    // required and map it
+    size_t map_size = 0;
+    for (int i = 0; i < arrlen(m_method_jit_results); i++) {
+        jit_method_result_t* blob = &m_method_jit_results[i];
+
+        // skip if there is no blob
+        if (blob->blob == NULL) {
+            continue;
+        }
+
+        // TODO: generate method thunks
+
+        // align methods to 16 bytes
+        map_size = ALIGN_UP(map_size, 16);
+        blob->offset = map_size;
+        map_size += spidir_codegen_blob_get_code_size(blob->blob);
+    }
+
+    if (map_size > 0) {
+        CHECK_AND_RETHROW(jit_map_and_relocate(map_size));
+    }
 
     // now fill up all the vtables
     for (int i = 0; i < arrlen(m_types_to_emit); i++) {
@@ -930,9 +1241,11 @@ cleanup:
     arrfree(m_method_jit_results);
     arrfree(m_methods_to_emit);
     arrfree(m_types_to_emit);
+    hmfree(m_jit_helper_lookup);
 
     // cleanup the module
     if (m_jit_module != NULL) {
+        TRACE("~~~ JIT END ~~~");
         spidir_module_destroy(m_jit_module);
         m_jit_module = NULL;
     }
