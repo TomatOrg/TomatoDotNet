@@ -23,6 +23,7 @@ static spidir_module_handle_t m_jit_module = NULL;
 static spidir_function_t m_jit_bzero;
 static spidir_function_t m_jit_memcpy;
 static spidir_function_t m_jit_gc_new;
+static spidir_function_t m_jit_throw;
 
 static struct {
     spidir_function_t key;
@@ -62,6 +63,17 @@ static void create_jit_helpers() {
         }
     );
     hmput(m_jit_helper_lookup, m_jit_gc_new, jit_gc_new);
+
+    m_jit_throw = spidir_module_create_extern_function(m_jit_module,
+        "jit_throw",
+        SPIDIR_TYPE_NONE,
+        2,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR,
+            SPIDIR_TYPE_I32,
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_throw, jit_throw);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -133,7 +145,8 @@ static spidir_value_type_t* get_spidir_arg_types(RuntimeMethodBase method) {
     }
 
     // implicit retval pointer
-    if (jit_is_struct_like(method->ReturnParameter->ParameterType)) {
+    RuntimeTypeInfo ret_type = method->ReturnParameter->ParameterType;
+    if (ret_type != tVoid && !ret_type->IsByRef && jit_is_struct_like(ret_type)) {
         arrpush(types, SPIDIR_TYPE_PTR);
     }
 
@@ -196,10 +209,18 @@ cleanup:
     return err;
 }
 
+static RuntimeTypeInfo emit_get_stack_type(RuntimeTypeInfo type) {
+    type = tdn_get_intermediate_type(type);
+    if (type == tIntPtr) {
+        type = tInt64;
+    }
+    return type;
+}
+
 #define EVAL_STACK_PUSH(_type, _value, ...) \
     do { \
         CHECK(arrlen(stack) < body->MaxStackSize); \
-        jit_stack_value_t __item = { .type = tdn_get_intermediate_type(_type), .value = _value, ## __VA_ARGS__ }; \
+        jit_stack_value_t __item = { .type = emit_get_stack_type(_type), .value = _value, ## __VA_ARGS__ }; \
         arrpush(stack, __item); \
     } while (0)
 
@@ -290,6 +311,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
 #endif
 
         tdn_normalize_inst(&inst);
+        uint32_t current_pc = pc;
         pc += inst.length;
 
         switch (inst.opcode) {
@@ -446,7 +468,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 } else {
                     spidir_builder_build_store(builder,
                         get_spidir_mem_size(type),
-                        ptr, value.value);
+                        value.value, ptr);
                 }
             } break;
 
@@ -469,6 +491,17 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 jit_method_t* target_method;
                 CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
 
+                // preallocate enough
+                arrsetcap(args, target->Parameters->Length + 2);
+
+                // first pop all of the arguments, they are in reversed
+                // order on the stack, so we will need to insert at 0
+                // each time
+                for (int i = 0 ; i < target->Parameters->Length; i++) {
+                    jit_stack_value_t value = EVAL_STACK_POP();
+                    arrins(args, 0, value.value);
+                }
+
                 // pass the this
                 if (inst.opcode == CEE_NEWOBJ) {
                     spidir_value_t obj;
@@ -489,10 +522,11 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                     }
 
                     // and add it
-                    arrpush(args, obj);
+                    arrins(args, 0, obj);
+
                 } else if (method_type != NULL) {
                     jit_stack_value_t value = EVAL_STACK_POP();
-                    arrpush(args, value.value);
+                    arrins(args, 0, value.value);
 
                     // if this is a virt call and we know the exact
                     // type this is, then just use that method directly
@@ -502,17 +536,13 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                     }
                 }
 
-                // pass all the other args
-                for (int i = 0 ; i < target->Parameters->Length; i++) {
-                    jit_stack_value_t value = EVAL_STACK_POP();
-                    arrpush(args, value.value);
-                }
-
-                // pass the implicit return attribute
+                // pass the implicit return attribute, in here we push
+                // since it is passed at the end
                 RuntimeTypeInfo return_type = target->ReturnParameter->ParameterType;
+                spidir_value_t struct_return_value = SPIDIR_VALUE_INVALID;
                 if (return_type != tVoid && jit_is_struct_like(return_type)) {
-                    // TODO: this
-                    CHECK_FAIL();
+                    struct_return_value = jit_push_struct(builder, return_type);
+                    arrpush(args, struct_return_value);
                 }
 
                 // now perform the call
@@ -569,8 +599,12 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 // push the result
                 if (inst.opcode == CEE_NEWOBJ) {
                     EVAL_STACK_PUSH(method_type, args[0]);
-                } else if (return_type != tVoid && !jit_is_struct_like(return_type)) {
-                    EVAL_STACK_PUSH(return_type, result);
+                } else if (return_type != tVoid) {
+                    if (jit_is_struct_like(return_type)) {
+                        EVAL_STACK_PUSH(return_type, struct_return_value);
+                    } else {
+                        EVAL_STACK_PUSH(return_type, result);
+                    }
                 }
             } break;
 
@@ -627,18 +661,13 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 if (op1.type == tInt32) {
                     if (op2.type == tInt32) {
                         result = tInt32;
-                    } else if (op2.type == tIntPtr) {
-                        result = tIntPtr;
                     } else {
                         CHECK_FAIL();
                     }
 
                 } else if (op1.type == tInt64) {
                     CHECK(op2.type == tInt64);
-
-                } else if (op1.type == tIntPtr) {
-                    CHECK(op2.type == tInt32 || op2.type == tIntPtr);
-                    result = tIntPtr;
+                    result = tInt64;
 
                 } else {
                     CHECK_FAIL();
@@ -688,6 +717,68 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
                 EVAL_STACK_PUSH(tInt32, value);
             } break;
 
+            case CEE_CONV_I8:
+            case CEE_CONV_U8:
+            case CEE_CONV_I:
+            case CEE_CONV_U: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                bool is_signed = inst.opcode == CEE_CONV_I8 || inst.opcode == CEE_CONV_I;
+
+                spidir_value_t val = value.value;
+
+                // int32 -> [u]int64
+                if (value.type == tInt32) {
+                    val = spidir_builder_build_iext(builder, val);
+                    if (is_signed) {
+                        val = spidir_builder_build_sfill(builder, 32, val);
+                    } else {
+                        val = spidir_builder_build_and(builder, val,
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFF));
+                    }
+                }
+
+                EVAL_STACK_PUSH(tInt64, val);
+            } break;
+
+            case CEE_CONV_I4:
+            case CEE_CONV_U4: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                spidir_value_t val = value.value;
+                if (value.type == tInt64) {
+                    val = spidir_builder_build_itrunc(builder, val);
+                }
+
+                EVAL_STACK_PUSH(tInt32, val);
+            } break;
+
+            case CEE_CONV_I1:
+            case CEE_CONV_I2:
+            case CEE_CONV_U1:
+            case CEE_CONV_U2: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                bool is_signed = inst.opcode == CEE_CONV_I2 || inst.opcode == CEE_CONV_I1;
+
+                spidir_value_t val = value.value;
+
+                // if its an i64 then truncate it first to an i32
+                if (value.type == tInt64) {
+                    val = spidir_builder_build_itrunc(builder, val);
+                }
+
+                // truncate it, by sign extension or by zero extension
+                if (is_signed) {
+                    uint8_t width = (inst.opcode == CEE_CONV_I1) ? 8 : 16;
+                    val = spidir_builder_build_sfill(builder, width, val);
+                } else {
+                    uint64_t width = (inst.opcode == CEE_CONV_U1) ? 0xFF : 0xFFFF;
+                    val = spidir_builder_build_and(builder, val,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, width));
+                }
+
+                EVAL_STACK_PUSH(tInt32, val);
+            } break;
+
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Stack manipulation
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -705,6 +796,13 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
             case CEE_LDNULL: {
                 spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
                 EVAL_STACK_PUSH(tObject, value);
+            } break;
+
+            case CEE_LDSTR: {
+                spidir_value_t value = spidir_builder_build_iconst(builder,
+                    SPIDIR_TYPE_PTR,
+                    (uint64_t)inst.operand.string);
+                EVAL_STACK_PUSH(tString, value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -808,6 +906,29 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Exception handling
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_THROW: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                // we give the current pc to the throw code so even if the jit
+                // decides to merge multiple throws into a single call we will
+                // still know where in the managed code it came from
+                spidir_builder_build_call(builder,
+                    m_jit_throw,
+                    2, (spidir_value_t[]){
+                        value.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, current_pc)
+                    });
+
+                // and terminate with an unreachable
+                spidir_builder_build_unreachable(builder);
+
+                arrsetlen(stack, 0);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -824,6 +945,12 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_emit_
 #endif
     }
 
+    // we have a fallthrough, handle it
+    if (inst.control_flow == TDN_IL_CF_NEXT) {
+        spidir_block_t new_block;
+        CHECK_AND_RETHROW(emit_merge_basic_block(ctx, builder, pc, stack, &new_block));
+        spidir_builder_build_branch(builder, new_block);
+    }
 
 cleanup:
     arrfree(stack);
@@ -1110,7 +1237,7 @@ static tdn_err_t jit_map_and_relocate(size_t map_size) {
             // method pointer we jitted
             uint64_t F;
             jit_method_t* target = jit_get_method_from_function(relocs[j].target);
-            if (method == NULL) {
+            if (target == NULL) {
                 void* ptr = hmget(m_jit_helper_lookup, relocs[j].target);
                 CHECK(ptr != NULL);
                 F = (uint64_t)ptr;

@@ -578,6 +578,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeMethodBase target = inst.operand.method;
                 RuntimeTypeInfo method_type = NULL;
 
+                // check this doesn't call anything unsafe
+                if (target->DeclaringType == tUnsafe || target->DeclaringType == tMemoryMarshal) {
+                    CHECK(method->Module->Assembly->AllowUnsafe);
+                }
+
                 if (!target->Attributes.Static) {
                     method_type = target->DeclaringType;
                 }
@@ -704,6 +709,89 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Array handling
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_NEWARR: {
+                jit_stack_value_t num_elems = EVAL_STACK_POP();
+                CHECK(
+                    num_elems.type == tInt32 ||
+                    num_elems.type == tIntPtr
+                );
+
+                RuntimeTypeInfo type = inst.operand.type;
+
+                // make sure it can be on the heap
+                CHECK(!type->IsByRefStruct);
+
+                // get the array type
+                CHECK_AND_RETHROW(tdn_get_array_type(type, &type));
+
+                EVAL_STACK_PUSH(type);
+            } break;
+
+            case CEE_LDELEMA:
+            case CEE_LDELEM:
+            case CEE_LDELEM_REF: {
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                CHECK(array.type->IsArray);
+
+                CHECK(
+                    index.type == tInt32 ||
+                    index.type == tIntPtr
+                );
+
+                RuntimeTypeInfo element_type = tdn_get_intermediate_type(array.type->ElementType);
+                if (inst.opcode == CEE_LDELEMA) {
+                    jit_item_attrs_t attrs = {
+                        .nonlocal_ref = true,
+                        .readable = true,
+                        .writable = true
+                    };
+
+                    RuntimeTypeInfo ref_type;
+                    CHECK_AND_RETHROW(tdn_get_byref_type(element_type, &ref_type));
+
+                    EVAL_STACK_PUSH(ref_type, attrs);
+                } else {
+                    EVAL_STACK_PUSH(element_type);
+                }
+            } break;
+
+            case CEE_STELEM:
+            case CEE_STELEM_REF: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                // make sure the declared value matches
+                RuntimeTypeInfo element_type = inst.operand.type;
+                if (element_type == NULL) {
+                    element_type = value.type;
+                } else {
+                    // make sure that the type matches the declaration
+                    CHECK(tdn_get_intermediate_type(element_type) == value.type);
+                }
+
+                // make sure this is an array type
+                CHECK(array.type->IsArray);
+
+                // make sure we can perform the assignment
+                CHECK(tdn_type_array_element_compatible_with(
+                    element_type,
+                    array.type->ElementType
+                ), "%T array-element-compatible-with %T", element_type, array.type->ElementType);
+
+                // validate the index
+                CHECK(
+                    index.type == tInt32 ||
+                    index.type == tIntPtr
+                );
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Indirect access
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -763,6 +851,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 } else if (op1.type == tInt64) {
                     CHECK(op2.type == tInt64);
+                    result = tInt64;
 
                 } else if (op1.type == tIntPtr) {
                     CHECK(op2.type == tInt32 || op2.type == tIntPtr);
@@ -813,6 +902,36 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 } else {
                     EVAL_STACK_PUSH(tInt32);
                 }
+            } break;
+
+            case CEE_NEG: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
+                EVAL_STACK_PUSH(value.type);
+            } break;
+
+            case CEE_SHL:
+            case CEE_SHR:
+            case CEE_SHR_UN: {
+                jit_stack_value_t shift_amount = EVAL_STACK_POP();
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
+
+                CHECK(
+                    shift_amount.type == tInt32 ||
+                    shift_amount.type == tIntPtr
+                );
+
+                EVAL_STACK_PUSH(value.type);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -937,7 +1056,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             // nothing to do
             case CEE_NOP: break;
 
-            default: CHECK_FAIL("Unknown opcode");
+            default: CHECK_FAIL("Unknown opcode `%s`", tdn_get_opcode_name(inst.opcode));
         }
 
         // if this was not a meta instruction (prefix) then make sure we have
@@ -949,6 +1068,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 #ifdef JIT_VERBOSE_VERIFY
         indent = tdn_disasm_print_end(body, pc, indent);
 #endif
+    }
+
+    // we have a fallthrough
+    if (inst.control_flow == TDN_IL_CF_NEXT) {
+        CHECK_AND_RETHROW(verify_merge_basic_block(jmethod, pc, stack, locals));
     }
 
     // last must be a valid instruction

@@ -266,10 +266,10 @@ int main(int argc, char* argv[]) {
     double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
     TRACE("Jit took %f seconds", time_taken);
 
-    // int (*entry_point)() = tests->EntryPoint->MethodPtr;
-    // int tests_output = entry_point();
-    // TRACE("Tests = %d", tests_output);
-    // ASSERT(tests_output == 0);
+    int (*entry_point)() = tests->EntryPoint->MethodPtr;
+    int tests_output = entry_point();
+    TRACE("Tests = %d", tests_output);
+    ASSERT(tests_output == 0);
 
 cleanup:
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : EXIT_SUCCESS;
