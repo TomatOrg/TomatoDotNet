@@ -1604,6 +1604,9 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
             ParameterInfo info = param->sequence == 0 ? base->ReturnParameter : base->Parameters->Elements[param->sequence - 1];
             info->Attributes = (ParameterAttributes){ .Attributes = param->flags };
             CHECK_AND_RETHROW(tdn_create_string_from_cstr(param->name, &info->Name));
+
+            // also store in the global array
+            assembly->Params->Elements[method_def->param_list.index - 1 + pi] = info;
         }
 
         // validate the signatures of ctor and cctor
@@ -1876,7 +1879,9 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
                 } break;
 
                 case METADATA_PARAM: {
-                    // we get the required information from the in attribute
+                    CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
+                    ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
+                    parent_type->IsReadonly = true;
                 } break;
 
                 default:
@@ -1976,6 +1981,8 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // load all the generics type information
     CHECK_AND_RETHROW(assembly_load_generics(assembly));
     CHECK_AND_RETHROW(assembly_load_generic_constraints(assembly));
+
+    assembly->Params = GC_NEW_ARRAY(ParameterInfo, assembly->Metadata->params_count);
 
     push_type_queue();
     pushed_type_queue = true;

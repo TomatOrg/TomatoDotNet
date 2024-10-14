@@ -242,48 +242,6 @@ bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     return false;
 }
 
-bool tdn_type_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
-    RuntimeTypeInfo T = tdn_get_verification_type(Q);
-    RuntimeTypeInfo U = tdn_get_verification_type(R);
-
-    // 1.
-    if (T == U) {
-        return true;
-    }
-
-    // 2.
-    // TODO: is this even correct?
-    if (T->BaseType != NULL && tdn_type_verifier_assignable_to(T->BaseType, U)) {
-        return true;
-    }
-
-    // 3.
-    if (tdn_type_assignable_to(T, U)) {
-        return true;
-    }
-
-    // TODO: 4 need controlled-mutability
-
-    // TODO: 5 need controlled-mutability
-
-    // TODO: 6 need boxed
-
-    // 7. T is boxed V and U is an interface directly implemented by V.
-    // TODO: handle boxed information
-    if (U->Attributes.Interface && (T->JitVTable->InterfaceProduct % U->TypeId) == 0) {
-        return true;
-    }
-
-    // TODO: 8 need boxed
-
-    // 9.
-    if (T == NULL && tdn_type_is_referencetype(U)) {
-        return true;
-    }
-
-    return false;
-}
-
 static bool is_instance(RuntimeTypeInfo has, RuntimeTypeInfo want) {
     while (has != want) {
         if (has == tObject) {

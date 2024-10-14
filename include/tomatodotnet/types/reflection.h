@@ -280,6 +280,7 @@ struct RuntimeAssembly {
     RuntimeFieldInfo_Array Fields;
 
     RuntimeTypeInfo_Array GenericParams;
+    ParameterInfo_Array Params;
 
     // the metadata of this assembly
     dotnet_file_t* Metadata;

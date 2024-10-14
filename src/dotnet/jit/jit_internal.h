@@ -25,11 +25,8 @@ typedef struct jit_item_attrs {
     // type given, for de-virt
     RuntimeTypeInfo known_type;
 
-    // this is a readable reference
-    size_t readable : 1;
-
-    // this is a writable reference
-    size_t writable : 1;
+    // is this a readonly reference
+    size_t readonly : 1;
 
     // this is a non-local reference
     // also applies for ref-structs

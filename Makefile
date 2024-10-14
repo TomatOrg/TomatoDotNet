@@ -24,7 +24,7 @@ BUILD_DIR	:= $(OUT_DIR)/build
 #-----------------------------------------------------------------------------------------------------------------------
 
 CFLAGS 		:=
-CFLAGS		+= -Werror -std=gnu17
+CFLAGS		+= -std=gnu17
 CFLAGS 		+= -Wno-unused-label
 CFLAGS 		+= -Wno-address-of-packed-member
 CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
@@ -45,6 +45,7 @@ ifeq ($(DEBUG),1)
 	CFLAGS 	+= -fstack-protector-all
 else
 	CFLAGS 	+= -DNDEBUG
+	CFLAGS  += -Werror
 endif
 
 CFLAGS		+= -fms-extensions -Wno-microsoft-anon-tag

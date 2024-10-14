@@ -141,14 +141,8 @@ static bool jit_merge_attrs(jit_item_attrs_t* wanted, jit_item_attrs_t* actual) 
     }
 
     // wanted readable, got non-readable, re-verify
-    if (wanted->readable && !actual->readable) {
-        wanted->readable = false;
-        modified = true;
-    }
-
-    // same for writable
-    if (wanted->writable && !actual->writable) {
-        wanted->writable = false;
+    if (wanted->readonly && !actual->readonly) {
+        wanted->readonly = false;
         modified = true;
     }
 
@@ -232,8 +226,31 @@ cleanup:
 // Perform verification on a single basic block
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static bool verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
+    RuntimeTypeInfo T = tdn_get_verification_type(Q);
+    RuntimeTypeInfo U = tdn_get_verification_type(R);
+
+    // 9. T is null type, and U is reference type, we perform
+    //    this first to make sure that no null deref happens from
+    //    the null type
+    if (T == NULL) {
+        if (tdn_type_is_referencetype(U)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    return tdn_type_assignable_to(T, U);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Perform verification on a single basic block
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 typedef enum il_prefix {
     IL_PREFIX_CONSTRAINED = BIT0,
+    IL_PREFIX_VOLATILE = BIT1,
 } il_prefix_t;
 
 #define EVAL_STACK_PUSH(...) \
@@ -248,6 +265,45 @@ typedef enum il_prefix {
         CHECK(arrlen(stack) > 0); \
         arrpop(stack); \
     })
+
+#define GET_ARG_TYPE(_index) \
+    ({ \
+        typeof(_index) __index = _index; \
+        RuntimeTypeInfo __arg_type; \
+        if (this_type != NULL) { \
+            if (__index == 0) { \
+                __arg_type = this_type; \
+            } else { \
+                __index--; \
+                CHECK(__index < method->Parameters->Length); \
+                __arg_type = method->Parameters->Elements[__index]->ParameterType; \
+            } \
+        } else { \
+            CHECK(__index < method->Parameters->Length); \
+            __arg_type = method->Parameters->Elements[__index]->ParameterType; \
+        } \
+        __arg_type; \
+    })
+
+#define GET_ARG_PARAMETER(_index) \
+    ({ \
+        typeof(_index) __index = _index; \
+        ParameterInfo __arg; \
+        if (this_type != NULL) { \
+            if (__index == 0) { \
+                __arg = NULL; \
+            } else { \
+                __index--; \
+                CHECK(__index < method->Parameters->Length); \
+                __arg = method->Parameters->Elements[__index]; \
+            } \
+        } else { \
+            CHECK(__index < method->Parameters->Length); \
+            __arg = method->Parameters->Elements[__index]; \
+        } \
+        __arg; \
+    })
+
 
 static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* block) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -325,613 +381,97 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
         switch (inst.opcode) {
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Argument access
+            // Arguments
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-            case CEE_LDARG:
-            case CEE_LDARGA: {
+            case CEE_STARG: {
                 int index = inst.operand.variable;
-                bool is_ldarga = inst.opcode == CEE_LDARGA;
+                RuntimeTypeInfo arg_type = GET_ARG_TYPE(index);
 
-                jit_item_attrs_t attrs = {};
-                RuntimeTypeInfo arg_type = NULL;
+                // verify the type
+                jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(verifier_assignable_to(value.type, arg_type));
 
-                if (this_type != NULL && index == 0) {
-                    // we don't allow to load this as a refernece
-                    CHECK(!is_ldarga);
-
-                    // this is the this type
-                    attrs.this_ptr = true;
-
-                    if (this_type->IsByRef) {
-                        attrs.readable = true;
-
-                        // if this is a readonly method then we have
-                        // a readonly this
-                        if (!method->IsReadOnly) {
-                            attrs.writable = true;
-                        }
-                    }
-
-                    arg_type = this_type;
-                } else {
-                    if (this_type != NULL) {
-                        index--;
-                    }
-                    CHECK(index < method->Parameters->Length);
-                    ParameterInfo arg_info = method->Parameters->Elements[index];
-                    if (is_ldarga) {
-                        // get the by-ref of the field
-                        CHECK_AND_RETHROW(tdn_get_byref_type(arg_info->ParameterType, &arg_type));
-                        arg_type = tdn_get_intermediate_type(arg_type);
-
-                        // always readable and writable since its a reference
-                        // to a local variable
-                        attrs.readable = true;
-                        attrs.writable = true;
-
-                        // if this is a primitive value then we need
-                        // to spill it for ldarga to work
-                        if (!jit_is_struct_like(arg_type)) {
-                            jmethod->args[inst.operand.variable].spill_required = true;
-                        }
-                    } else {
-                        arg_type = tdn_get_intermediate_type(arg_info->ParameterType);
-
-                        if (arg_info->Attributes.In) {
-                            // if this is a in make sure we have a byref
-                            // and set it as readable only
-                            CHECK(arg_type->IsByRef);
-                            attrs.readable = true;
-
-                        } else if (arg_info->Attributes.Out) {
-                            // if this is a out make sure we have a byref
-                            // and set it writable
-                            CHECK(arg_type->IsByRef);
-                            attrs.writable = true;
-
-                        } else if (arg_type->IsByRef) {
-                            // otherwise a normal ref
-                            attrs.readable = true;
-                            attrs.writable = true;
-                        }
-                    }
+                // don't allow to modify this
+                if (this_type != NULL) {
+                    CHECK(index != 0);
                 }
 
-                // this is always a non-local since it comes from the outside
-                if (arg_type->IsByRef || arg_type->IsByRefStruct) {
+                // for simplicity, don't allow to
+                // store to a byref parameter
+                CHECK(!arg_type->IsByRef);
+            }  break;
+
+            case CEE_LDARG: {
+                int index = inst.operand.variable;
+                RuntimeTypeInfo arg_type = GET_ARG_TYPE(index);
+                ParameterInfo arg_param = GET_ARG_PARAMETER(index);
+                arg_type = tdn_get_intermediate_type(arg_type);
+
+                // figure the attributes for the
+                // argument, if it has a
+                jit_item_attrs_t attrs = {};
+
+                // if this is a ref argument then it is nonlocal
+                if (arg_type->IsByRef) {
                     attrs.nonlocal_ref = true;
+
+                    // check if the reference is readonly
+                    if (arg_param != NULL) {
+                        attrs.readonly = arg_param->IsReadonly;
+                    } else {
+                        attrs.readonly = method->DeclaringType->IsReadOnly;
+                    }
                 }
 
                 EVAL_STACK_PUSH(arg_type, attrs);
-            } break;
+            }  break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Local variable access
+            // Locals
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
             case CEE_STLOC: {
-                CHECK(inst.operand.variable < body->LocalVariables->Length);
-                RuntimeLocalVariableInfo info = body->LocalVariables->Elements[inst.operand.variable];
+                int index = inst.operand.variable;
+                CHECK(index < arrlen(locals));
+                RuntimeLocalVariableInfo local = body->LocalVariables->Elements[index];
+                jit_item_attrs_t attrs = locals[index];
+
+                // verify the type
                 jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(verifier_assignable_to(value.type, local->LocalType));
 
-                // make sure we can assign them
-                RuntimeTypeInfo local_type = tdn_get_intermediate_type(info->LocalType);
-                CHECK(verifier_is_assignable(value.type, local_type),
-                    "%T -> %T", value.type, local_type);
-
-                // remember the known type
-                locals[inst.operand.variable].known_type = value.attrs.known_type;
-
-                // store the new attributes if this is a byref or byrefstruct
-                if (local_type->IsByRef || local_type->IsByRefStruct) {
-                    locals[inst.operand.variable].nonlocal_ref = value.attrs.nonlocal_ref;
-                    locals[inst.operand.variable].readable = value.attrs.readable;
-                    locals[inst.operand.variable].writable = value.attrs.writable;
-                }
+                // set the new local attributes
+                locals[index] = attrs;
             } break;
 
             case CEE_LDLOC: {
-                CHECK(inst.operand.variable < body->LocalVariables->Length);
-                RuntimeLocalVariableInfo info = body->LocalVariables->Elements[inst.operand.variable];
+                int index = inst.operand.variable;
+                CHECK(index < arrlen(locals));
+                RuntimeLocalVariableInfo local = body->LocalVariables->Elements[index];
+                jit_item_attrs_t attrs = locals[index];
 
-                // load the local with its attributes to the stack
-                RuntimeTypeInfo local_type = tdn_get_intermediate_type(info->LocalType);
-                EVAL_STACK_PUSH(.type = local_type, .attrs = locals[inst.operand.variable]);
+                RuntimeTypeInfo type = tdn_get_intermediate_type(local->LocalType);
+                EVAL_STACK_PUSH(type, attrs);
             } break;
 
             case CEE_LDLOCA: {
-                CHECK(inst.operand.variable < body->LocalVariables->Length);
-                RuntimeLocalVariableInfo info = body->LocalVariables->Elements[inst.operand.variable];
-
-                // load the local with its attributes to the stack, this will fail
-                // if this is already a byref
-                RuntimeTypeInfo local_type = tdn_get_intermediate_type(info->LocalType);
-                CHECK_AND_RETHROW(tdn_get_byref_type(local_type, &local_type));
-
-                // if we know the exact type then also set it
-                RuntimeTypeInfo known_type = NULL;
-                if (locals[inst.operand.variable].known_type != NULL) {
-                    CHECK_AND_RETHROW(tdn_get_byref_type(locals[inst.operand.variable].known_type, &known_type));
-                }
-
-                // the reference is readable and writable sinec it points to a local
-                // we will load the
-                EVAL_STACK_PUSH(.type = local_type, .attrs = {
-                    .known_type = known_type,
-                    .readable = true,
-                    .writable = true,
-                });
-            } break;
-
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Field access
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_STFLD:
-            case CEE_STSFLD: {
-                RuntimeFieldInfo field = inst.operand.field;
-                bool is_static = inst.opcode == CEE_STSFLD;
-
-                jit_stack_value_t value = EVAL_STACK_POP();
-
-                // make sure that the field is in the same inheritance tree
-                RuntimeTypeInfo field_type = tdn_get_intermediate_type(field->FieldType);
-                CHECK(verifier_is_assignable(value.type, field_type));
-
-                if (is_static) {
-                    CHECK(field->Attributes.Static);
-                } else {
-                    jit_stack_value_t obj = EVAL_STACK_POP();
-
-                    // must be either an instance or a byref
-                    CHECK(tdn_type_is_referencetype(obj.type) || obj.type->IsByRef);
-
-                    // make sure we can write to it if its a byref
-                    if (obj.type->IsByRef) {
-                        CHECK(obj.attrs.writable);
-                    }
-
-                    // if a byref make sure its readable
-                    RuntimeTypeInfo type = obj.type->ElementType;
-
-                    // if we are loading a byref, then it must mean the declaring type is also
-                    // a byref struct
-                    if (field->FieldType->IsByRef || field->FieldType->IsByRefStruct) {
-                        CHECK(type->IsByRefStruct);
-
-                        // if storing it in a nonlocal object, make sure that the
-                        // value is also nonlocal
-                        if (obj.attrs.nonlocal_ref) {
-                            CHECK(value.attrs.nonlocal_ref);
-                        }
-
-                        // must be readable to store it
-                        CHECK(value.attrs.readable);
-
-                        // TODO: support for IsReadOnlyAttribute
-                        CHECK(value.attrs.writable);
-                    }
-
-                    // make sure that the field is in the same inheritance tree
-                    CHECK(verifier_is_assignable(type, field->DeclaringType));
-                }
-            } break;
-
-            case CEE_LDFLD:
-            case CEE_LDSFLD: {
-                RuntimeFieldInfo field = inst.operand.field;
-                bool is_static = inst.opcode == CEE_LDSFLD;
-
-                jit_item_attrs_t attrs = {};
-
-                if (is_static) {
-                    CHECK(field->Attributes.Static);
-                } else {
-                    jit_stack_value_t obj = EVAL_STACK_POP();
-
-                    // need one of these
-                    CHECK(
-                        tdn_type_is_referencetype(obj.type) ||
-                        jit_is_struct(obj.type) ||
-                        obj.type->IsByRef
-                    );
-
-                    // if a byref make sure its readable
-                    RuntimeTypeInfo type = obj.type;
-                    if (obj.type->IsByRef) {
-                        CHECK(obj.attrs.readable);
-                        type = obj.type->ElementType;
-                    }
-
-                    // if we are loading a byref, then it must mean the declaring type is also
-                    // a byref struct
-                    if (field->FieldType->IsByRef || field->FieldType->IsByRefStruct) {
-                        CHECK(type->IsByRefStruct);
-
-                        // the nonlocal is the same as the one we are loading from
-                        attrs.nonlocal_ref = obj.attrs.nonlocal_ref;
-
-                        // always readable
-                        attrs.readable = true;
-
-                        // TODO: check the IsReadOnlyAttribute
-                        attrs.writable = true;
-                    }
-
-                    // make sure that the field is in the same inheritance tree
-                    CHECK(verifier_is_assignable(type, field->DeclaringType));
-                }
-
-                // TODO: make sure we can access the field
-
-                EVAL_STACK_PUSH(tdn_get_intermediate_type(field->FieldType), attrs);
-            } break;
-
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Method calling
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_NEWOBJ:
-            case CEE_CALL:
-            case CEE_CALLVIRT: {
-                RuntimeMethodBase target = inst.operand.method;
-                RuntimeTypeInfo method_type = NULL;
-
-                // check this doesn't call anything unsafe
-                if (target->DeclaringType == tUnsafe || target->DeclaringType == tMemoryMarshal) {
-                    CHECK(method->Module->Assembly->AllowUnsafe);
-                }
-
-                if (!target->Attributes.Static) {
-                    method_type = target->DeclaringType;
-                }
-
-                // queue for more verification
-                jit_method_t* target_method;
-                CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
-                jit_queue_verify(target_method);
-
-                // TODO: check accessibility
-
-                // TODO: check constraints
-
-                if (inst.opcode == CEE_CALLVIRT) {
-                    CHECK(method_type != NULL);
-                    CHECK(!tdn_type_is_valuetype(method_type));
-
-                } else if (inst.opcode == CEE_CALL) {
-                    CHECK(!target->Attributes.Abstract);
-
-                } else if (inst.opcode == CEE_NEWOBJ) {
-                    CHECK(target->Attributes.RTSpecialName);
-                    CHECK(!target->Attributes.Static);
-                    CHECK(!method_type->IsArray);
-                    CHECK(!method_type->Attributes.Abstract);
-
-                    // we are creating an instance type, queue it
-                    // for verification
-                    CHECK_AND_RETHROW(jit_queue_type(method_type));
-                }
-
-                // TODO: delegate handling
-
-                // check that the arguments are assignable, also checks if
-                // the call might return a byref from its argument
-                bool might_leak_byref = false;
-                for (int i = target->Parameters->Length - 1; i >= 0; i--) {
-                    ParameterInfo info = target->Parameters->Elements[i];
-                    jit_stack_value_t value = EVAL_STACK_POP();
-
-                    // check that we can pass the value
-                    RuntimeTypeInfo declared = tdn_get_intermediate_type(info->ParameterType);
-                    CHECK(verifier_is_assignable(value.type, declared));
-
-                    // reference readability/writability checks
-                    if (declared->IsByRef) {
-                        if (info->Attributes.In) {
-                            CHECK(value.attrs.readable);
-
-                        } else if (info->Attributes.Out) {
-                            CHECK(value.attrs.writable);
-
-                        } else {
-                            CHECK(value.attrs.readable);
-                            CHECK(value.attrs.writable);
-                        }
-                    }
-
-                    // check if we might leak a local reference from either a byref or a byref struct
-                    if (declared->IsByRef || declared->IsByRefStruct) {
-                        if (!value.attrs.nonlocal_ref) {
-                            might_leak_byref = true;
-                        }
-                    }
-                }
-
-                // and finally check the this type
-                if (inst.opcode != CEE_NEWOBJ && method_type != NULL) {
-                    // the stack value
-                    jit_stack_value_t value = EVAL_STACK_POP();
-
-                    RuntimeTypeInfo target_this_type = method_type;
-                    if (tdn_type_is_valuetype(method_type)) {
-                        CHECK_AND_RETHROW(tdn_get_byref_type(method_type, &target_this_type));
-                    }
-
-                    // check the assignability
-                    CHECK(verifier_is_assignable(value.type, target_this_type));
-
-                    // check the readable/writable attributes
-                    if (target_this_type->IsByRef) {
-                        CHECK(value.attrs.readable);
-
-                        // if calling non-readonly method make sure that we pass
-                        // to it a writable reference
-                        if (!target->IsReadOnly) {
-                            CHECK(value.attrs.writable);
-                        }
-                    }
-
-                    // if we use a call on a virtual function then it must be done on `this` instance
-                    // and not on anything else
-                    if (inst.opcode == CEE_CALL && target->Attributes.Virtual) {
-                        CHECK(value.attrs.this_ptr);
-                    }
-                }
-
-                //
-                // push the return value
-                //
-                if (inst.opcode == CEE_NEWOBJ) {
-                    EVAL_STACK_PUSH(method_type, .attrs = { .known_type = method_type });
-
-                } else if (target->ReturnParameter->ParameterType != tVoid) {
-                    RuntimeTypeInfo ret_type = tdn_get_intermediate_type(target->ReturnParameter->ParameterType);
-
-                    jit_item_attrs_t attrs = {};
-
-                    // if we can't leak the byref then it is def non-local
-                    // this applies to both byref and byref struct
-                    if (ret_type->IsByRef || ret_type->IsByRefStruct) {
-                        attrs.nonlocal_ref = !might_leak_byref;
-                    }
-
-                    // only writable if not readonly
-                    if (ret_type->IsByRef) {
-                        attrs.readable = true;
-                        attrs.writable = !target->ReturnParameter->IsReadonly;
-                    }
-
-                    // and finally push it
-                    EVAL_STACK_PUSH(ret_type, attrs);
-                }
-            } break;
-
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Array handling
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_NEWARR: {
-                jit_stack_value_t num_elems = EVAL_STACK_POP();
-                CHECK(
-                    num_elems.type == tInt32 ||
-                    num_elems.type == tIntPtr
-                );
-
-                RuntimeTypeInfo type = inst.operand.type;
-
-                // make sure it can be on the heap
-                CHECK(!type->IsByRefStruct);
-
-                // get the array type
-                CHECK_AND_RETHROW(tdn_get_array_type(type, &type));
-
-                EVAL_STACK_PUSH(type);
-            } break;
-
-            case CEE_LDELEMA:
-            case CEE_LDELEM:
-            case CEE_LDELEM_REF: {
-                jit_stack_value_t index = EVAL_STACK_POP();
-                jit_stack_value_t array = EVAL_STACK_POP();
-
-                CHECK(array.type->IsArray);
-
-                CHECK(
-                    index.type == tInt32 ||
-                    index.type == tIntPtr
-                );
-
-                RuntimeTypeInfo element_type = tdn_get_intermediate_type(array.type->ElementType);
-                if (inst.opcode == CEE_LDELEMA) {
-                    jit_item_attrs_t attrs = {
-                        .nonlocal_ref = true,
-                        .readable = true,
-                        .writable = true
-                    };
-
-                    RuntimeTypeInfo ref_type;
-                    CHECK_AND_RETHROW(tdn_get_byref_type(element_type, &ref_type));
-
-                    EVAL_STACK_PUSH(ref_type, attrs);
-                } else {
-                    EVAL_STACK_PUSH(element_type);
-                }
-            } break;
-
-            case CEE_STELEM:
-            case CEE_STELEM_REF: {
-                jit_stack_value_t value = EVAL_STACK_POP();
-                jit_stack_value_t index = EVAL_STACK_POP();
-                jit_stack_value_t array = EVAL_STACK_POP();
-
-                // make sure the declared value matches
-                RuntimeTypeInfo element_type = inst.operand.type;
-                if (element_type == NULL) {
-                    element_type = value.type;
-                } else {
-                    // make sure that the type matches the declaration
-                    CHECK(tdn_get_intermediate_type(element_type) == value.type);
-                }
-
-                // make sure this is an array type
-                CHECK(array.type->IsArray);
-
-                // make sure we can perform the assignment
-                CHECK(tdn_type_array_element_compatible_with(
-                    element_type,
-                    array.type->ElementType
-                ), "%T array-element-compatible-with %T", element_type, array.type->ElementType);
-
-                // validate the index
-                CHECK(
-                    index.type == tInt32 ||
-                    index.type == tIntPtr
-                );
-            } break;
-
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Indirect access
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_LDIND_I1:
-            case CEE_LDIND_U1:
-            case CEE_LDIND_I2:
-            case CEE_LDIND_U2:
-            case CEE_LDIND_I4:
-            case CEE_LDIND_U4:
-            case CEE_LDIND_I8:
-            case CEE_LDIND_I:
-            case CEE_LDIND_REF: {
-                jit_stack_value_t address = EVAL_STACK_POP();
-                CHECK(address.type->IsByRef);
-                CHECK(address.attrs.readable);
-
-                // check we can perform the load
-                RuntimeTypeInfo type = address.type->ElementType;
-                if (inst.operand.type == NULL) {
-                    CHECK(tdn_type_is_referencetype(type));
-                } else {
-                    CHECK(type == inst.operand.type);
-                    type = tdn_get_intermediate_type(type);
-                }
-
-                // push it
-                EVAL_STACK_PUSH(type);
-            } break;
-
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Math
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_ADD:
-            case CEE_SUB:
-            case CEE_MUL:
-            case CEE_DIV:
-            case CEE_REM:
-            case CEE_AND:
-            case CEE_OR:
-            case CEE_XOR:
-            case CEE_DIV_UN:
-            case CEE_REM_UN: {
-                jit_stack_value_t op1 = EVAL_STACK_POP();
-                jit_stack_value_t op2 = EVAL_STACK_POP();
-
-                // check the inputs and get the result type
-                RuntimeTypeInfo result = NULL;
-                if (op1.type == tInt32) {
-                    if (op2.type == tInt32) {
-                        result = tInt32;
-                    } else if (op2.type == tIntPtr) {
-                        result = tIntPtr;
-                    } else {
-                        CHECK_FAIL();
-                    }
-
-                } else if (op1.type == tInt64) {
-                    CHECK(op2.type == tInt64);
-                    result = tInt64;
-
-                } else if (op1.type == tIntPtr) {
-                    CHECK(op2.type == tInt32 || op2.type == tIntPtr);
-                    result = tIntPtr;
-
-                } else {
-                    CHECK_FAIL();
-                }
-
-                EVAL_STACK_PUSH(result);
-            } break;
-
-            case CEE_CEQ:
-            case CEE_CGT:
-            case CEE_CLT:
-            case CEE_CGT_UN:
-            case CEE_CLT_UN: {
-                jit_stack_value_t value1 = EVAL_STACK_POP();
-                jit_stack_value_t value2 = EVAL_STACK_POP();
-                CHECK(verifier_is_binary_comparable(value1.type, value2.type, inst.opcode));
-                EVAL_STACK_PUSH(tInt32);
-            } break;
-
-            case CEE_CONV_I1:
-            case CEE_CONV_I2:
-            case CEE_CONV_I4:
-            case CEE_CONV_I8:
-            case CEE_CONV_U1:
-            case CEE_CONV_U2:
-            case CEE_CONV_U4:
-            case CEE_CONV_U8:
-            case CEE_CONV_I:
-            case CEE_CONV_U: {
-                jit_stack_value_t value = EVAL_STACK_POP();
-
-                CHECK(
-                    value.type == tInt32 ||
-                    value.type == tInt64 ||
-                    value.type == tIntPtr
-                );
-
-                if (inst.opcode == CEE_CONV_I || inst.opcode == CEE_CONV_U) {
-                    EVAL_STACK_PUSH(tIntPtr);
-
-                } else if (inst.opcode == CEE_CONV_U8 || inst.opcode == CEE_CONV_I8) {
-                    EVAL_STACK_PUSH(tInt64);
-
-                } else {
-                    EVAL_STACK_PUSH(tInt32);
-                }
-            } break;
-
-            case CEE_NEG: {
-                jit_stack_value_t value = EVAL_STACK_POP();
-                CHECK(
-                    value.type == tInt32 ||
-                    value.type == tInt64 ||
-                    value.type == tIntPtr
-                );
-                EVAL_STACK_PUSH(value.type);
-            } break;
-
-            case CEE_SHL:
-            case CEE_SHR:
-            case CEE_SHR_UN: {
-                jit_stack_value_t shift_amount = EVAL_STACK_POP();
-                jit_stack_value_t value = EVAL_STACK_POP();
-
-                CHECK(
-                    value.type == tInt32 ||
-                    value.type == tInt64 ||
-                    value.type == tIntPtr
-                );
-
-                CHECK(
-                    shift_amount.type == tInt32 ||
-                    shift_amount.type == tIntPtr
-                );
-
-                EVAL_STACK_PUSH(value.type);
+                int index = inst.operand.variable;
+                CHECK(index < arrlen(locals));
+                RuntimeLocalVariableInfo local = body->LocalVariables->Elements[index];
+
+                RuntimeTypeInfo type = tdn_get_verification_type(local->LocalType);
+                CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+
+                // its only writable if the struct
+                // is writable in the first place
+                // its always readable because its
+                // coming from the stack
+                jit_item_attrs_t attrs = {
+                    .readonly = type->IsReadOnly,
+                };
+
+                EVAL_STACK_PUSH(type, attrs);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -946,26 +486,36 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 EVAL_STACK_PUSH(tInt64);
             } break;
 
-            case CEE_LDSTR: {
-                EVAL_STACK_PUSH(tString);
-            } break;
-
             case CEE_LDNULL: {
                 EVAL_STACK_PUSH(NULL);
             } break;
 
-            case CEE_LDTOKEN: {
-                EVAL_STACK_PUSH(tRuntimeTypeHandle);
+            case CEE_LDSTR: {
+                EVAL_STACK_PUSH(tString);
+            } break;
+
+            case CEE_POP: {
+                EVAL_STACK_POP();
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Math
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_CEQ:
+            case CEE_CGT:
+            case CEE_CGT_UN:
+            case CEE_CLT:
+            case CEE_CLT_UN: {
+                jit_stack_value_t value2 = EVAL_STACK_POP();
+                jit_stack_value_t value1 = EVAL_STACK_POP();
+                CHECK(verifier_is_binary_comparable(value1.type, value2.type, inst.opcode));
+                EVAL_STACK_PUSH(tInt32);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Branching
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_BR: {
-                // just a branch, merge with the block target
-                CHECK_AND_RETHROW(verify_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals));
-            } break;
 
             case CEE_BEQ:
             case CEE_BGE:
@@ -977,76 +527,66 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             case CEE_BGT_UN:
             case CEE_BLE_UN:
             case CEE_BLT_UN: {
-                jit_stack_value_t value1 = EVAL_STACK_POP();
                 jit_stack_value_t value2 = EVAL_STACK_POP();
+                jit_stack_value_t value1 = EVAL_STACK_POP();
                 CHECK(verifier_is_binary_comparable(value1.type, value2.type, inst.opcode));
 
-                // merge with the target
-                verify_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals);
+                CHECK_AND_RETHROW(verify_merge_basic_block(
+                    jmethod,
+                    inst.operand.branch_target,
+                    stack, locals));
 
-                // merge with the next block
-                verify_merge_basic_block(jmethod, pc, stack, locals);
+                CHECK_AND_RETHROW(verify_merge_basic_block(
+                    jmethod,
+                    pc,
+                    stack, locals));
             } break;
 
-            case CEE_BRFALSE:
-            case CEE_BRTRUE: {
+            case CEE_BRTRUE:
+            case CEE_BRFALSE: {
                 jit_stack_value_t value = EVAL_STACK_POP();
-
-                // ECMA-335 doesn't say brtrue takes in anything but
-                // O and native int, but I think its just an oversight
                 CHECK(
-                    tdn_type_is_referencetype(value.type) ||
-                    value.type == tIntPtr ||
+                    value.type == tInt32 ||
                     value.type == tInt64 ||
-                    value.type == tInt32
+                    value.type == tIntPtr ||
+                    tdn_type_is_referencetype(value.type)
                 );
 
-                // merge with the target
-                verify_merge_basic_block(jmethod, inst.operand.branch_target, stack, locals);
+                CHECK_AND_RETHROW(verify_merge_basic_block(
+                    jmethod,
+                    inst.operand.branch_target,
+                    stack, locals));
 
-                // merge with the next block
-                verify_merge_basic_block(jmethod, pc, stack, locals);
+                CHECK_AND_RETHROW(verify_merge_basic_block(
+                    jmethod,
+                    pc,
+                    stack, locals));
+            } break;
+
+            case CEE_BR: {
+                CHECK_AND_RETHROW(verify_merge_basic_block(
+                    jmethod,
+                    inst.operand.branch_target,
+                    stack, locals));
             } break;
 
             case CEE_RET: {
-                RuntimeTypeInfo return_type = tdn_get_intermediate_type(method->ReturnParameter->ParameterType);
+                RuntimeTypeInfo type = method->ReturnParameter->ParameterType;
 
-                if (return_type == tVoid) {
-                    // must have a clear stack at this point
-                    CHECK(arrlen(stack) == 0);
-                } else {
-                    jit_stack_value_t value = EVAL_STACK_POP();
-                    CHECK(verifier_is_assignable(value.type, return_type));
+                if (type != tVoid) {
+                    jit_stack_value_t ret_val = EVAL_STACK_POP();
 
-                    // if this is a byref or byref struct then make sure we don't return
-                    // a local reference
-                    if (value.type->IsByRef || value.type->IsByRefStruct) {
-                        CHECK(value.attrs.nonlocal_ref);
+                    // if we return a non-readonly then make sure
+                    // that the return is also not readonly
+                    if (!method->ReturnParameter->IsReadonly) {
+                        CHECK(!ret_val.attrs.readonly);
                     }
 
-                    // for byref check the readable/writable requirements
-                    if (value.type->IsByRef) {
-                        CHECK(value.attrs.readable);
-
-                        // make sure its writable
-                        if (!method->ReturnParameter->IsReadonly) {
-                            CHECK(value.attrs.writable);
-                        }
-                    }
+                    // check the type is the same
+                    CHECK(verifier_assignable_to(ret_val.type, type));
                 }
-            } break;
 
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-            // Exception handling
-            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-            case CEE_THROW: {
-                EVAL_STACK_POP();
-
-                // TODO: verify inherits from exception
-
-                // empty the stack
-                arrsetlen(stack, 0);
+                CHECK(arrlen(stack) == 0);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
