@@ -1884,6 +1884,10 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
                     parent_type->IsReadOnly = true;
                 } break;
 
+                case METADATA_PROPERTY: {
+                    // readonly property, we ignore
+                } break;
+
                 default:
                     WARN("Found IsReadOnlyAttribute on unknown token %02x", attr->parent.table);
             }

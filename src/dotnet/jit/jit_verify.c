@@ -188,7 +188,8 @@ static tdn_err_t verify_merge_basic_block(jit_method_t* method, uint32_t target_
     } else {
 
         // make sure both have the same stack length
-        CHECK(arrlen(stack) == arrlen(target->stack));
+        CHECK(arrlen(stack) == arrlen(target->stack),
+            "incoming %d, wanted %d", arrlen(stack), arrlen(target->stack));
 
         // already initialized, make sure the state is consistent, if not
         // mark the target for another pass
@@ -251,6 +252,7 @@ static bool verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
 typedef enum il_prefix {
     IL_PREFIX_CONSTRAINED = BIT0,
     IL_PREFIX_VOLATILE = BIT1,
+    IL_PREFIX_UNALIGNED = BIT2,
 } il_prefix_t;
 
 #define EVAL_STACK_PUSH(...) \
@@ -420,7 +422,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     if (arg_param != NULL) {
                         attrs.readonly = arg_param->IsReadOnly;
                     } else {
-                        attrs.readonly = method->DeclaringType->IsReadOnly;
+                        // if either the method or the type is readonly,
+                        // then the this pointer is also readonly
+                        attrs.readonly = method->IsReadOnly || method->DeclaringType->IsReadOnly;
                     }
                 }
 
@@ -463,6 +467,42 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeTypeInfo type = tdn_get_verification_type(local->LocalType);
                 CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
 
+                EVAL_STACK_PUSH(type);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Fields
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // TODO: check accessibility
+
+                // TODO: check object has field
+
+                // clear the possible prefixes
+                // for the instruction
+                pending_prefix &= ~IL_PREFIX_VOLATILE;
+
+                jit_item_attrs_t attrs = {};
+                if (field->FieldType->IsByRef) {
+                    // TODO: set as readonly if a readonly byref
+                }
+
+                RuntimeTypeInfo type = tdn_get_intermediate_type(field->FieldType);
+                EVAL_STACK_PUSH(type, attrs);
+            } break;
+
+            case CEE_LDSFLD: {
+                // TODO: check accessibility
+
+                // clear the possible prefixes
+                // for the instruction
+                pending_prefix &= ~IL_PREFIX_VOLATILE;
+
+                RuntimeTypeInfo type = tdn_get_intermediate_type(inst.operand.field->FieldType);
                 EVAL_STACK_PUSH(type);
             } break;
 
@@ -572,19 +612,89 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     // if we return a ref initialize if its nonlocal and if
                     // its readonly based on the return parameter
                     ParameterInfo ret_info = target->ReturnParameter;
-                    jit_item_attrs_t attrs = {
-                        .nonlocal_ref = ret_info->ParameterType->IsReadOnly && !might_return_nonlocal_ref,
-                        .readonly = ret_info->IsReadOnly
-                    };
+                    if (ret_info->ParameterType != tVoid) {
+                        jit_item_attrs_t attrs = {
+                            .nonlocal_ref = ret_info->ParameterType->IsReadOnly && !might_return_nonlocal_ref,
+                            .readonly = ret_info->IsReadOnly
+                        };
 
-                    RuntimeTypeInfo ret_type = tdn_get_intermediate_type(ret_info->ParameterType);
-                    EVAL_STACK_PUSH(ret_type, attrs);
+                        RuntimeTypeInfo ret_type = tdn_get_intermediate_type(ret_info->ParameterType);
+                        EVAL_STACK_PUSH(ret_type, attrs);
+                    }
                 }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Math
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_ADD:
+            case CEE_SUB:
+            case CEE_MUL:
+            case CEE_DIV:
+            case CEE_REM:
+            case CEE_DIV_UN:
+            case CEE_REM_UN:
+            case CEE_AND:
+            case CEE_XOR:
+            case CEE_OR: {
+                jit_stack_value_t value2 = EVAL_STACK_POP();
+                jit_stack_value_t value1 = EVAL_STACK_POP();
+
+                RuntimeTypeInfo result;
+                if (value1.type == tInt32) {
+                    if (value2.type == tInt32) {
+                        result = tInt32;
+                    } else {
+                        CHECK(value2.type == tIntPtr);
+                        result = tIntPtr;
+                    }
+
+                } else if (value1.type == tIntPtr) {
+                    CHECK(value2.type == tInt32 || value2.type == tIntPtr);
+                    result = tIntPtr;
+
+                } else if (value1.type == tInt64) {
+                    CHECK(value2.type == tInt64);
+                    result = tInt64;
+
+                } else {
+                    CHECK_FAIL();
+                }
+
+                EVAL_STACK_PUSH(result);
+            } break;
+
+            case CEE_SHL:
+            case CEE_SHR:
+            case CEE_SHR_UN: {
+                jit_stack_value_t shift_amount = EVAL_STACK_POP();
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                CHECK(
+                    shift_amount.type == tInt32 ||
+                    shift_amount.type == tIntPtr
+                );
+
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
+
+                EVAL_STACK_PUSH(value.type);
+            } break;
+
+            case CEE_NOT:
+            case CEE_NEG: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
+                EVAL_STACK_PUSH(value.type);
+            } break;
 
             case CEE_CEQ:
             case CEE_CGT:
@@ -594,6 +704,43 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 jit_stack_value_t value2 = EVAL_STACK_POP();
                 jit_stack_value_t value1 = EVAL_STACK_POP();
                 CHECK(verifier_is_binary_comparable(value1.type, value2.type, inst.opcode));
+                EVAL_STACK_PUSH(tInt32);
+            } break;
+
+            case CEE_CONV_U:
+            case CEE_CONV_I: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
+                EVAL_STACK_PUSH(tIntPtr);
+            } break;
+
+            case CEE_CONV_U8:
+            case CEE_CONV_I8: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
+                EVAL_STACK_PUSH(tInt64);
+            } break;
+
+            case CEE_CONV_U4:
+            case CEE_CONV_I4:
+            case CEE_CONV_U2:
+            case CEE_CONV_I2:
+            case CEE_CONV_I1:
+            case CEE_CONV_U1: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                CHECK(
+                    value.type == tInt32 ||
+                    value.type == tInt64 ||
+                    value.type == tIntPtr
+                );
                 EVAL_STACK_PUSH(tInt32);
             } break;
 

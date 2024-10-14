@@ -249,12 +249,12 @@ static RuntimeTypeInfo emit_get_stack_type(RuntimeTypeInfo type) {
         __arg_type; \
     })
 
-static spidir_value_t jit_push_struct(spidir_builder_handle_t builder, RuntimeTypeInfo type) {
+static spidir_value_t jit_get_stack_slot(spidir_builder_handle_t builder, RuntimeTypeInfo type) {
     // TODO: how should we handle this the best
     return spidir_builder_build_stackslot(builder, type->StackSize, type->StackAlignment);
 }
 
-static void jit_pop_struct(spidir_value_t value) {
+static void jit_release_struct_slot(spidir_value_t value) {
 }
 
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst, spidir_value_t src, RuntimeTypeInfo type) {
@@ -302,7 +302,7 @@ static void jit_emit_store(spidir_builder_handle_t builder, spidir_value_t dest,
 static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, spidir_value_t src, RuntimeTypeInfo type) {
     // store something that is a struct
     if (jit_is_struct_like(type)) {
-        spidir_value_t new_struct = jit_push_struct(builder, type);
+        spidir_value_t new_struct = jit_get_stack_slot(builder, type);
         jit_emit_memcpy(builder, new_struct, src, type);
         return new_struct;
 
@@ -379,7 +379,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 CHECK(jmethod->args[index].spill_required);
                 spidir_value_t dest = jmethod->args[index].value;
                 jit_emit_store(builder, dest, value.value, arg_type);
-                jit_pop_struct(dest);
+                jit_release_struct_slot(dest);
             }  break;
 
             case CEE_LDARG: {
@@ -391,7 +391,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                 if (jit_is_struct_like(arg_type)) {
                     // struct, need to copy it
-                    spidir_value_t new_struct = jit_push_struct(builder, arg_type);
+                    spidir_value_t new_struct = jit_get_stack_slot(builder, arg_type);
                     jit_emit_memcpy(builder, new_struct, value, arg_type);
                     value = new_struct;
 
@@ -418,7 +418,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 // verify the type
                 jit_stack_value_t value = EVAL_STACK_POP();
                 jit_emit_store(builder, jmethod->locals[index].value, value.value, local->LocalType);
-                jit_pop_struct(value.value);
+                jit_release_struct_slot(value.value);
             } break;
 
             case CEE_LDLOC: {
@@ -437,6 +437,41 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
 
                 EVAL_STACK_PUSH(type, jmethod->locals[index].value);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Fields
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // get the pointer to the field
+                spidir_value_t field_ptr = spidir_builder_build_ptroff(builder, obj.value,
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, field->FieldOffset));
+
+                // now perform the load
+                spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType);
+
+                // and push it
+                RuntimeTypeInfo type = tdn_get_intermediate_type(field->FieldType);
+                EVAL_STACK_PUSH(type, value);
+            } break;
+
+            case CEE_LDSFLD: {
+                // get the pointer to the field
+                RuntimeFieldInfo field = inst.operand.field;
+
+                // TODO: initialize the field pointer
+
+                spidir_value_t field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
+
+                // now perform the load
+                spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType);
+
+                RuntimeTypeInfo type = tdn_get_intermediate_type(inst.operand.field->FieldType);
+                EVAL_STACK_PUSH(type, value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -464,7 +499,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             } break;
 
             case CEE_POP: {
-                EVAL_STACK_POP();
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_release_struct_slot(value.value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -496,7 +532,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     // just emit a stack slot and zero it
                     spidir_value_t obj;
                     if (jit_is_struct(target->DeclaringType)) {
-                        obj = jit_push_struct(builder, target->DeclaringType);
+                        obj = jit_get_stack_slot(builder, target->DeclaringType);
                         jit_emit_bzero(builder, obj, target->DeclaringType);
                     } else {
                         // call the gc to create the new object
@@ -544,8 +580,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 spidir_value_t ret_val_ptr = SPIDIR_VALUE_INVALID;
                 ParameterInfo ret_info = target->ReturnParameter;
                 RuntimeTypeInfo ret_type = tdn_get_intermediate_type(ret_info->ParameterType);
-                if (jit_is_struct_like(ret_type)) {
-                    ret_val_ptr = jit_push_struct(builder, ret_type);
+                if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
+                    ret_val_ptr = jit_get_stack_slot(builder, ret_type);
                     arrpush(args, ret_val_ptr);
                 }
 
@@ -617,7 +653,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     // was created
                     EVAL_STACK_PUSH(method->DeclaringType, args[0], .attrs = { .known_type = target->DeclaringType });
 
-                } else {
+                } else if (ret_type != tVoid) {
                     // push the pointer we created for this
                     if (jit_is_struct_like(ret_type)) {
                         ret_value = ret_val_ptr;
@@ -630,6 +666,107 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Math
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_ADD:
+            case CEE_SUB:
+            case CEE_MUL:
+            case CEE_DIV:
+            case CEE_REM:
+            case CEE_DIV_UN:
+            case CEE_REM_UN:
+            case CEE_AND:
+            case CEE_XOR:
+            case CEE_OR: {
+                jit_stack_value_t value2 = EVAL_STACK_POP();
+                jit_stack_value_t value1 = EVAL_STACK_POP();
+
+                spidir_value_t val1 = value1.value;
+                spidir_value_t val2 = value2.value;
+
+                RuntimeTypeInfo result;
+                if (value1.type == tInt32) {
+                    if (value2.type == tInt32) {
+                        result = tInt32;
+                    } else {
+                        CHECK(value2.type == tIntPtr);
+                        result = tIntPtr;
+
+                        CHECK_FAIL("TODO: extend");
+                    }
+
+                } else if (value1.type == tIntPtr) {
+                    CHECK(value2.type == tInt32 || value2.type == tIntPtr);
+                    result = tIntPtr;
+
+                    if (value2.type == tIntPtr) {
+                        CHECK_FAIL("TODO: extend");
+                    }
+
+                } else if (value1.type == tInt64) {
+                    CHECK(value2.type == tInt64);
+                    result = tInt64;
+
+                } else {
+                    CHECK_FAIL();
+                }
+
+                spidir_value_t val;
+                switch (inst.opcode) {
+                    case CEE_ADD: val = spidir_builder_build_iadd(builder, val1, val2); break;
+                    case CEE_SUB: val = spidir_builder_build_isub(builder, val1, val2); break;
+                    case CEE_MUL: val = spidir_builder_build_imul(builder, val1, val2); break;
+                    case CEE_DIV: val = spidir_builder_build_sdiv(builder, val1, val2); break;
+                    case CEE_REM: val = spidir_builder_build_srem(builder, val1, val2); break;
+                    case CEE_DIV_UN: val = spidir_builder_build_udiv(builder, val1, val2); break;
+                    case CEE_REM_UN: val = spidir_builder_build_urem(builder, val1, val2); break;
+                    case CEE_AND: val = spidir_builder_build_and(builder, val1, val2); break;
+                    case CEE_XOR: val = spidir_builder_build_xor(builder, val1, val2); break;
+                    case CEE_OR: val = spidir_builder_build_or(builder, val1, val2); break;
+                    default: CHECK_FAIL();
+                }
+
+                EVAL_STACK_PUSH(result, val);
+            } break;
+
+            case CEE_SHL:
+            case CEE_SHR:
+            case CEE_SHR_UN: {
+                jit_stack_value_t shift_amount = EVAL_STACK_POP();
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                spidir_value_t result;
+                switch (inst.opcode) {
+                    case CEE_SHL: result = spidir_builder_build_shl(builder, value.value, shift_amount.value); break;
+                    case CEE_SHR: result = spidir_builder_build_ashr(builder, value.value, shift_amount.value); break;
+                    case CEE_SHR_UN: result = spidir_builder_build_lshr(builder, value.value, shift_amount.value); break;
+                    default: CHECK_FAIL();
+                }
+
+                EVAL_STACK_PUSH(value.type, result);
+            } break;
+
+            case CEE_NOT:
+            case CEE_NEG: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                bool is_64bit = value.type == tInt64;
+
+                spidir_value_t result;
+                if (inst.opcode == CEE_NOT) {
+                    // emulate not by xoring with FFs
+                    result = spidir_builder_build_xor(builder, value.value,
+                        spidir_builder_build_iconst(builder,
+                            is_64bit ? SPIDIR_TYPE_I64 : SPIDIR_TYPE_I32,
+                            is_64bit ? UINT64_MAX : UINT32_MAX));
+                } else {
+                    // emulate neg by doing 0 - value
+                    result = spidir_builder_build_isub(builder,
+                        spidir_builder_build_iconst(builder,
+                            is_64bit ? SPIDIR_TYPE_I64 : SPIDIR_TYPE_I32, 0),
+                            value.value);
+                }
+
+                EVAL_STACK_PUSH(value.type, result);
+            } break;
 
             case CEE_CEQ:
             case CEE_CGT:
@@ -817,7 +954,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                         // get the return pointer from the top of the stack implicitly
                         spidir_value_t ret_ptr = spidir_builder_build_param_ref(builder, arrlen(jmethod->locals));
                         jit_emit_memcpy(builder, ret_ptr, ret_val.value, ret_val.type);
-                        jit_pop_struct(ret_val.value);
+                        jit_release_struct_slot(ret_val.value);
 
                         spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
                     } else {
