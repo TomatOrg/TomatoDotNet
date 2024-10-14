@@ -1881,7 +1881,7 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
                 case METADATA_PARAM: {
                     CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
                     ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
-                    parent_type->IsReadonly = true;
+                    parent_type->IsReadOnly = true;
                 } break;
 
                 default:

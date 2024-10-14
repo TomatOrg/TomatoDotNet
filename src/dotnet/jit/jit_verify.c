@@ -418,7 +418,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                     // check if the reference is readonly
                     if (arg_param != NULL) {
-                        attrs.readonly = arg_param->IsReadonly;
+                        attrs.readonly = arg_param->IsReadOnly;
                     } else {
                         attrs.readonly = method->DeclaringType->IsReadOnly;
                     }
@@ -463,15 +463,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeTypeInfo type = tdn_get_verification_type(local->LocalType);
                 CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
 
-                // its only writable if the struct
-                // is writable in the first place
-                // its always readable because its
-                // coming from the stack
-                jit_item_attrs_t attrs = {
-                    .readonly = type->IsReadOnly,
-                };
-
-                EVAL_STACK_PUSH(type, attrs);
+                EVAL_STACK_PUSH(type);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -496,6 +488,98 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
             case CEE_POP: {
                 EVAL_STACK_POP();
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Method calling
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_NEWOBJ:
+            case CEE_CALL:
+            case CEE_CALLVIRT: {
+                RuntimeMethodBase target = inst.operand.method;
+
+                // queue for verify
+                jit_method_t* target_method = NULL;
+                CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
+                jit_queue_verify(target_method);
+
+                // TODO: verify the caller is visible
+
+                // get the target this type
+                RuntimeTypeInfo target_this_type = NULL;
+                if (!target->Attributes.Static) {
+                    target_this_type = target->DeclaringType;
+                    if (tdn_type_is_valuetype(target_this_type)) {
+                        CHECK_AND_RETHROW(tdn_get_byref_type(target_this_type, &target_this_type));
+                    }
+                }
+
+                // some extra verifications
+                if (inst.opcode == CEE_NEWOBJ) {
+                    // newobj must be done on a non-static ctor
+                    CHECK(!target->Attributes.Static);
+                    CHECK(!target->Attributes.RTSpecialName);
+
+                    // queue the type itself
+                    jit_queue_type(target->DeclaringType);
+
+                } else if (inst.opcode == CEE_CALLVIRT) {
+                    // callvirt must be done on a static method
+                    CHECK(!target->Attributes.Static);
+                }
+
+                // verify all of the arguments
+                bool might_return_nonlocal_ref = false;
+                for (int i = target->Parameters->Length - 1; i >= 0; i--) {
+                    ParameterInfo info = target->Parameters->Elements[i];
+                    jit_stack_value_t arg = EVAL_STACK_POP();
+                    CHECK(verifier_assignable_to(arg.type, info->ParameterType));
+
+                    // if the argument is not readonly (byref) then ensure
+                    // that the variable we pass to it is also not a readonly
+                    // one
+                    if (!info->IsReadOnly) {
+                        CHECK(!arg.attrs.readonly);
+                    }
+
+                    // if this is a byref and its not a nonlocal one then
+                    // we might get it back (or something in it) from the
+                    // function return, so ensure that we won't treat it
+                    // as non-local
+                    if (arg.type->IsByRef && !arg.attrs.nonlocal_ref) {
+                        might_return_nonlocal_ref = true;
+                    }
+                }
+
+                if (inst.opcode == CEE_NEWOBJ) {
+                    // push the target this type
+                    // NOTE: for value types we don't actually push a byref so
+                    //       take the declaring type directly
+                    jit_item_attrs_t attrs = {
+                        .known_type = target->DeclaringType
+                    };
+                    EVAL_STACK_PUSH(target->DeclaringType, attrs);
+
+                } else {
+                    // verify the this parameter
+                    if (target_this_type != NULL) {
+                        jit_stack_value_t obj = EVAL_STACK_POP();
+                        CHECK(verifier_assignable_to(obj.type, target_this_type),
+                            "%T verifier-assignable-to %T", obj.type, target_this_type);
+                    }
+
+                    // if we return a ref initialize if its nonlocal and if
+                    // its readonly based on the return parameter
+                    ParameterInfo ret_info = target->ReturnParameter;
+                    jit_item_attrs_t attrs = {
+                        .nonlocal_ref = ret_info->ParameterType->IsReadOnly && !might_return_nonlocal_ref,
+                        .readonly = ret_info->IsReadOnly
+                    };
+
+                    RuntimeTypeInfo ret_type = tdn_get_intermediate_type(ret_info->ParameterType);
+                    EVAL_STACK_PUSH(ret_type, attrs);
+                }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -578,8 +662,13 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                     // if we return a non-readonly then make sure
                     // that the return is also not readonly
-                    if (!method->ReturnParameter->IsReadonly) {
+                    if (!method->ReturnParameter->IsReadOnly) {
                         CHECK(!ret_val.attrs.readonly);
+                    }
+
+                    // make sure we don't leak a non-local byref
+                    if (ret_val.type->IsByRef) {
+                        CHECK(ret_val.attrs.nonlocal_ref);
                     }
 
                     // check the type is the same

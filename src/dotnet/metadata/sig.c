@@ -333,7 +333,7 @@ static tdn_err_t sig_parse_ret_type(
     CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     while(cmod_type != NULL) {
         if (cmod_type == tInAttribute) {
-            parameter_info->IsReadonly = 1;
+            parameter_info->IsReadOnly = 1;
         } else {
             WARN("Unknown mod %T", cmod_type);
             CHECK(!required);
