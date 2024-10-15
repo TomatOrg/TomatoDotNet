@@ -22,7 +22,10 @@ static spidir_module_handle_t m_jit_module = NULL;
 
 static spidir_function_t m_jit_bzero;
 static spidir_function_t m_jit_memcpy;
+
 static spidir_function_t m_jit_gc_new;
+static spidir_function_t m_jit_gc_newarr;
+
 static spidir_function_t m_jit_throw;
 
 static struct {
@@ -63,6 +66,17 @@ static void create_jit_helpers() {
         }
     );
     hmput(m_jit_helper_lookup, m_jit_gc_new, jit_gc_new);
+
+    m_jit_gc_newarr = spidir_module_create_extern_function(m_jit_module,
+        "jit_gc_newarr",
+        SPIDIR_TYPE_PTR,
+        2,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR,
+            SPIDIR_TYPE_I64
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_gc_newarr, jit_gc_newarr);
 
     m_jit_throw = spidir_module_create_extern_function(m_jit_module,
         "jit_throw",
@@ -315,6 +329,59 @@ static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, spidir_valu
             src);
     }
 
+}
+
+static void jit_emit_array_length_check(spidir_builder_handle_t builder, spidir_value_t array, spidir_value_t index) {
+    // load the length
+    spidir_value_t length_ptr = spidir_builder_build_ptroff(builder,
+        array,
+        spidir_builder_build_iconst(builder,
+            SPIDIR_TYPE_I64, offsetof(struct Array, Length))
+    );
+
+    spidir_value_t length = spidir_builder_build_load(builder,
+        SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64,
+        length_ptr
+    );
+
+    // compare it to the element index
+    spidir_value_t in_range_result = spidir_builder_build_icmp(builder,
+        SPIDIR_ICMP_ULT, SPIDIR_TYPE_I32,
+        index, length);
+
+    spidir_block_t in_range = spidir_builder_create_block(builder);
+    spidir_block_t out_of_range = spidir_builder_create_block(builder);
+
+    // go to the invalid path
+    spidir_builder_set_block(builder, out_of_range);
+
+    // TODO: throw the exception
+
+    // we won't go any further
+    spidir_builder_build_unreachable(builder);
+
+    // go back to the valid path
+    spidir_builder_set_block(builder, in_range);
+}
+
+static spidir_value_t jit_emit_array_offset(spidir_builder_handle_t builder, spidir_value_t array, spidir_value_t index, RuntimeTypeInfo element_type) {
+    // get the offset from the first element
+    spidir_value_t offset = spidir_builder_build_imul(builder,
+        index,
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,
+            element_type->StackSize)
+    );
+
+    // add the offset to the first element
+    offset = spidir_builder_build_iadd(
+        builder,
+        offset,
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,
+            ALIGN_UP(sizeof(struct Array), element_type->StackAlignment))
+    );
+
+    // and now add it to the array pointer
+    return spidir_builder_build_ptroff(builder, array, offset);
 }
 
 static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_method_t* jmethod, jit_basic_block_t* block) {
@@ -661,6 +728,139 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                     EVAL_STACK_PUSH(ret_type, ret_value);
                 }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Array handlig
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_NEWARR: {
+                jit_stack_value_t num_elems = EVAL_STACK_POP();
+
+                // extend to 64bit if a 32bit integer,
+                // we need to sign extend it
+                spidir_value_t element_count = num_elems.value;
+                if (num_elems.type == tInt32) {
+                    element_count = spidir_builder_build_iext(builder, element_count);
+                    element_count = spidir_builder_build_sfill(builder, 32, element_count);
+                }
+
+                RuntimeTypeInfo array_type;
+                CHECK_AND_RETHROW(tdn_get_array_type(inst.operand.type, &array_type));
+
+                // allocate it
+                spidir_value_t array = spidir_builder_build_call(
+                    builder,
+                    m_jit_gc_newarr,
+                    2,
+                    (spidir_value_t[]){
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)array_type),
+                        element_count
+                    }
+                );
+
+                // set the length, the reason we do it in here
+                // is to make sure that the jit sees the value
+                spidir_value_t length_ptr = spidir_builder_build_ptroff(builder,
+                    array,
+                    spidir_builder_build_iconst(builder,
+                        SPIDIR_TYPE_I64, offsetof(struct Array, Length))
+                );
+                spidir_builder_build_store(builder,
+                    SPIDIR_MEM_SIZE_4,
+                    element_count,
+                    length_ptr);
+
+                EVAL_STACK_PUSH(array_type, array);
+            } break;
+
+            case CEE_LDLEN: {
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                // load the length, a 4 byye -> 64bit zero extends by default
+                spidir_value_t length_ptr = spidir_builder_build_ptroff(builder,
+                    array.value,
+                    spidir_builder_build_iconst(builder,
+                        SPIDIR_TYPE_I64, offsetof(struct Array, Length))
+                );
+
+                spidir_value_t length = spidir_builder_build_load(builder,
+                    SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64,
+                    length_ptr
+                );
+
+                EVAL_STACK_PUSH(tIntPtr, length);
+            } break;
+
+            case CEE_STELEM:
+            case CEE_STELEM_REF: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                // sign extend the index
+                spidir_value_t index_val = index.value;
+                if (index.type == tInt32) {
+                    index_val = spidir_builder_build_iext(builder, index_val);
+                    index_val = spidir_builder_build_sfill(builder, 32, index_val);
+                }
+
+                // emit the length check
+                jit_emit_array_length_check(builder, array.value, index_val);
+
+                // get the pointer of the element
+                spidir_value_t offset = jit_emit_array_offset(builder, array.value, index_val, array.type->ElementType);
+
+                // and now store the value
+                jit_emit_store(builder, offset, value.value, array.type->ElementType);
+                jit_release_struct_slot(value.value);
+            } break;
+
+            case CEE_LDELEM:
+            case CEE_LDELEM_REF: {
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                // sign extend the index
+                spidir_value_t index_val = index.value;
+                if (index.type == tInt32) {
+                    index_val = spidir_builder_build_iext(builder, index_val);
+                    index_val = spidir_builder_build_sfill(builder, 32, index_val);
+                }
+
+                // emit the length check
+                jit_emit_array_length_check(builder, array.value, index_val);
+
+                // get the pointer of the element
+                spidir_value_t offset = jit_emit_array_offset(builder, array.value, index_val, array.type->ElementType);
+
+                // now perform the load itself
+                spidir_value_t value = jit_emit_load(builder, offset, array.type->ElementType);
+
+                EVAL_STACK_PUSH(tdn_get_intermediate_type(array.type->ElementType), value);
+            } break;
+
+            case CEE_LDELEMA: {
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                // sign extend the index
+                spidir_value_t index_val = index.value;
+                if (index.type == tInt32) {
+                    index_val = spidir_builder_build_iext(builder, index_val);
+                    index_val = spidir_builder_build_sfill(builder, 32, index_val);
+                }
+
+                // emit the length check
+                jit_emit_array_length_check(builder, array.value, index_val);
+
+                // get the pointer of the element
+                spidir_value_t offset = jit_emit_array_offset(builder, array.value, index_val, array.type->ElementType);
+
+                // and push the tracked address
+                RuntimeTypeInfo ref_type = tdn_get_verification_type(array.type->ElementType);
+                CHECK_AND_RETHROW(tdn_get_byref_type(ref_type, &ref_type));
+                EVAL_STACK_PUSH(ref_type, offset);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////

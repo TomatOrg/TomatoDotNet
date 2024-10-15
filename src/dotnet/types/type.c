@@ -21,6 +21,9 @@ bool tdn_type_is_referencetype(RuntimeTypeInfo type) {
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK(!type->IsByRef);
+    CHECK(!type->IsByRefStruct);
+
     RuntimeTypeInfo new_type = type->ArrayType;
     if (new_type != NULL) {
         *out_type = new_type;

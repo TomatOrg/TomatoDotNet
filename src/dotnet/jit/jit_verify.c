@@ -559,7 +559,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 if (inst.opcode == CEE_NEWOBJ) {
                     // newobj must be done on a non-static ctor
                     CHECK(!target->Attributes.Static);
-                    CHECK(!target->Attributes.RTSpecialName);
+                    CHECK(target->Attributes.RTSpecialName);
 
                     // queue the type itself
                     jit_queue_type(target->DeclaringType);
@@ -622,6 +622,107 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                         EVAL_STACK_PUSH(ret_type, attrs);
                     }
                 }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Array handlig
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_NEWARR: {
+                jit_stack_value_t num_elems = EVAL_STACK_POP();
+
+                CHECK(
+                    num_elems.type == tInt32 ||
+                    num_elems.type == tIntPtr
+                );
+
+                RuntimeTypeInfo array_type;
+                CHECK_AND_RETHROW(tdn_get_array_type(inst.operand.type, &array_type));
+
+                EVAL_STACK_PUSH(array_type);
+            } break;
+
+            case CEE_LDLEN: {
+                jit_stack_value_t array = EVAL_STACK_POP();
+                CHECK(array.type->IsArray);
+                EVAL_STACK_PUSH(tIntPtr);
+            } break;
+
+            case CEE_STELEM:
+            case CEE_STELEM_REF: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                CHECK(
+                    index.type == tInt32 ||
+                    index.type == tIntPtr
+                );
+
+                CHECK(array.type->IsArray);
+
+                RuntimeTypeInfo T = array.type->ElementType;
+                if (inst.operand.type == NULL) {
+                    // stelem.ref
+                    CHECK(tdn_type_is_referencetype(value.type));
+                    CHECK(tdn_type_array_element_compatible_with(value.type, T));
+
+                } else {
+                    // normal stelem
+                    // TODO: the spec is broken or something because I don't get it
+                    //       I added the get verification type and get intermediate type manually to make it work
+                    CHECK(tdn_type_array_element_compatible_with(value.type, tdn_get_intermediate_type(inst.operand.type)));
+                    CHECK(tdn_type_array_element_compatible_with(inst.operand.type, tdn_get_verification_type(T)));
+                }
+            } break;
+
+            case CEE_LDELEM:
+            case CEE_LDELEM_REF: {
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                CHECK(
+                    index.type == tInt32 ||
+                    index.type == tIntPtr
+                );
+
+                CHECK(array.type->IsArray);
+
+                RuntimeTypeInfo T = array.type->ElementType;
+                if (inst.operand.type == NULL) {
+                    // ldelem.ref
+                    CHECK(tdn_type_is_referencetype(T));
+                } else {
+                    // ldelem
+                    CHECK(tdn_type_array_element_compatible_with(T, inst.operand.type));
+                }
+
+                EVAL_STACK_PUSH(tdn_get_intermediate_type(T));
+            } break;
+
+            case CEE_LDELEMA: {
+                jit_stack_value_t index = EVAL_STACK_POP();
+                jit_stack_value_t array = EVAL_STACK_POP();
+
+                CHECK(
+                    index.type == tInt32 ||
+                    index.type == tIntPtr
+                );
+
+                CHECK(array.type->IsArray);
+
+                RuntimeTypeInfo T = array.type->ElementType;
+
+                // verify the types properly
+                RuntimeTypeInfo type_tok, T_ref;
+                CHECK_AND_RETHROW(tdn_get_byref_type(T, &T_ref));
+                CHECK_AND_RETHROW(tdn_get_byref_type(inst.operand.type, &type_tok));
+                CHECK_AND_RETHROW(tdn_type_pointer_element_compatible_with(T_ref, type_tok));
+
+                // and push the tracked address
+                RuntimeTypeInfo ref_type = tdn_get_verification_type(T);
+                CHECK_AND_RETHROW(tdn_get_byref_type(ref_type, &ref_type));
+                EVAL_STACK_PUSH(ref_type);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
