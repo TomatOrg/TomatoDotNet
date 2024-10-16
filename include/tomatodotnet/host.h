@@ -39,6 +39,7 @@ void tdn_host_map_rx(void* ptr, size_t size);
 // gc operation
 void* tdn_host_gc_alloc(size_t size, size_t alignment);
 void tdn_host_gc_register_root(void* root);
+void tdn_host_gc_pin_object(void* object);
 
 // file management
 typedef void* tdn_file_t;

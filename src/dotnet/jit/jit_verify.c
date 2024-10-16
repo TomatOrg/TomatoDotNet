@@ -401,7 +401,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // for simplicity, don't allow to
                 // store to a byref parameter
-                CHECK(!arg_type->IsByRef);
+                CHECK(!jit_is_byref_like(arg_type));
             }  break;
 
             case CEE_LDARG: {
@@ -415,7 +415,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 jit_item_attrs_t attrs = {};
 
                 // if this is a ref argument then it is nonlocal
-                if (arg_type->IsByRef) {
+                if (jit_is_byref_like(arg_type)) {
                     attrs.nonlocal_ref = true;
 
                     // check if the reference is readonly
@@ -474,22 +474,60 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             // Fields
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_STFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // TODO: check accessibility
+
+                // check that the object has the field
+                RuntimeTypeInfo owner = obj.type;
+                if (tdn_type_is_valuetype(field->DeclaringType)) {
+                    CHECK(owner->IsByRef);
+                    CHECK(field->DeclaringType == owner->ElementType);
+                } else {
+                    while (owner != field->DeclaringType) {
+                        owner = owner->BaseType;
+                        CHECK(owner != tObject);
+                    }
+                }
+
+                // clear the possible prefixes
+                // for the instruction
+                pending_prefix &= ~IL_PREFIX_VOLATILE;
+
+                CHECK(verifier_assignable_to(value.type, field->FieldType));
+            } break;
+
             case CEE_LDFLD: {
                 RuntimeFieldInfo field = inst.operand.field;
                 jit_stack_value_t obj = EVAL_STACK_POP();
 
                 // TODO: check accessibility
 
-                // TODO: check object has field
+                // get the owner type
+                RuntimeTypeInfo owner = obj.type;
+                if (tdn_type_is_valuetype(field->DeclaringType) && owner->IsByRef) {
+                    owner = owner->ElementType;
+                }
+
+                // check object has field
+                while (owner != field->DeclaringType) {
+                    owner = owner->BaseType;
+                    CHECK(owner != NULL);
+                }
 
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
 
-                jit_item_attrs_t attrs = {};
-                if (field->FieldType->IsByRef) {
-                    // TODO: set as readonly if a readonly byref
-                }
+                // this can have a non-local ref only if the struct
+                // itself is a nonlocal ref
+                jit_item_attrs_t attrs = {
+                    .readonly = field->IsReadOnly,
+                    .nonlocal_ref = obj.attrs.nonlocal_ref
+                };
 
                 RuntimeTypeInfo type = tdn_get_intermediate_type(field->FieldType);
                 EVAL_STACK_PUSH(type, attrs);
@@ -498,12 +536,31 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             case CEE_LDSFLD: {
                 // TODO: check accessibility
 
+                // make sure is static
+                CHECK(inst.operand.field->Attributes.Static);
+
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
 
                 RuntimeTypeInfo type = tdn_get_intermediate_type(inst.operand.field->FieldType);
                 EVAL_STACK_PUSH(type);
+            } break;
+
+            case CEE_STSFLD: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                // TODO: check accessibility
+
+                // make sure is static
+                CHECK(inst.operand.field->Attributes.Static);
+
+                // clear the possible prefixes
+                // for the instruction
+                pending_prefix &= ~IL_PREFIX_VOLATILE;
+
+                // check assignable
+                CHECK(verifier_assignable_to(value.type, inst.operand.field->FieldType));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -587,7 +644,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     // we might get it back (or something in it) from the
                     // function return, so ensure that we won't treat it
                     // as non-local
-                    if (arg.type->IsByRef && !arg.attrs.nonlocal_ref) {
+                    if (jit_is_byref_like(arg.type) && !arg.attrs.nonlocal_ref) {
                         might_return_nonlocal_ref = true;
                     }
                 }
@@ -694,7 +751,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     CHECK(tdn_type_is_referencetype(T));
                 } else {
                     // ldelem
-                    CHECK(tdn_type_array_element_compatible_with(T, inst.operand.type));
+                    // TODO: same as the stelem, I need to add the verification type reduction to make it pass...
+                    CHECK(tdn_type_array_element_compatible_with(tdn_get_verification_type(T), inst.operand.type));
                 }
 
                 EVAL_STACK_PUSH(tdn_get_intermediate_type(T));
@@ -915,7 +973,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     }
 
                     // make sure we don't leak a non-local byref
-                    if (ret_val.type->IsByRef) {
+                    if (jit_is_byref_like(ret_val.type)) {
                         CHECK(ret_val.attrs.nonlocal_ref);
                     }
 

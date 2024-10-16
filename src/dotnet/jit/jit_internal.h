@@ -159,6 +159,10 @@ static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
     return jit_is_interface(type) || jit_is_struct(type);
 }
 
+static inline bool jit_is_byref_like(RuntimeTypeInfo type) {
+    return type->IsByRef || type->IsByRefStruct;
+}
+
 /*
  * Create or get the jit method for the given method
  *

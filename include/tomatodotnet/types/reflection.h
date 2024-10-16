@@ -97,7 +97,8 @@ typedef struct RuntimeFieldInfo {
     void* JitFieldPtr;
     int FieldOffset;
     uint32_t IsVolatile : 1;
-    uint32_t : 31;
+    uint32_t IsReadOnly : 1;
+    uint32_t : 30;
 }* RuntimeFieldInfo;
 DEFINE_ARRAY(RuntimeFieldInfo);
 

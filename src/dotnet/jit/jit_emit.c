@@ -1,5 +1,6 @@
 #include "jit_emit.h"
 
+#include <dotnet/gc/gc.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
 
@@ -263,13 +264,62 @@ static RuntimeTypeInfo emit_get_stack_type(RuntimeTypeInfo type) {
         __arg_type; \
     })
 
-static spidir_value_t jit_get_stack_slot(spidir_builder_handle_t builder, RuntimeTypeInfo type) {
+static void jit_register_roots(void* ptr, RuntimeTypeInfo type) {
+    if (tdn_type_is_valuetype(type)) {
+        // need to go over all its fields
+        for (int i = 0; i < type->DeclaredFields->Length; i++) {
+            RuntimeFieldInfo field = type->DeclaredFields->Elements[i];
+            if (!field->Attributes.Static) {
+                jit_register_roots(ptr + field->FieldOffset, field->FieldType);
+            }
+        }
+
+    } else if (tdn_type_is_referencetype(type)) {
+        // this is a reference, either the
+        // actual object or the interface
+        // instance
+        gc_register_root(ptr);
+
+    } else {
+        ASSERT(!"Impossible");
+    }
+}
+
+static tdn_err_t jit_init_static_field(RuntimeFieldInfo field) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (field->JitFieldPtr != NULL) {
+        goto cleanup;
+    }
+
+    RuntimeTypeInfo type = field->FieldType;
+
+    // allocate it on the heap, that is the easiest way to do it
+    field->JitFieldPtr = tdn_host_mallocz(type->StackSize);
+    CHECK_ERROR(field->JitFieldPtr != NULL, TDN_ERROR_OUT_OF_MEMORY);
+
+    // register all the roots to the gc
+    jit_register_roots(field->JitFieldPtr, type);
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Struct slots
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static spidir_value_t jit_get_struct_slot(spidir_builder_handle_t builder, RuntimeTypeInfo type) {
     // TODO: how should we handle this the best
     return spidir_builder_build_stackslot(builder, type->StackSize, type->StackAlignment);
 }
 
 static void jit_release_struct_slot(spidir_value_t value) {
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Emit helpers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst, spidir_value_t src, RuntimeTypeInfo type) {
     // TODO: replace with a jit builtin-memcpy
@@ -298,16 +348,98 @@ static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, 
     );
 }
 
-static void jit_emit_store(spidir_builder_handle_t builder, spidir_value_t dest, spidir_value_t value, RuntimeTypeInfo type) {
+static bool jit_convert_interface(
+    spidir_builder_handle_t builder,
+    spidir_value_t dest, spidir_value_t src,
+    RuntimeTypeInfo dest_type, RuntimeTypeInfo src_type
+) {
+    ASSERT(jit_is_interface(dest_type));
+
+    if (!jit_is_interface(src_type)) {
+        // object -> interface
+
+        // store the instance
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, src, dest);
+
+        // load the vtable pointer
+        spidir_value_t vtable = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, src);
+        vtable = spidir_builder_build_inttoptr(builder, vtable);
+
+        // calculate the offset from the vtable and add it to it
+        size_t interface_offset = -1;
+        ASSERT(!"TODO: find the offset of the interface");
+        interface_offset = interface_offset * sizeof(void*) + offsetof(ObjectVTable, Functions);
+        vtable = spidir_builder_build_ptroff(builder, vtable,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, interface_offset));
+
+        // and store it
+        dest = spidir_builder_build_ptroff(builder, dest,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable)));
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable, dest);
+
+        // copy was performed
+        return true;
+    }
+
+    if (dest_type != src_type) {
+        // upcasting interfaces, need to move the vtable pointer
+        ASSERT(jit_is_interface(dest_type));
+        ASSERT(jit_is_interface(src_type));
+
+        // copy the instance
+        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, src);
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, dest);
+
+        // load the vtable pointer
+        spidir_value_t vtable = spidir_builder_build_ptroff(builder, src,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable)));
+        vtable = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, src);
+
+        // calculate the offset from the vtable and add it to it
+        size_t interface_offset = -1;
+        ASSERT(!"TODO: find the offset of the interface");
+        interface_offset = interface_offset * sizeof(void*);
+        vtable = spidir_builder_build_ptroff(builder, vtable,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, interface_offset));
+
+        // and store it
+        dest = spidir_builder_build_ptroff(builder, dest,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable)));
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable, dest);
+
+        // we copied
+        return true;
+    }
+
+    return false;
+}
+
+static void jit_emit_store(spidir_builder_handle_t builder, spidir_value_t dest, spidir_value_t value, RuntimeTypeInfo dest_type, RuntimeTypeInfo src_type) {
     // store something that is a struct
-    if (jit_is_struct_like(type)) {
-        jit_emit_memcpy(builder, dest, value, type);
+    if (jit_is_struct_like(dest_type)) {
+        // attempt to convert the interface in-place, if there is no conversion
+        // to be done perform the normal memcpy
+        if (
+            !jit_is_interface(dest_type) ||
+            !jit_convert_interface(builder, dest, value, dest_type, src_type)
+        ) {
+            jit_emit_memcpy(builder, dest, value, dest_type);
+        }
+
+        // release the struct slot for further use
+        jit_release_struct_slot(value);
 
     } else {
+        if (jit_is_interface(src_type)) {
+            // interface -> object
+            // just need to load the instance field
+            value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, value);
+        }
+
         // store something that is not a struct
         spidir_builder_build_store(
             builder,
-            get_spidir_mem_size(type),
+            get_spidir_mem_size(dest_type),
             value,
             dest);
     }
@@ -316,7 +448,7 @@ static void jit_emit_store(spidir_builder_handle_t builder, spidir_value_t dest,
 static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, spidir_value_t src, RuntimeTypeInfo type) {
     // store something that is a struct
     if (jit_is_struct_like(type)) {
-        spidir_value_t new_struct = jit_get_stack_slot(builder, type);
+        spidir_value_t new_struct = jit_get_struct_slot(builder, type);
         jit_emit_memcpy(builder, new_struct, src, type);
         return new_struct;
 
@@ -384,6 +516,10 @@ static spidir_value_t jit_emit_array_offset(spidir_builder_handle_t builder, spi
     return spidir_builder_build_ptroff(builder, array, offset);
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Emit basic block
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_method_t* jmethod, jit_basic_block_t* block) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = jmethod->method;
@@ -445,8 +581,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 // for locals as well)
                 CHECK(jmethod->args[index].spill_required);
                 spidir_value_t dest = jmethod->args[index].value;
-                jit_emit_store(builder, dest, value.value, arg_type);
-                jit_release_struct_slot(dest);
+                jit_emit_store(builder, dest, value.value, arg_type, value.type);
             }  break;
 
             case CEE_LDARG: {
@@ -458,7 +593,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                 if (jit_is_struct_like(arg_type)) {
                     // struct, need to copy it
-                    spidir_value_t new_struct = jit_get_stack_slot(builder, arg_type);
+                    spidir_value_t new_struct = jit_get_struct_slot(builder, arg_type);
                     jit_emit_memcpy(builder, new_struct, value, arg_type);
                     value = new_struct;
 
@@ -484,8 +619,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                 // verify the type
                 jit_stack_value_t value = EVAL_STACK_POP();
-                jit_emit_store(builder, jmethod->locals[index].value, value.value, local->LocalType);
-                jit_release_struct_slot(value.value);
+                jit_emit_store(builder, jmethod->locals[index].value, value.value, local->LocalType, value.type);
             } break;
 
             case CEE_LDLOC: {
@@ -510,13 +644,38 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             // Fields
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_STFLD: {
+                RuntimeFieldInfo field = inst.operand.field;
+                jit_stack_value_t value = EVAL_STACK_POP();
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // get the pointer to the field
+                spidir_value_t field_ptr;
+                if (!field->Attributes.Static) {
+                    field_ptr = spidir_builder_build_ptroff(builder, obj.value,
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, field->FieldOffset));
+                } else {
+                    CHECK_AND_RETHROW(jit_init_static_field(field));
+                    field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
+                }
+
+                // and now emit the store
+                jit_emit_store(builder, field_ptr, value.value, field->FieldType, value.type);
+            } break;
+
             case CEE_LDFLD: {
                 RuntimeFieldInfo field = inst.operand.field;
                 jit_stack_value_t obj = EVAL_STACK_POP();
 
                 // get the pointer to the field
-                spidir_value_t field_ptr = spidir_builder_build_ptroff(builder, obj.value,
+                spidir_value_t field_ptr;
+                if (!field->Attributes.Static) {
+                    field_ptr = spidir_builder_build_ptroff(builder, obj.value,
                     spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, field->FieldOffset));
+                } else {
+                    CHECK_AND_RETHROW(jit_init_static_field(field));
+                    field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
+                }
 
                 // now perform the load
                 spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType);
@@ -526,12 +685,20 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 EVAL_STACK_PUSH(type, value);
             } break;
 
+            case CEE_STSFLD: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                RuntimeFieldInfo field = inst.operand.field;
+                CHECK_AND_RETHROW(jit_init_static_field(field));
+                spidir_value_t field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
+
+                jit_emit_store(builder, field_ptr, value.value, field->FieldType, value.type);
+            } break;
+
             case CEE_LDSFLD: {
                 // get the pointer to the field
                 RuntimeFieldInfo field = inst.operand.field;
-
-                // TODO: initialize the field pointer
-
+                CHECK_AND_RETHROW(jit_init_static_field(field));
                 spidir_value_t field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
 
                 // now perform the load
@@ -561,6 +728,9 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             } break;
 
             case CEE_LDSTR: {
+                // pin the string so it will never get GCed
+                tdn_host_gc_pin_object(inst.operand.string);
+
                 spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst.operand.string);
                 EVAL_STACK_PUSH(tString, value);
             } break;
@@ -590,8 +760,34 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                 // add all the args
                 for (int i = target->Parameters->Length - 1; i >= 0; i--) {
+                    RuntimeTypeInfo arg_type = target->Parameters->Elements[i]->ParameterType;
                     jit_stack_value_t arg = EVAL_STACK_POP();
-                    arrins(args, 0, arg.value);
+
+                    // if this is an interface and the type of the arg is not the exact same
+                    // as the type of the param then perform an interface convert on a new
+                    // slot
+                    spidir_value_t value = arg.value;
+                    if (jit_is_interface(arg_type) && arg_type != arg.type) {
+                        spidir_value_t new_slot;
+                        if (!jit_is_interface(arg.type)) {
+                            // not even an interface, will need to
+                            // allocate a new slot for this
+                            new_slot = jit_get_struct_slot(builder, arg_type);
+                        } else {
+                            // this is already an interface, because of the eval-stack rules
+                            // this is already a new copy that we can do whatever we want with
+                            new_slot = value;
+                        }
+
+                        // perform the interface convertion
+                        CHECK(jit_convert_interface(builder, new_slot, value, arg_type, arg.type));
+                        // TODO: release the struct after the call
+
+                        // now use the new slot as the valeu
+                        value = new_slot;
+                    }
+
+                    arrins(args, 0, value);
                 }
 
                 if (inst.opcode == CEE_NEWOBJ) {
@@ -599,7 +795,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     // just emit a stack slot and zero it
                     spidir_value_t obj;
                     if (jit_is_struct(target->DeclaringType)) {
-                        obj = jit_get_stack_slot(builder, target->DeclaringType);
+                        obj = jit_get_struct_slot(builder, target->DeclaringType);
                         jit_emit_bzero(builder, obj, target->DeclaringType);
                     } else {
                         // call the gc to create the new object
@@ -648,7 +844,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 ParameterInfo ret_info = target->ReturnParameter;
                 RuntimeTypeInfo ret_type = tdn_get_intermediate_type(ret_info->ParameterType);
                 if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
-                    ret_val_ptr = jit_get_stack_slot(builder, ret_type);
+                    ret_val_ptr = jit_get_struct_slot(builder, ret_type);
                     arrpush(args, ret_val_ptr);
                 }
 
@@ -812,8 +1008,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 spidir_value_t offset = jit_emit_array_offset(builder, array.value, index_val, array.type->ElementType);
 
                 // and now store the value
-                jit_emit_store(builder, offset, value.value, array.type->ElementType);
-                jit_release_struct_slot(value.value);
+                jit_emit_store(builder, offset, value.value, array.type->ElementType, value.type);
             } break;
 
             case CEE_LDELEM:
@@ -1153,7 +1348,16 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     if (jit_is_struct_like(ret_val.type)) {
                         // get the return pointer from the top of the stack implicitly
                         spidir_value_t ret_ptr = spidir_builder_build_param_ref(builder, arrlen(jmethod->locals));
-                        jit_emit_memcpy(builder, ret_ptr, ret_val.value, ret_val.type);
+
+                        // copy the value to it, in some cases we will perform an interface convertion to match
+                        // the actual returned type
+                        if (
+                            !jit_is_interface(type) ||
+                            !jit_convert_interface(builder, ret_ptr, ret_val.value, type, ret_val.type)
+                        ) {
+                            jit_emit_memcpy(builder, ret_ptr, ret_val.value, ret_val.type);
+                        }
+
                         jit_release_struct_slot(ret_val.value);
 
                         spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);

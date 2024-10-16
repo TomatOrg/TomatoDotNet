@@ -118,6 +118,10 @@ void tdn_host_gc_register_root(void* root) {
     (void)root;
 }
 
+void tdn_host_gc_pin_object(void* object) {
+
+}
+
 void* tdn_host_map(size_t size) {
     void* ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (ptr == MAP_FAILED) {
