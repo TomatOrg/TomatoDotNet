@@ -3,6 +3,7 @@
 #include <dotnet/types.h>
 #include <spidir/module.h>
 #include <tomatodotnet/types/reflection.h>
+#include <util/defs.h>
 
 // enable printing while verifying
 #define JIT_VERBOSE_VERIFY
@@ -161,6 +162,10 @@ static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
 
 static inline bool jit_is_byref_like(RuntimeTypeInfo type) {
     return type->IsByRef || type->IsByRefStruct;
+}
+
+static inline size_t jit_get_boxed_value_offset(RuntimeTypeInfo type) {
+    return ALIGN_UP(sizeof(struct Object), type->StackAlignment);
 }
 
 /*

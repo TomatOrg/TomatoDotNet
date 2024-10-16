@@ -484,13 +484,15 @@ static void jit_emit_array_length_check(spidir_builder_handle_t builder, spidir_
         SPIDIR_ICMP_ULT, SPIDIR_TYPE_I32,
         index, length);
 
+    // now emit the brcond on the check
     spidir_block_t in_range = spidir_builder_create_block(builder);
     spidir_block_t out_of_range = spidir_builder_create_block(builder);
+    spidir_builder_build_brcond(builder, in_range_result, in_range, out_of_range);
 
     // go to the invalid path
     spidir_builder_set_block(builder, out_of_range);
 
-    // TODO: throw the exception
+    // TODO: throw IndexOutOfRangeException
 
     // we won't go any further
     spidir_builder_build_unreachable(builder);
@@ -793,6 +795,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     arrins(args, 0, value);
                 }
 
+                bool need_explicit_null_check = false;
                 if (inst.opcode == CEE_NEWOBJ) {
                     // perform the allocation, in the case of a struct value
                     // just emit a stack slot and zero it
@@ -815,28 +818,42 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     jit_stack_value_t obj = EVAL_STACK_POP();
                     arrins(args, 0, obj.value);
 
-                    if (inst.opcode == CEE_CALL) {
-                        if (obj.attrs.known_type != NULL) {
+                    if (inst.opcode == CEE_CALLVIRT) {
+                        if (!target->Attributes.Virtual) {
+                            // method not virtual, just need the null check
+                            inst.opcode = CEE_CALL;
+                            need_explicit_null_check = true;
+
+                        } else if (obj.attrs.known_type != NULL) {
                             // we have a known type, we can de-virt to it
                             target = (RuntimeMethodBase)obj.attrs.known_type->VTable->Elements[target->VTableOffset];
                             inst.opcode = CEE_CALL;
+                            need_explicit_null_check = true;
+
+                            // if we have de-virtualized a boxed
+                            if (
+                                tdn_type_is_referencetype(obj.type) &&
+                                tdn_type_is_valuetype(obj.attrs.known_type) &&
+                                tdn_type_is_valuetype(target->DeclaringType)
+                            ) {
+                                args[0] = spidir_builder_build_ptroff(builder, args[0],
+                                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(obj.attrs.known_type)));
+                            }
 
                         } else if (target->Attributes.Final || target->DeclaringType->Attributes.Sealed) {
                             // the type is sealed / the method is final, we can de-virt it
                             target = (RuntimeMethodBase)target->DeclaringType->VTable->Elements[target->VTableOffset];
                             inst.opcode = CEE_CALL;
+                            need_explicit_null_check = true;
 
                         } else if (jit_is_struct(target->DeclaringType)) {
-                            // the type is a struct, attempt to de-virt it, if we don't have
-                            // a way to de-virt it then in theory we need to box it, but I think
-                            // for now I will just fail
+                            // the type is a struct, attempt to de-virt it
                             RuntimeMethodBase possible_target = (RuntimeMethodBase)target->DeclaringType->VTable->Elements[target->VTableOffset];
-                            if (possible_target->DeclaringType == target->DeclaringType) {
-                                target = possible_target;
-                                inst.opcode = CEE_CALL;
-                            } else {
-                                CHECK_FAIL();
-                            }
+                            CHECK(possible_target->DeclaringType == target->DeclaringType);
+                            target = possible_target;
+                            inst.opcode = CEE_CALL;
+                            need_explicit_null_check = true;
+
                         }
                     }
                 }
@@ -902,6 +919,13 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     //       already should handle it in the verifier
                     jit_method_t* target_method = NULL;
                     CHECK_AND_RETHROW(jit_get_or_create_method(method, &target_method));
+
+                    // perform the null check on this if required
+                    if (need_explicit_null_check) {
+                        // just perform a deref, this will fail if we have a null pointer in there,
+                        // use a size of 1 in case we have a struct ref in here
+                        spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_1, SPIDIR_TYPE_I32, args[0]);
+                    }
 
                     // and now we can perform the direct call
                     ret_value = spidir_builder_build_call(
@@ -1405,6 +1429,82 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 }
 
                 CHECK(arrlen(stack) == 0);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Class casting
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_BOX: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                // TODO: how does box work with nullable
+
+                // if this is areference type then there is nothing to do,
+                // just keep it as is
+                spidir_value_t res = value.value;
+                if (!tdn_type_is_referencetype(inst.operand.type)) {
+                    // allocate it
+                    res = spidir_builder_build_call(
+                        builder,
+                        m_jit_gc_new,
+                        1,
+                        (spidir_value_t[]){
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst.operand.type)
+                        }
+                    );
+
+                    // get the pointer to the data
+                    spidir_value_t value_ptr = spidir_builder_build_ptroff(builder, res,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(inst.operand.type)));
+
+                    // store to it the value itself
+                    jit_emit_store(builder, value_ptr, value.value, inst.operand.type, value.type);
+                }
+
+                // track it as an object
+                EVAL_STACK_PUSH(tObject, res, .attrs = {.known_type = inst.operand.type});
+            } break;
+
+            case CEE_UNBOX_ANY: {
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // if this is already a reference type we have nothing to do
+                spidir_value_t value = obj.value;
+                if (!tdn_type_is_referencetype(inst.operand.type)) {
+                    // if we don't know the exact types we
+                    // need to emit a type check
+                    if (obj.attrs.known_type != inst.operand.type) {
+                        // the null check will just check the vtables, because we know
+                        // that it must be a value type which doesn't have any inheritance
+
+                        // load the vtable of the object
+                        spidir_value_t runtime = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32, value);
+                        spidir_value_t expected = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (uint32_t)inst.operand.type->JitVTable);
+                        spidir_value_t result = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, runtime, expected);
+
+                        // and emit the brcond
+                        spidir_block_t same_type = spidir_builder_create_block(builder);
+                        spidir_block_t not_same_type = spidir_builder_create_block(builder);
+                        spidir_builder_build_brcond(builder, result, same_type, not_same_type);
+
+                        // start with the invalid path
+                        spidir_builder_set_block(builder, not_same_type);
+                        // TODO: throw InvalidCastException
+                        spidir_builder_build_unreachable(builder);
+
+                        // continue on the same path
+                        spidir_builder_set_block(builder, same_type);
+                    }
+
+                    // perform the load assuming its
+                    value = jit_emit_load(builder, obj.value, inst.operand.type, inst.operand.type);
+                } else {
+                    // TODO: perform castclass
+                }
+
+                // and push it
+                EVAL_STACK_PUSH(tdn_get_intermediate_type(inst.operand.type), value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////

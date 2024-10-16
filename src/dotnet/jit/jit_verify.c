@@ -622,8 +622,14 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     jit_queue_type(target->DeclaringType);
 
                 } else if (inst.opcode == CEE_CALLVIRT) {
-                    // callvirt must be done on a static method
+                    // callvirt must be done on a non-static method
+                    // it can be done on a non-virtual one, then it
+                    // just requires a nullcheck
                     CHECK(!target->Attributes.Static);
+
+                    // must be a reference type, otherwise there is
+                    // no vtable to check
+                    CHECK(tdn_type_is_referencetype(target->DeclaringType));
                 }
 
                 // verify all of the arguments
@@ -1016,6 +1022,34 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 }
 
                 CHECK(arrlen(stack) == 0);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Class casting
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_BOX: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+
+                // must not be something that has a ref
+                CHECK(!jit_is_byref_like(value.type));
+
+                // validate it can be boxed as we want
+                CHECK(verifier_assignable_to(value.type, inst.operand.type));
+
+                // TODO: how does box work with nullable
+
+                // track it as an object
+                EVAL_STACK_PUSH(tObject, { .known_type = inst.operand.type });
+            } break;
+
+            case CEE_UNBOX_ANY: {
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // must be another ref on the stack
+                CHECK(tdn_type_is_referencetype(obj.type));
+
+                EVAL_STACK_PUSH(tdn_get_intermediate_type(inst.operand.type));
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
