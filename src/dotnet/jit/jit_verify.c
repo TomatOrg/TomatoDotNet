@@ -755,6 +755,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     CHECK(tdn_type_array_element_compatible_with(tdn_get_verification_type(T), inst.operand.type));
                 }
 
+                // TODO: should this actually track the inst.operand.type and not the T itself?
+                //       this could be very much important when dealing with interfaces...
                 EVAL_STACK_PUSH(tdn_get_intermediate_type(T));
             } break;
 
@@ -781,6 +783,38 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeTypeInfo ref_type = tdn_get_verification_type(T);
                 CHECK_AND_RETHROW(tdn_get_byref_type(ref_type, &ref_type));
                 EVAL_STACK_PUSH(ref_type);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Indirect access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDIND_I1:
+            case CEE_LDIND_I2:
+            case CEE_LDIND_I4:
+            case CEE_LDIND_I8:
+            case CEE_LDIND_U1:
+            case CEE_LDIND_U2:
+            case CEE_LDIND_U4:
+            case CEE_LDIND_I:
+            case CEE_LDIND_REF:
+            case CEE_LDOBJ: {
+                jit_stack_value_t addr = EVAL_STACK_POP();
+
+                CHECK(addr.type->IsByRef);
+
+                pending_prefix &= ~IL_PREFIX_VOLATILE;
+
+                RuntimeTypeInfo type = inst.operand.type;
+                if (type == NULL) {
+                    type = addr.type->ElementType;
+                    CHECK(tdn_type_is_referencetype(type));
+                    type = tdn_get_verification_type(type);
+                } else {
+                    CHECK(verifier_is_assignable(addr.type->ElementType, type));
+                    type = tdn_get_intermediate_type(type);
+                }
+                EVAL_STACK_PUSH(type);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////

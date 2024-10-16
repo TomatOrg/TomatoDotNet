@@ -445,19 +445,22 @@ static void jit_emit_store(spidir_builder_handle_t builder, spidir_value_t dest,
     }
 }
 
-static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, spidir_value_t src, RuntimeTypeInfo type) {
+static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, spidir_value_t src, RuntimeTypeInfo src_type, RuntimeTypeInfo dest_type) {
+    // TODO: we will need to add code to convert structs in here as well
+    ASSERT(tdn_get_intermediate_type(src_type) == tdn_get_intermediate_type(dest_type));
+
     // store something that is a struct
-    if (jit_is_struct_like(type)) {
-        spidir_value_t new_struct = jit_get_struct_slot(builder, type);
-        jit_emit_memcpy(builder, new_struct, src, type);
+    if (jit_is_struct_like(src_type)) {
+        spidir_value_t new_struct = jit_get_struct_slot(builder, src_type);
+        jit_emit_memcpy(builder, new_struct, src, src_type);
         return new_struct;
 
     } else {
         // store something that is not a struct
         return spidir_builder_build_load(
             builder,
-            get_spidir_mem_size(type),
-            get_spidir_type(type),
+            get_spidir_mem_size(src_type),
+            get_spidir_type(src_type),
             src);
     }
 
@@ -625,7 +628,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             case CEE_LDLOC: {
                 int index = inst.operand.variable;
                 RuntimeLocalVariableInfo local = body->LocalVariables->Elements[index];
-                spidir_value_t value = jit_emit_load(builder, jmethod->locals[index].value, local->LocalType);
+                spidir_value_t value = jit_emit_load(builder, jmethod->locals[index].value, local->LocalType, local->LocalType);
                 RuntimeTypeInfo type = tdn_get_intermediate_type(local->LocalType);
                 EVAL_STACK_PUSH(type, value);
             } break;
@@ -678,7 +681,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 }
 
                 // now perform the load
-                spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType);
+                spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType, field->FieldType);
 
                 // and push it
                 RuntimeTypeInfo type = tdn_get_intermediate_type(field->FieldType);
@@ -702,7 +705,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 spidir_value_t field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
 
                 // now perform the load
-                spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType);
+                spidir_value_t value = jit_emit_load(builder, field_ptr, field->FieldType, field->FieldType);
 
                 RuntimeTypeInfo type = tdn_get_intermediate_type(inst.operand.field->FieldType);
                 EVAL_STACK_PUSH(type, value);
@@ -1030,7 +1033,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 spidir_value_t offset = jit_emit_array_offset(builder, array.value, index_val, array.type->ElementType);
 
                 // now perform the load itself
-                spidir_value_t value = jit_emit_load(builder, offset, array.type->ElementType);
+                // TODO: should we use the inst.operand.type here?
+                spidir_value_t value = jit_emit_load(builder, offset, array.type->ElementType, array.type->ElementType);
 
                 EVAL_STACK_PUSH(tdn_get_intermediate_type(array.type->ElementType), value);
             } break;
@@ -1056,6 +1060,36 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 RuntimeTypeInfo ref_type = tdn_get_verification_type(array.type->ElementType);
                 CHECK_AND_RETHROW(tdn_get_byref_type(ref_type, &ref_type));
                 EVAL_STACK_PUSH(ref_type, offset);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Indirect access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDIND_I1:
+            case CEE_LDIND_I2:
+            case CEE_LDIND_I4:
+            case CEE_LDIND_I8:
+            case CEE_LDIND_U1:
+            case CEE_LDIND_U2:
+            case CEE_LDIND_U4:
+            case CEE_LDIND_I:
+            case CEE_LDIND_REF:
+            case CEE_LDOBJ: {
+                jit_stack_value_t addr = EVAL_STACK_POP();
+
+                // get the type we will have on the stack eventually
+                RuntimeTypeInfo type = inst.operand.type;
+                if (type == NULL) {
+                    type = addr.type->ElementType;
+                    type = tdn_get_verification_type(type);
+                } else {
+                    type = tdn_get_intermediate_type(type);
+                }
+
+                // perform the load
+                spidir_value_t value = jit_emit_load(builder, addr.value, addr.type->ElementType, type);
+                EVAL_STACK_PUSH(type, value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
