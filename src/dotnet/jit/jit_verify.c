@@ -54,38 +54,6 @@ cleanup:
 // Verify types match
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static bool verifier_is_assignable(RuntimeTypeInfo src, RuntimeTypeInfo dst) {
-    if (src == dst) {
-        return true;
-    }
-
-    if (tdn_type_is_referencetype(src)) {
-        if (!tdn_type_is_referencetype(dst)) {
-            return false;
-        }
-
-        if (src == NULL) {
-            return true;
-        }
-
-        // if the dst is an interface, check that we can
-        if (dst->Attributes.Interface) {
-            return (src->JitVTable->InterfaceProduct % dst->TypeId) == 0;
-        }
-
-        // check that the object can be lowered to the dest object
-        // TODO: when we implemented the normal type ids then use that instead
-        do {
-            if (dst == src) {
-                return true;
-            }
-            src = src->BaseType;
-        } while (src != NULL);
-    }
-
-    return false;
-}
-
 static bool verifier_is_binary_comparable(RuntimeTypeInfo src, RuntimeTypeInfo dst, tdn_il_opcode_t op) {
     if (tdn_type_is_referencetype(src)) {
         // can only compare reference type to another one
@@ -228,19 +196,19 @@ cleanup:
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static bool verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
-    RuntimeTypeInfo T = tdn_get_verification_type(Q);
-    RuntimeTypeInfo U = tdn_get_verification_type(R);
-
     // 9. T is null type, and U is reference type, we perform
     //    this first to make sure that no null deref happens from
     //    the null type
-    if (T == NULL) {
-        if (tdn_type_is_referencetype(U)) {
+    if (Q == NULL) {
+        if (tdn_type_is_referencetype(R)) {
             return true;
         }
 
         return false;
     }
+
+    RuntimeTypeInfo T = tdn_get_verification_type(Q);
+    RuntimeTypeInfo U = tdn_get_verification_type(R);
 
     return tdn_type_assignable_to(T, U);
 }
@@ -382,6 +350,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
         switch (inst.opcode) {
 
+            case CEE_VOLATILE: {
+                pending_prefix |= IL_PREFIX_VOLATILE;
+            } break;
+
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Arguments
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -393,6 +365,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 // verify the type
                 jit_stack_value_t value = EVAL_STACK_POP();
                 CHECK(verifier_assignable_to(value.type, arg_type));
+
+                // need to be spilled like a local variable
+                jmethod->args[index].spill_required = true;
 
                 // don't allow to modify this
                 if (this_type != NULL) {
@@ -430,6 +405,24 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 EVAL_STACK_PUSH(arg_type, attrs);
             }  break;
+
+            case CEE_LDARGA: {
+                int index = inst.operand.variable;
+                RuntimeTypeInfo arg_type = GET_ARG_TYPE(index);
+
+                // don't allow byref of the this, so
+                // it can't be overriden
+                if (this_type != NULL) {
+                    CHECK(index != 0);
+                }
+
+                // mark that we need a spill
+                jmethod->args[index].spill_required = true;
+
+                arg_type = tdn_get_verification_type(arg_type);
+                CHECK_AND_RETHROW(tdn_get_byref_type(arg_type, &arg_type));
+                EVAL_STACK_PUSH(arg_type);
+            } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Locals
@@ -533,20 +526,6 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 EVAL_STACK_PUSH(type, attrs);
             } break;
 
-            case CEE_LDSFLD: {
-                // TODO: check accessibility
-
-                // make sure is static
-                CHECK(inst.operand.field->Attributes.Static);
-
-                // clear the possible prefixes
-                // for the instruction
-                pending_prefix &= ~IL_PREFIX_VOLATILE;
-
-                RuntimeTypeInfo type = tdn_get_intermediate_type(inst.operand.field->FieldType);
-                EVAL_STACK_PUSH(type);
-            } break;
-
             case CEE_STSFLD: {
                 jit_stack_value_t value = EVAL_STACK_POP();
 
@@ -561,6 +540,35 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // check assignable
                 CHECK(verifier_assignable_to(value.type, inst.operand.field->FieldType));
+            } break;
+
+            case CEE_LDSFLD: {
+                // TODO: check accessibility
+
+                // make sure is static
+                CHECK(inst.operand.field->Attributes.Static);
+
+                // clear the possible prefixes
+                // for the instruction
+                pending_prefix &= ~IL_PREFIX_VOLATILE;
+
+                RuntimeTypeInfo type = tdn_get_intermediate_type(inst.operand.field->FieldType);
+                EVAL_STACK_PUSH(type);
+            } break;
+
+            case CEE_LDSFLDA: {
+                // TODO: check accessibility
+
+                // make sure is static
+                CHECK(inst.operand.field->Attributes.Static);
+
+                RuntimeTypeInfo type = tdn_get_verification_type(inst.operand.field->FieldType);
+                CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+                jit_item_attrs_t attrs = {
+                    .nonlocal_ref = true,
+                    .readonly = inst.operand.field->IsReadOnly,
+                };
+                EVAL_STACK_PUSH(type, attrs);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -585,6 +593,12 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
             case CEE_POP: {
                 EVAL_STACK_POP();
+            } break;
+
+            case CEE_DUP: {
+                jit_stack_value_t value = EVAL_STACK_POP();
+                EVAL_STACK_PUSH(value.type, value.attrs);
+                EVAL_STACK_PUSH(value.type, value.attrs);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -817,10 +831,44 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     CHECK(tdn_type_is_referencetype(type));
                     type = tdn_get_verification_type(type);
                 } else {
-                    CHECK(verifier_is_assignable(addr.type->ElementType, type));
+                    CHECK(verifier_assignable_to(addr.type->ElementType, type));
                     type = tdn_get_intermediate_type(type);
                 }
                 EVAL_STACK_PUSH(type);
+            } break;
+
+            case CEE_STIND_I1:
+            case CEE_STIND_I2:
+            case CEE_STIND_I4:
+            case CEE_STIND_I8:
+            case CEE_STIND_I:
+            case CEE_STIND_REF:
+            case CEE_STOBJ: {
+                jit_stack_value_t val = EVAL_STACK_POP();
+                jit_stack_value_t addr = EVAL_STACK_POP();
+
+                CHECK(addr.type->IsByRef);
+
+                if (inst.operand.type != NULL) {
+                    CHECK(verifier_assignable_to(val.type, inst.operand.type));
+                } else {
+                    CHECK(tdn_type_is_referencetype(val.type));
+                }
+
+                // check consistent
+                CHECK(verifier_assignable_to(val.type, addr.type->ElementType));
+            } break;
+
+            case CEE_INITOBJ: {
+                jit_stack_value_t dest = EVAL_STACK_POP();
+
+                CHECK(dest.type->IsByRef);
+
+                if (tdn_type_is_referencetype(dest.type->ElementType)) {
+                    CHECK(tdn_type_assignable_to(inst.operand.type, dest.type->ElementType));
+                } else {
+                    CHECK(inst.operand.type == dest.type->ElementType);
+                }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
