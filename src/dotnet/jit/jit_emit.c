@@ -29,6 +29,9 @@ static spidir_function_t m_jit_gc_newarr;
 
 static spidir_function_t m_jit_throw;
 
+static spidir_function_t m_jit_throw_invalid_cast_exception;
+static spidir_function_t m_jit_throw_index_out_of_range_exception;
+
 static struct {
     spidir_function_t key;
     void* value;
@@ -89,6 +92,20 @@ static void create_jit_helpers() {
         }
     );
     hmput(m_jit_helper_lookup, m_jit_throw, jit_throw);
+
+    m_jit_throw_invalid_cast_exception = spidir_module_create_extern_function(m_jit_module,
+        "jit_throw_invalid_cast_exception",
+        SPIDIR_TYPE_NONE,
+        0, NULL
+    );
+    hmput(m_jit_helper_lookup, m_jit_throw_invalid_cast_exception, jit_throw_invalid_cast_exception);
+
+    m_jit_throw_index_out_of_range_exception = spidir_module_create_extern_function(m_jit_module,
+        "jit_throw_index_out_of_range_exception",
+        SPIDIR_TYPE_NONE,
+        0, NULL
+    );
+    hmput(m_jit_helper_lookup, m_jit_throw_index_out_of_range_exception, jit_throw_index_out_of_range_exception);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -154,7 +171,10 @@ static spidir_value_type_t* get_spidir_arg_types(RuntimeMethodBase method) {
 
     // implicit retval pointer
     RuntimeTypeInfo ret_type = method->ReturnParameter->ParameterType;
-    if (ret_type != tVoid && !ret_type->IsByRef && jit_is_struct_like(ret_type)) {
+    if (
+        ret_type != tVoid &&
+        jit_is_struct_like(ret_type)
+    ) {
         arrpush(types, SPIDIR_TYPE_PTR);
     }
 
@@ -170,6 +190,11 @@ static void jit_queue_block(jit_method_t* method, spidir_builder_handle_t builde
 
         // create the phis for this block
         if (block->needs_phi) {
+            // switch to the target block
+            spidir_block_t current;
+            ASSERT(spidir_builder_cur_block(builder, &current));
+            spidir_builder_set_block(builder, block->block);
+
             for (int i = 0; i < arrlen(block->stack); i++) {
                 block->stack[i].value = spidir_builder_build_phi(
                     builder,
@@ -178,6 +203,9 @@ static void jit_queue_block(jit_method_t* method, spidir_builder_handle_t builde
                     &block->stack[i].phi
                 );
             }
+
+            // switch back
+            spidir_builder_set_block(builder, current);
         }
 
         // queue it
@@ -200,6 +228,7 @@ static tdn_err_t emit_merge_basic_block(jit_method_t* method, spidir_builder_han
     // TODO: in theory we only need to do this on the entries that are at the top
     //       of the stack to the lowest this block goes
     if (target->needs_phi) {
+        CHECK(arrlen(stack) == arrlen(target->stack));
         for (int i = 0; i < arrlen(stack); i++) {
             spidir_builder_add_phi_input(builder,
                 target->stack[i].phi,
@@ -207,7 +236,9 @@ static tdn_err_t emit_merge_basic_block(jit_method_t* method, spidir_builder_han
         }
     } else {
         // copy all of the stack over
-        memcpy(target->stack, stack, arrlen(stack) * sizeof(*stack));
+        for (int i = 0; i < arrlen(stack); i++) {
+            target->stack[i].value = stack[i].value;
+        }
     }
 
     // output the block if this entry
@@ -455,11 +486,19 @@ static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, spidir_valu
 
     } else {
         // store something that is not a struct
-        return spidir_builder_build_load(
+        // zero extend by default
+        spidir_value_t value = spidir_builder_build_load(
             builder,
             get_spidir_mem_size(src_type),
             get_spidir_type(src_type),
             src);
+
+        // sign extend if required
+        if (src_type == tSByte || src_type == tInt16) {
+            value = spidir_builder_build_sfill(builder, src_type->StackSize * 8, value);
+        }
+
+        return value;
     }
 
 }
@@ -490,7 +529,12 @@ static void jit_emit_array_length_check(spidir_builder_handle_t builder, spidir_
     // go to the invalid path
     spidir_builder_set_block(builder, out_of_range);
 
-    // TODO: throw IndexOutOfRangeException
+    // throw IndexOutOfRangeException
+    spidir_builder_build_call(
+        builder,
+        m_jit_throw_index_out_of_range_exception,
+        0, NULL
+    );
 
     // we won't go any further
     spidir_builder_build_unreachable(builder);
@@ -957,7 +1001,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     // TODO: replace with a version that doesn't create since we
                     //       already should handle it in the verifier
                     jit_method_t* target_method = NULL;
-                    CHECK_AND_RETHROW(jit_get_or_create_method(method, &target_method));
+                    CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
 
                     // perform the null check on this if required
                     if (need_explicit_null_check) {
@@ -1322,8 +1366,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     case CEE_CGT: SWAP(val1, val2);
                     case CEE_CLT: kind = SPIDIR_ICMP_SLT; break;
 
-                    case CEE_CLT_UN: SWAP(val1, val2);
-                    case CEE_CGT_UN: kind = SPIDIR_ICMP_ULT; break;
+                    case CEE_CGT_UN: SWAP(val1, val2);
+                    case CEE_CLT_UN: kind = SPIDIR_ICMP_ULT; break;
 
                     default: CHECK_FAIL();
                 }
@@ -1506,6 +1550,10 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     pc,
                     stack, &false_block));
 
+                if (inst.opcode == CEE_BRFALSE) {
+                    SWAP(true_block, false_block);
+                }
+
                 // and finally emit the actual brcond
                 spidir_builder_build_brcond(builder, value.value, true_block, false_block);
             } break;
@@ -1613,15 +1661,23 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                         // start with the invalid path
                         spidir_builder_set_block(builder, not_same_type);
-                        // TODO: throw InvalidCastException
+                        spidir_builder_build_call(
+                            builder,
+                            m_jit_throw_invalid_cast_exception,
+                            0, NULL
+                        );
                         spidir_builder_build_unreachable(builder);
 
                         // continue on the same path
                         spidir_builder_set_block(builder, same_type);
                     }
 
+                    // get the pointer to the data
+                    spidir_value_t value_ptr = spidir_builder_build_ptroff(builder, obj.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(inst.operand.type)));
+
                     // perform the load assuming its
-                    value = jit_emit_load(builder, obj.value, inst.operand.type, inst.operand.type);
+                    value = jit_emit_load(builder, value_ptr, inst.operand.type, inst.operand.type);
                 } else {
                     // TODO: perform castclass
                     CHECK_FAIL();
@@ -1649,7 +1705,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
     }
 
     // we have a fallthrough, handle it
-    if (inst.control_flow == TDN_IL_CF_NEXT) {
+    if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
         spidir_block_t new_block;
         CHECK_AND_RETHROW(emit_merge_basic_block(jmethod, builder, pc, stack, &new_block));
         spidir_builder_build_branch(builder, new_block);
@@ -1682,7 +1738,7 @@ static bool jit_prepare_args(spidir_builder_handle_t builder, jit_method_t* meth
             } else {
                 size = get_spidir_mem_size(arg->type);
             }
-            spidir_builder_build_store(builder, size, arg->value, value);
+            spidir_builder_build_store(builder, size, value, arg->value);
 
             modified_block = true;
         } else {
@@ -1864,8 +1920,6 @@ static spidir_function_t create_spidir_function(RuntimeMethodBase method, bool e
 void jit_queue_emit(jit_method_t* method) {
     // if required create a new spidir module
     if (m_jit_module == NULL) {
-        TRACE("~~~ JIT START ~~~");
-
         // create the module
         m_jit_module = spidir_module_create();
 
@@ -1993,6 +2047,12 @@ tdn_err_t jit_emit(void) {
         CHECK_AND_RETHROW(jit_emit_method(method));
     }
 
+#ifdef JIT_DUMP_EMIT
+    void* ctx = tdn_host_jit_start_dump();
+    spidir_module_dump(m_jit_module, tdn_host_jit_dump_callback, ctx);
+    tdn_host_jit_end_dump(ctx);
+#endif
+
     //
     // TODO: this is where we need to enable optimizations and such
     //
@@ -2080,7 +2140,6 @@ cleanup:
 
     // cleanup the module
     if (m_jit_module != NULL) {
-        TRACE("~~~ JIT END ~~~");
         spidir_module_destroy(m_jit_module);
         m_jit_module = NULL;
     }

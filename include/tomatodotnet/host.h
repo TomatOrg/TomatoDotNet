@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <spidir/module.h>
+
 #include "except.h"
 
 // logging helpers
@@ -40,6 +42,13 @@ void tdn_host_map_rx(void* ptr, size_t size);
 void* tdn_host_gc_alloc(size_t size, size_t alignment);
 void tdn_host_gc_register_root(void* root);
 void tdn_host_gc_pin_object(void* object);
+
+// used for debugging the jit, will dump spidir modules
+// using these functions
+// TODO: ugly
+void* tdn_host_jit_start_dump(void);
+void tdn_host_jit_end_dump(void* ctx);
+spidir_dump_status_t tdn_host_jit_dump_callback(const char* data, size_t size, void* ctx);
 
 // file management
 typedef void* tdn_file_t;

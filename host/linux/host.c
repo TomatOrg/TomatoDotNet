@@ -133,3 +133,20 @@ void* tdn_host_map(size_t size) {
 void tdn_host_map_rx(void* ptr, size_t size) {
     mprotect(ptr, size, PROT_READ | PROT_EXEC);
 }
+
+static int m_debug_counter = 0;
+
+void* tdn_host_jit_start_dump(void) {
+    char name[256];
+    snprintf(name, sizeof(name), "test.%d.spidir", m_debug_counter++);
+    return fopen(name, "w");
+}
+
+void tdn_host_jit_end_dump(void* ctx) {
+    fclose(ctx);
+}
+
+spidir_dump_status_t tdn_host_jit_dump_callback(const char* data, size_t size, void* ctx) {
+    fwrite(data, size, 1, ctx);
+    return SPIDIR_DUMP_CONTINUE;
+}

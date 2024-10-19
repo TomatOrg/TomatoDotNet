@@ -367,7 +367,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 CHECK(verifier_assignable_to(value.type, arg_type));
 
                 // need to be spilled like a local variable
-                jmethod->args[index].spill_required = true;
+                if (!jit_is_struct_like(arg_type)) {
+                    jmethod->args[index].spill_required = true;
+                }
 
                 // don't allow to modify this
                 if (this_type != NULL) {
@@ -417,7 +419,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 }
 
                 // mark that we need a spill
-                jmethod->args[index].spill_required = true;
+                if (!jit_is_struct_like(arg_type)) {
+                    jmethod->args[index].spill_required = true;
+                }
 
                 arg_type = tdn_get_verification_type(arg_type);
                 CHECK_AND_RETHROW(tdn_get_byref_type(arg_type, &arg_type));
@@ -1122,7 +1126,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
     }
 
     // we have a fallthrough
-    if (inst.control_flow == TDN_IL_CF_NEXT) {
+    if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
         CHECK_AND_RETHROW(verify_merge_basic_block(jmethod, pc, stack, locals));
     }
 

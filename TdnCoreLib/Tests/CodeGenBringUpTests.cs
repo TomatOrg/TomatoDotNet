@@ -2250,49 +2250,49 @@ public class CodeGenBringUpTests
         {
             if (p0.W != 0)
                 return false;
-
+            
             if (p0.X != 0)
                 return false;
-
+            
             if (p0.Y != 0)
                 return false;
-
+            
             if (p0.Z != 0)
                 return false;
 
             if (p1.W != 1)
                 return false;
-
+            
             if (p1.X != 1)
                 return false;
-
+            
             if (p1.Y != 1)
                 return false;
-
+            
             if (p1.Z != 1)
                 return false;
-
+            
             if (p2.W != 9)
                 return false;
-
+            
             if (p2.X != 99)
                 return false;
-
+            
             if (p2.Y != 999)
                 return false;
-
+            
             if (p2.Z != 9999)
                 return false;
-
+            
             if (p3.W != 10)
                 return false;
-
+            
             if (p3.X != 100)
                 return false;
-
+            
             if (p3.Y != 1000)
                 return false;
-
+            
             if (p3.Z != 10000)
                 return false;
             
