@@ -247,6 +247,10 @@ cleanup:
     return err;
 }
 
+static void console_write_line(String str) {
+    TRACE("%U", str);
+}
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     register_printf_specifier('U', string_output, string_arginf_sz);
@@ -255,6 +259,18 @@ int main(int argc, char* argv[]) {
     // load the corelib, must come first
     RuntimeAssembly corelib = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Debug/net8.0/System.Private.CoreLib.dll", &corelib));
+
+    RuntimeAssembly console = NULL;
+    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Debug/net8.0/System.Console.dll", &console));
+
+    RuntimeTypeInfo console_class;
+    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(console, "System", "Console", &console_class));
+    for (int i = 0; i < console_class->DeclaredMethods->Length; i++) {
+        RuntimeMethodInfo method = console_class->DeclaredMethods->Elements[i];
+        if (tdn_compare_string_to_cstr(method->Name, "WriteLine")) {
+            method->MethodPtr = console_write_line;
+        }
+    }
 
     RuntimeAssembly tests = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll", &tests));

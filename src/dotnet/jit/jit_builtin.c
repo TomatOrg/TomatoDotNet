@@ -79,11 +79,11 @@ void jit_emit_builtin(spidir_builder_handle_t handle, void* _ctx) {
         if (tdn_compare_string_to_cstr(method->Name, "Add")) {
             emit_unsafe_add(handle, method);
         } else {
-            CHECK_FAIL();
+            CHECK_FAIL("Invalid function %T::%U", method->DeclaringType, method->Name);
         }
 
     } else {
-        CHECK_FAIL();
+        CHECK_FAIL("Invalid function %T::%U", method->DeclaringType, method->Name);
     }
 
 cleanup:

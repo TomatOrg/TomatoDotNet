@@ -1325,8 +1325,8 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
         if (attributes.RTSpecialName) CHECK(attributes.SpecialName);
         if (attributes.Final || attributes.VtableNewSlot || attributes.Strict) CHECK(attributes.Virtual);
         if (attributes.PinvokeImpl) CHECK(!attributes.Virtual);
-        if (!attributes.Abstract) CHECK(method_def->rva != 0 || attributes.PinvokeImpl || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME);
-        if (method_def->rva == 0) CHECK(attributes.Abstract || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME || attributes.PinvokeImpl);
+        if (!attributes.Abstract) CHECK(method_def->rva != 0 || attributes.PinvokeImpl || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_NATIVE);
+        if (method_def->rva == 0) CHECK(attributes.Abstract || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_NATIVE || attributes.PinvokeImpl);
         if (method_def->rva != 0) CHECK(!attributes.Abstract && (impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_IL || impl_attributes.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME));
         if (attributes.PinvokeImpl) CHECK(method_def->rva == 0);
         if (attributes.RTSpecialName) {
