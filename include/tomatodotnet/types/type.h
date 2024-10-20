@@ -94,6 +94,7 @@ typedef struct RuntimeTypeInfo {
     // The base of the type
     RuntimeTypeInfo BaseType;
     generic_type_instance_t* GenericTypeInstances;
+    RuntimeConstructorInfo TypeInitializer;
 
     // the interfaces this type implements
     interface_impl_t* InterfaceImpls;

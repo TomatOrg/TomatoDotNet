@@ -1543,7 +1543,6 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
     type->DeclaredMethods = GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
     methods = 0;
-    bool found_static_ctor = false;
     for (int i = 0; i < methods_count; i++) {
         int idx = type_def->method_list.index + i;
         metadata_method_def_t* method_def = &assembly->Metadata->method_defs[idx - 1];
@@ -1616,8 +1615,8 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                 CHECK(!is_module);
                 CHECK(base->ReturnParameter->ParameterType == tVoid);
             } else if (strcmp(method_def->name, ".cctor") == 0) {
-                CHECK(!found_static_ctor);
-                found_static_ctor = true;
+                CHECK(type->TypeInitializer == NULL);
+                type->TypeInitializer = (RuntimeConstructorInfo)base;
                 CHECK(base->ReturnParameter->ParameterType == tVoid);
                 CHECK(base->Parameters->Length == 0);
             } else {

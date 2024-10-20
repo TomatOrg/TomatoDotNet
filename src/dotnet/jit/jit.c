@@ -24,6 +24,20 @@ static void jit_spidir_log_callback(spidir_log_level_t level, const char* module
 // Top level dispatching
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+static jit_cctor_t* m_jit_cctors_to_run = NULL;
+
+void jit_queue_cctor(jit_cctor_t type) {
+    arrpush(m_jit_cctors_to_run, type);
+}
+
+static void jit_call_cctors() {
+    for (int i = 0; i < arrlen(m_jit_cctors_to_run); i++) {
+        m_jit_cctors_to_run[i]();
+    }
+
+    arrfree(m_jit_cctors_to_run);
+}
+
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -41,6 +55,19 @@ cleanup:
     return err;
 }
 
+static tdn_err_t jit_common(void) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // emit everything
+    CHECK_AND_RETHROW(jit_emit());
+
+    // call all the cctors
+    jit_call_cctors();
+
+cleanup:
+    return err;
+}
+
 // TODO: protect with a lock, only one assembly/method/type can be jitted at any given time
 //       this ensures easier ordering between different jitting sessions
 
@@ -49,11 +76,8 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
 
     // TODO: take mutex
 
-    // queue the method
     CHECK_AND_RETHROW(jit_verify_method(methodInfo));
-
-    // emit everything
-    CHECK_AND_RETHROW(jit_emit());
+    CHECK_AND_RETHROW(jit_common());
 
 cleanup:
     // we can now clean the session
@@ -69,11 +93,8 @@ tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
 
     // TODO: take mutex
 
-    // queue the type
     CHECK_AND_RETHROW(jit_verify_type(type));
-
-    // emit everything
-    CHECK_AND_RETHROW(jit_emit());
+    CHECK_AND_RETHROW(jit_common());
 
 cleanup:
     // we can now clean the session

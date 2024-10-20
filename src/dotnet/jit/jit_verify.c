@@ -27,6 +27,20 @@ static void jit_queue_verify(jit_method_t* method) {
     }
 }
 
+static tdn_err_t jit_queue_cctor(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    RuntimeMethodBase cctor = (RuntimeMethodBase)type->TypeInitializer;
+    if (cctor != NULL) {
+        jit_method_t* jit_method;
+        CHECK_AND_RETHROW(jit_get_or_create_method(cctor, &jit_method));
+        jit_queue_verify(jit_method);
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t jit_queue_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -490,6 +504,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     }
                 }
 
+                // make sure we have the cctor
+                if (field->Attributes.Static) {
+                    CHECK_AND_RETHROW(jit_queue_cctor(field->DeclaringType));
+                }
+
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
@@ -515,6 +534,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     CHECK(owner != NULL);
                 }
 
+                // make sure we have the cctor
+                if (field->Attributes.Static) {
+                    CHECK_AND_RETHROW(jit_queue_cctor(field->DeclaringType));
+                }
+
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
@@ -538,6 +562,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 // make sure is static
                 CHECK(inst.operand.field->Attributes.Static);
 
+                // make sure we have the cctor
+                CHECK_AND_RETHROW(jit_queue_cctor(inst.operand.field->DeclaringType));
+
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
@@ -552,6 +579,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 // make sure is static
                 CHECK(inst.operand.field->Attributes.Static);
 
+                // make sure we have the cctor
+                CHECK_AND_RETHROW(jit_queue_cctor(inst.operand.field->DeclaringType));
+
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
@@ -565,6 +595,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // make sure is static
                 CHECK(inst.operand.field->Attributes.Static);
+
+                // make sure we have the cctor
+                CHECK_AND_RETHROW(jit_queue_cctor(inst.operand.field->DeclaringType));
 
                 RuntimeTypeInfo type = tdn_get_verification_type(inst.operand.field->FieldType);
                 CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
@@ -628,6 +661,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     if (tdn_type_is_valuetype(target_this_type)) {
                         CHECK_AND_RETHROW(tdn_get_byref_type(target_this_type, &target_this_type));
                     }
+                } else {
+                    // make sure we have the cctor
+                    CHECK_AND_RETHROW(jit_queue_cctor(target->DeclaringType));
                 }
 
                 // some extra verifications
@@ -638,6 +674,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                     // queue the type itself
                     jit_queue_type(target->DeclaringType);
+
+                    // make sure we have the cctor
+                    CHECK_AND_RETHROW(jit_queue_cctor(target->DeclaringType));
 
                 } else if (inst.opcode == CEE_CALLVIRT) {
                     // callvirt must be done on a non-static method

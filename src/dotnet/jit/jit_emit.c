@@ -13,6 +13,7 @@
 #include <util/string.h>
 #include <util/string_builder.h>
 
+#include "jit.h"
 #include "jit_builtin.h"
 #include "jit_helpers.h"
 
@@ -1976,6 +1977,18 @@ static tdn_err_t jit_map_and_relocate(size_t map_size) {
             spidir_codegen_blob_get_code(blob->blob),
             method->method->MethodSize
         );
+
+        // check the static constructor
+        RuntimeTypeInfo type = method->method->DeclaringType;
+        if (type->TypeInitializer != NULL) {
+            if (type->Attributes.BeforeFieldInit) {
+                jit_queue_cctor(method->method->MethodPtr);
+            } else {
+                // TODO: need to generate a hook or something
+                //       to call the initializer
+                CHECK_FAIL();
+            }
+        }
     }
 
     // now we can apply the relocations, this can technically be done in parallel but I think

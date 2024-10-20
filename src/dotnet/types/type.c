@@ -288,6 +288,11 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
         if (attributes.RTSpecialName) {
             base = (RuntimeMethodBase)GC_NEW(RuntimeConstructorInfo);
             type->DeclaredConstructors->Elements[ctors++] = (RuntimeConstructorInfo)base;
+
+            // set this as the type initialized
+            if (original_type->TypeInitializer == (RuntimeConstructorInfo)original_method) {
+                type->TypeInitializer = (RuntimeConstructorInfo)base;
+            }
         } else {
             base = (RuntimeMethodBase)GC_NEW(RuntimeMethodInfo);
             type->DeclaredMethods->Elements[methods++] = (RuntimeMethodInfo)base;
@@ -298,7 +303,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
         base->DeclaringType = type;
         base->Module = type->Module;
         base->Name = original_method->Name;
-        base->Attributes = attributes;
+        base->Attributes = original_method->Attributes;
         base->MethodImplFlags = original_method->MethodImplFlags;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
 
