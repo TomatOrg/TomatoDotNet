@@ -1980,7 +1980,7 @@ static tdn_err_t jit_map_and_relocate(size_t map_size) {
 
         // check the static constructor
         RuntimeTypeInfo type = method->method->DeclaringType;
-        if (type->TypeInitializer != NULL) {
+        if (type->TypeInitializer == (RuntimeConstructorInfo)method->method) {
             if (type->Attributes.BeforeFieldInit) {
                 jit_queue_cctor(method->method->MethodPtr);
             } else {

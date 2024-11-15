@@ -26,6 +26,7 @@ static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_A
     new_method->Attributes = base->Attributes;
     new_method->MethodImplFlags = base->MethodImplFlags;
     new_method->IsReadOnly = base->IsReadOnly;
+    new_method->VTableOffset = VTABLE_INVALID;
 
     // if it has a body copy it over
     if (method_def->rva != 0) {

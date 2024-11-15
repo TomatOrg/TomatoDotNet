@@ -6,20 +6,6 @@ namespace Tests;
 
 public static class Program
 {
-
-    public interface IA
-    {
-        public int Test();
-    }
-
-    public class A : IA
-    {
-        public int Test()
-        {
-            return 123;
-        }
-    }
-    
     public static int Main()
     {
         if (CodeGenBringUpTests.Run() != 0) return 1;
@@ -30,8 +16,6 @@ public static class Program
         if (!Arrays.Run()) return 6;
         if (!ConstantFolding.Run()) return 7;
         if (!Shifts.Run()) return 8;
-
         return 0;
     }
-    
 }

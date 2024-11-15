@@ -3,6 +3,11 @@ namespace System;
 internal static class ThrowHelper
 {
     
+    internal static void ThrowArgumentNullException(string argument)
+    {
+        throw new ArgumentNullException(argument);
+    }
+    
     internal static void ThrowInvalidOperationException_InvalidOperation_NoValue()
     {
         throw new InvalidOperationException(SR.InvalidOperation_NoValue);

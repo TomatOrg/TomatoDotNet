@@ -451,7 +451,7 @@ tdn_err_t sig_parse_field(blob_entry_t _blob, RuntimeFieldInfo field_info) {
         is_ref = true;
 
         // make sure it is not defined in a class
-        CHECK(tdn_type_is_valuetype(field_info->DeclaringType));
+        CHECK(tdn_type_is_valuetype(field_info->DeclaringType), "%T", field_info->DeclaringType->BaseType);
 
         // mark the owner as a ref-struct, we will check later if it has
         // any other problems

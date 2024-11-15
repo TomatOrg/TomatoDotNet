@@ -222,11 +222,15 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
     tdn_err_t err = TDN_NO_ERROR;
     token_t token = { .token = type->MetadataToken };
     RuntimeAssembly assembly = type->Module->Assembly;
+    CHECK(token.table == METADATA_TYPE_DEF);
+    CHECK(token.index != 0);
     metadata_type_def_t* type_def = &assembly->Metadata->type_defs[token.index - 1];
 
     // resolve it
-    CHECK_AND_RETHROW(tdn_assembly_lookup_type(
-            assembly, type_def->extends.token, type->GenericArguments, NULL, &type->BaseType));
+    if (type_def->extends.index != 0) {
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(
+                assembly, type_def->extends.token, type->GenericArguments, NULL, &type->BaseType));
+    }
 
     // make sure the array is built correctly
     if (token.index != 1) {
@@ -305,6 +309,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
         base->Name = original_method->Name;
         base->Attributes = original_method->Attributes;
         base->MethodImplFlags = original_method->MethodImplFlags;
+        base->VTableOffset = VTABLE_INVALID;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
 
         // if its generic setup the arguments and method definition
