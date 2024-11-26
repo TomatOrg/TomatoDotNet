@@ -361,6 +361,7 @@ static tdn_err_t create_generic_type(RuntimeTypeInfo base, RuntimeTypeInfo_Array
     new_type->GenericTypeDefinition = base;
     new_type->GenericArguments = args;
     new_type->IsReadOnly = base->IsReadOnly;
+    new_type->IsByRefStruct = base->IsByRefStruct;
 
     // get all the other stuff
     token_t token = { .token = base->MetadataToken };

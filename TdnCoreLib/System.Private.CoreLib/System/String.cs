@@ -15,17 +15,42 @@ public sealed partial class String
     private int _length;
     private char _firstChar;
 
-    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
-    public extern String(ReadOnlySpan<char> value);
-    
-    public static bool IsNullOrEmpty([NotNullWhen(false)] string? value)
+    public String(ReadOnlySpan<char> value)
     {
-        return value == null || value.Length == 0;
+        _length = value.Length;
+        Buffer.Memmove(ref _firstChar, ref value._reference, (nuint)value.Length);
     }
+
+    internal String(int length)
+    {
+        _length = length;
+    }
+    
+    [IndexerName("Chars")]
+    public char this[int index]
+    {
+        get
+        {
+            if ((uint)index >= (uint)_length)
+                ThrowHelper.ThrowIndexOutOfRangeException();
+            return Unsafe.Add(ref Unsafe.AsRef(ref _firstChar), (nint)(uint)index /* force zero-extension */);
+        }
+    }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static implicit operator ReadOnlySpan<char>(string? value) =>
+        value != null ? new ReadOnlySpan<char>(ref value.GetRawStringData(), value.Length) : default;
+    
+    internal ref char GetRawStringData() => ref _firstChar;
     
     public override string ToString()
     {
         return this;
+    }
+
+    public static bool IsNullOrEmpty([NotNullWhen(false)] string? value)
+    {
+        return value == null || value.Length == 0;
     }
     
 }

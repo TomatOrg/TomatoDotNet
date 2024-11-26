@@ -9,7 +9,7 @@ public readonly ref struct ReadOnlySpan<T>
     
     public static ReadOnlySpan<T> Empty => default;
     
-    private readonly ref T _reference;
+    internal readonly ref T _reference;
     private readonly int _length;
 
     public int Length => _length;
@@ -99,6 +99,16 @@ public readonly ref struct ReadOnlySpan<T>
         if ((ulong)(uint)start + (ulong)(uint)length > (ulong)(uint)_length)
             ThrowHelper.ThrowArgumentOutOfRangeException();
         return new ReadOnlySpan<T>(ref Unsafe.Add(ref _reference, (nint)(uint)start /* force zero-extension */), length);
+    }
+    
+    public T[] ToArray()
+    {
+        if (_length == 0)
+            return Array.Empty<T>();
+
+        var destination = new T[_length];
+        Buffer.Memmove(ref MemoryMarshal.GetArrayDataReference(destination), ref _reference, (uint)_length);
+        return destination;
     }
     
 }

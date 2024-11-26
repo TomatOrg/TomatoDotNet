@@ -134,6 +134,12 @@ static bool jit_merge_attrs(jit_item_attrs_t* wanted, jit_item_attrs_t* actual) 
         modified = true;
     }
 
+    // and same for ref-structs
+    if (wanted->nonlocal_ref_struct && !actual->nonlocal_ref_struct) {
+        wanted->nonlocal_ref_struct = false;
+        modified = true;
+    }
+
     return modified;
 }
 
@@ -308,29 +314,37 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
         this_type = jmethod->args[0].type;
     }
 
-    // initialize the context
-    // if this block was jumped to before then the locals would be non-null and we would need
-    // to initialize from it
-    if (body->LocalVariables != NULL) {
-        arrsetlen(locals, body->LocalVariables->Length);
-    }
-
     if (block->initialized) {
-        // copy the initial locals state
-        memcpy(locals, block->locals, sizeof(*locals) * arrlen(locals));
-
         // copy the initial stack
         arrsetlen(stack, arrlen(block->stack));
         memcpy(stack, block->stack, arrlen(block->stack) * sizeof(*block->stack));
-    } else {
-        // start with no attributes on any local
-        memset(locals, 0, sizeof(*locals) * arrlen(locals));
 
-        // also initialize the locals in the block
-        arrsetlen(block->locals, arrlen(locals));
-        memset(block->locals, 0, sizeof(*block->locals) * arrlen(block->locals));
+    } else {
+        //
+        // This is the first block, should only really happen
+        // on the entry block
+        //
+
+        // set initial local state
+        if (body->LocalVariables != NULL) {
+            arrsetlen(block->locals, body->LocalVariables->Length);
+            for (int i = 0; i < arrlen(block->locals); i++) {
+                RuntimeTypeInfo type = jmethod->locals[i].type;
+
+                // we need to initialize locals to be non-local since they start with
+                // all zeroes default state, and a NULL ref is considered a non-local ref
+                block->locals[i] = (jit_item_attrs_t){
+                    .nonlocal_ref_struct = type->IsByRefStruct,
+                    .nonlocal_ref = type->IsByRef,
+                };
+            }
+        }
     }
     block->initialized = true;
+
+    // copy the locals state
+    arrsetlen(locals, arrlen(block->locals));
+    memcpy(locals, block->locals, sizeof(*locals) * arrlen(locals));
 
 #ifdef JIT_VERBOSE_VERIFY
     int indent = 0;
@@ -392,7 +406,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // for simplicity, don't allow to
                 // store to a byref parameter
-                CHECK(!jit_is_byref_like(arg_type));
+                if (arg_type->IsByRef) CHECK(value.attrs.nonlocal_ref);
+                if (arg_type->IsByRefStruct) CHECK(value.attrs.nonlocal_ref_struct);
             }  break;
 
             case CEE_LDARG: {
@@ -406,17 +421,34 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 jit_item_attrs_t attrs = {};
 
                 // if this is a ref argument then it is nonlocal
-                if (jit_is_byref_like(arg_type)) {
-                    attrs.nonlocal_ref = true;
-
+                if (arg_type->IsByRef) {
                     // check if the reference is readonly
                     if (arg_param != NULL) {
                         attrs.readonly = arg_param->IsReadOnly;
+
+                        // a ref that comes from the outside, so its a non-local ref
+                        attrs.nonlocal_ref = true;
                     } else {
-                        // if either the method or the type is readonly,
-                        // then the this pointer is also readonly
-                        attrs.readonly = method->IsReadOnly || method->DeclaringType->IsReadOnly;
+                        // if this is a readonly method and we are loading
+                        // the `this` pointer then its a non-local reference
+                        attrs.readonly = method->IsReadOnly;
+
+                        if (arg_type->ElementType->IsByRefStruct) {
+                            // when passing a ref struct, the ref struct itself is considered
+                            // non-local, even tho its reference is considered local (because
+                            // of the default scoping rules), this doesn't allow ldflda to work
+                            // but allows ldfld of references to work
+                            attrs.nonlocal_ref_struct = true;
+                        }
+
+                        // TODO: UnscopedRefAttribute
                     }
+
+                } else if (arg_type->IsByRefStruct) {
+                    // a ref-struct that comes from the outside, quick check to make sure we are
+                    // not returning a `this` type with this
+                    CHECK(arg_param != NULL);
+                    attrs.nonlocal_ref_struct = true;
                 }
 
                 EVAL_STACK_PUSH(arg_type, attrs);
@@ -426,7 +458,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 int index = inst.operand.variable;
                 RuntimeTypeInfo arg_type = GET_ARG_TYPE(index);
 
-                // don't allow byref of the this, so
+                // don't allow byref of the `this`, so
                 // it can't be overriden
                 if (this_type != NULL) {
                     CHECK(index != 0);
@@ -437,9 +469,18 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     jmethod->args[index].spill_required = true;
                 }
 
+                jit_item_attrs_t attrs = {};
+
+                // taking a reference to a ref-struct parameter
+                // keeps the nonlocality of the struct itself even
+                // tho the ref itself is local
+                if (arg_type->IsByRefStruct) {
+                    attrs.nonlocal_ref_struct = true;
+                }
+
                 arg_type = tdn_get_verification_type(arg_type);
                 CHECK_AND_RETHROW(tdn_get_byref_type(arg_type, &arg_type));
-                EVAL_STACK_PUSH(arg_type);
+                EVAL_STACK_PUSH(arg_type, attrs);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -450,14 +491,13 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 int index = inst.operand.variable;
                 CHECK(index < arrlen(locals));
                 RuntimeLocalVariableInfo local = body->LocalVariables->Elements[index];
-                jit_item_attrs_t attrs = locals[index];
 
                 // verify the type
                 jit_stack_value_t value = EVAL_STACK_POP();
                 CHECK(verifier_assignable_to(value.type, local->LocalType));
 
                 // set the new local attributes
-                locals[index] = attrs;
+                locals[index] = value.attrs;
             } break;
 
             case CEE_LDLOC: {
@@ -478,7 +518,12 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeTypeInfo type = tdn_get_verification_type(local->LocalType);
                 CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
 
-                EVAL_STACK_PUSH(type);
+                // need to keep the locality of the ref-struct
+                jit_item_attrs_t attrs = {
+                    .nonlocal_ref_struct = locals[index].nonlocal_ref_struct
+                };
+
+                EVAL_STACK_PUSH(type, attrs);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -496,11 +541,24 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeTypeInfo owner = obj.type;
                 if (tdn_type_is_valuetype(field->DeclaringType)) {
                     CHECK(owner->IsByRef);
-                    CHECK(field->DeclaringType == owner->ElementType);
+                    owner = owner->ElementType;
+
+                    CHECK(field->DeclaringType == owner);
                 } else {
                     while (owner != field->DeclaringType) {
                         owner = owner->BaseType;
                         CHECK(owner != tObject);
+                    }
+                }
+
+                // check this is a valid assignment
+                CHECK(verifier_assignable_to(value.type, field->FieldType));
+
+                // if we assign a ref into a ref-struct field then
+                // we need to make sure we won't be able to leak a local
+                if (owner->IsByRefStruct && value.type->IsByRef) {
+                    if (obj.attrs.nonlocal_ref_struct) {
+                        CHECK(value.attrs.nonlocal_ref);
                     }
                 }
 
@@ -512,8 +570,6 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 // clear the possible prefixes
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
-
-                CHECK(verifier_assignable_to(value.type, field->FieldType));
             } break;
 
             case CEE_LDFLD: {
@@ -543,14 +599,56 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 // for the instruction
                 pending_prefix &= ~IL_PREFIX_VOLATILE;
 
-                // this can have a non-local ref only if the struct
-                // itself is a nonlocal ref
-                jit_item_attrs_t attrs = {
-                    .readonly = field->IsReadOnly,
-                    .nonlocal_ref = obj.attrs.nonlocal_ref
-                };
+
+                // if we are loading a by-ref field it gets the
+                // same scope as the struct it was loaded from
+                jit_item_attrs_t attrs = {};
+                if (field->FieldType->IsByRef) {
+                    attrs.readonly = field->ReferenceIsReadOnly;
+                    attrs.nonlocal_ref = obj.attrs.nonlocal_ref_struct;
+                }
 
                 RuntimeTypeInfo type = tdn_get_intermediate_type(field->FieldType);
+                EVAL_STACK_PUSH(type, attrs);
+            } break;
+
+            case CEE_LDFLDA: {
+                RuntimeFieldInfo field = inst.operand.field;
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // TODO: check accessibility
+
+                // get the owner type
+                RuntimeTypeInfo owner = obj.type;
+                if (tdn_type_is_valuetype(field->DeclaringType) && owner->IsByRef) {
+                    owner = owner->ElementType;
+                }
+
+                // check object has field
+                while (owner != field->DeclaringType) {
+                    owner = owner->BaseType;
+                    CHECK(owner != NULL);
+                }
+
+                // make sure we have the cctor
+                if (field->Attributes.Static) {
+                    CHECK_AND_RETHROW(jit_queue_cctor(field->DeclaringType));
+                }
+
+                RuntimeTypeInfo type = tdn_get_verification_type(field->FieldType);
+                CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+
+                // we have a readonly field if the
+                jit_item_attrs_t attrs = {
+                    .readonly = field->Attributes.InitOnly
+                };
+
+                // check if the reference will be non-local
+                if (tdn_type_is_referencetype(owner)) {
+                    // on the heap, will always be non-local
+                    attrs.nonlocal_ref = true;
+                }
+
                 EVAL_STACK_PUSH(type, attrs);
             } break;
 
@@ -602,8 +700,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 RuntimeTypeInfo type = tdn_get_verification_type(inst.operand.field->FieldType);
                 CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
                 jit_item_attrs_t attrs = {
-                    .nonlocal_ref = true,
-                    .readonly = inst.operand.field->IsReadOnly,
+                    .readonly = inst.operand.field->Attributes.InitOnly,
+                    .nonlocal_ref = true
                 };
                 EVAL_STACK_PUSH(type, attrs);
             } break;
@@ -690,7 +788,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 }
 
                 // verify all of the arguments
-                bool might_return_nonlocal_ref = false;
+                bool might_return_local_ref = false;
                 for (int i = target->Parameters->Length - 1; i >= 0; i--) {
                     ParameterInfo info = target->Parameters->Elements[i];
                     jit_stack_value_t arg = EVAL_STACK_POP();
@@ -703,12 +801,14 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                         CHECK(!arg.attrs.readonly);
                     }
 
-                    // if this is a byref and its not a nonlocal one then
-                    // we might get it back (or something in it) from the
-                    // function return, so ensure that we won't treat it
-                    // as non-local
-                    if (jit_is_byref_like(arg.type) && !arg.attrs.nonlocal_ref) {
-                        might_return_nonlocal_ref = true;
+                    // check if we might pass a local-reference into this function, either by passing
+                    // a reference directly or passing a reference via a ref-struct indirectly
+                    // TODO: support for scoped and unscoped references
+                    if (
+                        (arg.type->IsByRef && !arg.attrs.nonlocal_ref) ||
+                        (arg.type->IsByRefStruct && !arg.attrs.nonlocal_ref_struct)
+                    ) {
+                        might_return_local_ref = true;
                     }
                 }
 
@@ -717,8 +817,16 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     // NOTE: for value types we don't actually push a byref so
                     //       take the declaring type directly
                     jit_item_attrs_t attrs = {
-                        .known_type = target->DeclaringType
+                        .known_type = target->DeclaringType,
                     };
+
+                    // the rules for newobj is very similar, if we are creating
+                    // a by-ref struct with a local reference we won't mark
+                    // the ref-struct as non-local
+                    if (target_this_type->IsByRef && target_this_type->ElementType->IsByRefStruct) {
+                        attrs.nonlocal_ref_struct = !might_return_local_ref;
+                    }
+
                     EVAL_STACK_PUSH(target->DeclaringType, attrs);
 
                 } else {
@@ -727,16 +835,31 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                         jit_stack_value_t obj = EVAL_STACK_POP();
                         CHECK(verifier_assignable_to(obj.type, target_this_type),
                             "%T verifier-assignable-to %T", obj.type, target_this_type);
+
+                        // by default `this` is considered scoped in the callee
+                        // meaning that we know the returned ref won't point to
+                        // the this pointer
+                        // TODO: unscoped reference support
                     }
 
                     // if we return a ref initialize if its nonlocal and if
                     // its readonly based on the return parameter
                     ParameterInfo ret_info = target->ReturnParameter;
                     if (ret_info->ParameterType != tVoid) {
-                        jit_item_attrs_t attrs = {
-                            .nonlocal_ref = ret_info->ParameterType->IsReadOnly && !might_return_nonlocal_ref,
-                            .readonly = ret_info->IsReadOnly
-                        };
+                        jit_item_attrs_t attrs = {};
+
+                        // if we return either a by-ref struct or a ref value
+                        // then we need to mark it as non-local only if we don't
+                        // pass any locals into it
+                        if (ret_info->ParameterType->IsByRefStruct) {
+                            attrs.nonlocal_ref_struct = !might_return_local_ref;
+
+                        } else if (ret_info->ParameterType->IsByRef) {
+                            // in the case of ref we also need to check if
+                            // sthe returned reference is readonly
+                            attrs.readonly = ret_info->IsReadOnly;
+                            attrs.nonlocal_ref = !might_return_local_ref;
+                        }
 
                         RuntimeTypeInfo ret_type = tdn_get_intermediate_type(ret_info->ParameterType);
                         EVAL_STACK_PUSH(ret_type, attrs);
@@ -927,7 +1050,13 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             case CEE_REM_UN:
             case CEE_AND:
             case CEE_XOR:
-            case CEE_OR: {
+            case CEE_OR:
+            case CEE_ADD_OVF:
+            case CEE_ADD_OVF_UN:
+            case CEE_SUB_OVF:
+            case CEE_SUB_OVF_UN:
+            case CEE_MUL_OVF:
+            case CEE_MUL_OVF_UN: {
                 jit_stack_value_t value2 = EVAL_STACK_POP();
                 jit_stack_value_t value1 = EVAL_STACK_POP();
 
@@ -1103,9 +1232,21 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                         CHECK(!ret_val.attrs.readonly);
                     }
 
-                    // make sure we don't leak a non-local byref
-                    if (jit_is_byref_like(ret_val.type)) {
+                    // check reference scoping
+                    if (ret_val.type->IsByRef) {
+                        // don't leak non-local reference
                         CHECK(ret_val.attrs.nonlocal_ref);
+
+                        // I don't think its possible to get a nonlocal-ref
+                        // to a local ref-struct, but just in case I will
+                        // check it
+                        if (ret_val.type->ElementType->IsByRefStruct) {
+                            CHECK(ret_val.attrs.nonlocal_ref_struct);
+                        }
+
+                    } else if (ret_val.type->IsByRefStruct) {
+                        // don't leak a ref-struct with non-local members
+                        CHECK(ret_val.attrs.nonlocal_ref_struct);
                     }
 
                     // check the type is the same
@@ -1123,7 +1264,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 jit_stack_value_t value = EVAL_STACK_POP();
 
                 // must not be something that has a ref
-                CHECK(!jit_is_byref_like(value.type));
+                CHECK(!value.type->IsByRef && !value.type->IsByRefStruct);
 
                 // validate it can be boxed as we want
                 CHECK(verifier_assignable_to(value.type, inst.operand.type));
@@ -1137,6 +1278,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             case CEE_UNBOX_ANY: {
                 jit_stack_value_t obj = EVAL_STACK_POP();
 
+                // can't be something that is a by-ref or a by-ref-struct
+                CHECK(!inst.operand.type->IsByRef);
+                CHECK(!inst.operand.type->IsByRefStruct);
+
                 // must be another ref on the stack
                 CHECK(tdn_type_is_referencetype(obj.type));
 
@@ -1144,8 +1289,26 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Exception handling
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_THROW: {
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // TODO: check instanceof System.Exception
+                CHECK(tdn_type_is_referencetype(obj.type));
+
+                // and clear the stack
+                arrsetlen(stack, 0);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_SIZEOF: {
+                EVAL_STACK_PUSH(tInt32);
+            } break;
 
             // nothing to do
             case CEE_NOP: break;

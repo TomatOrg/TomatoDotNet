@@ -43,10 +43,15 @@ extern RuntimeTypeInfo tNullable;
 
 extern RuntimeTypeInfo tUnsafe;
 extern RuntimeTypeInfo tMemoryMarshal;
+extern RuntimeTypeInfo tBuffer;
+extern RuntimeTypeInfo tBitOperations;
+extern RuntimeTypeInfo tDebug;
 
 extern RuntimeTypeInfo tInAttribute;
 extern RuntimeTypeInfo tIsReadOnlyAttribute;
+extern RuntimeTypeInfo tIsByRefLikeAttribute;
 extern RuntimeTypeInfo tIsVolatile;
+extern RuntimeTypeInfo tUnmanagedType;
 
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type);
 RuntimeTypeInfo tdn_get_reduced_type(RuntimeTypeInfo type);

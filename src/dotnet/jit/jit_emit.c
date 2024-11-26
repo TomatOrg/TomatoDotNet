@@ -7,6 +7,7 @@
 #include <spidir/module.h>
 #include <spidir/codegen.h>
 #include <spidir/x64.h>
+#include <spidir/opt.h>
 
 #include <tomatodotnet/disasm.h>
 #include <tomatodotnet/types/type.h>
@@ -22,11 +23,15 @@
  */
 static spidir_module_handle_t m_jit_module = NULL;
 
-static spidir_function_t m_jit_bzero;
-static spidir_function_t m_jit_memcpy;
+spidir_function_t g_jit_bzero;
+spidir_function_t g_jit_memcpy;
+
+spidir_function_t g_jit_leading_zero_count_32;
+spidir_function_t g_jit_leading_zero_count_64;
 
 static spidir_function_t m_jit_gc_new;
 static spidir_function_t m_jit_gc_newarr;
+static spidir_function_t m_jit_gc_newstr;
 
 static spidir_function_t m_jit_throw;
 
@@ -38,8 +43,46 @@ static struct {
     void* value;
 }* m_jit_helper_lookup = NULL;
 
+spidir_function_t g_jit_print_str;
+spidir_function_t g_jit_print_int;
+spidir_function_t g_jit_print_ptr;
+
+static void create_jit_debug_helpers() {
+    g_jit_print_str = spidir_module_create_extern_function(m_jit_module,
+        "jit_print_str",
+        SPIDIR_TYPE_NONE,
+        1,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR
+        }
+    );
+    hmput(m_jit_helper_lookup, g_jit_print_str, jit_print_str);
+
+    g_jit_print_int = spidir_module_create_extern_function(m_jit_module,
+        "jit_print_int",
+        SPIDIR_TYPE_NONE,
+        1,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_I32
+        }
+    );
+    hmput(m_jit_helper_lookup, g_jit_print_int, jit_print_int);
+
+    g_jit_print_ptr = spidir_module_create_extern_function(m_jit_module,
+        "jit_print_ptr",
+        SPIDIR_TYPE_NONE,
+        1,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR
+        }
+    );
+    hmput(m_jit_helper_lookup, g_jit_print_ptr, jit_print_ptr);
+}
+
 static void create_jit_helpers() {
-    m_jit_bzero = spidir_module_create_extern_function(m_jit_module,
+    create_jit_debug_helpers();
+
+    g_jit_bzero = spidir_module_create_extern_function(m_jit_module,
         "jit_bzero",
         SPIDIR_TYPE_NONE,
         2,
@@ -48,9 +91,9 @@ static void create_jit_helpers() {
             SPIDIR_TYPE_I64
         }
     );
-    hmput(m_jit_helper_lookup, m_jit_bzero, jit_bzero);
+    hmput(m_jit_helper_lookup, g_jit_bzero, jit_bzero);
 
-    m_jit_memcpy = spidir_module_create_extern_function(m_jit_module,
+    g_jit_memcpy = spidir_module_create_extern_function(m_jit_module,
         "jit_memcpy",
         SPIDIR_TYPE_NONE,
         3,
@@ -60,7 +103,7 @@ static void create_jit_helpers() {
             SPIDIR_TYPE_I64
         }
     );
-    hmput(m_jit_helper_lookup, m_jit_memcpy, jit_memcpy);
+    hmput(m_jit_helper_lookup, g_jit_memcpy, jit_memcpy);
 
     m_jit_gc_new = spidir_module_create_extern_function(m_jit_module,
         "jit_gc_new",
@@ -82,6 +125,16 @@ static void create_jit_helpers() {
         }
     );
     hmput(m_jit_helper_lookup, m_jit_gc_newarr, jit_gc_newarr);
+
+    m_jit_gc_newstr = spidir_module_create_extern_function(m_jit_module,
+        "jit_gc_newstr",
+        SPIDIR_TYPE_PTR,
+        1,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_I32
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_gc_newstr, jit_gc_newstr);
 
     m_jit_throw = spidir_module_create_extern_function(m_jit_module,
         "jit_throw",
@@ -107,6 +160,20 @@ static void create_jit_helpers() {
         0, NULL
     );
     hmput(m_jit_helper_lookup, m_jit_throw_index_out_of_range_exception, jit_throw_index_out_of_range_exception);
+
+    g_jit_leading_zero_count_32 = spidir_module_create_extern_function(m_jit_module,
+        "jit_leading_zero_count_32",
+        SPIDIR_TYPE_I32,
+        1, (spidir_value_type_t[]){ SPIDIR_TYPE_I32, }
+    );
+    hmput(m_jit_helper_lookup, g_jit_leading_zero_count_32, jit_leading_zero_count_32);
+
+    g_jit_leading_zero_count_64 = spidir_module_create_extern_function(m_jit_module,
+        "jit_leading_zero_count_64",
+        SPIDIR_TYPE_I32,
+        1, (spidir_value_type_t[]){ SPIDIR_TYPE_I64, }
+    );
+    hmput(m_jit_helper_lookup, g_jit_leading_zero_count_64, jit_leading_zero_count_32);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -355,7 +422,7 @@ static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst,
     // TODO: replace with a jit builtin-memcpy
     // TODO: use gc_memcpy in case contains a refernce
     spidir_builder_build_call(builder,
-        m_jit_memcpy,
+        g_jit_memcpy,
         3,
         (spidir_value_t[]){
             dst,
@@ -369,7 +436,7 @@ static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, 
     // TODO: replace with a jit builtin-bzero/memset
     // TODO: use gc_bzero in case contains a refernce
     spidir_builder_build_call(builder,
-        m_jit_bzero,
+        g_jit_bzero,
         2,
         (spidir_value_t[]){
             dst,
@@ -536,8 +603,6 @@ static void jit_emit_array_length_check(spidir_builder_handle_t builder, spidir_
         m_jit_throw_index_out_of_range_exception,
         0, NULL
     );
-
-    // we won't go any further
     spidir_builder_build_unreachable(builder);
 
     // go back to the valid path
@@ -748,6 +813,25 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 EVAL_STACK_PUSH(type, value);
             } break;
 
+            case CEE_LDFLDA: {
+                RuntimeFieldInfo field = inst.operand.field;
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // get the pointer to the field
+                spidir_value_t field_ptr;
+                if (!field->Attributes.Static) {
+                    field_ptr = spidir_builder_build_ptroff(builder, obj.value,
+                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, field->FieldOffset));
+                } else {
+                    CHECK_AND_RETHROW(jit_init_static_field(field));
+                    field_ptr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)field->JitFieldPtr);
+                }
+
+                RuntimeTypeInfo type = tdn_get_verification_type(field->FieldType);
+                CHECK_AND_RETHROW(tdn_get_byref_type(type, &type));
+                EVAL_STACK_PUSH(type, field_ptr);
+            } break;
+
             case CEE_STSFLD: {
                 jit_stack_value_t value = EVAL_STACK_POP();
 
@@ -887,13 +971,54 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     if (jit_is_struct(target->DeclaringType)) {
                         obj = jit_get_struct_slot(builder, target->DeclaringType);
                         jit_emit_bzero(builder, obj, target->DeclaringType);
+
+                    } else if (target->DeclaringType == tString) {
+                        // String class is special because when allocating it we need to figure
+                        // the correct amount of memory required
+                        spidir_value_t element_count = SPIDIR_VALUE_INVALID;
+                        if (target->Parameters->Length == 1) {
+                            if (target->Parameters->Elements[0]->ParameterType == tInt32) {
+                                // takes in a length
+                                element_count = args[0];
+                            } else {
+                                // takes in a ReadOnlySpan
+                                // TODO: verify that or something
+                                element_count = args[0];
+
+                                // add the offset to the length, its after the ref
+                                element_count = spidir_builder_build_ptroff(
+                                    builder,
+                                    element_count,
+                                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, sizeof(void*))
+                                );
+
+                                // and now deref it to get the value
+                                element_count = spidir_builder_build_load(builder,
+                                    SPIDIR_MEM_SIZE_4,
+                                    SPIDIR_TYPE_I32,
+                                    element_count
+                                );
+                            }
+                        } else {
+                            CHECK_FAIL();
+                        }
+
+                        // and now allocate the string by using newstr
+                        obj = spidir_builder_build_call(builder,
+                            m_jit_gc_newstr,
+                            1,
+                            (spidir_value_t[]){
+                                element_count
+                            }
+                        );
                     } else {
                         // call the gc to create the new object
                         obj = spidir_builder_build_call(builder,
                             m_jit_gc_new,
                             1,
-                            (spidir_value_t[]){ spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR,
-                                (uint64_t)target->DeclaringType) }
+                            (spidir_value_t[]){
+                                spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)target->DeclaringType)
+                            }
                         );
                     }
                     arrins(args, 0, obj);
@@ -1230,7 +1355,13 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             case CEE_REM_UN:
             case CEE_AND:
             case CEE_XOR:
-            case CEE_OR: {
+            case CEE_OR:
+            case CEE_ADD_OVF:
+            case CEE_ADD_OVF_UN:
+            case CEE_SUB_OVF:
+            case CEE_SUB_OVF_UN:
+            case CEE_MUL_OVF:
+            case CEE_MUL_OVF_UN: {
                 jit_stack_value_t value2 = EVAL_STACK_POP();
                 jit_stack_value_t value1 = EVAL_STACK_POP();
 
@@ -1266,8 +1397,14 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                 spidir_value_t val;
                 switch (inst.opcode) {
+                    case CEE_ADD_OVF:
+                    case CEE_ADD_OVF_UN:
                     case CEE_ADD: val = spidir_builder_build_iadd(builder, val1, val2); break;
+                    case CEE_SUB_OVF:
+                    case CEE_SUB_OVF_UN:
                     case CEE_SUB: val = spidir_builder_build_isub(builder, val1, val2); break;
+                    case CEE_MUL_OVF:
+                    case CEE_MUL_OVF_UN:
                     case CEE_MUL: val = spidir_builder_build_imul(builder, val1, val2); break;
                     case CEE_DIV: val = spidir_builder_build_sdiv(builder, val1, val2); break;
                     case CEE_REM: val = spidir_builder_build_srem(builder, val1, val2); break;
@@ -1551,12 +1688,22 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     pc,
                     stack, &false_block));
 
+                spidir_value_t cond = value.value;
+                if (tdn_type_is_referencetype(value.type)) {
+                    // can't pass ptr to brcond, turn into an int first
+                    cond = spidir_builder_build_icmp(builder,
+                        SPIDIR_ICMP_NE,
+                        SPIDIR_TYPE_I32,
+                        cond, spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0));
+                }
+
+                // use the same condition but swap args
                 if (inst.opcode == CEE_BRFALSE) {
                     SWAP(true_block, false_block);
                 }
 
                 // and finally emit the actual brcond
-                spidir_builder_build_brcond(builder, value.value, true_block, false_block);
+                spidir_builder_build_brcond(builder, cond, true_block, false_block);
             } break;
 
             case CEE_BR: {
@@ -1689,12 +1836,41 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Exception handling
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_THROW: {
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // just throw the object
+                spidir_builder_build_call(builder,
+                    m_jit_throw,
+                    2,
+                    (spidir_value_t[]){
+                        obj.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, current_pc)
+                    }
+                );
+
+                // and we are unreachable after this
+                spidir_builder_build_unreachable(builder);
+
+                // and clear the stack
+                arrsetlen(stack, 0);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_SIZEOF: {
+                spidir_value_t value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.type->StackSize);
+                EVAL_STACK_PUSH(tInt32, value);
+            } break;
+
             case CEE_NOP: break;
 
-            default: CHECK_FAIL("Unknown opcode");
+            default: CHECK_FAIL("Unknown opcode `%s`", tdn_get_opcode_name(inst.opcode));
         }
 
         arrfree(args_type);
@@ -2067,8 +2243,12 @@ tdn_err_t jit_emit(void) {
 #endif
 
     //
-    // TODO: this is where we need to enable optimizations and such
+    // Optimization time!
     //
+
+    // perform all global optimizations
+    spidir_opt_run(m_jit_module);
+
 
     // perform the codegen
     // TODO: do this in parallel in the future

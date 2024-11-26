@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+
 #include "tomatodotnet/except.h"
 
 typedef uint8_t Byte;
@@ -43,10 +45,7 @@ typedef struct ObjectVTable {
 
 typedef struct Object {
     uint32_t VTable;
-    uint8_t MonitorLock;
-    uint8_t MonitorCondVar;
-    uint8_t GCFlags;
-    uint8_t _reserved;
+    uint32_t _reserved;
 }* Object;
 _Static_assert(sizeof(struct Object) == 8, "Object size too big");
 
@@ -79,7 +78,13 @@ typedef struct Guid {
 } Guid;
 
 DEFINE_ARRAY(Byte);
+DEFINE_ARRAY(Char);
 DEFINE_ARRAY(RuntimeTypeInfo);
+
+/**
+ * We depend on this in the runtime
+ */
+_Static_assert(offsetof(struct Char_Array, Elements) == offsetof(struct String, Chars), "");
 
 tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str);
 

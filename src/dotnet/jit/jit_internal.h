@@ -16,7 +16,7 @@
 // enable printing while emitting
 // #define JIT_VERBOSE_EMIT
 // #define JIT_DEBUG_EMIT
-// #define JIT_DUMP_EMIT
+#define JIT_DUMP_EMIT
 
 #ifdef JIT_VERBOSE_EMIT
     #define JIT_DEBUG_EMIT
@@ -30,9 +30,14 @@ typedef struct jit_item_attrs {
     // is this a readonly reference
     size_t readonly : 1;
 
-    // this is a non-local reference
-    // also applies for ref-structs
+    // if this is a reference that comes
+    // from non-scoped place
     size_t nonlocal_ref : 1;
+
+    // the ref-struct contains a nonlocal
+    // reference, so it should not be
+    // returned
+    size_t nonlocal_ref_struct : 1;
 
     // the value holds the this ptr
     size_t this_ptr : 1;
@@ -160,10 +165,6 @@ static inline bool jit_is_struct(RuntimeTypeInfo type) {
 
 static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
     return jit_is_interface(type) || jit_is_struct(type);
-}
-
-static inline bool jit_is_byref_like(RuntimeTypeInfo type) {
-    return type->IsByRef || type->IsByRefStruct;
 }
 
 static inline size_t jit_get_boxed_value_offset(RuntimeTypeInfo type) {

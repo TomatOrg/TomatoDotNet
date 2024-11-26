@@ -41,10 +41,15 @@ RuntimeTypeInfo tNullable = NULL;
 
 RuntimeTypeInfo tUnsafe = NULL;
 RuntimeTypeInfo tMemoryMarshal = NULL;
+RuntimeTypeInfo tBuffer = NULL;
+RuntimeTypeInfo tBitOperations = NULL;
+RuntimeTypeInfo tDebug = NULL;
 
 RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
 RuntimeTypeInfo tIsReadOnlyAttribute = NULL;
+RuntimeTypeInfo tIsByRefLikeAttribute = NULL;
+RuntimeTypeInfo tUnmanagedType = NULL;
 
 static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
@@ -275,7 +280,11 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
     if (constraints != NULL) {
         for (int i = 0; i < constraints->Length; i++) {
             RuntimeTypeInfo constraint = constraints->Elements[i];
-            CHECK(is_instance(arg_type, constraint));
+            if (constraint == tUnmanagedType) {
+                CHECK(arg_type->IsUnmanaged);
+            } else {
+                CHECK(is_instance(arg_type, constraint));
+            }
         }
     }
 

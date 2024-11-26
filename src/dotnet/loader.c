@@ -139,11 +139,16 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Reflection, ParameterInfo),
     LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
     LOAD_TYPE(System.Runtime.CompilerServices, IsReadOnlyAttribute),
+    LOAD_TYPE(System.Runtime.CompilerServices, IsByRefLikeAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
     LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
+    LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
     LOAD_TYPE(System, RuntimeTypeHandle),
+    LOAD_TYPE(System, Buffer),
+    LOAD_TYPE(System.Diagnostics, Debug),
+    LOAD_TYPE(System.Numerics, BitOperations),
     { "System", "Nullable`1", &tNullable, 4 },
 };
 static int m_loaded_types = 0;
@@ -280,12 +285,6 @@ static tdn_err_t fill_stack_size(RuntimeTypeInfo type) {
     CHECK(!type->FillingStackSize);
     type->FillingStackSize = 1;
 
-    // don't allow byref structs in unverified assemblies
-    // otherwise we can have a very bad time
-    if (type->IsByRefStruct) {
-        CHECK(type->Module->Assembly->AllowUnsafe);
-    }
-
     // value types have the same size as the heap size, while
     // reference types always have the size of a pointer
     if (tdn_type_is_valuetype(type)) {
@@ -394,23 +393,30 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
         for (int i = 0; i < fields->Length; i++) {
             RuntimeFieldInfo field = fields->Elements[i];
             RuntimeTypeInfo field_type = field->FieldType;
+
             if (field->Attributes.Static) {
+                // static fields may never have a by-ref or ref-structs
+                CHECK(!field_type->IsByRef);
+                CHECK(!field_type->IsByRefStruct);
                 continue;
             }
+
             CHECK_AND_RETHROW(fill_stack_size(field_type));
             if (tdn_type_is_referencetype(field_type) || !field_type->IsUnmanaged) {
                 is_managed = true;
             }
 
-            // make sure we don't include a byref struct inside
-            // of another byref struct
-            if (type->IsByRefStruct && field_type->IsByRef) {
-                CHECK(!field_type->ElementType->IsByRefStruct);
+            // make sure a byref is only inside of a byref struct
+            if (field_type->IsByRef || field_type->IsByRefStruct) {
+                CHECK(type->IsByRefStruct, "%T must be ref-struct to have field of %T",
+                    type, field_type);
             }
 
-            // make sure a byref is only inside of a byref struct
-            if (field_type->IsByRef) {
-                CHECK(type->IsByRefStruct);
+            // all fields of a readonly struct
+            // must be readonly as well
+            if (type->IsReadOnly) {
+                CHECK(field->Attributes.InitOnly, "%T::%U must be readonly since its part of readonly struct %T",
+                    type, field->Name, type);
             }
 
             largest_alignment = MAX(largest_alignment, fields->Elements[i]->FieldType->StackAlignment);
@@ -1020,19 +1026,33 @@ cleanup:
     return err;
 }
 
+static tdn_err_t fill_type(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK_AND_RETHROW(fill_stack_size(type));
+    CHECK_AND_RETHROW(fill_heap_size(type));
+    CHECK_AND_RETHROW(fill_type_id(type));
+    CHECK_AND_RETHROW(fill_virtual_methods(type));
+
+cleanup:
+    return err;
+}
+
 tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    if (type->TypeInitStarted) {
+        goto cleanup;
+    }
+
     if (arrlen(m_type_queues) == 0) {
-        // no delay, just calculate it
-        CHECK_AND_RETHROW(fill_stack_size(type));
-        CHECK_AND_RETHROW(fill_heap_size(type));
-        CHECK_AND_RETHROW(fill_type_id(type));
-        CHECK_AND_RETHROW(fill_virtual_methods(type));
+        fill_type(type);
     } else {
-        // delayed for later
         arrpush(arrlast(m_type_queues).types, type);
     }
+
+    // it is considered
+    type->TypeInitStarted = true;
 
 cleanup:
     return err;
@@ -1048,10 +1068,7 @@ static tdn_err_t drain_type_queue() {
     // and init them all
     while (arrlen(queue.types) != 0) {
         RuntimeTypeInfo type = arrpop(queue.types);
-        CHECK_AND_RETHROW(fill_stack_size(type));
-        CHECK_AND_RETHROW(fill_heap_size(type));
-        CHECK_AND_RETHROW(fill_type_id(type));
-        CHECK_AND_RETHROW(fill_virtual_methods(type));
+        fill_type(type);
     }
 
 cleanup:
@@ -1400,6 +1417,27 @@ static bool is_module_type(RuntimeTypeInfo type) {
     return tdn_compare_string_to_cstr(type->Name, "<Module>") && (type->Namespace == NULL || type->Namespace->Length == 0);
 }
 
+static tdn_err_t connect_method_declaring_type(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+    token_t token = { .token = type->MetadataToken };
+    RuntimeAssembly assembly = type->Module->Assembly;
+    metadata_type_def_t* type_def = &assembly->Metadata->type_defs[token.index - 1];
+
+    size_t methods_count = (token.index == assembly->Metadata->type_defs_count ?
+                            assembly->Metadata->method_defs_count :
+                            type_def[1].method_list.index - 1) - (type_def->method_list.index - 1);
+
+    for (int i = 0; i < methods_count; i++) {
+        int idx = type_def->method_list.index + i;
+        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[idx - 1];
+        RuntimeMethodBase base = assembly->MethodDefs->Elements[idx - 1];
+        base->DeclaringType = type;
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
     token_t token = { .token = type->MetadataToken };
@@ -1569,9 +1607,6 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                 base->Attributes.MemberAccess == TDN_METHOD_ACCESS_PUBLIC
             );
         }
-
-        // setup most of the type
-        base->DeclaringType = type;
 
         // parse the body
         if (method_def->rva != 0) {
@@ -1809,7 +1844,84 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
+static tdn_err_t assembly_connect_read_only_attribute(RuntimeAssembly assembly, bool parameter) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // connect jit related custom attributes
+    for (int i = 0; i < assembly->Metadata->custom_attribute_count; i++) {
+        metadata_custom_attribute_t* attr = &assembly->Metadata->custom_attributes[i];
+        RuntimeMethodBase method;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->type.token, NULL, NULL, &method));
+        CHECK(object_get_vtable(&method->Object)->Type == tRuntimeConstructorInfo);
+        RuntimeTypeInfo type = method->DeclaringType;
+
+        if (type == tIsReadOnlyAttribute) {
+            switch (attr->parent.table) {
+                case METADATA_TYPE_DEF: {
+                    if (parameter) break;
+                    RuntimeTypeInfo parent_type;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, attr->parent.token, NULL, NULL, &parent_type));
+                    parent_type->IsReadOnly = true;
+                } break;
+
+                case METADATA_METHOD_DEF: {
+                    if (parameter) break;
+                    RuntimeMethodBase parent_type;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->parent.token, NULL, NULL, &parent_type));
+                    parent_type->IsReadOnly = true;
+                } break;
+
+                case METADATA_PARAM: {
+                    if (!parameter) break;
+                    CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
+                    ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
+                    parent_type->IsReadOnly = true;
+                } break;
+
+                case METADATA_PROPERTY: {
+                    // readonly property, we ignore
+                } break;
+
+                default:
+                    WARN("Found IsReadOnlyAttribute on unknown token %02x", attr->parent.table);
+            }
+        }
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t assembly_connect_by_ref_like_attribute(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // connect jit related custom attributes
+    for (int i = 0; i < assembly->Metadata->custom_attribute_count; i++) {
+        metadata_custom_attribute_t* attr = &assembly->Metadata->custom_attributes[i];
+        RuntimeMethodBase method;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->type.token, NULL, NULL, &method));
+        CHECK(object_get_vtable(&method->Object)->Type == tRuntimeConstructorInfo);
+        RuntimeTypeInfo type = method->DeclaringType;
+
+        if (type == tIsByRefLikeAttribute) {
+            switch (attr->parent.table) {
+                case METADATA_TYPE_DEF: {
+                    RuntimeTypeInfo parent_type;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, attr->parent.token, NULL, NULL, &parent_type));
+                    parent_type->IsByRefStruct = true;
+                } break;
+
+                default:
+                    WARN("Found IsByRefLikeAttribute on unknown token %02x", attr->parent.table);
+            }
+        }
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t assembly_connect_nested(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect nested classes
@@ -1853,44 +1965,6 @@ static tdn_err_t assembly_connect_misc(RuntimeAssembly assembly) {
         // save it for later
         type->Packing = layout->packing_size;
         type->HeapSize = layout->class_size;
-    }
-
-    // connect jit related custom attributes
-    for (int i = 0; i < assembly->Metadata->custom_attribute_count; i++) {
-        metadata_custom_attribute_t* attr = &assembly->Metadata->custom_attributes[i];
-        RuntimeMethodBase method;
-        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->type.token, NULL, NULL, &method));
-        CHECK(object_get_vtable(&method->Object)->Type == tRuntimeConstructorInfo);
-        RuntimeTypeInfo type = method->DeclaringType;
-
-        if (type == tIsReadOnlyAttribute) {
-            switch (attr->parent.table) {
-                case METADATA_TYPE_DEF: {
-                    RuntimeTypeInfo parent_type;
-                    CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, attr->parent.token, NULL, NULL, &parent_type));
-                    parent_type->IsReadOnly = true;
-                } break;
-
-                case METADATA_METHOD_DEF: {
-                    RuntimeMethodBase parent_type;
-                    CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->parent.token, NULL, NULL, &parent_type));
-                    parent_type->IsReadOnly = true;
-                } break;
-
-                case METADATA_PARAM: {
-                    CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
-                    ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
-                    parent_type->IsReadOnly = true;
-                } break;
-
-                case METADATA_PROPERTY: {
-                    // readonly property, we ignore
-                } break;
-
-                default:
-                    WARN("Found IsReadOnlyAttribute on unknown token %02x", attr->parent.table);
-            }
-        }
     }
 
 cleanup:
@@ -1987,6 +2061,19 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     assembly->Params = GC_NEW_ARRAY(ParameterInfo, assembly->Metadata->params_count);
 
+    // connect the parent types of methods, this is required for
+    // the custom properties connection to work
+    for (int i = 0; i < assembly->TypeDefs->Length; i++) {
+        RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
+        CHECK_AND_RETHROW(connect_method_declaring_type(type));
+    }
+
+    // must be done before we do anything like create generic type instances otherwise
+    // it won't pass the properties properly, we don't include parameters since they
+    // are not initialized yet in this context
+    CHECK_AND_RETHROW(assembly_connect_by_ref_like_attribute(assembly));
+    CHECK_AND_RETHROW(assembly_connect_read_only_attribute(assembly, false));
+
     push_type_queue();
     pushed_type_queue = true;
 
@@ -1995,6 +2082,11 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
         CHECK_AND_RETHROW(connect_members_to_type(type));
     }
+
+    // connect the read-only attribute on parameters, this must be done after
+    // connecting the member to types since otherwise the parameters are not
+    // initialized
+    CHECK_AND_RETHROW(assembly_connect_read_only_attribute(assembly, true));
 
     pushed_type_queue = false;
     CHECK_AND_RETHROW(drain_type_queue());
@@ -2006,7 +2098,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     }
 
     // connect all the misc classes
-    CHECK_AND_RETHROW(assembly_connect_misc(assembly));
+    CHECK_AND_RETHROW(assembly_connect_nested(assembly));
 
     // finish up with bootstrapping if this is the corelib
     if (mCoreAssembly == NULL) {

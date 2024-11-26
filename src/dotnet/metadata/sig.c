@@ -452,10 +452,6 @@ tdn_err_t sig_parse_field(blob_entry_t _blob, RuntimeFieldInfo field_info) {
 
         // make sure it is not defined in a class
         CHECK(tdn_type_is_valuetype(field_info->DeclaringType), "%T", field_info->DeclaringType->BaseType);
-
-        // mark the owner as a ref-struct, we will check later if it has
-        // any other problems
-        field_info->DeclaringType->IsByRefStruct = 1;
     }
 
     // parse the type
@@ -517,6 +513,27 @@ tdn_err_t sig_parse_type_spec(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
     blob_entry_t* blob = &_blob;
+    bool is_unmanaged_type = false;
+
+    // Parse custom modifiers
+    RuntimeTypeInfo cmod_type = NULL;
+    bool required = false;
+    CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
+    while(cmod_type != NULL) {
+        if (cmod_type == tUnmanagedType) {
+            is_unmanaged_type = true;
+        } else {
+            WARN("Unknown mod %T", cmod_type);
+            CHECK(!required);
+        }
+        CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
+    }
+
+    // TODO: something more correct?
+    if (is_unmanaged_type) {
+        *type = tUnmanagedType;
+        goto cleanup;
+    }
 
     uint8_t value = FETCH_BYTE;
     switch (value) {

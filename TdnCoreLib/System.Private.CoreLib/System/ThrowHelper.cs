@@ -13,6 +13,12 @@ internal static class ThrowHelper
         throw new InvalidOperationException(SR.InvalidOperation_NoValue);
     }
 
+    internal static void ThrowArgumentException_TupleIncorrectType(object obj)
+    {
+        // TODO: formatting 
+        throw new ArgumentException();
+    }
+    
     internal static void ThrowIndexOutOfRangeException()
     {
         throw new IndexOutOfRangeException();
@@ -21,6 +27,11 @@ internal static class ThrowHelper
     internal static void ThrowArgumentOutOfRangeException()
     {
         throw new ArgumentOutOfRangeException();
+    }
+    
+    internal static void ThrowArgumentOutOfRangeException(string argument)
+    {
+        throw new ArgumentOutOfRangeException(argument);
     }
     
     internal static void ThrowArgumentException_DestinationTooShort()
