@@ -597,7 +597,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         hmput(info->InterfaceImpls, interface, parent_offset);
 
         // calculate the product and make sure it doesn't overflow
-        CHECK(!__builtin_mul_overflow(interface_product, interface->TypeId, &interface_product));
+        CHECK(!__builtin_mul_overflow(interface_product, interface->InterfacePrime, &interface_product));
     }
 
     // go over all the virtual methods and allocate vtable slots to all of them,
@@ -1013,13 +1013,59 @@ static void push_type_queue() {
  */
 static prime_generator_t m_interface_prime_generator;
 
-static tdn_err_t fill_type_id(RuntimeTypeInfo info) {
+/**
+ * Used to generate interface ids
+ */
+static uint64_t m_interface_id = 0;
+
+static tdn_err_t fill_interface_type_id(RuntimeTypeInfo info) {
     tdn_err_t err = TDN_NO_ERROR;
 
     if (info->Attributes.Interface) {
-        info->TypeId = prime_generate(&m_interface_prime_generator);
-    } else {
-        // TODO: this
+        // interface uses prime multipliers to check for inclusion
+        info->InterfacePrime = prime_generate(&m_interface_prime_generator);
+        info->InterfaceId = m_interface_id++;
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t fill_object_type_id(RuntimeTypeInfo info) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (info == tObject && info->TypeIdGen == 0) {
+        // object is special, it has a type id of 0 but we will make so the generation start
+        // from 1 so the rest would not have a type id of zero
+        info->TypeIdGen = 1;
+
+    } else if (info->BaseType == NULL) {
+        // ignore types with no base class (aka module)
+
+    } else if (tdn_type_is_referencetype(info) && info->TypeMaskLength == 0) {
+        // reference types have the proper chains, struct types
+        // are checked explicitly via the vtable reference
+
+        // make sure the base type is initialized
+        CHECK_AND_RETHROW(fill_object_type_id(info->BaseType));
+
+        // generate the mask
+        if (info->BaseType == tObject) {
+            // the first level is 20 bit (~260k base types)
+            info->TypeMaskLength = 20;
+        } else {
+            // every other level is 10 bit (~1k for each level)
+            info->TypeMaskLength = info->BaseType->TypeMaskLength + 8;
+            CHECK(info->BaseType->TypeMaskLength <= 64);
+        }
+
+        // generate the type hierarchy
+        uint64_t base_id = info->BaseType->JitVTable->TypeHierarchy;
+        uint64_t current_id = info->BaseType->TypeIdGen++;
+        info->JitVTable->TypeHierarchy = base_id | (current_id << info->BaseType->TypeMaskLength);
+
+        // make sure it fits for the length
+        CHECK(info->JitVTable->TypeHierarchy < (1ull << info->TypeMaskLength));
     }
 
 cleanup:
@@ -1031,8 +1077,9 @@ static tdn_err_t fill_type(RuntimeTypeInfo type) {
 
     CHECK_AND_RETHROW(fill_stack_size(type));
     CHECK_AND_RETHROW(fill_heap_size(type));
-    CHECK_AND_RETHROW(fill_type_id(type));
+    CHECK_AND_RETHROW(fill_interface_type_id(type));
     CHECK_AND_RETHROW(fill_virtual_methods(type));
+    CHECK_AND_RETHROW(fill_object_type_id(type));
 
 cleanup:
     return err;
@@ -1429,7 +1476,6 @@ static tdn_err_t connect_method_declaring_type(RuntimeTypeInfo type) {
 
     for (int i = 0; i < methods_count; i++) {
         int idx = type_def->method_list.index + i;
-        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[idx - 1];
         RuntimeMethodBase base = assembly->MethodDefs->Elements[idx - 1];
         base->DeclaringType = type;
     }

@@ -164,14 +164,14 @@ static void create_jit_helpers() {
     g_jit_leading_zero_count_32 = spidir_module_create_extern_function(m_jit_module,
         "jit_leading_zero_count_32",
         SPIDIR_TYPE_I32,
-        1, (spidir_value_type_t[]){ SPIDIR_TYPE_I32, }
+        1, (spidir_value_type_t[]){ SPIDIR_TYPE_I32 }
     );
     hmput(m_jit_helper_lookup, g_jit_leading_zero_count_32, jit_leading_zero_count_32);
 
     g_jit_leading_zero_count_64 = spidir_module_create_extern_function(m_jit_module,
         "jit_leading_zero_count_64",
         SPIDIR_TYPE_I32,
-        1, (spidir_value_type_t[]){ SPIDIR_TYPE_I64, }
+        1, (spidir_value_type_t[]){ SPIDIR_TYPE_I64 }
     );
     hmput(m_jit_helper_lookup, g_jit_leading_zero_count_64, jit_leading_zero_count_32);
 }
@@ -445,6 +445,15 @@ static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, 
     );
 }
 
+static size_t jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
+    for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
+        if (type->InterfaceImpls[i].key == iface) {
+            return type->InterfaceImpls[i].value;
+        }
+    }
+    return -1;
+}
+
 static bool jit_convert_interface(
     spidir_builder_handle_t builder,
     spidir_value_t dest, spidir_value_t src,
@@ -463,8 +472,8 @@ static bool jit_convert_interface(
         vtable = spidir_builder_build_inttoptr(builder, vtable);
 
         // calculate the offset from the vtable and add it to it
-        size_t interface_offset = -1;
-        ASSERT(!"TODO: find the offset of the interface");
+        size_t interface_offset = jit_get_interface_offset(src_type, dest_type);
+        ASSERT(interface_offset != -1);
         interface_offset = interface_offset * sizeof(void*) + offsetof(ObjectVTable, Functions);
         vtable = spidir_builder_build_ptroff(builder, vtable,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, interface_offset));
@@ -963,6 +972,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     arrins(args, 0, value);
                 }
 
+                RuntimeTypeInfo obj_type = NULL;
                 bool need_explicit_null_check = false;
                 if (inst.opcode == CEE_NEWOBJ) {
                     // perform the allocation, in the case of a struct value
@@ -1026,6 +1036,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 } else if (target_this_type != NULL) {
                     jit_stack_value_t obj = EVAL_STACK_POP();
                     arrins(args, 0, obj.value);
+                    obj_type = obj.type;
 
                     if (inst.opcode == CEE_CALLVIRT) {
                         if (!target->Attributes.Virtual) {
@@ -1039,14 +1050,19 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                             inst.opcode = CEE_CALL;
                             need_explicit_null_check = true;
 
-                            // if we have de-virtualized a boxed
                             if (
                                 tdn_type_is_referencetype(obj.type) &&
                                 tdn_type_is_valuetype(obj.attrs.known_type) &&
                                 tdn_type_is_valuetype(target->DeclaringType)
                             ) {
+                                // we have a value type, de-virtualize
                                 args[0] = spidir_builder_build_ptroff(builder, args[0],
                                     spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(obj.attrs.known_type)));
+
+                            } else if (jit_is_interface(obj.type)) {
+                                // we have an interface, get the raw object instance
+                                args[0] = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, args[0]);
+
                             }
 
                         } else if (target->Attributes.Final || target->DeclaringType->Attributes.Sealed) {
@@ -1086,14 +1102,32 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     size_t base_offset = sizeof(void*) * target->VTableOffset;
                     if (target_this_type->Attributes.Interface) {
                         // load the vtable pointer
-                        func_addr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable));
-                        func_addr = spidir_builder_build_ptroff(builder, args[0], func_addr);
-                        func_addr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, func_addr);
+                        if (jit_is_interface(obj_type)) {
+                            // from an interface fat pointer
+                            func_addr = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable));
+                            func_addr = spidir_builder_build_ptroff(builder, args[0], func_addr);
+                            func_addr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, func_addr);
+                        } else {
+                            // load the vtable pointer, the load will automatically zero extend the pointer
+                            func_addr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, args[0]);
+                            func_addr = spidir_builder_build_inttoptr(builder, func_addr);
+
+                            // get the offset into the actual interface vtable
+                            size_t interface_offset = jit_get_interface_offset(obj_type, target_this_type);
+                            ASSERT(interface_offset != -1);
+                            base_offset += offsetof(ObjectVTable, Functions) + interface_offset;
+                        }
 
                         // lastly replace the this pointer with the real one
                         args[0] = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, args[0]);
                         ASSERT(offsetof(Interface, Instance) == 0);
+
                     } else {
+                        if (jit_is_interface(obj_type)) {
+                            // we are calling with an interface, take the actual reference from it
+                            args[0] = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, args[0]);
+                        }
+
                         // load the vtable pointer, the load will automatically zero extend the pointer
                         func_addr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, args[0]);
                         func_addr = spidir_builder_build_inttoptr(builder, func_addr);
@@ -2314,7 +2348,7 @@ tdn_err_t jit_emit(void) {
             CHECK(ptr != NULL);
 
             // save it in the jit vtable
-            type->JitVTable->Functions[i] = ptr;
+            type->JitVTable->Functions[j] = ptr;
         }
     }
 

@@ -82,10 +82,18 @@ typedef struct RuntimeTypeInfo {
 
     // for interfaces this is their prime
     // for types this is the id relative to the parent
-    uint64_t TypeId;
+    uint64_t InterfacePrime;
 
-    // the TypeId generator for reference types
-    uint64_t TypeIdGen;
+    union {
+        // the ID used for the interface lookup
+        uint64_t InterfaceId;
+
+        // the ID used for matching base types
+        struct {
+            uint32_t TypeIdGen;
+            uint32_t TypeMaskLength;
+        };
+    };
 
     // The namespace of the type
     String Namespace;

@@ -792,7 +792,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 for (int i = target->Parameters->Length - 1; i >= 0; i--) {
                     ParameterInfo info = target->Parameters->Elements[i];
                     jit_stack_value_t arg = EVAL_STACK_POP();
-                    CHECK(verifier_assignable_to(arg.type, info->ParameterType));
+                    CHECK(verifier_assignable_to(arg.type, info->ParameterType),
+                            "%T verifier-assignable-to %T", arg.type, info->ParameterType);
 
                     // if the argument is not readonly (byref) then ensure
                     // that the variable we pass to it is also not a readonly

@@ -1,4 +1,7 @@
 #include "types.h"
+
+#include <util/stb_ds.h>
+
 #include "util/except.h"
 
 RuntimeTypeInfo tObject = NULL;
@@ -150,6 +153,10 @@ bool tdn_type_array_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U
     return false;
 }
 
+static void tdn_type_check_generic_parameter() {
+
+}
+
 bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     // 1.
     if (T == U) {
@@ -158,7 +165,7 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
 
     // 2.
     // TODO: is this even correct?
-    if (T->BaseType != NULL && tdn_type_compatible_with(T->BaseType, U)) {
+    if (tdn_is_instance(T, U)) {
         return true;
     }
 
@@ -182,7 +189,13 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
 
     // TODO: 7.
 
-    // TODO: 8.
+    // 8.
+    // if (U->Attributes.Interface && ) {
+    //     ASSERT(T->GenericArguments->Length == T->GenericArguments->Length);
+    //     for (int i = 0; i < T->GenericArguments->Length; i++) {
+    //
+    //     }
+    // }
 
     // TODO: 9.
 
@@ -242,16 +255,6 @@ bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     return false;
 }
 
-static bool is_instance(RuntimeTypeInfo has, RuntimeTypeInfo want) {
-    while (has != want) {
-        if (has == tObject) {
-            return false;
-        }
-        has = has->BaseType;
-    }
-    return true;
-}
-
 tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes, RuntimeTypeInfo_Array constraints) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -283,11 +286,31 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
             if (constraint == tUnmanagedType) {
                 CHECK(arg_type->IsUnmanaged);
             } else {
-                CHECK(is_instance(arg_type, constraint));
+                CHECK(tdn_is_instance(arg_type, constraint));
             }
         }
     }
 
 cleanup:
     return err;
+}
+
+bool tdn_is_instance(RuntimeTypeInfo type, RuntimeTypeInfo base) {
+    if (base->Attributes.Interface) {
+        // go over the interface impls
+        for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
+            if (type->InterfaceImpls[i].key == base) {
+                return true;
+            }
+        }
+    } else {
+        // go over the inheritance
+        do {
+            if (type == base) {
+                return true;
+            }
+            type = type->BaseType;
+        } while (type != NULL);
+    }
+    return false;
 }

@@ -67,4 +67,12 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_compatible_with_location(RuntimeTypeInfo T, RuntimeTypeInfo U);
 bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U);
 
+/**
+ * Check the argument constraint against the actual generic type
+ */
 tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes, RuntimeTypeInfo_Array constraints);
+
+/**
+ * Check if a type is an instance of another type dynamically, works for both interfaces and class bases
+ */
+bool tdn_is_instance(RuntimeTypeInfo type, RuntimeTypeInfo base);
