@@ -1711,11 +1711,11 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
             for (int j = 0; j < base->Parameters->Length; j++) {
                 CHECK(!tdn_type_contains_generic_parameters(base->Parameters->Elements[i]->ParameterType));
             }
+
         } else if (variance == TDN_GENERIC_PARAM_VARIANCE_CONTRAVARIANT) {
             // should not be in parameters to inherited interface or
+            // the result of a generic
             CHECK(!tdn_type_contains_generic_parameters(base->ReturnParameter->ParameterType));
-
-            // TODO: check for interface impls
         }
     }
 
