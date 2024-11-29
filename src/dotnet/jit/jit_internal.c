@@ -42,10 +42,15 @@ tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** resu
         jmethod->verifying = true;
 
     } else if (method->MethodBody == NULL) {
-        // the method is a runtime method, we will
-        // need to emit it manually, this will be done
-        // later on
-        jit_queue_emit(jmethod);
+        if (method->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME) {
+            // the method is a runtime method, we will
+            // need to emit it manually, this will be done
+            // later on
+            jit_queue_emit(jmethod);
+        } else {
+            CHECK(method->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_IL);
+            CHECK(method->Attributes.Abstract);
+        }
 
         // runtime methods don't need verification
         jmethod->verifying = true;

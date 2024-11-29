@@ -8,27 +8,16 @@ namespace Tests;
 public static class Program
 {
 
-    public interface ICovariant<out T> { }
-    public interface IContravariant<in T> { }
-
-    public class CovariantExample<T> : ICovariant<T> { }
-    public class ContravariantExample<T> : IContravariant<T> { }
-
-    public class Fruit { }
-    public class Apple : Fruit { }
-
-    public static void Covariant(ICovariant<Fruit> fruit)
-    {
-        Console.WriteLine(fruit.ToString());
-    }
-    
     public static int Main()
     {
-        var fruit = new CovariantExample<Fruit>();
-        var apple = new CovariantExample<Apple>();
-        
-        Covariant(fruit);
-        // Covariant(apple);
+        if (CodeGenBringUpTests.Run() != 0) return 1;
+        if (!BitTest.Run()) return 2;
+        if (!Bool_And_Op.Run()) return 3;
+        if (!Bool_No_Op.Run()) return 4;
+        if (!Int_No_Op.Run()) return 5;
+        if (!Arrays.Run()) return 6;
+        if (!ConstantFolding.Run()) return 7;
+        if (!Shifts.Run()) return 8;
         
         return 0;
     }

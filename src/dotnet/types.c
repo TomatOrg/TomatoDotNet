@@ -190,12 +190,52 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     // TODO: 7.
 
     // 8.
-    // if (U->Attributes.Interface && ) {
-    //     ASSERT(T->GenericArguments->Length == T->GenericArguments->Length);
-    //     for (int i = 0; i < T->GenericArguments->Length; i++) {
-    //
-    //     }
-    // }
+    if (U->Attributes.Interface && tdn_type_is_generic(U)) {
+        for (int i = 0; i < hmlen(T->InterfaceImpls); i++) {
+            if (T->InterfaceImpls[i].key->GenericTypeDefinition != U->GenericTypeDefinition) continue;
+
+            // check that the variance
+            bool matched = true;
+            RuntimeTypeInfo base = T->GenericTypeDefinition;
+            if (base != NULL && T->GenericArguments != NULL) {
+                for (int j = 0; j < T->GenericArguments->Length; j++) {
+                    RuntimeTypeInfo Ti = T->GenericArguments->Elements[j];
+                    RuntimeTypeInfo Ui = U->GenericArguments->Elements[j];
+                    RuntimeTypeInfo base_typ = base->GenericArguments->Elements[j];
+                    uint32_t var_i = base_typ->GenericParameterAttributes.Variance;
+
+                    // a. var_i = none (no variance) and Ti is identical to Ui
+                    if (var_i == 0) {
+                        if (Ti != Ui) {
+                            matched = false;
+                            break;
+                        }
+                    }
+
+                    // b. var_i = + (covariance), and T i is compatible-with Ui
+                    if (var_i == TDN_GENERIC_PARAM_VARIANCE_COVARIANT) {
+                        if (!tdn_type_compatible_with(Ti, Ui)) {
+                            matched = false;
+                            break;
+                        }
+                    }
+
+                    // c. var_i = - (contravariance), and Ui is compatible-with Ti
+                    if (var_i == TDN_GENERIC_PARAM_VARIANCE_CONTRAVARIANT) {
+                        if (!tdn_type_compatible_with(Ui, Ti)) {
+                            matched = false;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // matches everything
+            if (matched) {
+                return true;
+            }
+        }
+    }
 
     // TODO: 9.
 

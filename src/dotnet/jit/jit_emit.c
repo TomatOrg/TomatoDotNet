@@ -454,6 +454,82 @@ static size_t jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo ifa
     return -1;
 }
 
+static interface_impl_t* jit_find_variant_interface(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
+    for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
+        if (type->InterfaceImpls[i].key->GenericTypeDefinition != iface->GenericTypeDefinition) continue;
+        RuntimeTypeInfo T = type->InterfaceImpls[i].key;
+        RuntimeTypeInfo U = iface;
+
+        // check that the variance
+        bool matched = true;
+        RuntimeTypeInfo base = T->GenericTypeDefinition;
+        if (base != NULL && T->GenericArguments != NULL) {
+            for (int j = 0; j < T->GenericArguments->Length; j++) {
+                RuntimeTypeInfo Ti = T->GenericArguments->Elements[j];
+                RuntimeTypeInfo Ui = U->GenericArguments->Elements[j];
+                RuntimeTypeInfo base_typ = base->GenericArguments->Elements[j];
+                uint32_t var_i = base_typ->GenericParameterAttributes.Variance;
+
+                // a. var_i = none (no variance) and Ti is identical to Ui
+                if (var_i == 0) {
+                    if (Ti != Ui) {
+                        matched = false;
+                        break;
+                    }
+                }
+
+                // b. var_i = + (covariance), and T i is compatible-with Ui
+                if (var_i == TDN_GENERIC_PARAM_VARIANCE_COVARIANT) {
+                    if (!tdn_type_compatible_with(Ti, Ui)) {
+                        matched = false;
+                        break;
+                    }
+                }
+
+                // c. var_i = - (contravariance), and Ui is compatible-with Ti
+                if (var_i == TDN_GENERIC_PARAM_VARIANCE_CONTRAVARIANT) {
+                    if (!tdn_type_compatible_with(Ui, Ti)) {
+                        matched = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // matches everything
+        if (matched) {
+            return &type->InterfaceImpls[i];
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * Checks if the interface we convert to requires a stub in order to function
+ */
+static bool jit_needs_variant_vtable_stub(RuntimeTypeInfo wanted_iface, RuntimeTypeInfo got_iface) {
+    if (wanted_iface->GenericArguments == NULL) {
+        return false;
+    }
+
+    bool might_need = false;
+    for (int i = 0; i < wanted_iface->GenericArguments->Length; i++) {
+        RuntimeTypeInfo a = wanted_iface->GenericArguments->Elements[i];
+        RuntimeTypeInfo b = got_iface->GenericArguments->Elements[i];
+        if (a->Attributes.Interface != b->Attributes.Interface) {
+            might_need = true;
+        }
+    }
+
+    if (might_need) {
+        // TODO: check for exact methods
+        return true;
+    }
+
+    return false;
+}
+
 static bool jit_convert_interface(
     spidir_builder_handle_t builder,
     spidir_value_t dest, spidir_value_t src,
@@ -473,10 +549,25 @@ static bool jit_convert_interface(
 
         // calculate the offset from the vtable and add it to it
         size_t interface_offset = jit_get_interface_offset(src_type, dest_type);
-        ASSERT(interface_offset != -1);
-        interface_offset = interface_offset * sizeof(void*) + offsetof(ObjectVTable, Functions);
-        vtable = spidir_builder_build_ptroff(builder, vtable,
-            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, interface_offset));
+        if (interface_offset == -1) {
+            interface_impl_t* impl = jit_find_variant_interface(src_type, dest_type);
+            ASSERT(impl != NULL);
+
+            if (jit_needs_variant_vtable_stub(dest_type, impl->key)) {
+                // we need to build a stub table to thinner/fatten the interfaces
+                ASSERT(!"TODO: Interface <-> object variance support");
+            } else {
+                // we don't need any special thunk, use the normal vtable
+                interface_offset = impl->value;
+            }
+        }
+
+        // if we have a normal interface use it
+        if (interface_offset != -1) {
+            interface_offset = interface_offset * sizeof(void*) + offsetof(ObjectVTable, Functions);
+            vtable = spidir_builder_build_ptroff(builder, vtable,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, interface_offset));
+        }
 
         // and store it
         dest = spidir_builder_build_ptroff(builder, dest,
