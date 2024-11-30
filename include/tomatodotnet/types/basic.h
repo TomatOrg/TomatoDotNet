@@ -54,6 +54,11 @@ typedef struct Interface {
     void** VTable;
 } Interface;
 
+typedef struct Delegate {
+    Object Instance;
+    void* Function;
+} Delegate;
+
 static inline ObjectVTable* object_get_vtable(Object object) { return (void*)(uintptr_t)object->VTable; }
 
 typedef struct String {

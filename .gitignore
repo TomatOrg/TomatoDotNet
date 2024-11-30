@@ -11,3 +11,5 @@ fuzz_example
 fuzz.sh
 findings
 out
+*.spidir
+*.asm

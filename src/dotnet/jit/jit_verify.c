@@ -189,6 +189,10 @@ static tdn_err_t verify_merge_basic_block(jit_method_t* method, uint32_t target_
             // TODO: support finding the common of the two
             CHECK(wanted->type == actual->type);
 
+            // make sure we don't have weird cases with a dangling method
+            CHECK(!wanted->attrs.is_method);
+            CHECK(!actual->attrs.is_method);
+
             // merge the attributes
             if (jit_merge_attrs(&wanted->attrs, &actual->attrs)) {
                 verify_queue_basic_block(method, target);
@@ -352,6 +356,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
     // the pending prefixes
     il_prefix_t pending_prefix = 0;
+    bool must_be_newobj = false;
+    tdn_il_opcode_t last_opcode;
 
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
@@ -366,6 +372,9 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             inst.control_flow == TDN_IL_CF_CALL
         );
 
+        // save the last opcode
+        last_opcode = inst.opcode;
+
         // get the instruction
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
@@ -375,6 +384,13 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
         tdn_normalize_inst(&inst);
         pc += inst.length;
+
+        // we got a delegate creation sequence, so this
+        // opcode must be newobj
+        if (must_be_newobj) {
+            CHECK(inst.opcode == CEE_NEWOBJ);
+            must_be_newobj = false;
+        }
 
         switch (inst.opcode) {
 
@@ -736,6 +752,29 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 EVAL_STACK_PUSH(value.type, value.attrs);
             } break;
 
+            case CEE_LDVIRTFTN: {
+                CHECK(last_opcode == CEE_DUP, "must have dup before CEE_LDVIRTFTN");
+
+                // push the method
+                EVAL_STACK_PUSH(.attrs = { .method = inst.operand.method, .is_method = true });
+
+                // next must come newobj
+                must_be_newobj = true;
+            } break;
+
+            case CEE_LDFTN: {
+                // push the method
+                EVAL_STACK_PUSH(.attrs = { .method = inst.operand.method, .is_method = true });
+
+                // queue for verify
+                jit_method_t* target_method = NULL;
+                CHECK_AND_RETHROW(jit_get_or_create_method(inst.operand.method, &target_method));
+                jit_queue_verify(target_method);
+
+                // next must come newobj
+                must_be_newobj = true;
+            } break;
+
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Method calling
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -789,27 +828,45 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // verify all of the arguments
                 bool might_return_local_ref = false;
+                RuntimeMethodBase delegate_method = NULL;
                 for (int i = target->Parameters->Length - 1; i >= 0; i--) {
                     ParameterInfo info = target->Parameters->Elements[i];
                     jit_stack_value_t arg = EVAL_STACK_POP();
-                    CHECK(verifier_assignable_to(arg.type, info->ParameterType),
-                            "%T verifier-assignable-to %T", arg.type, info->ParameterType);
 
-                    // if the argument is not readonly (byref) then ensure
-                    // that the variable we pass to it is also not a readonly
-                    // one
-                    if (!info->IsReadOnly) {
-                        CHECK(!arg.attrs.readonly);
-                    }
+                    // when creating a delegate we have a bit of specific rules
+                    if (inst.opcode == CEE_NEWOBJ && jit_is_delegate(target_this_type)) {
+                        if (i == 0) {
+                            if (delegate_method->Attributes.Static) {
+                                CHECK(arg.type == NULL);
+                            } else {
+                                CHECK(delegate_method->DeclaringType == arg.type);
+                            }
+                        } else if (i == 1) {
+                            CHECK(arg.attrs.is_method);
+                            delegate_method = arg.attrs.method;
 
-                    // check if we might pass a local-reference into this function, either by passing
-                    // a reference directly or passing a reference via a ref-struct indirectly
-                    // TODO: support for scoped and unscoped references
-                    if (
-                        (arg.type->IsByRef && !arg.attrs.nonlocal_ref) ||
-                        (arg.type->IsByRefStruct && !arg.attrs.nonlocal_ref_struct)
-                    ) {
-                        might_return_local_ref = true;
+                            // TODO: check method signature against the delegate
+                        }
+                    } else {
+                        CHECK(verifier_assignable_to(arg.type, info->ParameterType),
+                                "%T verifier-assignable-to %T", arg.type, info->ParameterType);
+
+                        // if the argument is not readonly (byref) then ensure
+                        // that the variable we pass to it is also not a readonly
+                        // one
+                        if (!info->IsReadOnly) {
+                            CHECK(!arg.attrs.readonly);
+                        }
+
+                        // check if we might pass a local-reference into this function, either by passing
+                        // a reference directly or passing a reference via a ref-struct indirectly
+                        // TODO: support for scoped and unscoped references
+                        if (
+                            (arg.type->IsByRef && !arg.attrs.nonlocal_ref) ||
+                            (arg.type->IsByRefStruct && !arg.attrs.nonlocal_ref_struct)
+                        ) {
+                            might_return_local_ref = true;
+                        }
                     }
                 }
 
@@ -1320,7 +1377,10 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
         // if this was not a meta instruction (prefix) then make sure we have
         // no pending prefixes
         if (inst.control_flow != TDN_IL_CF_META) {
-            CHECK(pending_prefix == 0);
+            if (pending_prefix & IL_PREFIX_CONSTRAINED) ERROR("- Unhandled `.constrained`");
+            if (pending_prefix & IL_PREFIX_VOLATILE) ERROR("- Unhandled `.volatile`");
+            if (pending_prefix & IL_PREFIX_UNALIGNED) ERROR("- Unhandled `.unaglined`");
+            CHECK(pending_prefix == 0, "Some prefixes not handled");
         }
 
 #ifdef JIT_VERBOSE_VERIFY

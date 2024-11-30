@@ -227,10 +227,9 @@ typedef struct RuntimeMethodBase {
     void* MethodPtr;
     size_t MethodSize;
 
-    // A stub for calling the method, if this is on an instance
-    // method then it strips the object header to give the struct,
-    // if its on a static method it strips the first parameter to
-    // convert from a this call with null argument to a static call
+    // A stub for calling the method
+    //      - static method: calls the function assuming thiscall
+    //      - struct member: calls the function stripping the object header
     void* ThunkPtr;
     size_t ThunkSize;
 

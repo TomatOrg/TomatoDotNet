@@ -69,6 +69,10 @@ cleanup:
     return err;
 }
 
+void jit_method_register_thunk(jit_method_t* method) {
+    hmput(m_jit_functions, method->thunk, method);
+}
+
 jit_method_t* jit_get_method_from_function(spidir_function_t function) {
     int idx = hmgeti(m_jit_functions, function);
     if (idx >= 0) {

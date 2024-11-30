@@ -6,8 +6,8 @@
 #include <util/defs.h>
 
 // enable printing while verifying
-// #define JIT_VERBOSE_VERIFY
-// #define JIT_DEBUG_VERIFY
+#define JIT_VERBOSE_VERIFY
+#define JIT_DEBUG_VERIFY
 
 #ifdef JIT_VERBOSE_VERIFY
     #define JIT_DEBUG_VERIFY
@@ -16,7 +16,7 @@
 // enable printing while emitting
 // #define JIT_VERBOSE_EMIT
 // #define JIT_DEBUG_EMIT
-// #define JIT_DUMP_EMIT
+#define JIT_DUMP_EMIT
 
 #ifdef JIT_VERBOSE_EMIT
     #define JIT_DEBUG_EMIT
@@ -25,7 +25,10 @@
 typedef struct jit_item_attrs {
     // the known type, only set if we know this is the exact
     // type given, for de-virt
-    RuntimeTypeInfo known_type;
+    union {
+        RuntimeTypeInfo known_type;
+        RuntimeMethodBase method;
+    };
 
     // is this a readonly reference
     size_t readonly : 1;
@@ -41,6 +44,9 @@ typedef struct jit_item_attrs {
 
     // the value holds the this ptr
     size_t this_ptr : 1;
+
+    // the method is valid
+    size_t is_method : 1;
 } jit_item_attrs_t;
 
 typedef struct jit_stack_value {
@@ -128,9 +134,6 @@ typedef struct jit_method {
     // the list of basic blocks in the method
     jit_basic_block_t* basic_blocks;
 
-    // the method's state
-    bool verifying;
-
     // the locals of the method
     jit_local_t* locals;
 
@@ -146,10 +149,23 @@ typedef struct jit_method {
 
     // the spidir function for this method
     spidir_function_t function;
+
+    // the static stub of the method
+    spidir_function_t thunk;
+
+    // the method's state
+    bool verifying;
+
+    // do we have a static stub
+    bool has_thunk;
 } jit_method_t;
 
 static inline bool jit_is_interface(RuntimeTypeInfo type) {
     return type->Attributes.Interface;
+}
+
+static inline bool jit_is_delegate(RuntimeTypeInfo type) {
+    return type->BaseType == tMulticastDelegate || type == tMulticastDelegate || type == tDelegate;
 }
 
 static inline bool jit_is_struct(RuntimeTypeInfo type) {
@@ -164,7 +180,7 @@ static inline bool jit_is_struct(RuntimeTypeInfo type) {
 }
 
 static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
-    return jit_is_interface(type) || jit_is_struct(type);
+    return jit_is_interface(type) || jit_is_struct(type) || jit_is_delegate(type);
 }
 
 static inline size_t jit_get_boxed_value_offset(RuntimeTypeInfo type) {
@@ -178,6 +194,11 @@ static inline size_t jit_get_boxed_value_offset(RuntimeTypeInfo type) {
  * after the verification stage
  */
 tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** jit_method);
+
+/**
+ * Register the thunk of the given method
+ */
+void jit_method_register_thunk(jit_method_t* method);
 
 /**
  * Get the jit method from the spidir function

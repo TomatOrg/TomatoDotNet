@@ -146,6 +146,8 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
     LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
     LOAD_TYPE(System, RuntimeTypeHandle),
+    LOAD_TYPE(System, Delegate),
+    LOAD_TYPE(System, MulticastDelegate),
     LOAD_TYPE(System, Buffer),
     LOAD_TYPE(System.Diagnostics, Debug),
     LOAD_TYPE(System.Numerics, BitOperations),
@@ -291,9 +293,15 @@ static tdn_err_t fill_stack_size(RuntimeTypeInfo type) {
         CHECK_AND_RETHROW(fill_heap_size(type));
         type->StackSize = type->HeapSize;
         type->StackAlignment = type->HeapAlignment;
+
     } else if (type->Attributes.Interface) {
         type->StackAlignment = _Alignof(Interface);
         type->StackSize = sizeof(Interface);
+
+    } else if (type->BaseType == tMulticastDelegate || type == tMulticastDelegate || type == tDelegate) {
+        type->StackAlignment = _Alignof(Delegate);
+        type->StackSize = sizeof(Delegate);
+
     } else {
         type->StackAlignment = _Alignof(Object);
         type->StackSize = sizeof(Object);
@@ -1538,6 +1546,15 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
     if (type->BaseType == tEnum) {
         CHECK(type->Attributes.Sealed);
         CHECK(methods_count == 0);
+
+    } else if (type->BaseType == tDelegate) {
+        CHECK(type == tMulticastDelegate);
+
+    } else if (type->BaseType == tMulticastDelegate) {
+        CHECK(type->Attributes.Sealed);
+        CHECK(methods_count == 2);
+        CHECK(fields_count == 0);
+
     } else if (type->BaseType == tValueType && type != tEnum) {
         CHECK(type->Attributes.Sealed);
     }
@@ -1623,6 +1640,7 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
     }
 
     // now we can allocate and init all of them
+    bool delegate_found_ctor = false, delegate_found_invoke = false;
     type->DeclaredConstructors = GC_NEW_ARRAY(RuntimeConstructorInfo, ctors);
     type->DeclaredMethods = GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
@@ -1700,6 +1718,7 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                 type->TypeInitializer = (RuntimeConstructorInfo)base;
                 CHECK(base->ReturnParameter->ParameterType == tVoid);
                 CHECK(base->Parameters->Length == 0);
+                CHECK(base->Attributes.Static);
             } else {
                 CHECK_FAIL();
             }
@@ -1717,6 +1736,28 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
             // the result of a generic
             CHECK(!tdn_type_contains_generic_parameters(base->ReturnParameter->ParameterType));
         }
+
+        if (type->BaseType == tMulticastDelegate) {
+            if (base->Attributes.RTSpecialName) {
+                // ctor
+                CHECK(base->Parameters->Length == 2);
+                CHECK(base->Parameters->Elements[0]->ParameterType == tObject);
+                CHECK(base->Parameters->Elements[1]->ParameterType == tIntPtr);
+                CHECK(base->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME);
+                delegate_found_ctor = true;
+            } else if (strcmp(method_def->name, "Invoke") == 0) {
+                CHECK(base->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME);
+                CHECK(base->Attributes.Virtual);
+                delegate_found_invoke = true;
+            } else {
+                CHECK_FAIL("Unknown delegate method %s", method_def->name);
+            }
+        }
+    }
+
+    if (type->BaseType == tMulticastDelegate) {
+        CHECK(delegate_found_ctor);
+        CHECK(delegate_found_invoke);
     }
 
 cleanup:

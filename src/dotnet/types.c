@@ -54,21 +54,8 @@ RuntimeTypeInfo tIsReadOnlyAttribute = NULL;
 RuntimeTypeInfo tIsByRefLikeAttribute = NULL;
 RuntimeTypeInfo tUnmanagedType = NULL;
 
-static bool has_common_subtype(RuntimeTypeInfo T, RuntimeTypeInfo U) {
-    if (!tdn_type_is_referencetype(T) || !tdn_type_is_referencetype(U)) {
-        return false;
-    }
-
-    RuntimeTypeInfo V = T;
-    while (V != NULL) {
-        if (V == U) {
-            return true;
-        }
-        V = V->BaseType;
-    }
-
-    return false;
-}
+RuntimeTypeInfo tDelegate = NULL;
+RuntimeTypeInfo tMulticastDelegate = NULL;
 
 RuntimeTypeInfo tdn_get_underlying_type(RuntimeTypeInfo type) {
     if (type->BaseType == tEnum) {

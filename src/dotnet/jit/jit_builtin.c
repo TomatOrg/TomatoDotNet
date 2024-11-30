@@ -3,7 +3,9 @@
 #include <dotnet/types.h>
 #include <tomatodotnet/types/type.h>
 #include <util/except.h>
+#include <util/stb_ds.h>
 
+#include "jit_emit.h"
 #include "jit_helpers.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -167,6 +169,61 @@ static void emit_debug_print(spidir_builder_handle_t builder, RuntimeMethodBase 
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Delegate handling
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void emit_delegate_ctor(spidir_builder_handle_t builder) {
+    spidir_value_t delegate = spidir_builder_build_param_ref(builder, 0);
+    spidir_value_t target = spidir_builder_build_param_ref(builder, 1);
+    spidir_value_t method = spidir_builder_build_param_ref(builder, 2);
+
+    // store the instance
+    STATIC_ASSERT(offsetof(Delegate, Instance) == 0);
+    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, target, delegate);
+
+    // store the method
+    spidir_value_t method_ptr = spidir_builder_build_ptroff(builder, delegate,
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function)));
+    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, method, method_ptr);
+
+    spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
+}
+
+
+static void emit_delegate_invoke(spidir_builder_handle_t builder, RuntimeMethodBase method) {
+    spidir_value_t delegate = spidir_builder_build_param_ref(builder, 0);
+
+    // load the target and method ptr
+    spidir_value_t method_ptr = spidir_builder_build_ptroff(builder, delegate,
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function)));
+    method_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, method_ptr);
+    spidir_value_t target = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, delegate);
+
+    // load all the arguments
+    spidir_value_t* args = NULL;
+    arrpush(args, target);
+    for (int i = 0; i < method->Parameters->Length; i++) {
+        arrpush(args, spidir_builder_build_param_ref(builder, i + 1));
+    }
+
+    // perform the indirect call
+    spidir_value_type_t* arg_types = jit_get_spidir_arg_types(method);
+    spidir_value_t result = spidir_builder_build_callind(
+        builder,
+        jit_get_spidir_ret_type(method),
+        arrlen(arg_types), arg_types,
+        method_ptr,
+        args
+    );
+
+    // and return it
+    spidir_builder_build_return(builder, result);
+
+    arrfree(arg_types);
+    arrfree(args);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Generic emit code
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -225,6 +282,18 @@ void jit_emit_builtin(spidir_builder_handle_t handle, void* _ctx) {
     } else if (type == tDebug) {
         if (tdn_compare_string_to_cstr(method->Name, "Print")) {
             emit_debug_print(handle, method);
+        } else {
+            CHECK_FAIL("Invalid function %T::%U", method->DeclaringType, method->Name);
+        }
+
+    } else if (type->BaseType == tMulticastDelegate) {
+        // this is a delegate instance, the ctor takes
+        if (tdn_compare_string_to_cstr(method->Name, ".ctor")) {
+            emit_delegate_ctor(handle);
+
+        } else if (tdn_compare_string_to_cstr(method->Name, "Invoke")) {
+            emit_delegate_invoke(handle, method);
+
         } else {
             CHECK_FAIL("Invalid function %T::%U", method->DeclaringType, method->Name);
         }

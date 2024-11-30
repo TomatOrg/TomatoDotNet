@@ -1,5 +1,6 @@
 #include "jit_emit.h"
 
+#include <stdalign.h>
 #include <dotnet/gc/gc.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
@@ -208,7 +209,7 @@ static spidir_mem_size_t get_spidir_mem_size(RuntimeTypeInfo info) {
     }
 }
 
-static spidir_value_type_t get_spidir_ret_type(RuntimeMethodBase method) {
+spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
     RuntimeTypeInfo type = tdn_get_intermediate_type(method->ReturnParameter->ParameterType);
     if (type == tInt32) {
         return SPIDIR_TYPE_I32;
@@ -223,7 +224,7 @@ static spidir_value_type_t get_spidir_ret_type(RuntimeMethodBase method) {
     }
 }
 
-static spidir_value_type_t* get_spidir_arg_types(RuntimeMethodBase method) {
+spidir_value_type_t* jit_get_spidir_arg_types(RuntimeMethodBase method) {
     spidir_value_type_t* types = NULL;
 
     // this pointer
@@ -316,18 +317,10 @@ cleanup:
     return err;
 }
 
-static RuntimeTypeInfo emit_get_stack_type(RuntimeTypeInfo type) {
-    type = tdn_get_intermediate_type(type);
-    if (type == tIntPtr) {
-        type = tInt64;
-    }
-    return type;
-}
-
 #define EVAL_STACK_PUSH(_type, _value, ...) \
     do { \
         CHECK(arrlen(stack) < body->MaxStackSize); \
-        jit_stack_value_t __item = { .type = emit_get_stack_type(_type), .value = _value, ## __VA_ARGS__ }; \
+        jit_stack_value_t __item = { .type = tdn_get_intermediate_type(_type), .value = _value, ## __VA_ARGS__ }; \
         arrpush(stack, __item); \
     } while (0)
 
@@ -730,6 +723,79 @@ static spidir_value_t jit_emit_array_offset(spidir_builder_handle_t builder, spi
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Thunk generation
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void jit_emit_static_delegate_thunk(spidir_builder_handle_t builder, void* _ctx) {
+    jit_method_t* jmethod = _ctx;
+
+    // setup the call
+    spidir_block_t entry = spidir_builder_create_block(builder);
+    spidir_builder_set_block(builder, entry);
+    spidir_builder_set_entry_block(builder, entry);
+
+    // load all the arguments
+    spidir_value_t* args = NULL;
+    for (int i = 0; i < jmethod->method->Parameters->Length; i++) {
+        arrpush(args, spidir_builder_build_param_ref(builder, i + 1));
+    }
+
+    // perform the indirect call
+    spidir_value_t result = spidir_builder_build_call(
+        builder,
+        jmethod->function,
+        arrlen(args), args
+    );
+
+    // and return it
+    spidir_builder_build_return(builder, result);
+
+    arrfree(args);
+}
+
+static tdn_err_t jit_generate_static_delegate_thunk(spidir_module_handle_t module, jit_method_t* method) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_type_t* args = NULL;
+
+    // build the name
+    string_builder_t builder = {};
+    string_builder_push_method_signature(&builder, method->method, true);
+    string_builder_push_cstr(&builder, " [static-delegate-thunk]");
+    const char* name = string_builder_build(&builder);
+
+    // build the arg types, insert a dummy ptr to the first argument
+    // to simulate the thiscall
+    args = jit_get_spidir_arg_types(method->method);
+    arrins(args, 0, SPIDIR_TYPE_PTR);
+
+    // create the function
+    method->thunk = spidir_module_create_function(
+        module,
+        name,
+        jit_get_spidir_ret_type(method->method),
+        arrlen(args), args
+    );
+    method->has_thunk = true;
+
+    // build the function
+    spidir_module_build_function(
+        module,
+        method->thunk,
+        jit_emit_static_delegate_thunk,
+        method
+    );
+
+    // register the thunk
+    jit_method_register_thunk(method);
+
+cleanup:
+    string_builder_free(&builder);
+    arrfree(args);
+
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Emit basic block
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -1013,6 +1079,28 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 }
             } break;
 
+            case CEE_LDFTN: {
+                // get the jit method
+                jit_method_t* target_method = NULL;
+                CHECK_AND_RETHROW(jit_get_or_create_method(inst.operand.method, &target_method));
+
+                // we need to create a stub for static functions
+                spidir_value_t addr = SPIDIR_VALUE_INVALID;
+                if (inst.operand.method->Attributes.Static) {
+                    CHECK_AND_RETHROW(jit_generate_static_delegate_thunk(spidir_builder_get_module(builder), target_method));
+                    addr = spidir_builder_build_funcaddr(builder, target_method->thunk);
+
+                } else {
+                    addr = spidir_builder_build_funcaddr(builder, target_method->function);
+                }
+
+                // load the address and push it
+                // TODO: for now we need the ptrtoint because of how the method ctor is defined
+                //       as intptr, in the future we might want to replace this to make the jit
+                //       be able to inline things properly
+                EVAL_STACK_PUSH(tIntPtr, spidir_builder_build_ptrtoint(builder, addr));
+            } break;
+
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Method calling
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1069,7 +1157,11 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     // perform the allocation, in the case of a struct value
                     // just emit a stack slot and zero it
                     spidir_value_t obj;
-                    if (jit_is_struct(target->DeclaringType)) {
+                    if (jit_is_delegate(target_this_type)) {
+                        obj = jit_get_struct_slot(builder, tMulticastDelegate);
+                        jit_emit_bzero(builder, obj, tMulticastDelegate);
+
+                    } else if (jit_is_struct(target->DeclaringType)) {
                         obj = jit_get_struct_slot(builder, target->DeclaringType);
                         jit_emit_bzero(builder, obj, target->DeclaringType);
 
@@ -1100,6 +1192,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                                     element_count
                                 );
                             }
+
                         } else {
                             CHECK_FAIL();
                         }
@@ -1160,7 +1253,9 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                             // the type is sealed / the method is final, we can de-virt it
                             target = (RuntimeMethodBase)target->DeclaringType->VTable->Elements[target->VTableOffset];
                             inst.opcode = CEE_CALL;
-                            need_explicit_null_check = true;
+                            if (!jit_is_delegate(target->DeclaringType)) {
+                                need_explicit_null_check = true;
+                            }
 
                         } else if (jit_is_struct(target->DeclaringType)) {
                             // the type is a struct, attempt to de-virt it
@@ -1238,10 +1333,10 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     func_addr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, func_addr);
 
                     // now emit the call
-                    args_type = get_spidir_arg_types(target);
+                    args_type = jit_get_spidir_arg_types(target);
                     ret_value = spidir_builder_build_callind(
                         builder,
-                        get_spidir_ret_type(target),
+                        jit_get_spidir_ret_type(target),
                         arrlen(args),
                         args_type,
                         func_addr,
@@ -1814,6 +1909,15 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     stack, &false_block));
 
                 spidir_value_t cond = value.value;
+
+                if (jit_is_delegate(value.type)) {
+                    // load the method ptr, since its the thing that can be null
+                    // when dealing with a delegate
+                    cond = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+                        spidir_builder_build_ptroff(builder, cond,
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
+                }
+
                 if (tdn_type_is_referencetype(value.type)) {
                     // can't pass ptr to brcond, turn into an int first
                     cond = spidir_builder_build_icmp(builder,
@@ -2123,7 +2227,6 @@ static tdn_err_t jit_emit_method(jit_method_t* method) {
     TRACE("%T::%U", method->method->DeclaringType, method->method->Name);
 #endif
 
-    // TODO: implement runtime methods
     if (method->method->MethodBody == NULL) {
         jit_builtin_context_t ctx = {
             .method = method->method,
@@ -2159,7 +2262,7 @@ cleanup:
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * The methods left to be verified
+ * The methods left to be emitted
  */
 static jit_method_t** m_methods_to_emit = NULL;
 
@@ -2176,10 +2279,15 @@ typedef struct jit_method_result {
     spidir_codegen_blob_handle_t blob;
 } jit_method_result_t;
 
+typedef struct jit_method_results {
+    jit_method_result_t function;
+    jit_method_result_t thunk;
+} jit_method_results_t;
+
 /**
  * Blobs of the emitted methods
  */
-static jit_method_result_t* m_method_jit_results = NULL;
+static jit_method_results_t* m_method_jit_results = NULL;
 
 /**
  * The mahcine used for jtiting
@@ -2203,8 +2311,8 @@ static spidir_function_t create_spidir_function(RuntimeMethodBase method, bool e
     const char* name = string_builder_build(&builder);
 
     // get the signature
-    spidir_value_type_t ret_type = get_spidir_ret_type(method);
-    spidir_value_type_t* arg_types = get_spidir_arg_types(method);
+    spidir_value_type_t ret_type = jit_get_spidir_ret_type(method);
+    spidir_value_type_t* arg_types = jit_get_spidir_arg_types(method);
 
     spidir_function_t function;
     if (external) {
@@ -2251,6 +2359,55 @@ void jit_queue_emit_type(RuntimeTypeInfo type) {
     arrpush(m_types_to_emit, type);
 }
 
+static tdn_err_t jit_relocate_function(void* method_ptr, jit_method_result_t* blob, jit_method_t* method) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    size_t reloc_count = spidir_codegen_blob_get_reloc_count(blob->blob);
+    const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(blob->blob);
+    for (size_t j = 0; j < reloc_count; j++) {
+        uint64_t P = (uint64_t)(method_ptr + relocs[j].offset);
+        int64_t A = relocs[j].addend;
+
+        // resolve the target, will either be a builtin or a
+        // method pointer we jitted
+        uint64_t F;
+        jit_method_t* target = jit_get_method_from_function(relocs[j].target);
+        if (target == NULL) {
+            void* ptr = hmget(m_jit_helper_lookup, relocs[j].target);
+            CHECK(ptr != NULL);
+            F = (uint64_t)ptr;
+        } else {
+            // check if we reference the function or the thunk
+            if (target->function.id == relocs[j].target.id) {
+                F = (uint64_t)(target->method->MethodPtr);
+            } else {
+                F = (uint64_t)(target->method->ThunkPtr);
+            }
+            CHECK(F != 0);
+        }
+
+        switch (relocs[j].kind) {
+            case SPIDIR_RELOC_X64_PC32: {
+                int64_t value = F + A - P;
+                CHECK(INT32_MIN <= value && value <= INT32_MAX, "%p", value);
+                int32_t pc32 = value;
+                memcpy((void*)P, &pc32, sizeof(pc32));
+            } break;
+
+            case SPIDIR_RELOC_X64_ABS64: {
+                uint64_t value = F + A;
+                memcpy((void*)P, &value, sizeof(value));
+            } break;
+
+            default:
+                CHECK_FAIL("Unknown relocation kind: %d", relocs[j].kind);
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t jit_map_and_relocate(size_t map_size) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -2260,24 +2417,28 @@ static tdn_err_t jit_map_and_relocate(size_t map_size) {
 
     // copy over all of the code and set the method pointers
     for (int i = 0; i < arrlen(m_method_jit_results); i++) {
-        jit_method_result_t* blob = &m_method_jit_results[i];
+        jit_method_results_t* results = &m_method_jit_results[i];
         jit_method_t* method = m_methods_to_emit[i];
 
-        // skip if there is no blob
-        if (blob->blob == NULL) {
-            continue;
+        if (results->function.blob != NULL) {
+            method->method->MethodPtr = map + results->function.offset;
+            method->method->MethodSize = spidir_codegen_blob_get_code_size(results->function.blob);
+            memcpy(
+                method->method->MethodPtr,
+                spidir_codegen_blob_get_code(results->function.blob),
+                method->method->MethodSize
+            );
         }
 
-        // TODO: generate method thunks
-
-        // align methods to 16 bytes
-        method->method->MethodPtr = map + blob->offset;
-        method->method->MethodSize = spidir_codegen_blob_get_code_size(blob->blob);
-        memcpy(
-            method->method->MethodPtr,
-            spidir_codegen_blob_get_code(blob->blob),
-            method->method->MethodSize
-        );
+        if (results->thunk.blob != NULL) {
+            method->method->ThunkPtr = map + results->thunk.offset;
+            method->method->ThunkSize = spidir_codegen_blob_get_code_size(results->thunk.blob);
+            memcpy(
+                method->method->ThunkPtr,
+                spidir_codegen_blob_get_code(results->thunk.blob),
+                method->method->ThunkSize
+            );
+        }
 
         // check the static constructor
         RuntimeTypeInfo type = method->method->DeclaringType;
@@ -2295,48 +2456,15 @@ static tdn_err_t jit_map_and_relocate(size_t map_size) {
     // now we can apply the relocations, this can technically be done in parallel but I think
     // its cheap enough that its not worth it
     for (int i = 0; i < arrlen(m_method_jit_results); i++) {
-        jit_method_result_t* blob = &m_method_jit_results[i];
+        jit_method_results_t* results = &m_method_jit_results[i];
         jit_method_t* method = m_methods_to_emit[i];
 
-        // skip if there is no blob
-        if (blob->blob == NULL) {
-            continue;
+        if (results->function.blob != NULL) {
+            jit_relocate_function(method->method->MethodPtr, &results->function, method);
         }
 
-        size_t reloc_count = spidir_codegen_blob_get_reloc_count(blob->blob);
-        const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(blob->blob);
-        for (size_t j = 0; j < reloc_count; j++) {
-            uint64_t P = (uint64_t)(method->method->MethodPtr + relocs[j].offset);
-            int64_t A = relocs[j].addend;
-
-            // resolve the target, will either be a builtin or a
-            // method pointer we jitted
-            uint64_t F;
-            jit_method_t* target = jit_get_method_from_function(relocs[j].target);
-            if (target == NULL) {
-                void* ptr = hmget(m_jit_helper_lookup, relocs[j].target);
-                CHECK(ptr != NULL);
-                F = (uint64_t)ptr;
-            } else {
-                F = (uint64_t)(target->method->MethodPtr);
-            }
-
-            switch (relocs[j].kind) {
-                case SPIDIR_RELOC_X64_PC32: {
-                    int64_t value = F + A - P;
-                    CHECK(INT32_MIN <= value && value <= INT32_MAX, "%p", value);
-                    int32_t pc32 = value;
-                    memcpy((void*)P, &pc32, sizeof(pc32));
-                } break;
-
-                case SPIDIR_RELOC_X64_ABS64: {
-                    uint64_t value = F + A;
-                    memcpy((void*)P, &value, sizeof(value));
-                } break;
-
-                default:
-                    CHECK_FAIL("Unknown relocation kind: %d", relocs[j].kind);
-            }
+        if (results->thunk.blob != NULL) {
+            jit_relocate_function(method->method->ThunkPtr, &results->thunk, method);
         }
     }
 
@@ -2384,40 +2512,56 @@ tdn_err_t jit_emit(void) {
         jit_method_t* method = m_methods_to_emit[i];
 
         // if already was jitted before then don't jit it again
-        if (method->method->MethodPtr != NULL) {
-            continue;
+        if (method->method->MethodPtr == NULL) {
+            spidir_codegen_config_t config = {
+                .verify_ir = true,
+                .verify_regalloc = true
+            };
+            spidir_codegen_status_t status = spidir_codegen_emit_function(
+                m_spidir_machine, &config,
+                m_jit_module,
+                method->function,
+                &m_method_jit_results[i].function.blob
+            );
+            CHECK(status == SPIDIR_CODEGEN_OK, "Failed to jit: %d", status);
         }
 
-        spidir_codegen_config_t config = {
-            .verify_ir = true,
-            .verify_regalloc = true
-        };
-        spidir_codegen_status_t status = spidir_codegen_emit_function(
-            m_spidir_machine, &config,
-            m_jit_module,
-            method->function,
-            &m_method_jit_results[i].blob
-        );
-        CHECK(status == SPIDIR_CODEGEN_OK, "Failed to jit: %d", status);
+        if (method->has_thunk) {
+            spidir_codegen_config_t config = {
+                .verify_ir = true,
+                .verify_regalloc = true
+            };
+            spidir_codegen_status_t status = spidir_codegen_emit_function(
+                m_spidir_machine, &config,
+                m_jit_module,
+                method->thunk,
+                &m_method_jit_results[i].thunk.blob
+            );
+            CHECK(status == SPIDIR_CODEGEN_OK, "Failed to jit: %d", status);
+        }
     }
 
     // now that all the codegen is finished we can sum up the size
     // required and map it
     size_t map_size = 0;
     for (int i = 0; i < arrlen(m_method_jit_results); i++) {
-        jit_method_result_t* blob = &m_method_jit_results[i];
+        jit_method_results_t* results = &m_method_jit_results[i];
 
-        // skip if there is no blob
-        if (blob->blob == NULL) {
-            continue;
+        if (results->function.blob != NULL) {
+            // align methods to 16 bytes
+            map_size += 16;
+            map_size = ALIGN_UP(map_size, 16);
+            results->function.offset = map_size;
+            map_size += spidir_codegen_blob_get_code_size(results->function.blob);
         }
 
-        // TODO: generate method thunks
-
-        // align methods to 16 bytes
-        map_size = ALIGN_UP(map_size, 16);
-        blob->offset = map_size;
-        map_size += spidir_codegen_blob_get_code_size(blob->blob);
+        if (results->thunk.blob != NULL) {
+            // align methods to 16 bytes
+            map_size += 16;
+            map_size = ALIGN_UP(map_size, 16);
+            results->thunk.offset = map_size;
+            map_size += spidir_codegen_blob_get_code_size(results->thunk.blob);
+        }
     }
 
     if (map_size > 0) {
@@ -2446,8 +2590,11 @@ tdn_err_t jit_emit(void) {
 cleanup:
     // destroy all the blobs and free the results
     for (int i = 0; i < arrlen(m_method_jit_results); i++) {
-        if (m_method_jit_results[i].blob != NULL) {
-            spidir_codegen_blob_destroy(m_method_jit_results[i].blob);
+        if (m_method_jit_results[i].function.blob != NULL) {
+            spidir_codegen_blob_destroy(m_method_jit_results[i].function.blob);
+        }
+        if (m_method_jit_results[i].thunk.blob != NULL) {
+            spidir_codegen_blob_destroy(m_method_jit_results[i].thunk.blob);
         }
     }
 
