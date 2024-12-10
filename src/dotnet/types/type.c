@@ -372,7 +372,7 @@ cleanup:
     return err;
 }
 
-static bool tdn_has_generic_parameters(RuntimeTypeInfo type) {
+bool tdn_has_generic_parameters(RuntimeTypeInfo type) {
     if (type->IsGenericParameter) {
         return true;
     }

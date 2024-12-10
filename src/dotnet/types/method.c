@@ -72,7 +72,9 @@ tdn_err_t tdn_method_make_generic(
             CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(
                     args->Elements[i],
                     base->GenericArguments->Elements[i]->GenericParameterAttributes,
-                    base->GenericArguments->Elements[i]->GenericParameterConstraints));
+                    base->GenericArguments->Elements[i]->GenericParameterConstraints,
+                    base->DeclaringType->GenericArguments,
+                    args));
         }
 
         // and now fill it up

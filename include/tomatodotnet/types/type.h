@@ -185,3 +185,5 @@ tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type,
 tdn_err_t tdn_type_make_generic(RuntimeTypeInfo type,
                                 RuntimeTypeInfo_Array arguments,
                                 RuntimeTypeInfo* instance);
+
+bool tdn_has_generic_parameters(RuntimeTypeInfo type);

@@ -152,7 +152,7 @@ bool tdn_type_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
 
     // 2.
     // TODO: is this even correct?
-    if (tdn_is_instance(T, U)) {
+    if (tdn_is_instance(T, U, NULL, NULL)) {
         return true;
     }
 
@@ -282,7 +282,13 @@ bool tdn_type_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     return false;
 }
 
-tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, GenericParameterAttributes attributes, RuntimeTypeInfo_Array constraints) {
+tdn_err_t tdn_check_generic_argument_constraints(
+    RuntimeTypeInfo arg_type,
+    GenericParameterAttributes attributes,
+    RuntimeTypeInfo_Array constraints,
+    RuntimeTypeInfo_Array typeArgs,
+    RuntimeTypeInfo_Array methodArgs
+) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // special constraints
@@ -291,7 +297,6 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
     }
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
-        CHECK(tdn_type_is_valuetype(arg_type));
         CHECK(arg_type->GenericTypeDefinition != tNullable);
     }
 
@@ -313,7 +318,8 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
             if (constraint == tUnmanagedType) {
                 CHECK(arg_type->IsUnmanaged);
             } else {
-                CHECK(tdn_is_instance(arg_type, constraint));
+                CHECK(tdn_is_instance(arg_type, constraint, typeArgs, methodArgs),
+                    "%T is-instance %T", arg_type, constraint);
             }
         }
     }
@@ -322,12 +328,54 @@ cleanup:
     return err;
 }
 
-bool tdn_is_instance(RuntimeTypeInfo type, RuntimeTypeInfo base) {
+bool tdn_is_instance(
+    RuntimeTypeInfo type,
+    RuntimeTypeInfo base,
+    RuntimeTypeInfo_Array typeArgs,
+    RuntimeTypeInfo_Array methodArgs
+) {
     if (base->Attributes.Interface) {
         // go over the interface impls
         for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
-            if (type->InterfaceImpls[i].key == base) {
+            RuntimeTypeInfo iface = type->InterfaceImpls[i].key;
+
+            // fast path
+            if (iface == base) {
                 return true;
+            }
+
+            // slow path if has generics
+            if (iface->GenericTypeDefinition == base->GenericTypeDefinition) {
+                bool matched = true;
+                for (int j = 0; j < iface->GenericArguments->Length; j++) {
+                    RuntimeTypeInfo in_arg = iface->GenericArguments->Elements[j];
+                    RuntimeTypeInfo want_arg = base->GenericArguments->Elements[j];
+
+                    // resolve the real argument
+                    if (want_arg->IsGenericTypeParameter) {
+                        if (typeArgs != NULL && typeArgs->Length > want_arg->GenericParameterPosition) {
+                            want_arg = typeArgs->Elements[want_arg->GenericParameterPosition];
+                        } else {
+                            want_arg = NULL;
+                        }
+                    } else if (want_arg->IsGenericMethodParameter) {
+                        if (methodArgs != NULL && methodArgs->Length > want_arg->GenericParameterPosition) {
+                            want_arg = methodArgs->Elements[want_arg->GenericParameterPosition];
+                        } else {
+                            want_arg = NULL;
+                        }
+                    }
+
+                    // and now check they match
+                    if (in_arg != want_arg) {
+                        matched = false;
+                        break;
+                    }
+                }
+
+                if (matched) {
+                    return true;
+                }
             }
         }
     } else {

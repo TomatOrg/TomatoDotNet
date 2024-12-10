@@ -358,6 +358,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
     il_prefix_t pending_prefix = 0;
     bool must_be_newobj = false;
     tdn_il_opcode_t last_opcode;
+    RuntimeTypeInfo constrained_type = NULL;
 
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
@@ -396,6 +397,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
             case CEE_VOLATILE: {
                 pending_prefix |= IL_PREFIX_VOLATILE;
+            } break;
+
+            case CEE_CONSTRAINED: {
+                pending_prefix |= IL_PREFIX_CONSTRAINED;
+                constrained_type = inst.operand.type;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -801,6 +807,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 } else {
                     // make sure we have the cctor
                     CHECK_AND_RETHROW(jit_queue_cctor(target->DeclaringType));
+                }
+
+                // constrained is allowed on both call and callvirt
+                if (inst.opcode == CEE_CALL || inst.opcode == CEE_CALLVIRT) {
+                    pending_prefix &= ~IL_PREFIX_CONSTRAINED;
                 }
 
                 // some extra verifications
@@ -1381,6 +1392,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             if (pending_prefix & IL_PREFIX_VOLATILE) ERROR("- Unhandled `.volatile`");
             if (pending_prefix & IL_PREFIX_UNALIGNED) ERROR("- Unhandled `.unaglined`");
             CHECK(pending_prefix == 0, "Some prefixes not handled");
+            constrained_type = NULL;
         }
 
 #ifdef JIT_VERBOSE_VERIFY

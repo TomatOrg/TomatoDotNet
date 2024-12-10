@@ -2,6 +2,7 @@
 
 #include <stdalign.h>
 #include <dotnet/gc/gc.h>
+#include <dotnet/metadata/metadata.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
 
@@ -18,6 +19,7 @@
 #include "jit.h"
 #include "jit_builtin.h"
 #include "jit_helpers.h"
+#include "jit_verify.h"
 
 /**
  * The module used for jitting
@@ -830,6 +832,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
     block->state = JIT_BLOCK_FINISHED;
 
+    RuntimeTypeInfo constrained_type = NULL;
+
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     uint32_t pc = block->start;
@@ -850,6 +854,10 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             case CEE_VOLATILE: {
                 // nothing to do for now, eventually pass this to spidir for
                 // the following memory access
+            } break;
+
+            case CEE_CONSTRAINED: {
+                constrained_type = inst.operand.type;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1228,15 +1236,20 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                             inst.opcode = CEE_CALL;
                             need_explicit_null_check = true;
 
-                        } else if (obj.attrs.known_type != NULL) {
+                        } else if (obj.attrs.known_type != NULL || constrained_type != NULL) {
+                            RuntimeTypeInfo known_type = obj.attrs.known_type;
+                            if (known_type == NULL) {
+                                known_type = constrained_type;
+                            }
+
                             // we have a known type, we can de-virt to it
-                            target = (RuntimeMethodBase)obj.attrs.known_type->VTable->Elements[target->VTableOffset];
+                            target = (RuntimeMethodBase)known_type->VTable->Elements[target->VTableOffset];
                             inst.opcode = CEE_CALL;
                             need_explicit_null_check = true;
 
                             if (
                                 tdn_type_is_referencetype(obj.type) &&
-                                tdn_type_is_valuetype(obj.attrs.known_type) &&
+                                tdn_type_is_valuetype(known_type) &&
                                 tdn_type_is_valuetype(target->DeclaringType)
                             ) {
                                 // we have a value type, de-virtualize
@@ -1266,6 +1279,49 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                             need_explicit_null_check = true;
 
                         }
+                    }
+
+                } else {
+                    // special case for static-virtual, we need to search for the real implementation
+                    // in the method impl metadata, we don't actually parse it outside, so we will
+                    // just parse it inside
+                    if (constrained_type != NULL) {
+                        RuntimeAssembly assembly = constrained_type->Module->Assembly;
+                        token_t token = {};
+                        for (int i = 0; i < assembly->Metadata->method_impls_count; i++) {
+                            metadata_method_impl_t* impl = &assembly->Metadata->method_impls[i];
+                            if (impl->class.token != constrained_type->MetadataToken) {
+                                continue;
+                            }
+
+                            RuntimeMethodBase decl;
+                            CHECK_AND_RETHROW(tdn_assembly_lookup_method(
+                                assembly,
+                                impl->method_declaration.token,
+                                target->DeclaringType->GenericArguments,
+                                target->GenericArguments,
+                                &decl
+                            ));
+
+                            if (target == decl) {
+                                token = impl->method_body;
+                                break;
+                            }
+                        }
+                        CHECK(token.index != 0);
+
+                        // found the token, now go over the functions in our
+                        // constrained class and search for the correct method
+                        // TODO: check ctors as well?
+                        target = NULL;
+                        for (int i = 0; i < constrained_type->DeclaredMethods->Length; i++) {
+                            RuntimeMethodInfo maybe_target = constrained_type->DeclaredMethods->Elements[i];
+                            if (maybe_target->MetadataToken == token.token) {
+                                target = (RuntimeMethodBase)maybe_target;
+                                break;
+                            }
+                        }
+                        CHECK(target != NULL);
                     }
                 }
 
@@ -1343,6 +1399,13 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                         args
                     );
                 } else {
+                    // make sure this is a non-virtual function
+                    CHECK(!target->Attributes.Virtual);
+
+                    // make sure to verify the target if not already verified, this could
+                    // happen if we de-virtualized something in here
+                    CHECK_AND_RETHROW(jit_verify_method(target));
+
                     // get the function
                     // TODO: replace with a version that doesn't create since we
                     //       already should handle it in the verifier

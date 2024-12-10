@@ -617,7 +617,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
             method->IsReadOnly = true;
         }
 
-        if (!method->Attributes.Virtual) {
+        if (!method->Attributes.Virtual || method->Attributes.Static) {
             continue;
         }
 
@@ -647,7 +647,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     // get the offset from the child
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
-        if (!method->Attributes.Virtual) continue;
+        if (!method->Attributes.Virtual || method->Attributes.Static) continue;
 
         if (method->VTableOffset == VTABLE_ALLOCATE_SLOT) {
             method->VTableOffset = vtable_offset++;
@@ -711,7 +711,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     // and now fill the normal slots as well
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
-        if (method->Attributes.Virtual) {
+        if (method->Attributes.Virtual && !method->Attributes.Static) {
             info->VTable->Elements[method->VTableOffset] = method;
         }
     }
@@ -1037,10 +1037,12 @@ static tdn_err_t check_generic_constraints(RuntimeTypeInfo type) {
     for (int i = 0; i < type->GenericArguments->Length; i++) {
         RuntimeTypeInfo arg_type = type->GenericArguments->Elements[i];
         RuntimeTypeInfo constraint_type = type->GenericTypeDefinition->GenericArguments->Elements[i];
-        CHECK(tdn_check_generic_argument_constraints(
+        CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(
             arg_type,
             constraint_type->GenericParameterAttributes,
-            constraint_type->GenericParameterConstraints
+            constraint_type->GenericParameterConstraints,
+            type->GenericArguments,
+            type->DeclaringMethod ? type->DeclaringMethod->GenericArguments : NULL
         ));
     }
 
@@ -1105,6 +1107,7 @@ cleanup:
 static tdn_err_t fill_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK_AND_RETHROW(check_generic_constraints(type));
     CHECK_AND_RETHROW(fill_stack_size(type));
     CHECK_AND_RETHROW(fill_heap_size(type));
     CHECK_AND_RETHROW(fill_interface_type_id(type));
@@ -1411,7 +1414,6 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
         // make sure the entire entry is valid, not including checks
         // that will be done at a later stage
         CHECK(!(attributes.Static && attributes.Final));
-        CHECK(!(attributes.Static && attributes.Virtual));
         CHECK(!(attributes.Static && attributes.VtableNewSlot));
         CHECK(!(attributes.Final && attributes.Abstract));
         CHECK(!(attributes.Abstract && attributes.PinvokeImpl));
@@ -1692,6 +1694,17 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
                 base->Attributes.MemberAccess == TDN_METHOD_ACCESS_PRIVATE ||
                 base->Attributes.MemberAccess == TDN_METHOD_ACCESS_PUBLIC
             );
+        }
+
+        // if its not an interface must not have virtual static functions
+        // in interface its allowed, if its an interface we allow static
+        // only if its also marked as virtual
+        if (!type->Attributes.Interface) {
+            CHECK(!(attributes.Static && attributes.Virtual));
+        } else {
+            if (attributes.Static) {
+                CHECK(attributes.Virtual);
+            }
         }
 
         // parse the body
@@ -2214,7 +2227,9 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // calculate the size of all the basic types
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
-        CHECK_AND_RETHROW(tdn_type_init(type));
+        if (!tdn_has_generic_parameters(type)) {
+            CHECK_AND_RETHROW(tdn_type_init(type));
+        }
     }
 
     // connect all the misc classes
