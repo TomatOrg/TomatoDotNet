@@ -77,5 +77,8 @@ tdn_err_t tdn_check_generic_argument_constraints(RuntimeTypeInfo arg_type, Gener
 
 /**
  * Check if a type is an instance of another type dynamically, works for both interfaces and class bases
+ *
+ * This does not use the fast checkings but instead goes over the type reflection, this ensures that the check
+ * works even before full type initialization is complete
  */
 bool tdn_is_instance(RuntimeTypeInfo type, RuntimeTypeInfo base);

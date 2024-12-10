@@ -1026,6 +1026,28 @@ static prime_generator_t m_interface_prime_generator;
  */
 static uint64_t m_interface_id = 0;
 
+static tdn_err_t check_generic_constraints(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (type->GenericArguments == NULL) {
+        goto cleanup;
+    }
+
+    // just go over the types and check they match properly
+    for (int i = 0; i < type->GenericArguments->Length; i++) {
+        RuntimeTypeInfo arg_type = type->GenericArguments->Elements[i];
+        RuntimeTypeInfo constraint_type = type->GenericTypeDefinition->GenericArguments->Elements[i];
+        CHECK(tdn_check_generic_argument_constraints(
+            arg_type,
+            constraint_type->GenericParameterAttributes,
+            constraint_type->GenericParameterConstraints
+        ));
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t fill_interface_type_id(RuntimeTypeInfo info) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1904,6 +1926,7 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
     // now fill it properly
     int offset = 0;
     count = 0;
+    last_object = NULL;
     for (int i = 0; i < assembly->Metadata->generic_param_constraints_count; i++) {
         metadata_generic_param_constraint_t* generic_param = &assembly->Metadata->generic_param_constraints[i];
         RuntimeTypeInfo current_object = assembly->GenericParams->Elements[generic_param->owner.index - 1];
@@ -1915,9 +1938,19 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
             last_object = current_object;
         }
 
-        // get the constraint
+        RuntimeTypeInfo_Array typeArgs = NULL;
+        RuntimeTypeInfo_Array methodArgs = NULL;
+
+        if (current_object->DeclaringMethod != NULL) {
+            methodArgs = current_object->DeclaringMethod->GenericArguments;
+        }
+
+        if (current_object->DeclaringType != NULL) {
+            typeArgs = current_object->DeclaringType->GenericArguments;
+        }
+
         RuntimeTypeInfo constraint = NULL;
-        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, generic_param->constraint.token, current_object->GenericArguments, NULL, &constraint));
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, generic_param->constraint.token, typeArgs, methodArgs, &constraint));
 
         // store it
         current_object->GenericParameterConstraints->Elements[i - offset] = constraint;

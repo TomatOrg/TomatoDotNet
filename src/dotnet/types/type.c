@@ -372,6 +372,26 @@ cleanup:
     return err;
 }
 
+static bool tdn_has_generic_parameters(RuntimeTypeInfo type) {
+    if (type->IsGenericParameter) {
+        return true;
+    }
+
+    if (type->IsArray || type->IsByRef || type->IsPointer) {
+        return tdn_has_generic_parameters(type->ElementType);
+    }
+
+    if (type->GenericArguments != NULL) {
+        for (int i = 0; i < type->GenericArguments->Length; i++) {
+            if (tdn_has_generic_parameters(type->GenericArguments->Elements[i])) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args, RuntimeTypeInfo* type) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -387,18 +407,22 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
 
         hmput(base->GenericTypeInstances, hash, new_type);
 
-        // validate the make generic
-        CHECK(base->GenericArguments->Length == args->Length);
+        CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
+
+        // check for generic arguments
+        bool has_generic_params = false;
         for (int i = 0; i < args->Length; i++) {
-            CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(
-                    args->Elements[i],
-                    base->GenericArguments->Elements[i]->GenericParameterAttributes,
-                    base->GenericArguments->Elements[i]->GenericParameterConstraints));
+            if (tdn_has_generic_parameters(args->Elements[i])) {
+                has_generic_params = true;
+                break;
+            }
         }
 
-        // and now fill it up
-        CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
-        CHECK_AND_RETHROW(tdn_type_init(new_type));
+        // if it does not then we can properly init the type instead
+        // of keeping it uninitialized
+        if (!has_generic_params) {
+            CHECK_AND_RETHROW(tdn_type_init(new_type));
+        }
 
         // and out it goes
         *type = new_type;
