@@ -358,7 +358,6 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
     il_prefix_t pending_prefix = 0;
     bool must_be_newobj = false;
     tdn_il_opcode_t last_opcode;
-    RuntimeTypeInfo constrained_type = NULL;
 
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
@@ -401,7 +400,6 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
             case CEE_CONSTRAINED: {
                 pending_prefix |= IL_PREFIX_CONSTRAINED;
-                constrained_type = inst.operand.type;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1357,6 +1355,17 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 EVAL_STACK_PUSH(tdn_get_intermediate_type(inst.operand.type));
             } break;
 
+            // verification wise both do the same
+            case CEE_CASTCLASS:
+            case CEE_ISINST: {
+                EVAL_STACK_POP();
+                if (tdn_type_is_valuetype(inst.operand.type)) {
+                    EVAL_STACK_PUSH(tObject, { .known_type = inst.operand.type });
+                } else {
+                    EVAL_STACK_PUSH(inst.operand.type);
+                }
+            } break;
+
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Exception handling
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1392,7 +1401,6 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
             if (pending_prefix & IL_PREFIX_VOLATILE) ERROR("- Unhandled `.volatile`");
             if (pending_prefix & IL_PREFIX_UNALIGNED) ERROR("- Unhandled `.unaglined`");
             CHECK(pending_prefix == 0, "Some prefixes not handled");
-            constrained_type = NULL;
         }
 
 #ifdef JIT_VERBOSE_VERIFY

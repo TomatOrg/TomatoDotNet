@@ -41,6 +41,8 @@ static spidir_function_t m_jit_throw;
 static spidir_function_t m_jit_throw_invalid_cast_exception;
 static spidir_function_t m_jit_throw_index_out_of_range_exception;
 
+static spidir_function_t m_jit_interface_downcast;
+
 static struct {
     spidir_function_t key;
     void* value;
@@ -138,6 +140,17 @@ static void create_jit_helpers() {
         }
     );
     hmput(m_jit_helper_lookup, m_jit_gc_newstr, jit_gc_newstr);
+
+    m_jit_interface_downcast = spidir_module_create_extern_function(m_jit_module,
+        "jit_interface_downcast",
+        SPIDIR_TYPE_PTR,
+        2,
+        (spidir_value_type_t[]){
+            SPIDIR_TYPE_PTR,
+            SPIDIR_TYPE_PTR
+        }
+    );
+    hmput(m_jit_helper_lookup, m_jit_interface_downcast, jit_interface_downcast);
 
     m_jit_throw = spidir_module_create_extern_function(m_jit_module,
         "jit_throw",
@@ -546,14 +559,26 @@ static bool jit_convert_interface(
         size_t interface_offset = jit_get_interface_offset(src_type, dest_type);
         if (interface_offset == -1) {
             interface_impl_t* impl = jit_find_variant_interface(src_type, dest_type);
-            ASSERT(impl != NULL);
-
-            if (jit_needs_variant_vtable_stub(dest_type, impl->key)) {
-                // we need to build a stub table to thinner/fatten the interfaces
-                ASSERT(!"TODO: Interface <-> object variance support");
+            if (impl != NULL) {
+                if (jit_needs_variant_vtable_stub(dest_type, impl->key)) {
+                    // we need to build a stub table to thinner/fatten the interfaces
+                    ASSERT(!"TODO: Interface <-> object variance support");
+                } else {
+                    // we don't need any special thunk, use the normal vtable
+                    interface_offset = impl->value;
+                }
             } else {
-                // we don't need any special thunk, use the normal vtable
-                interface_offset = impl->value;
+                // could not find the target at jit time, assume we need a
+                // runtime cast also assume we already checked it is a valid cast
+                vtable = spidir_builder_build_call(
+                    builder,
+                    m_jit_interface_downcast,
+                    2,
+                    (spidir_value_t[]){
+                        src,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)dest_type)
+                    }
+                );
             }
         }
 
@@ -569,11 +594,7 @@ static bool jit_convert_interface(
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable)));
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable, dest);
 
-        // copy was performed
-        return true;
-    }
-
-    if (dest_type != src_type) {
+    } else if (dest_type != src_type) {
         // upcasting interfaces, need to move the vtable pointer
         ASSERT(jit_is_interface(dest_type));
         ASSERT(jit_is_interface(src_type));
@@ -588,8 +609,19 @@ static bool jit_convert_interface(
         vtable = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, src);
 
         // calculate the offset from the vtable and add it to it
-        size_t interface_offset = -1;
-        ASSERT(!"TODO: find the offset of the interface");
+        size_t interface_offset = jit_get_interface_offset(src_type, dest_type);
+        if (interface_offset == -1) {
+            interface_impl_t* impl = jit_find_variant_interface(src_type, dest_type);
+            ASSERT(impl != NULL);
+
+            if (jit_needs_variant_vtable_stub(dest_type, impl->key)) {
+                // we need to build a stub table to thinner/fatten the interfaces
+                ASSERT(!"TODO: Interface <-> object variance support");
+            } else {
+                // we don't need any special thunk, use the normal vtable
+                interface_offset = impl->value;
+            }
+        }
         interface_offset = interface_offset * sizeof(void*);
         vtable = spidir_builder_build_ptroff(builder, vtable,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, interface_offset));
@@ -599,11 +631,13 @@ static bool jit_convert_interface(
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable)));
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable, dest);
 
-        // we copied
-        return true;
+    } else {
+        // nothing was needed to be done
+        // so we did not emit a store at all
+        return false;
     }
 
-    return false;
+    return true;
 }
 
 static void jit_emit_store(spidir_builder_handle_t builder, spidir_value_t dest, spidir_value_t value, RuntimeTypeInfo dest_type, RuntimeTypeInfo src_type) {
@@ -722,6 +756,120 @@ static spidir_value_t jit_emit_array_offset(spidir_builder_handle_t builder, spi
 
     // and now add it to the array pointer
     return spidir_builder_build_ptroff(builder, array, offset);
+}
+
+static spidir_value_t jit_emit_type_check(spidir_builder_handle_t builder, spidir_value_t obj, bool obj_is_interface, RuntimeTypeInfo target) {
+    spidir_value_t vtable = SPIDIR_VALUE_INVALID;
+
+    // if the object is actually an interface then we are going
+    // to load the object first
+    if (obj_is_interface) {
+        obj = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, obj);
+    }
+
+    // load the vtable pointer from the object
+    vtable = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64, obj);
+    vtable = spidir_builder_build_inttoptr(builder, vtable);
+
+    // and now check
+    if (jit_is_interface(target)) {
+        // checking against an interface
+
+        // load the interface product
+        spidir_value_t product = spidir_builder_build_load(
+            builder,
+            SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I64,
+            spidir_builder_build_ptroff(
+                builder,
+                vtable,
+                spidir_builder_build_iconst(
+                    builder,
+                    SPIDIR_TYPE_I64,
+                    offsetof(ObjectVTable, InterfaceProduct)
+                )
+            )
+        );
+
+        // and now check that the prime is dividable by the interface product, if it is (and the reminder
+        // is zero) then we know that the type implements the interface, otherwise it does not implement it
+        //  (obj->product % target->prime) == 0
+        return spidir_builder_build_icmp(
+            builder,
+            SPIDIR_ICMP_EQ,
+            SPIDIR_TYPE_I32,
+            spidir_builder_build_urem(
+                builder,
+                product,
+                spidir_builder_build_iconst(
+                    builder,
+                    SPIDIR_TYPE_I64,
+                    target->InterfacePrime
+                )
+            ),
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0)
+        );
+    } else if (tdn_type_is_valuetype(target)) {
+        // checking against a boxed value type, just compare the vtables
+        // themselves
+        return spidir_builder_build_icmp(
+            builder,
+            SPIDIR_ICMP_EQ,
+            SPIDIR_TYPE_I32,
+            vtable,
+            spidir_builder_build_iconst(
+                builder,
+                SPIDIR_TYPE_PTR,
+                (uintptr_t)target->JitVTable
+            )
+        );
+
+    } else {
+        // checking against a normal class
+
+        // load the type hierarchy
+        spidir_value_t hierarchy = spidir_builder_build_load(
+            builder,
+            SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I64,
+            spidir_builder_build_ptroff(
+                builder,
+                vtable,
+                spidir_builder_build_iconst(
+                    builder,
+                    SPIDIR_TYPE_I64,
+                    offsetof(ObjectVTable, TypeHierarchy)
+                )
+            )
+        );
+
+        // the expected hierarchy
+        spidir_value_t expected_hierarchy = spidir_builder_build_iconst(
+            builder,
+            SPIDIR_TYPE_I64,
+            target->JitVTable->TypeHierarchy
+        );
+
+        // build the mask based on the target type
+        spidir_value_t type_mask = spidir_builder_build_iconst(
+            builder,
+            SPIDIR_TYPE_I64,
+            (1ull << target->TypeMaskLength) - 1ull
+        );
+
+        // and now check that the bits at the start of the hierarchy are the same
+        // as the target type
+        //  (obj->type_hierarchy & target->type_mask) == target->type_hierarchy
+        return spidir_builder_build_icmp(
+            builder,
+            SPIDIR_ICMP_EQ,
+            SPIDIR_TYPE_I32,
+            spidir_builder_build_and(
+                builder,
+                hierarchy,
+                type_mask
+            ),
+            expected_hierarchy
+        );
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2125,6 +2273,190 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
 
                 // and push it
                 EVAL_STACK_PUSH(tdn_get_intermediate_type(inst.operand.type), value);
+            } break;
+
+            case CEE_CASTCLASS: {
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // create the continuation
+                spidir_block_t cont = spidir_builder_create_block(builder);
+
+                // TODO: perform a type check already, not emitting any check if its the same type
+                //       or emit a single NULL if it is not the same
+
+                bool def_isinst = false;
+                bool def_not_isinst = false;
+
+                spidir_value_t result = obj.value;
+                if (!def_not_isinst && !def_isinst) {
+                    // emit the type check itself
+                    spidir_value_t isinst = jit_emit_type_check(
+                        builder,
+                        obj.value, jit_is_interface(obj.type),
+                        inst.operand.type
+                    );
+
+                    spidir_block_t perform_isinst = spidir_builder_create_block(builder);
+
+                    // check if not null, if not then go to perform inst, otherwise
+                    // go to the continuation
+                    spidir_value_t is_not_null = spidir_builder_build_icmp(
+                        builder,
+                        SPIDIR_ICMP_NE, SPIDIR_TYPE_I32,
+                        obj.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0)
+                    );
+
+                    // null check, if null then continue with null
+                    spidir_builder_build_brcond(builder, is_not_null, perform_isinst, cont);
+
+                    // we don't have a null, perform the isinst
+                    spidir_builder_set_block(builder, perform_isinst);
+
+                    spidir_block_t not_isinst = spidir_builder_create_block(builder);
+
+                    // place a brcond, we go to the same location but we will
+                    // have a phi with different results
+                    spidir_builder_build_brcond(builder, isinst, cont, not_isinst);
+
+                    // throw the cast class exception
+                    spidir_builder_set_block(builder, not_isinst);
+
+                    spidir_builder_build_call(
+                        builder,
+                        m_jit_throw_invalid_cast_exception,
+                        0, NULL
+                    );
+
+                    // should not return from invalid cast exception
+                    spidir_builder_build_unreachable(builder);
+
+                    // finally place the continuation
+                    spidir_builder_set_block(builder, cont);
+
+                    // if the dest type is an interface, we need to actually convert it
+                    if (jit_is_interface(inst.operand.type)) {
+                        spidir_value_t iface = jit_get_struct_slot(builder, inst.operand.type);
+                        ASSERT(jit_convert_interface(
+                            builder,
+                            iface, result,
+                            inst.operand.type,
+                            obj.type
+                        ));
+                        result = iface;
+                    }
+
+                } else if (def_isinst) {
+                    // is def the instance
+                    // nothing special to do, since we always push the value
+
+                } else if (def_not_isinst) {
+                    // is def not the same, just give null
+
+                    // we throw the exception
+                    // TODO: mark as unreachable with the rest
+                    //       of the code, not possible right now
+                    //       since we keep emitting and have no
+                    //       way to stop emitting
+                    spidir_builder_build_call(
+                        builder,
+                        m_jit_throw_invalid_cast_exception,
+                        0, NULL
+                    );
+
+                } else {
+                    CHECK_FAIL();
+                }
+
+                // push the result, for value types we use the known type for things
+                if (tdn_type_is_valuetype(inst.operand.type)) {
+                    EVAL_STACK_PUSH(tObject, result, .attrs = { .known_type = inst.operand.type });
+                } else {
+                    EVAL_STACK_PUSH(inst.operand.type, result);
+                }
+            } break;
+
+            case CEE_ISINST: {
+                jit_stack_value_t obj = EVAL_STACK_POP();
+
+                // create the continuation
+                spidir_block_t cont = spidir_builder_create_block(builder);
+
+                // TODO: perform a type check already, not emitting any check if its the same type
+                //       or emit a single NULL if it is not the same
+
+                bool def_isinst = false;
+                bool def_not_isinst = false;
+
+                spidir_value_t result = SPIDIR_VALUE_INVALID;
+                if (!def_not_isinst && !def_isinst) {
+                    // emit the type check itself
+                    spidir_value_t isinst = jit_emit_type_check(
+                        builder,
+                        obj.value, jit_is_interface(obj.type),
+                        inst.operand.type
+                    );
+
+                    spidir_block_t perform_isinst = spidir_builder_create_block(builder);
+
+                    // check if not null, if not then go to perform inst, otherwise
+                    // go to the continuation
+                    spidir_value_t is_not_null = spidir_builder_build_icmp(
+                        builder,
+                        SPIDIR_ICMP_NE, SPIDIR_TYPE_I32,
+                        obj.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0)
+                    );
+
+                    // null check, if null then continue with null
+                    spidir_builder_build_brcond(builder, is_not_null, perform_isinst, cont);
+
+                    // we don't have a null, perform the isinst
+                    spidir_builder_set_block(builder, perform_isinst);
+
+                    // place a brcond, we go to the same location but we will
+                    // have a phi with different results
+                    spidir_builder_build_brcond(builder, isinst, cont, cont);
+
+                    // finally place the continuation
+                    spidir_builder_set_block(builder, cont);
+
+                    // build the phi, this will either be the pointer if the same
+                    // or a NULL if not the same
+                    spidir_value_t values[] = {
+                        // the is_not_null check
+                        // technically we can also use obj.value, but I think semantically
+                        // its more correct to treat it as a null on its own
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
+
+                        // the type check
+                        obj.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0)
+                    };
+                    result = spidir_builder_build_phi(
+                        builder, SPIDIR_TYPE_PTR,
+                        ARRAY_LENGTH(values), values,
+                        NULL
+                    );
+
+                } else if (def_isinst) {
+                    // is def the instance, just give the value
+                    result = obj.value;
+
+                } else if (def_not_isinst) {
+                    // is def not the same, just give null
+                    result = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
+
+                } else {
+                    CHECK_FAIL();
+                }
+
+                // push the result, for value types we use the known type for things
+                if (tdn_type_is_valuetype(inst.operand.type)) {
+                    EVAL_STACK_PUSH(tObject, result, .attrs = { .known_type = inst.operand.type });
+                } else {
+                    EVAL_STACK_PUSH(inst.operand.type, result);
+                }
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -16,6 +16,8 @@ void* jit_gc_newstr(uint32_t element_count);
 void jit_gc_memcpy();
 void jit_gc_bzero();
 
+void* jit_interface_downcast(Object instance, RuntimeTypeInfo interface_type);
+
 void jit_throw(Object exception, uint32_t pc);
 
 void jit_throw_invalid_cast_exception();

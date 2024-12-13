@@ -3,6 +3,7 @@
 #include <dotnet/loader.h>
 #include <dotnet/gc/gc.h>
 #include <util/except.h>
+#include <util/stb_ds.h>
 #include <util/string.h>
 
 void jit_bzero(void* ptr, size_t size) {
@@ -43,6 +44,25 @@ void* jit_gc_newstr(uint32_t element_count) {
     if (__builtin_mul_overflow(size, sizeof(Char), &size)) return NULL;
     if (__builtin_add_overflow(size, sizeof(struct String), &size)) return NULL;
     return gc_new(tString, size);
+}
+
+void* jit_interface_downcast(Object instance, RuntimeTypeInfo iface) {
+    // get the vtable of the object
+    ObjectVTable* vtable = object_get_vtable(instance);
+
+    // go over the type interface implementations and search for one which matches
+    RuntimeTypeInfo type = vtable->Type;
+    for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
+        if (type->InterfaceImpls[i].key == iface) {
+            return &vtable->Functions[type->InterfaceImpls[i].value];
+        }
+    }
+
+    // TODO: do we need to do more stuff for variance?
+
+    // we assume that a type check was made prior to this, so if we failed
+    // to find the implementation we assume something bad happened
+    ASSERT(!"Failed to downcast an interface");
 }
 
 void jit_throw(Object exception, uint32_t pc) {

@@ -12,5 +12,5 @@ static uint64_t m_primes[] = {
 
 uint64_t prime_generate(prime_generator_t* generator) {
     ASSERT(generator->index <= ARRAY_LENGTH(m_primes));
-    return m_primes[generator->index];
+    return m_primes[generator->index++];
 }
