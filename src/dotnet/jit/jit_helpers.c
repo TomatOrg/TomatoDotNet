@@ -52,10 +52,11 @@ void* jit_interface_downcast(Object instance, RuntimeTypeInfo iface) {
 
     // go over the type interface implementations and search for one which matches
     RuntimeTypeInfo type = vtable->Type;
-    for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
-        if (type->InterfaceImpls[i].key == iface) {
-            return &vtable->Functions[type->InterfaceImpls[i].value];
-        }
+
+    // lookup the interface in the table
+    int idx = hmgeti(type->InterfaceImpls, iface);
+    if (idx >= 0) {
+        return &vtable->Functions[type->InterfaceImpls[idx].value];
     }
 
     // TODO: do we need to do more stuff for variance?

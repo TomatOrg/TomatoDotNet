@@ -454,12 +454,11 @@ static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, 
 }
 
 static size_t jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
-    for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
-        if (type->InterfaceImpls[i].key == iface) {
-            return type->InterfaceImpls[i].value;
-        }
+    int idx = hmgeti(type->InterfaceImpls, iface);
+    if (idx < 0) {
+        return -1;
     }
-    return -1;
+    return type->InterfaceImpls[idx].value;
 }
 
 static interface_impl_t* jit_find_variant_interface(RuntimeTypeInfo type, RuntimeTypeInfo iface) {

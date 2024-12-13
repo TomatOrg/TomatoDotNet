@@ -335,16 +335,27 @@ bool tdn_is_instance(
     RuntimeTypeInfo_Array methodArgs
 ) {
     if (base->Attributes.Interface) {
-        // go over the interface impls
+        // fast path if its exactly
+        int idx = hmgeti(type->InterfaceImpls, base);
+        if (idx >= 0) {
+            return true;
+        }
+
+        // if not a generic type we can return right now, or we have
+        // no generic arguments given, we can return right now, otherwise
+        // we need to perform a more manual check in case the arguments
+        // have changed
+        if (
+            !tdn_type_is_generic(base->GenericTypeDefinition) ||
+            (typeArgs == NULL && methodArgs == NULL)
+        ) {
+            return false;
+        }
+
+        // slow path for generics
         for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
             RuntimeTypeInfo iface = type->InterfaceImpls[i].key;
 
-            // fast path
-            if (iface == base) {
-                return true;
-            }
-
-            // slow path if has generics
             if (iface->GenericTypeDefinition == base->GenericTypeDefinition) {
                 bool matched = true;
                 for (int j = 0; j < iface->GenericArguments->Length; j++) {
