@@ -819,7 +819,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                     CHECK(target->Attributes.RTSpecialName);
 
                     // queue the type itself
-                    jit_queue_type(target->DeclaringType);
+                    CHECK_AND_RETHROW(jit_queue_type(target->DeclaringType));
 
                     // make sure we have the cctor
                     CHECK_AND_RETHROW(jit_queue_cctor(target->DeclaringType));
@@ -1338,6 +1338,8 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // TODO: how does box work with nullable
 
+                CHECK_AND_RETHROW(jit_queue_type(inst.operand.type));
+
                 // track it as an object
                 EVAL_STACK_PUSH(tObject, { .known_type = inst.operand.type });
             } break;
@@ -1519,7 +1521,7 @@ tdn_err_t jit_verify_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // queue all the instance methods
-    jit_queue_type(type);
+    CHECK_AND_RETHROW(jit_queue_type(type));
 
     // verify it and all the called methods
     CHECK_AND_RETHROW(verify_all_methods());

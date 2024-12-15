@@ -1546,9 +1546,6 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                         args
                     );
                 } else {
-                    // make sure this is a non-virtual function
-                    CHECK(!target->Attributes.Virtual);
-
                     // make sure to verify the target if not already verified, this could
                     // happen if we de-virtualized something in here
                     CHECK_AND_RETHROW(jit_verify_method(target));
@@ -1794,6 +1791,9 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             case CEE_MUL_OVF_UN: {
                 jit_stack_value_t value2 = EVAL_STACK_POP();
                 jit_stack_value_t value1 = EVAL_STACK_POP();
+                bool is_unsigned = inst.opcode == CEE_DIV_UN || inst.opcode == CEE_REM_UN ||
+                                    inst.opcode == CEE_ADD_OVF_UN || inst.opcode == CEE_SUB_OVF_UN ||
+                                    inst.opcode == CEE_MUL_OVF_UN;
 
                 spidir_value_t val1 = value1.value;
                 spidir_value_t val2 = value2.value;
@@ -1806,15 +1806,29 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                         CHECK(value2.type == tIntPtr);
                         result = tIntPtr;
 
-                        CHECK_FAIL("TODO: extend");
+                        // extend to intptr
+                        val1 = spidir_builder_build_iext(builder, val1);
+                        if (is_unsigned) {
+                            val1 = spidir_builder_build_and(builder, val1,
+                                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFF));
+                        } else {
+                            val1 = spidir_builder_build_sfill(builder, 32, val1);
+                        }
                     }
 
                 } else if (value1.type == tIntPtr) {
                     CHECK(value2.type == tInt32 || value2.type == tIntPtr);
                     result = tIntPtr;
 
-                    if (value2.type == tIntPtr) {
-                        CHECK_FAIL("TODO: extend");
+                    if (value2.type == tInt32) {
+                        // extend to intptr
+                        val2 = spidir_builder_build_iext(builder, val2);
+                        if (is_unsigned) {
+                            val2 = spidir_builder_build_and(builder, val2,
+                                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFF));
+                        } else {
+                            val2 = spidir_builder_build_sfill(builder, 32, val2);
+                        }
                     }
 
                 } else if (value1.type == tInt64) {
@@ -1869,7 +1883,7 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
             case CEE_NOT:
             case CEE_NEG: {
                 jit_stack_value_t value = EVAL_STACK_POP();
-                bool is_64bit = value.type == tInt64;
+                bool is_64bit = value.type == tInt64 || value.type == tIntPtr;
 
                 spidir_value_t result;
                 if (inst.opcode == CEE_NOT) {
@@ -2802,12 +2816,21 @@ cleanup:
     return err;
 }
 
+/**
+ * If this is a virtual method from a value type, then we need a thunk for moving the this pointer
+ * from the boxed object to the non-boxed offset
+ */
+static bool jit_needs_value_type_virtual_thunk(RuntimeMethodBase method) {
+    return tdn_type_is_valuetype(method->DeclaringType) && !method->Attributes.Static && method->Attributes.Virtual;
+}
+
 static tdn_err_t jit_map_and_relocate(size_t map_size) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // map it as read-write
+    // map it as read-write, initialize it as fully int3 just in case
     void* map = tdn_host_map(map_size);
     CHECK_ERROR(map != NULL, TDN_ERROR_OUT_OF_MEMORY);
+    memset(map, 0xCC, map_size);
 
     // copy over all of the code and set the method pointers
     for (int i = 0; i < arrlen(m_method_jit_results); i++) {
@@ -2832,6 +2855,25 @@ static tdn_err_t jit_map_and_relocate(size_t map_size) {
                 spidir_codegen_blob_get_code(results->thunk.blob),
                 method->method->ThunkSize
             );
+        }
+
+        // check if we need to create a value type virtual thunk, this adjusts the this
+        // pointer to not have the object header like the value type methods expect
+        // we always make sure we have 16 bytes between functions so we can easily
+        // put this before the function, keeping all the the code aligned to 16 bytes
+        if (jit_needs_value_type_virtual_thunk(method->method)) {
+            CHECK(method->method->ThunkPtr == NULL);
+
+            size_t object_header_size = ALIGN_UP(sizeof(struct Object), method->method->DeclaringType->HeapAlignment);
+            CHECK(object_header_size <= 0x7F);
+
+            // add rdi, $object_header_size
+            uint8_t opcode[4] = { 0x48, 0x83, 0xC7, object_header_size };
+
+            // setup the size and copy the opcode
+            method->method->ThunkSize = sizeof(opcode);
+            method->method->ThunkPtr = method->method->MethodPtr - sizeof(opcode);
+            memcpy(method->method->ThunkPtr, opcode, sizeof(opcode));
         }
 
         // check the static constructor
@@ -2937,12 +2979,14 @@ tdn_err_t jit_emit(void) {
 
     // now that all the codegen is finished we can sum up the size
     // required and map it
+    // we align methods to 16 bytes but also make sure that they always
+    // have room of at least 16 bytes, this just makes sure that we have
+    // place for any thunk needed to happen before the function
     size_t map_size = 0;
     for (int i = 0; i < arrlen(m_method_jit_results); i++) {
         jit_method_results_t* results = &m_method_jit_results[i];
 
         if (results->function.blob != NULL) {
-            // align methods to 16 bytes
             map_size += 16;
             map_size = ALIGN_UP(map_size, 16);
             results->function.offset = map_size;
@@ -2950,7 +2994,6 @@ tdn_err_t jit_emit(void) {
         }
 
         if (results->thunk.blob != NULL) {
-            // align methods to 16 bytes
             map_size += 16;
             map_size = ALIGN_UP(map_size, 16);
             results->thunk.offset = map_size;

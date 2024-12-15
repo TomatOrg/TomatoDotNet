@@ -32,7 +32,7 @@ public static class Program
         // if (!ConstantFolding.Run()) return 7;
         // if (!Shifts.Run()) return 8;
 
-        object a = new A();
-        return ((IA)a).Get();
+        object a = 123;
+        return a.GetHashCode();
     }
 }
