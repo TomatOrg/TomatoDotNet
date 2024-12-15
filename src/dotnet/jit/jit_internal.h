@@ -16,7 +16,7 @@
 // enable printing while emitting
 // #define JIT_VERBOSE_EMIT
 // #define JIT_DEBUG_EMIT
-#define JIT_DUMP_EMIT
+// #define JIT_DUMP_EMIT
 
 #ifdef JIT_VERBOSE_EMIT
     #define JIT_DEBUG_EMIT
@@ -96,6 +96,16 @@ typedef struct jit_basic_block {
 
     // the jit block
     spidir_block_t block;
+
+    // // is this the start of a handling clause
+    // bool try_start;
+    // bool filter_start;
+    // bool handler_start;
+
+    // the exception clause around this
+    RuntimeExceptionHandlingClause try_clause;
+    RuntimeExceptionHandlingClause handler_clause;
+    RuntimeExceptionHandlingClause filter_clause;
 
     // is this block initialized
     bool initialized;

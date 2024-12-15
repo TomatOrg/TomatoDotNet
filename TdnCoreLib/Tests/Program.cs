@@ -32,7 +32,14 @@ public static class Program
         // if (!ConstantFolding.Run()) return 7;
         // if (!Shifts.Run()) return 8;
 
-        object a = 123;
-        return a.GetHashCode();
+        try
+        {
+            Console.WriteLine("Hello World!");
+        } finally
+        {
+            Console.WriteLine("Got to finally!");   
+        }
+
+        return 0;
     }
 }
