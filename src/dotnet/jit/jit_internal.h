@@ -14,6 +14,7 @@
 #endif
 
 // enable printing while emitting
+// #define JIT_VERBOSE_SPIDIR
 // #define JIT_VERBOSE_EMIT
 // #define JIT_DEBUG_EMIT
 // #define JIT_DUMP_EMIT
@@ -85,6 +86,9 @@ typedef struct jit_basic_block {
     uint32_t start;
     uint32_t end;
 
+    // leave target, larger than zero if any
+    uint32_t* leave_target_stack;
+
     // the stack at the entry point
     jit_stack_value_t* stack;
 
@@ -96,16 +100,6 @@ typedef struct jit_basic_block {
 
     // the jit block
     spidir_block_t block;
-
-    // // is this the start of a handling clause
-    // bool try_start;
-    // bool filter_start;
-    // bool handler_start;
-
-    // the exception clause around this
-    RuntimeExceptionHandlingClause try_clause;
-    RuntimeExceptionHandlingClause handler_clause;
-    RuntimeExceptionHandlingClause filter_clause;
 
     // is this block initialized
     bool initialized;
@@ -134,15 +128,20 @@ typedef struct jit_local {
     spidir_value_t value;
 } jit_local_t;
 
+typedef struct jit_leave_block_key {
+    jit_basic_block_t* block;
+    uint64_t leave_target;
+} jit_leave_block_key_t;
+
 typedef struct jit_method {
     // the C# method we are handling right now
     RuntimeMethodBase method;
 
     // the queue of blocks to process
-    int* block_queue;
+    jit_basic_block_t** block_queue;
 
     // the list of basic blocks in the method
-    jit_basic_block_t* basic_blocks;
+    jit_basic_block_t** basic_blocks;
 
     // the locals of the method
     jit_local_t* locals;
@@ -154,8 +153,17 @@ typedef struct jit_method {
     // this is used to find jump targets
     struct {
         uint32_t key;
-        int value;
+        jit_basic_block_t* value;
     }* labels;
+
+    // blocks duplicated as part of being in a leave path
+    // they are initialized to a default value but are
+    // associated with a leave target
+    // the hashmap owns the basic blocks in it
+    struct {
+        jit_leave_block_key_t key;
+        jit_basic_block_t* value;
+    }* leave_blocks;
 
     // the spidir function for this method
     spidir_function_t function;
@@ -214,6 +222,17 @@ void jit_method_register_thunk(jit_method_t* method);
  * Get the jit method from the spidir function
  */
 jit_method_t* jit_get_method_from_function(spidir_function_t function);
+
+/**
+ * Find an enclosing try clause of the given type
+ * which comes before the given one
+ *
+ * @param method    [IN] The method to check
+ * @param pc        [IN] The PC we are in
+ * @param type      [IN] The clause type we want
+ * @param previous  [IN] The clause to stop at
+ */
+RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_method_t* method, uint32_t pc, int type, RuntimeExceptionHandlingClause previous);
 
 /**
  * clear the created jit methods, done as part of cleaning up the codegen

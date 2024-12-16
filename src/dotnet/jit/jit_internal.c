@@ -81,6 +81,43 @@ jit_method_t* jit_get_method_from_function(spidir_function_t function) {
     return NULL;
 }
 
+RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_method_t* method, uint32_t pc, int type, RuntimeExceptionHandlingClause previous) {
+    RuntimeExceptionHandlingClause_Array arr = method->method->MethodBody->ExceptionHandlingClauses;
+    RuntimeExceptionHandlingClause matched = NULL;
+
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+        if (previous == clause) {
+            break;
+        }
+
+        if (clause->Flags != type) {
+            continue;
+        }
+
+        if (clause->TryOffset <= pc && pc < clause->TryOffset + clause->TryLength) {
+            if (
+                matched == NULL ||
+                (
+                    matched->TryOffset < clause->TryOffset &&
+                    matched->TryOffset + matched->TryLength > clause->TryOffset + clause->TryLength
+                )
+            ) {
+                matched = clause;
+            }
+        }
+    }
+
+    return matched;
+}
+
+static void free_basic_block(jit_basic_block_t* block) {
+    arrfree(block->locals);
+    arrfree(block->stack);
+    arrfree(block->leave_target_stack);
+    tdn_host_free(block);
+}
+
 void jit_clean() {
     for (int i = 0; i < hmlen(m_jit_methods); i++) {
         jit_method_t* method = m_jit_methods[i].value;
@@ -88,14 +125,25 @@ void jit_clean() {
             continue;
         }
 
-        for (int j = 0; j < arrlen(method->basic_blocks); j++) {
-            jit_basic_block_t* block = &method->basic_blocks[j];
-            arrfree(block->locals);
-            arrfree(block->stack);
-        }
+        // make sure all the things made while
+        arrfree(method->args);
+        arrfree(method->locals);
+        arrfree(method->block_queue);
 
-        arrfree(method->basic_blocks);
+        // free the labels
         hmfree(method->labels);
+
+        // free all the basic block structs
+        for (int j = 0; j < arrlen(method->basic_blocks); j++) {
+            free_basic_block(method->basic_blocks[j]);
+        }
+        arrfree(method->basic_blocks);
+
+        // free all the leave paths
+        for (int j = 0; j < hmlen(method->leave_blocks); j++) {
+            free_basic_block(method->leave_blocks[j].value);
+        }
+        hmfree(method->leave_blocks);
     }
 
     hmfree(m_jit_methods);

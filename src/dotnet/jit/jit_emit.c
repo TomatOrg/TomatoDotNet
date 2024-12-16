@@ -265,6 +265,31 @@ spidir_value_type_t* jit_get_spidir_arg_types(RuntimeMethodBase method) {
     return types;
 }
 
+
+static jit_basic_block_t* get_basic_block(jit_method_t* method, long target_pc, long leave_target) {
+    int bi = hmgeti(method->labels, target_pc);
+    if (bi < 0) {
+        return NULL;
+    }
+    jit_basic_block_t* block = method->labels[bi].value;
+
+    // lookup based on the leave target
+    if (leave_target >= 0) {
+        jit_leave_block_key_t key = {
+            .block = block,
+            .leave_target = leave_target
+        };
+
+        int bi = hmgeti(method->leave_blocks, key);
+        if (bi < 0) {
+            return NULL;
+        }
+        block = method->leave_blocks[bi].value;
+    }
+
+    return block;
+}
+
 static void jit_queue_block(jit_method_t* method, spidir_builder_handle_t builder, jit_basic_block_t* block) {
     if (block->state <= JIT_BLOCK_VERIFIED) {
         block->state = JIT_BLOCK_PENDING_EMIT;
@@ -293,17 +318,29 @@ static void jit_queue_block(jit_method_t* method, spidir_builder_handle_t builde
         }
 
         // queue it
-        long bi = block - method->basic_blocks;
-        arrpush(method->block_queue, bi);
+        arrpush(method->block_queue, block);
     }
 }
 
-static tdn_err_t emit_merge_basic_block(jit_method_t* method, spidir_builder_handle_t builder, uint32_t target_pc, jit_stack_value_t* stack, spidir_block_t* block) {
+static long get_leave_target(uint32_t* leave_target_stack) {
+    if (leave_target_stack == NULL) {
+        return -1;
+    }
+    return arrlast(leave_target_stack);
+}
+
+static tdn_err_t emit_merge_basic_block(
+    jit_method_t* method,
+    spidir_builder_handle_t builder,
+    uint32_t target_pc,
+    jit_stack_value_t* stack,
+    spidir_block_t* block,
+    long leave_target
+) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    int bi = hmgeti(method->labels, target_pc);
-    CHECK(bi != 0);
-    jit_basic_block_t* target = &method->basic_blocks[method->labels[bi].value];
+    jit_basic_block_t* target = get_basic_block(method, target_pc, leave_target);
+    CHECK(target != NULL);
 
     // queue the block, will also handle creating the phi if required
     jit_queue_block(method, builder, target);
@@ -2103,13 +2140,15 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 CHECK_AND_RETHROW(emit_merge_basic_block(
                     jmethod, builder,
                     inst.operand.branch_target,
-                    stack, &true_block));
+                    stack, &true_block,
+                    get_leave_target(block->leave_target_stack)));
 
                 spidir_block_t false_block;
                 CHECK_AND_RETHROW(emit_merge_basic_block(
                     jmethod, builder,
                     pc,
-                    stack, &false_block));
+                    stack, &false_block,
+                    get_leave_target(block->leave_target_stack)));
 
                 // and finally emit the actual brcond
                 spidir_builder_build_brcond(builder, value, true_block, false_block);
@@ -2124,13 +2163,15 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 CHECK_AND_RETHROW(emit_merge_basic_block(
                     jmethod, builder,
                     inst.operand.branch_target,
-                    stack, &true_block));
+                    stack, &true_block,
+                    get_leave_target(block->leave_target_stack)));
 
                 spidir_block_t false_block;
                 CHECK_AND_RETHROW(emit_merge_basic_block(
                     jmethod, builder,
                     pc,
-                    stack, &false_block));
+                    stack, &false_block,
+                    get_leave_target(block->leave_target_stack)));
 
                 spidir_value_t cond = value.value;
 
@@ -2164,7 +2205,8 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 CHECK_AND_RETHROW(emit_merge_basic_block(
                     jmethod, builder,
                     inst.operand.branch_target,
-                    stack, &dest));
+                    stack, &dest,
+                    get_leave_target(block->leave_target_stack)));
 
                 spidir_builder_build_branch(builder, dest);
             } break;
@@ -2496,6 +2538,72 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                 arrsetlen(stack, 0);
             } break;
 
+            case CEE_LEAVE: {
+                // empty the stack
+                arrsetlen(stack, 0);
+
+                // check if there is any finally around us
+                spidir_block_t target_block;
+                RuntimeExceptionHandlingClause clause = jit_get_enclosing_try_clause(jmethod, current_pc, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+                if (clause != NULL) {
+                    CHECK_AND_RETHROW(emit_merge_basic_block(
+                        jmethod, builder,
+                        clause->HandlerOffset,
+                        stack, &target_block,
+                        inst.operand.branch_target));
+                } else {
+                    CHECK_AND_RETHROW(emit_merge_basic_block(
+                        jmethod, builder,
+                        inst.operand.branch_target,
+                        stack, &target_block,
+                        get_leave_target(block->leave_target_stack)));
+                }
+
+                // go to the target, will either be the leave destination
+                // or the finally handler before it
+                spidir_builder_build_branch(builder, target_block);
+            } break;
+
+            case CEE_ENDFINALLY: {
+                // empty the stack
+                arrsetlen(stack, 0);
+
+                // TODO: verify the endfinally is actually inside a finally handler
+
+                // check if there is any finally around us
+                RuntimeExceptionHandlingClause clause = jit_get_enclosing_try_clause(jmethod, current_pc, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+                spidir_block_t target_block;
+                if (clause != NULL) {
+                    // we do, merge with it, we need to go to the clause
+                    // the leave target will actually stay the same for
+                    // this case
+                    CHECK_AND_RETHROW(emit_merge_basic_block(
+                        jmethod, builder,
+                        clause->HandlerOffset,
+                        stack, &target_block,
+                        get_leave_target(block->leave_target_stack)));
+
+                } else {
+                    // take the previous leave target, or -1 if non
+                    long previous_leave_target = -1;
+                    if (arrlen(block->leave_target_stack) >= 2) {
+                        previous_leave_target = block->leave_target_stack[arrlen(block->leave_target_stack) - 2];
+                    }
+
+                    // we don't have any finally handlers, we can call the
+                    // target directly, we use the same leave target that
+                    // we have right now
+                    CHECK_AND_RETHROW(emit_merge_basic_block(
+                        jmethod, builder,
+                        get_leave_target(block->leave_target_stack),
+                        stack, &target_block,
+                        previous_leave_target));
+                }
+
+                // go to the target, will either be the leave destination
+                // or the finally handler before it
+                spidir_builder_build_branch(builder, target_block);
+            } break;
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2521,7 +2629,11 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
     // we have a fallthrough, handle it
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
         spidir_block_t new_block;
-        CHECK_AND_RETHROW(emit_merge_basic_block(jmethod, builder, pc, stack, &new_block));
+        CHECK_AND_RETHROW(emit_merge_basic_block(
+            jmethod, builder,
+            pc, stack, &new_block,
+            get_leave_target(block->leave_target_stack)));
+
         spidir_builder_build_branch(builder, new_block);
     }
 
@@ -2591,11 +2703,11 @@ static void jit_emit_spidir_from_il(spidir_builder_handle_t builder, void* _ctx)
     jit_method_t* jmethod = ctx->method;
 
     // start from the first block
-    jit_queue_block(jmethod, builder, &jmethod->basic_blocks[0]);
+    jit_queue_block(jmethod, builder, jmethod->basic_blocks[0]);
 
     // set the entry block
-    spidir_builder_set_entry_block(builder, jmethod->basic_blocks[0].block);
-    spidir_builder_set_block(builder, jmethod->basic_blocks[0].block);
+    spidir_builder_set_entry_block(builder, jmethod->basic_blocks[0]->block);
+    spidir_builder_set_block(builder, jmethod->basic_blocks[0]->block);
 
     bool modified_block = false;
 
@@ -2615,13 +2727,13 @@ static void jit_emit_spidir_from_il(spidir_builder_handle_t builder, void* _ctx)
         // create a new block
         spidir_block_t new_block = spidir_builder_create_block(builder);
         spidir_builder_build_branch(builder, new_block);
-        jmethod->basic_blocks[0].block = new_block;
+        jmethod->basic_blocks[0]->block = new_block;
     }
 
     // and dispatch them all
     while (arrlen(jmethod->block_queue)) {
-        int bi = arrpop(jmethod->block_queue);
-        CHECK_AND_RETHROW(jit_emit_basic_block(builder, jmethod, &jmethod->basic_blocks[bi]));
+        jit_basic_block_t* block = arrpop(jmethod->block_queue);
+        CHECK_AND_RETHROW(jit_emit_basic_block(builder, jmethod, block));
     }
 
 cleanup:

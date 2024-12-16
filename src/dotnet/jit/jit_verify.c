@@ -143,21 +143,76 @@ static bool jit_merge_attrs(jit_item_attrs_t* wanted, jit_item_attrs_t* actual) 
     return modified;
 }
 
+static uint32_t* copy_leave_targets(uint32_t* targets) {
+    if (targets == NULL) {
+        return NULL;
+    }
+
+    uint32_t* new = NULL;
+    arrsetlen(new, arrlen(targets));
+    memcpy(new, targets, sizeof(uint32_t) * arrlen(targets));
+    return new;
+}
+
+static jit_basic_block_t* get_basic_block(
+    jit_method_t* method,
+    long target_pc,
+    uint32_t* leave_target_stack
+) {
+    int bi = hmgeti(method->labels, target_pc);
+    if (bi < 0) {
+        return NULL;
+    }
+    jit_basic_block_t* block = method->labels[bi].value;
+
+    // lookup based on the leave target
+    if (leave_target_stack != NULL) {
+        jit_leave_block_key_t key = {
+            .block = block,
+            .leave_target = arrlast(leave_target_stack)
+        };
+
+        int bi = hmgeti(method->leave_blocks, key);
+        if (bi >= 0) {
+            block = method->leave_blocks[bi].value;
+        } else {
+            jit_basic_block_t* new_block = tdn_host_mallocz(sizeof(jit_basic_block_t));
+            if (new_block == NULL) {
+                return NULL;
+            }
+
+            new_block->start = block->start;
+            new_block->end = block->end;
+            new_block->leave_target_stack = leave_target_stack;
+
+            // save the new block
+            hmput(method->leave_blocks, key, new_block);
+
+            // and return the new block instead
+            // of the original block
+            block = new_block;
+        }
+    }
+
+    return block;
+}
+
 static void verify_queue_basic_block(jit_method_t* ctx, jit_basic_block_t* block) {
     if (block->state != JIT_BLOCK_PENDING_VERIFY) {
         block->state = JIT_BLOCK_PENDING_VERIFY;
-
-        long bi = block - ctx->basic_blocks;
-        arrpush(ctx->block_queue, bi);
+        arrpush(ctx->block_queue, block);
     }
 }
 
-static tdn_err_t verify_merge_basic_block(jit_method_t* method, uint32_t target_pc, jit_stack_value_t* stack, jit_item_attrs_t* locals) {
+static tdn_err_t verify_merge_basic_block(
+    jit_method_t* method,
+    uint32_t target_pc,
+    jit_stack_value_t* stack, jit_item_attrs_t* locals,
+    uint32_t* leave_target_stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    int bi = hmgeti(method->labels, target_pc);
-    CHECK(bi != 0);
-    jit_basic_block_t* target = &method->basic_blocks[method->labels[bi].value];
+    jit_basic_block_t* target = get_basic_block(method, target_pc, leave_target_stack);
+    CHECK(target != NULL);
 
     // if not initialized yet then initialize it now
     if (!target->initialized) {
@@ -383,6 +438,7 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 #endif
 
         tdn_normalize_inst(&inst);
+        uint32_t current_pc = pc;
         pc += inst.length;
 
         // we got a delegate creation sequence, so this
@@ -1251,12 +1307,14 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 CHECK_AND_RETHROW(verify_merge_basic_block(
                     jmethod,
                     inst.operand.branch_target,
-                    stack, locals));
+                    stack, locals,
+                    copy_leave_targets(block->leave_target_stack)));
 
                 CHECK_AND_RETHROW(verify_merge_basic_block(
                     jmethod,
                     pc,
-                    stack, locals));
+                    stack, locals,
+                    copy_leave_targets(block->leave_target_stack)));
             } break;
 
             case CEE_BRTRUE:
@@ -1272,19 +1330,22 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 CHECK_AND_RETHROW(verify_merge_basic_block(
                     jmethod,
                     inst.operand.branch_target,
-                    stack, locals));
+                    stack, locals,
+                    copy_leave_targets(block->leave_target_stack)));
 
                 CHECK_AND_RETHROW(verify_merge_basic_block(
                     jmethod,
                     pc,
-                    stack, locals));
+                    stack, locals,
+                    copy_leave_targets(block->leave_target_stack)));
             } break;
 
             case CEE_BR: {
                 CHECK_AND_RETHROW(verify_merge_basic_block(
                     jmethod,
                     inst.operand.branch_target,
-                    stack, locals));
+                    stack, locals,
+                    copy_leave_targets(block->leave_target_stack)));
             } break;
 
             case CEE_RET: {
@@ -1382,6 +1443,78 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
                 arrsetlen(stack, 0);
             } break;
 
+            case CEE_LEAVE: {
+                // empty the stack
+                arrsetlen(stack, 0);
+
+                // TODO: verify the leave target is actually valid and won't cause
+                //       weird stuff, I don't think this matters from memory safety
+                //       point so its not that important
+
+                uint32_t* target_stack = copy_leave_targets(block->leave_target_stack);
+
+                // check if there is any finally around us
+                RuntimeExceptionHandlingClause clause = jit_get_enclosing_try_clause(jmethod, current_pc, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+                if (clause != NULL) {
+                    // we do, merge with it, we need to go to the clause
+                    // and have it's leave target be our branch target
+                    arrpush(target_stack, inst.operand.branch_target);
+                    CHECK_AND_RETHROW(verify_merge_basic_block(
+                        jmethod,
+                        clause->HandlerOffset,
+                        stack, locals,
+                        target_stack));
+                } else {
+                    // we don't have any finally handlers, we can call the
+                    // target directly, we use the same leave targets that
+                    // we have right now
+                    CHECK_AND_RETHROW(verify_merge_basic_block(
+                        jmethod,
+                        inst.operand.branch_target,
+                        stack, locals,
+                        target_stack));
+                }
+            } break;
+
+            case CEE_ENDFINALLY: {
+                // empty the stack
+                arrsetlen(stack, 0);
+
+                // TODO: verify the endfinally is actually inside a finally handler
+
+                // we need a target to exit to
+                CHECK(block->leave_target_stack != NULL);
+
+                uint32_t* leave_targets = copy_leave_targets(block->leave_target_stack);
+
+                // check if there is any finally around us
+                RuntimeExceptionHandlingClause clause = jit_get_enclosing_try_clause(jmethod, current_pc, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+                if (clause != NULL) {
+                    // we do, merge with it, we need to go to the clause
+                    // the leave target will actually stay the same for
+                    // this case
+                    CHECK_AND_RETHROW(verify_merge_basic_block(
+                        jmethod,
+                        clause->HandlerOffset,
+                        stack, locals,
+                        leave_targets));
+
+                } else {
+                    // we don't have any finally handlers, we can call the
+                    // target directly, we remove the current leave target
+                    // from the stack and use the rest
+
+                    uint32_t leave_target = arrpop(leave_targets);
+                    if (arrlen(leave_targets) == 0) arrfree(leave_targets);
+
+                    CHECK_AND_RETHROW(verify_merge_basic_block(
+                        jmethod,
+                        leave_target,
+                        stack, locals,
+                        leave_targets));
+                }
+            } break;
+
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Misc
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1412,7 +1545,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
     // we have a fallthrough
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
-        CHECK_AND_RETHROW(verify_merge_basic_block(jmethod, pc, stack, locals));
+        CHECK_AND_RETHROW(verify_merge_basic_block(
+            jmethod,
+            pc,
+            stack, locals,
+            copy_leave_targets(block->leave_target_stack)));
     }
 
     // last must be a valid instruction
@@ -1473,15 +1610,15 @@ static tdn_err_t verify_method(jit_method_t* method) {
     CHECK_AND_RETHROW(prepare_method(method));
 
     // push the first block
-    verify_queue_basic_block(method, &method->basic_blocks[0]);
+    verify_queue_basic_block(method, method->basic_blocks[0]);
 
     while (arrlen(method->block_queue) > 0) {
-        int bi = arrpop(method->block_queue);
+        jit_basic_block_t* block = arrpop(method->block_queue);
 
 #ifdef JIT_VERBOSE_VERIFY
-        TRACE("\tBlock %d", bi);
+        TRACE("\tBlock (IL_%04x)", block->start);
 #endif
-        CHECK_AND_RETHROW(verify_basic_block(method, &method->basic_blocks[bi]));
+        CHECK_AND_RETHROW(verify_basic_block(method, block));
     }
 
 cleanup:

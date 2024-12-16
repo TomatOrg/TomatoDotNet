@@ -836,35 +836,26 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
 
         // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
 
-        // verify the offsets
-        CHECK(clause.handler_length >= 0);
-        CHECK(clause.handler_offset >= 0);
-        CHECK(clause.try_length >= 0);
-        CHECK(clause.try_offset >= 0);
-        CHECK(clause.handler_length >= 0);
-
         CHECK(clause.handler_offset < code_size);
-        CHECK((int64_t)clause.handler_offset + clause.handler_length <= code_size);
+        CHECK((size_t)clause.handler_offset + clause.handler_length <= code_size);
 
         CHECK(clause.try_offset < code_size);
-        CHECK((int64_t)clause.try_offset + clause.try_length <= code_size);
+        CHECK((size_t)clause.try_offset + clause.try_length <= code_size);
 
         // TODO: check no overlap
         // TODO: check no overlap with any other entry already parsed
 
         if (clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-            CHECK(clause.filter_offset >= 0);
             CHECK(clause.filter_offset < code_size);
 
             // filter must come before the length
-            CHECK(clause.filter_offset < clause.handler_offset);
-        }
+            CHECK((size_t)clause.filter_offset < clause.handler_offset);
 
-        // our jit mandates the handler comes before the try so we will always know everything only
-        // after going through the try region, this is only important for finally regions
-        // NOTE: this is not written in the spec
-        if (clause.flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-            CHECK(clause.try_offset < clause.handler_offset);
+            // try must be before the filter
+            CHECK(clause.try_offset + clause.try_length == clause.filter_offset);
+        } else {
+            // try must be before the handler
+            CHECK(clause.try_offset + clause.try_length == clause.handler_offset);
         }
 
         // and now create it and fill it

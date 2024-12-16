@@ -45,7 +45,7 @@ tdn_err_t tdn_jit_init() {
     CHECK_AND_RETHROW(jit_init_emit());
 
     spidir_log_init(jit_spidir_log_callback);
-#ifdef JIT_VERBOSE_EMIT
+#ifdef JIT_VERBOSE_SPIDIR
     spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
 #else
     spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);

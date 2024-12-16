@@ -5,23 +5,23 @@
 #include <util/stb_ds.h>
 #include <util/string.h>
 
-static void swap_basic_blocks(jit_basic_block_t* a, jit_basic_block_t* b) {
-    jit_basic_block_t temp = *a;
+static void swap_basic_blocks(jit_basic_block_t** a, jit_basic_block_t** b) {
+    jit_basic_block_t* temp = *a;
     *a = *b;
     *b = temp;
 }
 
-static int partition_basic_blocks(jit_basic_block_t arr[], int low, int high) {
-    uint32_t p = arr[low].start;
+static int partition_basic_blocks(jit_basic_block_t* arr[], int low, int high) {
+    uint32_t p = arr[low]->start;
     int i = low;
     int j = high;
 
     while (i < j) {
-        while (arr[i].start <= p && i <= high - 1) {
+        while (arr[i]->start <= p && i <= high - 1) {
             i++;
         }
 
-        while (arr[j].start > p && j >= low + 1) {
+        while (arr[j]->start > p && j >= low + 1) {
             j--;
         }
         if (i < j) {
@@ -32,7 +32,7 @@ static int partition_basic_blocks(jit_basic_block_t arr[], int low, int high) {
     return j;
 }
 
-static void sort_basic_blocks(jit_basic_block_t arr[], int low, int high) {
+static void sort_basic_blocks(jit_basic_block_t* arr[], int low, int high) {
     if (low < high) {
         int pi = partition_basic_blocks(arr, low, high);
         sort_basic_blocks(arr, low, pi - 1);
@@ -40,62 +40,14 @@ static void sort_basic_blocks(jit_basic_block_t arr[], int low, int high) {
     }
 }
 
-static void jit_find_enclosing_exception_regions(RuntimeMethodBody body, jit_basic_block_t* block) {
-    if (body->ExceptionHandlingClauses == NULL) {
-        return;
-    }
-
-    for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
-        RuntimeExceptionHandlingClause clause = body->ExceptionHandlingClauses->Elements[i];
-
-        // Check if the try range
-        if (clause->TryOffset <= block->start && block->start < clause->TryOffset + clause->TryLength) {
-            if (block->try_clause == NULL) {
-                block->try_clause = clause;
-            } else {
-                RuntimeExceptionHandlingClause current = block->try_clause;
-                if (
-                    current->TryOffset < clause->TryOffset &&
-                    current->TryOffset + current->TryLength > clause->TryOffset + clause->TryLength
-                ) {
-                    block->try_clause = clause;
-                }
-            }
-        }
-
-        // Check if the handler range
-        if (clause->HandlerOffset <= block->start && block->start < clause->HandlerOffset + clause->HandlerLength) {
-            if (block->handler_clause == NULL) {
-                block->handler_clause = clause;
-            } else {
-                RuntimeExceptionHandlingClause current = block->handler_clause;
-                if (
-                    current->HandlerOffset < clause->HandlerOffset &&
-                    current->HandlerOffset + current->HandlerLength > clause->HandlerOffset + clause->HandlerLength
-                ) {
-                    block->handler_clause = clause;
-                }
-            }
-        }
-
-        // Check if the filter range
-        if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER && clause->FilterOffset <= block->start && block->start < clause->HandlerOffset) {
-            if (block->filter_clause == NULL) {
-                block->filter_clause = clause;
-            }
-        }
-    }
-}
-
 static void jit_add_basic_block(jit_method_t* method, uint32_t pc) {
     if (hmgeti(method->labels, pc) < 0) {
-        int bi = arraddnindex(method->basic_blocks, 1);
-        jit_basic_block_t* block = &method->basic_blocks[bi];
-        memset(block, 0, sizeof(*block));
+        jit_basic_block_t* block = tdn_host_mallocz(sizeof(jit_basic_block_t));
         block->start = pc;
         block->end = -1;
-        jit_find_enclosing_exception_regions(method->method->MethodBody, block);
-        hmput(method->labels, pc, bi);
+
+        arrpush(method->basic_blocks, block);
+        hmput(method->labels, pc, block);
     }
 }
 
@@ -150,11 +102,11 @@ tdn_err_t jit_find_basic_blocks(jit_method_t* jmethod) {
     hmfree(jmethod->labels);
     for (int i = 0; i < arrlen(jmethod->basic_blocks); i++) {
         if (i != arrlen(jmethod->basic_blocks) - 1) {
-            jmethod->basic_blocks[i].end = jmethod->basic_blocks[i + 1].start;
+            jmethod->basic_blocks[i]->end = jmethod->basic_blocks[i + 1]->start;
         } else {
-            jmethod->basic_blocks[i].end = body->ILSize;
+            jmethod->basic_blocks[i]->end = body->ILSize;
         }
-        hmput(jmethod->labels, jmethod->basic_blocks[i].start, i);
+        hmput(jmethod->labels, jmethod->basic_blocks[i]->start, jmethod->basic_blocks[i]);
     }
 
 cleanup:

@@ -21,6 +21,22 @@ public static class Program
         }
     }
 
+    public static int Lol(int a)
+    {
+        try
+        {
+            if (a < 0)
+            {
+                return 123;
+            }
+        } finally
+        {
+            Console.WriteLine("Finally!");
+        }
+
+        return a;
+    }
+    
     public static int Main()
     {
         // if (CodeGenBringUpTests.Run() != 0) return 1;
@@ -31,15 +47,7 @@ public static class Program
         // if (!Arrays.Run()) return 6;
         // if (!ConstantFolding.Run()) return 7;
         // if (!Shifts.Run()) return 8;
-
-        try
-        {
-            Console.WriteLine("Hello World!");
-        } finally
-        {
-            Console.WriteLine("Got to finally!");   
-        }
-
-        return 0;
+    
+        return Lol(0);
     }
 }
