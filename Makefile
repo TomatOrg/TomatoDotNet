@@ -54,6 +54,10 @@ TDN_CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
 TDN_CFLAGS		+= -fms-extensions -Wno-microsoft-anon-tag
 TDN_CFLAGS		+= -Iinclude -Isrc -Ilibs/spidir/c-api/include
 
+ifeq ($(DEBUG),1)
+TDN_CFLAGS		+= -D__TDN_DEBUG__
+endif
+
 # Get the sources along side all of the objects and dependencies
 SRCS 		:= $(shell find src -name '*.c')
 OBJS 		:= $(SRCS:%=$(BUILD_DIR)/%.o)

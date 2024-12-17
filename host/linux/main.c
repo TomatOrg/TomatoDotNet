@@ -256,36 +256,24 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    // load the corelib, must come first
+    CHECK(argc == 3, "Usage: %s <corelib.dll> <run.dll>", argv[0]);
+
     RuntimeAssembly corelib = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Private.CoreLib/bin/Debug/net8.0/System.Private.CoreLib.dll", &corelib));
+    CHECK_AND_RETHROW(load_assembly_from_path(argv[1], &corelib));
 
-    RuntimeAssembly console = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/System.Console/bin/Debug/net8.0/System.Console.dll", &console));
-
-    RuntimeTypeInfo console_class;
-    CHECK_AND_RETHROW(tdn_assembly_lookup_type_by_cstr(console, "System", "Console", &console_class));
-    for (int i = 0; i < console_class->DeclaredMethods->Length; i++) {
-        RuntimeMethodInfo method = console_class->DeclaredMethods->Elements[i];
-        if (tdn_compare_string_to_cstr(method->Name, "WriteLine")) {
-            method->MethodPtr = console_write_line;
-        }
-    }
-
-    RuntimeAssembly tests = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path("TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll", &tests));
+    RuntimeAssembly run = NULL;
+    CHECK_AND_RETHROW(load_assembly_from_path(argv[2], &run));
 
     clock_t t;
     t = clock();
-    CHECK_AND_RETHROW(tdn_jit_method(tests->EntryPoint));
+    CHECK_AND_RETHROW(tdn_jit_method(run->EntryPoint));
     t = clock() - t;
     double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
     TRACE("Jit took %f seconds", time_taken);
 
-    int (*entry_point)() = tests->EntryPoint->MethodPtr;
+    int (*entry_point)() = run->EntryPoint->MethodPtr;
     int tests_output = entry_point();
-    TRACE("Tests = %d", tests_output);
-    ASSERT(tests_output == 0);
+    TRACE("RETURNED = %d", tests_output);
 
 cleanup:
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : EXIT_SUCCESS;
