@@ -4,3 +4,6 @@
 [submodule "libs/zydis"]
 	path = libs/zydis
 	url = git@github.com:zyantific/zydis.git
+[submodule "TdnCoreLib"]
+	path = TdnCoreLib
+	url = git@github.com:TomatOrg/TdnCoreLib.git
