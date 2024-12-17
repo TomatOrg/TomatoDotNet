@@ -14,6 +14,7 @@
 #include "util/stb_ds.h"
 #include "tomatodotnet/jit/jit.h"
 #include <tomatodotnet/types/type.h>
+#include <util/alloc.h>
 #include <util/prime.h>
 
 #include "jit/jit.h"
@@ -2287,16 +2288,16 @@ tdn_err_t tdn_load_assembly_from_memory(const void* buffer, size_t buffer_size, 
     // Setup the file handle and the dotnet file so we can parse them
     // we will also copy the buffer to our own memory
     // TODO: we might need to make this managed or something
-    handle = tdn_host_mallocz(sizeof(memory_file_handle_t));
+    handle = tdn_mallocz(sizeof(memory_file_handle_t));
     CHECK_ERROR(handle != NULL, TDN_ERROR_OUT_OF_MEMORY);
     handle->buffer_size = buffer_size;
-    tmp_buffer = tdn_host_mallocz(buffer_size);
+    tmp_buffer = tdn_mallocz(buffer_size);
     CHECK_ERROR(tmp_buffer != NULL, TDN_ERROR_OUT_OF_MEMORY);
     memcpy(tmp_buffer, buffer, buffer_size);
     handle->buffer = tmp_buffer;
 
     // setup the dotnet file itself
-    dotnet = tdn_host_mallocz(sizeof(dotnet_file_t));
+    dotnet = tdn_mallocz(sizeof(dotnet_file_t));
     CHECK_ERROR(dotnet != NULL, TDN_ERROR_OUT_OF_MEMORY);
     dotnet->file.handle = handle;
     dotnet->file.read_file = memory_file_read;
@@ -2323,7 +2324,7 @@ tdn_err_t tdn_load_assembly_from_file(tdn_file_t file, RuntimeAssembly* out_asse
     dotnet_file_t* dotnet = NULL;
 
     // setup the dotnet file itself
-    dotnet = tdn_host_mallocz(sizeof(dotnet_file_t));
+    dotnet = tdn_mallocz(sizeof(dotnet_file_t));
     CHECK_ERROR(dotnet != NULL, TDN_ERROR_OUT_OF_MEMORY);
     dotnet->file.handle = file;
     dotnet->file.read_file = tdn_host_read_file;

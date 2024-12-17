@@ -1,6 +1,7 @@
 #include "jit_basic_block.h"
 
 #include <tomatodotnet/disasm.h>
+#include <util/alloc.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
 #include <util/string.h>
@@ -42,7 +43,7 @@ static void sort_basic_blocks(jit_basic_block_t* arr[], int low, int high) {
 
 static void jit_add_basic_block(jit_method_t* method, uint32_t pc) {
     if (hmgeti(method->labels, pc) < 0) {
-        jit_basic_block_t* block = tdn_host_mallocz(sizeof(jit_basic_block_t));
+        jit_basic_block_t* block = tdn_mallocz(sizeof(jit_basic_block_t));
         block->start = pc;
         block->end = -1;
 

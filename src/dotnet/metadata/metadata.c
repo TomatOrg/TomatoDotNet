@@ -1,4 +1,7 @@
 #include "metadata.h"
+
+#include <util/alloc.h>
+
 #include "util/except.h"
 #include "util/string.h"
 #include "sig.h"
@@ -410,7 +413,7 @@ static tdn_err_t expand_metadata_table(metadata_loader_context_t* context, int t
     CHECK(stream_size >= in_file * row_count);
 
     // allocate space for expanded part
-    entries = tdn_host_mallocz(in_memory * context->tables[table].row_count);
+    entries = tdn_mallocz(in_memory * context->tables[table].row_count);
     CHECK_ERROR(entries != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
 #define GET_INDEX(IS_BIG) \

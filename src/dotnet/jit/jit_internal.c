@@ -1,5 +1,6 @@
 #include "jit_internal.h"
 
+#include <util/alloc.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
 
@@ -25,7 +26,7 @@ tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** resu
         goto cleanup;
     }
 
-    jit_method_t* jmethod = tdn_host_mallocz(sizeof(*method));
+    jit_method_t* jmethod = tdn_mallocz(sizeof(*method));
     CHECK_ERROR(jmethod != NULL, TDN_ERROR_OUT_OF_MEMORY);
     hmput(m_jit_methods, method, jmethod);
 

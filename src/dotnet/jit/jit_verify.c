@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <dotnet/types.h>
 #include <tomatodotnet/disasm.h>
+#include <util/alloc.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
 #include <util/string.h>
@@ -176,7 +177,7 @@ static jit_basic_block_t* get_basic_block(
         if (bi >= 0) {
             block = method->leave_blocks[bi].value;
         } else {
-            jit_basic_block_t* new_block = tdn_host_mallocz(sizeof(jit_basic_block_t));
+            jit_basic_block_t* new_block = tdn_mallocz(sizeof(jit_basic_block_t));
             if (new_block == NULL) {
                 return NULL;
             }

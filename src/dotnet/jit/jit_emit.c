@@ -13,6 +13,7 @@
 
 #include <tomatodotnet/disasm.h>
 #include <tomatodotnet/types/type.h>
+#include <util/alloc.h>
 #include <util/string.h>
 #include <util/string_builder.h>
 
@@ -437,7 +438,7 @@ static tdn_err_t jit_init_static_field(RuntimeFieldInfo field) {
     RuntimeTypeInfo type = field->FieldType;
 
     // allocate it on the heap, that is the easiest way to do it
-    field->JitFieldPtr = tdn_host_mallocz(type->StackSize);
+    field->JitFieldPtr = tdn_mallocz(type->StackSize);
     CHECK_ERROR(field->JitFieldPtr != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // register all the roots to the gc

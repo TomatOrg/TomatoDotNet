@@ -1,4 +1,7 @@
 #include "pe.h"
+
+#include <util/alloc.h>
+
 #include "util/except.h"
 
 typedef struct pe_loader_context {
@@ -114,7 +117,7 @@ tdn_err_t pe_load_image(pe_file_t* pe_file) {
     CHECK_AND_RETHROW(pe_get_image_info(&loader_context));
 
     // allocate space for it
-    loader_context.image_address = tdn_host_mallocz(loader_context.image_size);
+    loader_context.image_address = tdn_mallocz(loader_context.image_size);
     CHECK_ERROR(loader_context.image_address != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // read the entire header into memory

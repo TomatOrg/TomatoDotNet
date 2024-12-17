@@ -7,7 +7,7 @@
 void* spidir_platform_alloc(size_t size, size_t align) {
     if (align <= alignof(max_align_t)) {
         // Get a `realloc`-able pointer where possible
-        return tdn_host_mallocz(size);
+        return tdn_host_mallocz(size, align);
     } else {
         // TODO: lol
         __builtin_trap();

@@ -18,7 +18,7 @@ void tdn_host_vprintf(const char* format, va_list args);
 size_t tdn_host_strnlen(const char* string, size_t maxlen);
 
 // memory allocation
-void* tdn_host_mallocz(size_t size);
+void* tdn_host_mallocz(size_t size, size_t align);
 void* tdn_host_realloc(void* ptr, size_t new_size);
 void tdn_host_free(void* ptr);
 
