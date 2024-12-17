@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include <spidir/module.h>
 
-#include "except.h"
-
 // logging helpers
 void tdn_host_log_trace(const char* format, ...);
 void tdn_host_log_warn(const char* format, ...);

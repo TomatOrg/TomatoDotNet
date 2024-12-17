@@ -7,6 +7,48 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
                          to be memory safe, this is to ensure that loading an untrusted binary would not result in
                          memory safety and unsafe related issues.
 
+## Compiling
+
+### Library
+
+First you will want to invoke the makefile from your makefile giving the following variables:
+- `CC` (defaults to `clang`): The compiler to use
+- `AR` (defaults to `llvm-ar`): The archive utility to use
+- `LD` (defaults to `ld.lld`): The linker to use
+- `SPIDIR_TARGET` (defaults to `x86_64-unknown-none`): The target to use for compiling the jit (rust)
+- `CFLAGS`: additional CFLAGS to add, you will most likely want at least optimization level
+- `DEBUG`: should we compile as debug or release
+- `SPIDIR_DEBUG`: Should spidir (the jit) be compiled as debug or release (defaults to same as `DEBUG`)
+
+Then you will want to include it in your source:
+- Include paths:
+  - `./include`: This has the main Tomato.net headers
+  - `./libs/spidir/c-api/include`: This has the JIT's includes, which are sometimes needed by the host headers
+- Compiler flags:
+  - `-fms-extensions -Wno-microsoft-anon-tag`: An extension that we use for defining objects more easily
+- Libraries:
+  - `./out/{debug,release}/libtdn.a`: The actual static library
+- C# Core libraries:
+  - `./out/{debug,release}/bin/System.Private.CoreLib.dll`: The main corelib, must be loaded first
+
+All you need to do then is to call `tdn_load_assembly_from_memory` giving the corelib, once you loaded the corelib 
+you can continue and load the rest of the DLLs you need. 
+
+For each one (excluding the corelib) you will most likely want to also call the entry point:
+```c
+  ASSERT(tdn_jit_method(tests->EntryPoint) == TDN_NO_ERROR);
+  int (*entry_point)() = tests->EntryPoint->MethodPtr;
+  int return_value = entry_point();
+```
+
+### Linux host
+
+The repo includes an example linux host which can be built:
+```bash
+make -C host/linux
+```
+
+And then under `out/bin/tdn.elf` you can run the binary
 
 ## Implemented
 
@@ -15,7 +57,9 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
   - Simple object and struct operations 
   - Type and Method generics
   - Interfaces
+    - Virtual static methods
   - Delegates
+  - Finally clauses
 - (mostly) Full support for references
   - properly checking references don't escape
   - Ref-struct support
@@ -24,7 +68,7 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
 ### To be implemented
 - explicit scoped and unscoped reference support
 - safe stackalloc (which returns Span)
-  - the generated MSIL is not safe by default
+  - the generated MSIL is not safe, will need to special case it
 - Exceptions
     - This requires unwind support from the jit which is currently missing
 - Much more of the standard library
