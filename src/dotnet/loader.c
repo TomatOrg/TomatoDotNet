@@ -1,5 +1,8 @@
 #include <stddef.h>
 #include "loader.h"
+
+#include <tomatodotnet/tdn.h>
+
 #include "tomatodotnet/except.h"
 #include "tomatodotnet/types/reflection.h"
 #include "dotnet/metadata/pe.h"
@@ -1301,12 +1304,23 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
 
         // get from the hashmap of known assemblies
         // TODO: if not found call a callback to find and load the assembly
+        RuntimeAssembly new_assembly = NULL;
         int idx = shgeti(m_loaded_assemblies, name);
-        CHECK(idx >= 0, "Failed to get assembly `%s` - not found", name);
+        if (idx >= 0) {
+            // TODO: maybe this should have an array of major versions we know about
+            new_assembly = m_loaded_assemblies[i].value;
+            CHECK(new_assembly != NULL, "Failed to get assembly `%s` - recursive dependency", name);
 
-        // TODO: maybe this should have an array of major versions we know about
-        RuntimeAssembly new_assembly = m_loaded_assemblies[i].value;
-        CHECK(new_assembly != NULL, "Failed to get assembly `%s` - recursive dependency", name);
+        } else {
+            // attempt to resolve an assembly
+            CHECK(tdn_host_resolve_assembly(name, assembly_ref->major_version, &current_file), "Failed to get assembly `%s` - not found", name);
+
+            // now actually load the assembly so it can be used
+            CHECK_AND_RETHROW(tdn_load_assembly_from_file(current_file, &new_assembly));
+
+            // add to the loaded assembly list
+            shput(m_loaded_assemblies, name, new_assembly);
+        }
 
         // TODO: validate the minor version
 
@@ -2299,6 +2313,31 @@ cleanup:
         tdn_host_free(dotnet);
         tdn_host_free(tmp_buffer);
         tdn_host_free(handle);
+    }
+
+    return err;
+}
+
+tdn_err_t tdn_load_assembly_from_file(tdn_file_t file, RuntimeAssembly* out_assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+    dotnet_file_t* dotnet = NULL;
+
+    // setup the dotnet file itself
+    dotnet = tdn_host_mallocz(sizeof(dotnet_file_t));
+    CHECK_ERROR(dotnet != NULL, TDN_ERROR_OUT_OF_MEMORY);
+    dotnet->file.handle = file;
+    dotnet->file.read_file = tdn_host_read_file;
+    dotnet->file.close_handle = tdn_host_close_file;
+
+    // call common code
+    CHECK_AND_RETHROW(load_assembly(dotnet, out_assembly));
+
+cleanup:
+    // if we got an error free all the
+    // native allocations
+    if (IS_ERROR(err)) {
+        dotnet_free_file(dotnet);
+        tdn_host_free(dotnet);
     }
 
     return err;

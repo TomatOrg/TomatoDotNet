@@ -251,19 +251,27 @@ static void console_write_line(String str) {
     TRACE("%U", str);
 }
 
+extern const char* g_assembly_search_path;
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    CHECK(argc == 3, "Usage: %s <corelib.dll> <run.dll>", argv[0]);
+    CHECK(argc == 4, "Usage: %s <corelib.dll> <search path> <run.dll>", argv[0]);
 
+    // set the search path for other assemblies
+    g_assembly_search_path = argv[2];
+
+    // load the corelib first
     RuntimeAssembly corelib = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path(argv[1], &corelib));
 
+    // now load the assembly we want to run
     RuntimeAssembly run = NULL;
-    CHECK_AND_RETHROW(load_assembly_from_path(argv[2], &run));
+    CHECK_AND_RETHROW(load_assembly_from_path(argv[3], &run));
 
+    // and now jit it and let it run
     clock_t t;
     t = clock();
     CHECK_AND_RETHROW(tdn_jit_method(run->EntryPoint));

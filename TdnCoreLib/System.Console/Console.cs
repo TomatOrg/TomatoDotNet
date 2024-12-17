@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace System;
@@ -5,10 +6,9 @@ namespace System;
 public static class Console
 {
 
-    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
-    public static extern void Write(string? value);
-
-    [MethodImpl(MethodCodeType = MethodCodeType.Runtime)]
-    public static extern void WriteLine(string? value);
+    public static void WriteLine(string? value)
+    {
+        Debug.Print(value!);
+    }
 
 }

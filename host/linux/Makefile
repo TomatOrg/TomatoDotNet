@@ -84,6 +84,7 @@ OBJS		+= $(TDN_BIN_DIR)/libtdn.a
 
 # The dlls that we need for the runtime
 DLLS 		:= $(BIN_DIR)/Tests.dll
+DLLS 		+= $(BIN_DIR)/System.Console.dll
 
 # The default rule
 .PHONY: default
@@ -140,3 +141,10 @@ $(BIN_DIR)/Tests.dll: ../../TdnCoreLib/Tests/bin/$(DOTNET_CONFIG)/net8.0/Tests.d
 
 ../../TdnCoreLib/Tests/bin/$(DOTNET_CONFIG)/net8.0/Tests.dll: force
 	cd ../../TdnCoreLib/Tests && dotnet build --configuration $(DOTNET_CONFIG)
+
+$(BIN_DIR)/System.Console.dll: ../../TdnCoreLib/System.Console/bin/Debug/net8.0/System.Console.dll
+	@mkdir -p $(@D)
+	cp $^ $@
+
+../../TdnCoreLib/System.Console/bin/Debug/net8.0/System.Console.dll: force
+	cd ../../TdnCoreLib/System.Console && dotnet build --configuration Debug

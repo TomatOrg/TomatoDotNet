@@ -7,6 +7,7 @@
 
 #include "tomatodotnet/host.h"
 
+#include <linux/limits.h>
 #include <sys/mman.h>
 
 #include <util/except.h>
@@ -86,13 +87,25 @@ size_t tdn_host_strnlen(const char* string, size_t maxlen) {
     return strnlen(string, maxlen);
 }
 
-int tdn_host_resolve_assembly(const char* name, uint16_t revision, tdn_file_t* out_file) {
-    FILE* file = fopen(name, "rb");
-    if (file == NULL) {
-        return errno;
+const char* g_assembly_search_path = "";
+
+bool tdn_host_resolve_assembly(const char* name, uint16_t revision, tdn_file_t* out_file) {
+    // attempt to search for the file
+    char buffer[PATH_MAX] = {};
+    strcat(buffer, g_assembly_search_path);
+    if (g_assembly_search_path[strlen(buffer) - 1] != '/') {
+        strcat(buffer, "/");
     }
+    strcat(buffer, name);
+    strcat(buffer, ".dll");
+
+    FILE* file = fopen(buffer, "rb");
+    if (file == NULL) {
+        return false;
+    }
+
     *out_file = file;
-    return 0;
+    return true;
 }
 
 int tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer) {

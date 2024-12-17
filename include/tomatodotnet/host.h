@@ -55,7 +55,7 @@ typedef void* tdn_file_t;
  * Resolve an assembly and open it as a file, the major version of the assembly must match
  * the requested one, and the highest minor should be given for best result
  */
-int tdn_host_resolve_assembly(const char* name, uint16_t major_version, tdn_file_t* out_file);
+bool tdn_host_resolve_assembly(const char* name, uint16_t major_version, tdn_file_t* out_file);
 
 /**
  * Read a file opened by tdn_host_resolve_assembly
