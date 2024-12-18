@@ -174,7 +174,7 @@ tdn_err_t tdn_assembly_lookup_method(
             }
 
             // we didn't find it
-            CHECK(found);
+            CHECK(found, "Failed to find member ref %T::%s", parent, ref->name);
         } break;
 
         default:
