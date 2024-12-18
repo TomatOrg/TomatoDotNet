@@ -51,7 +51,7 @@ void tdn_host_vprintf(const char* format, va_list args) {
     vprintf(format, args);
 }
 
-void* tdn_host_mallocz(size_t size) {
+void* tdn_host_mallocz(size_t size, size_t align) {
     void* ptr = malloc(size);
     if (ptr == NULL) return NULL;
     memset(ptr, 0, size);
