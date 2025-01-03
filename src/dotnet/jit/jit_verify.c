@@ -1,10 +1,5 @@
-//
-// Created by tomato on 10/4/24.
-//
-
 #include "jit_verify.h"
 
-#include <stdlib.h>
 #include <dotnet/types.h>
 #include <tomatodotnet/disasm.h>
 #include <util/alloc.h>
