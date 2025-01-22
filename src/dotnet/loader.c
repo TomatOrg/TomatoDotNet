@@ -605,11 +605,16 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
             vtable_offset += interface->VTable->Length;
         }
 
-        // and now insert it
-        hmput(info->InterfaceImpls, interface, parent_offset);
+        // insert that the type implements this interface
+        interface_impl_t new_impl = {
+            .key = interface,
+            .value = parent_offset,
+            .next = interface->InterfaceImplementors
+        };
+        hmputs(info->InterfaceImpls, new_impl);
 
-        // calculate the product and make sure it doesn't overflow
-        CHECK(!__builtin_mul_overflow(interface_product, interface->InterfacePrime, &interface_product));
+        // set the new link to point to us
+        interface->InterfaceImplementors = info;
     }
 
     // go over all the virtual methods and allocate vtable slots to all of them,
@@ -1050,7 +1055,6 @@ static tdn_err_t fill_interface_type_id(RuntimeTypeInfo info) {
 
     if (info->Attributes.Interface) {
         // interface uses prime multipliers to check for inclusion
-        info->InterfacePrime = prime_generate(&m_interface_prime_generator);
         info->InterfaceId = m_interface_id++;
     }
 
@@ -1167,6 +1171,30 @@ static void pop_type_queue() {
     } else {
         ERROR("Tried to pop queue but there was no queue to popup");
     }
+}
+
+tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo interface) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // generate the prime
+    interface->InterfacePrime = prime_generate(&m_interface_prime_generator);
+
+    // and now go over all of the implementors of this interface
+    // and update their product to include this type
+    RuntimeTypeInfo implementor = interface->InterfaceImplementors;
+    while (implementor != NULL) {
+        // set the product
+        uint64_t* product = &implementor->JitVTable->InterfaceProduct;
+        CHECK(!__builtin_mul_overflow(*product, interface->InterfacePrime, product));
+
+        // get next
+        interface_impl_t* impl = hmgetp_null(implementor->InterfaceImpls, interface);
+        CHECK(impl != NULL);
+        implementor = impl->next;
+    }
+
+cleanup:
+    return err;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

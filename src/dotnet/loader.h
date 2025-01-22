@@ -12,3 +12,8 @@ tdn_err_t tdn_parser_method_body(
 );
 
 tdn_err_t tdn_type_init(RuntimeTypeInfo type);
+
+/**
+ * Generate the prime for this interface
+ */
+tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo InterfaceType);

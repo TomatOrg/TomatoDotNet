@@ -1,6 +1,8 @@
 #pragma once
 
 #include <stddef.h>
+#include <util/list.h>
+
 #include "reflection.h"
 #include "tomatodotnet/except.h"
 
@@ -70,6 +72,9 @@ typedef struct generic_type_instance {
 typedef struct interface_impl {
     RuntimeTypeInfo key;
     int value;
+
+    // the next type that implements this interface
+    RuntimeTypeInfo next;
 } interface_impl_t;
 
 typedef struct RuntimeTypeInfo {
@@ -106,6 +111,9 @@ typedef struct RuntimeTypeInfo {
 
     // the interfaces this type implements
     interface_impl_t* InterfaceImpls;
+
+    // list of people who implement this interface
+    RuntimeTypeInfo InterfaceImplementors;
 
     // the declared stuff
     RuntimeConstructorInfo_Array DeclaredConstructors;

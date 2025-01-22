@@ -1,6 +1,7 @@
 #include "jit_emit.h"
 
 #include <stdalign.h>
+#include <dotnet/loader.h>
 #include <dotnet/gc/gc.h>
 #include <dotnet/metadata/metadata.h>
 #include <util/except.h>
@@ -14,6 +15,7 @@
 #include <tomatodotnet/disasm.h>
 #include <tomatodotnet/types/type.h>
 #include <util/alloc.h>
+#include <util/prime.h>
 #include <util/string.h>
 #include <util/string_builder.h>
 
@@ -826,6 +828,13 @@ static spidir_value_t jit_emit_type_check(spidir_builder_handle_t builder, spidi
                 )
             )
         );
+
+        // if this is the first time someone is doing type checking
+        // against this interface, generate the prime for it, this recudes
+        // the amount of primes needed to only those used by the type checking
+        if (target->InterfacePrime == 0) {
+            ASSERT(!IS_ERROR(tdn_generate_interface_prime(target)));
+        }
 
         // and now check that the prime is dividable by the interface product, if it is (and the reminder
         // is zero) then we know that the type implements the interface, otherwise it does not implement it
