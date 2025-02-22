@@ -14,10 +14,10 @@
 #endif
 
 // enable printing while emitting
-// #define JIT_VERBOSE_SPIDIR
-// #define JIT_VERBOSE_EMIT
-// #define JIT_DEBUG_EMIT
-// #define JIT_DUMP_EMIT
+#define JIT_VERBOSE_SPIDIR
+#define JIT_VERBOSE_EMIT
+#define JIT_DEBUG_EMIT
+#define JIT_DUMP_EMIT
 
 #ifdef JIT_VERBOSE_EMIT
     #define JIT_DEBUG_EMIT

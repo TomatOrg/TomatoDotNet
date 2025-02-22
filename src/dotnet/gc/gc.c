@@ -42,7 +42,7 @@ void* gc_new(RuntimeTypeInfo type, size_t size) {
     }
 
     // set the vtable
-    object->VTable = (uint32_t)(uintptr_t)type->JitVTable;
+    object->VTable = type->JitVTable;
 
     return object;
 }

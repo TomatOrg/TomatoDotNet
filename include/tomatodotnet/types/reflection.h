@@ -48,9 +48,10 @@ typedef union ParameterAttributes {
 } ParameterAttributes;
 
 typedef struct ParameterInfo {
-    struct Object Object;
+    struct Object;
     ParameterAttributes Attributes;
     RuntimeTypeInfo ParameterType;
+    Object DefaultValue;
     RuntimeMemberInfo Member;
     String Name;
     int Position;

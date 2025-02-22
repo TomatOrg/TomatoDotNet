@@ -652,7 +652,11 @@ static tdn_err_t verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* bl
 
                 // get the owner type
                 RuntimeTypeInfo owner = obj.type;
-                if (tdn_type_is_valuetype(field->DeclaringType) && owner->IsByRef) {
+                if (tdn_type_is_valuetype(field->DeclaringType) && (owner->IsByRef || owner->IsPointer)) {
+                    // if this is a pointer only allow it if we allow unssafe for the assembly
+                    if (owner->IsPointer) {
+                        CHECK(method->Module->Assembly->AllowUnsafe);
+                    }
                     owner = owner->ElementType;
                 }
 

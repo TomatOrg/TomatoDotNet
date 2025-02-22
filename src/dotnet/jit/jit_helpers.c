@@ -48,7 +48,7 @@ void* jit_gc_newstr(uint32_t element_count) {
 
 void* jit_interface_downcast(Object instance, RuntimeTypeInfo iface) {
     // get the vtable of the object
-    ObjectVTable* vtable = object_get_vtable(instance);
+    ObjectVTable* vtable = instance->VTable;
 
     // go over the type interface implementations and search for one which matches
     RuntimeTypeInfo type = vtable->Type;
@@ -67,7 +67,7 @@ void* jit_interface_downcast(Object instance, RuntimeTypeInfo iface) {
 }
 
 void jit_throw(Object exception, uint32_t pc) {
-    ERROR("Exception of type %T thrown (IL PC %d)", object_get_vtable(exception)->Type, pc);
+    ERROR("Exception of type %T thrown (IL PC %d)", exception->VTable->Type, pc);
     ASSERT(!"jit_throw");
 }
 

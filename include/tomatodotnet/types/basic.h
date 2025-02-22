@@ -44,10 +44,13 @@ typedef struct ObjectVTable {
 } ObjectVTable;
 
 typedef struct Object {
-    uint32_t VTable;
-    uint32_t _reserved;
+    ObjectVTable* VTable;
+    uint32_t Flags;
+    uint8_t Mutex;
+    uint8_t CondVar;
+    uint16_t MutexThreadId;
 }* Object;
-_Static_assert(sizeof(struct Object) == 8, "Object size too big");
+_Static_assert(sizeof(struct Object) == 16, "Object size too big");
 
 typedef struct Interface {
     Object Instance;
@@ -59,17 +62,17 @@ typedef struct Delegate {
     void* Function;
 } Delegate;
 
-static inline ObjectVTable* object_get_vtable(Object object) { return (void*)(uintptr_t)object->VTable; }
-
 typedef struct String {
     struct Object;
     int Length;
+    int HashCode;
     Char Chars[];
 }* String;
 
 typedef struct Array {
     struct Object;
     int Length;
+    int SubLength;
 }* Array;
 
 #define DEFINE_ARRAY(Type) \

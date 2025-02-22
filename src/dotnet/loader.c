@@ -137,7 +137,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE_VTABLE(System.Reflection, RuntimeFieldInfo, 5),
     LOAD_TYPE(System.Reflection, RuntimeMethodBody),
     LOAD_TYPE_VTABLE(System.Reflection, RuntimeMethodInfo, 5),
-    LOAD_TYPE(System.Reflection, RuntimeConstructorInfo),
+    LOAD_TYPE_VTABLE(System.Reflection, RuntimeConstructorInfo, 5),
     LOAD_TYPE(System.Reflection, RuntimeLocalVariableInfo),
     LOAD_TYPE_VTABLE(System.Reflection, RuntimeTypeInfo, 5),
     LOAD_TYPE(System.Reflection, ParameterInfo),
@@ -145,17 +145,12 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Runtime.CompilerServices, IsReadOnlyAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsByRefLikeAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
-    LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
-    LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
     LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
     LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
     LOAD_TYPE(System, RuntimeTypeHandle),
     LOAD_TYPE(System, Delegate),
     LOAD_TYPE(System, MulticastDelegate),
-    LOAD_TYPE(System, Buffer),
-    LOAD_TYPE(System.Diagnostics, Debug),
-    LOAD_TYPE(System.Numerics, BitOperations),
-    { "System", "Nullable`1", &tNullable, 4 },
+    LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
 };
 static int m_loaded_types = 0;
 
@@ -169,7 +164,7 @@ static tdn_err_t create_vtable(RuntimeTypeInfo type, int count) {
 
     // create the jit vtable
     CHECK(type->JitVTable == NULL);
-    type->JitVTable = tdn_host_mallocz_low(sizeof(ObjectVTable) + count * sizeof(void*));
+    type->JitVTable = tdn_host_mallocz(sizeof(ObjectVTable) + count * sizeof(void*), 8);
     CHECK_ERROR(type->JitVTable != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // set the type in the vtable
@@ -1215,7 +1210,7 @@ static tdn_err_t corelib_bootstrap() {
 
     // make sure to set its type id properly
     CHECK_AND_RETHROW(create_vtable(tRuntimeTypeInfo, 5));
-    tRuntimeTypeInfo->Object.VTable = (uint32_t)(uintptr_t)tRuntimeTypeInfo->JitVTable;
+    tRuntimeTypeInfo->Object.VTable = tRuntimeTypeInfo->JitVTable;
 
     // hard-code types we require for proper bootstrap
     tArray = GC_NEW(RuntimeTypeInfo); // for creating a Type[]
@@ -1325,11 +1320,6 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
         metadata_assembly_ref_t* assembly_ref = &assembly->Metadata->assembly_refs[i];
 
         const char* name = assembly_ref->name;
-
-        // TODO: how to handle this correctly
-        if (strcmp(name, "System.Runtime") == 0) {
-            name = "System.Private.CoreLib";
-        }
 
         // get from the hashmap of known assemblies
         // TODO: if not found call a callback to find and load the assembly
@@ -1865,7 +1855,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
             } else {
                 // only valid on methods, not on ctors
                 CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
-                CHECK(object_get_vtable(last_object)->Type == tRuntimeMethodInfo);
+                CHECK(((Object)last_object)->VTable->Type == tRuntimeMethodInfo);
                 ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
                 ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
             }
@@ -1890,8 +1880,8 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
         } else {
             // only valid on methods, not on ctors
             CHECK(((RuntimeMethodInfo)last_object)->GenericArguments == NULL);
-            CHECK(object_get_vtable(last_object)->Type == tRuntimeMethodInfo,
-                "%T != %T", object_get_vtable(last_object)->Type, tRuntimeMethodInfo);
+            CHECK(((Object)last_object)->VTable->Type == tRuntimeMethodInfo,
+                "%T != %T", ((Object)last_object)->VTable->Type, tRuntimeMethodInfo);
             ((RuntimeMethodInfo)last_object)->GenericArguments = arr;
             ((RuntimeMethodInfo)last_object)->GenericMethodDefinition = last_object;
         }
@@ -2019,7 +2009,7 @@ static tdn_err_t assembly_connect_read_only_attribute(RuntimeAssembly assembly, 
         metadata_custom_attribute_t* attr = &assembly->Metadata->custom_attributes[i];
         RuntimeMethodBase method;
         CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->type.token, NULL, NULL, &method));
-        CHECK(object_get_vtable(&method->Object)->Type == tRuntimeConstructorInfo);
+        CHECK(method->Object.VTable->Type == tRuntimeConstructorInfo);
         RuntimeTypeInfo type = method->DeclaringType;
 
         if (type == tIsReadOnlyAttribute) {
@@ -2067,7 +2057,7 @@ static tdn_err_t assembly_connect_by_ref_like_attribute(RuntimeAssembly assembly
         metadata_custom_attribute_t* attr = &assembly->Metadata->custom_attributes[i];
         RuntimeMethodBase method;
         CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, attr->type.token, NULL, NULL, &method));
-        CHECK(object_get_vtable(&method->Object)->Type == tRuntimeConstructorInfo);
+        CHECK(method->Object.VTable->Type == tRuntimeConstructorInfo);
         RuntimeTypeInfo type = method->DeclaringType;
 
         if (type == tIsByRefLikeAttribute) {

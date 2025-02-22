@@ -40,13 +40,7 @@ RuntimeTypeInfo tParameterInfo = NULL;
 RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
 RuntimeTypeInfo tRuntimeTypeHandle = NULL;
 
-RuntimeTypeInfo tNullable = NULL;
-
 RuntimeTypeInfo tUnsafe = NULL;
-RuntimeTypeInfo tMemoryMarshal = NULL;
-RuntimeTypeInfo tBuffer = NULL;
-RuntimeTypeInfo tBitOperations = NULL;
-RuntimeTypeInfo tDebug = NULL;
 
 RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
@@ -297,7 +291,8 @@ tdn_err_t tdn_check_generic_argument_constraints(
     }
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
-        CHECK(arg_type->GenericTypeDefinition != tNullable);
+        // CHECK(arg_type->GenericTypeDefinition != tNullable);
+        CHECK(tdn_type_is_valuetype(arg_type));
     }
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_DEFAULT_CONSTRUCTOR) {

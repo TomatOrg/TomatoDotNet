@@ -1597,12 +1597,6 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                     // happen if we de-virtualized something in here
                     CHECK_AND_RETHROW(jit_verify_method(target));
 
-                    // get the function
-                    // TODO: replace with a version that doesn't create since we
-                    //       already should handle it in the verifier
-                    jit_method_t* target_method = NULL;
-                    CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
-
                     // perform the null check on this if required
                     if (need_explicit_null_check) {
                         // just perform a deref, this will fail if we have a null pointer in there,
@@ -1610,13 +1604,25 @@ static tdn_err_t jit_emit_basic_block(spidir_builder_handle_t builder, jit_metho
                         spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_1, SPIDIR_TYPE_I32, args[0]);
                     }
 
-                    // and now we can perform the direct call
-                    ret_value = spidir_builder_build_call(
-                        builder,
-                        target_method->function,
-                        arrlen(args),
-                        args
-                    );
+                    // check if this is a builtin, if so we will emit it inline
+                    // since those are never big enough to not inline
+                    jit_builtin_emitter_t builtin_emitter = jit_get_builtin_emitter(target);
+                    if (builtin_emitter != NULL) {
+                        // just emit it, without creating the method
+                        ret_value = builtin_emitter(builder, target, args);
+                    } else {
+                        // get the function
+                        jit_method_t* target_method = NULL;
+                        CHECK_AND_RETHROW(jit_get_or_create_method(target, &target_method));
+
+                        // and now we can perform the direct call
+                        ret_value = spidir_builder_build_call(
+                            builder,
+                            target_method->function,
+                            arrlen(args),
+                            args
+                        );
+                    }
                 }
 
                 // finally we need to handle the return value
