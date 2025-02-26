@@ -17,7 +17,7 @@ static struct {
     jit_method_t* value;
 }* m_jit_functions;
 
-tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** result) {
+tdn_err_t jit_get_method(RuntimeMethodBase method, jit_method_t** result) {
     tdn_err_t err = TDN_NO_ERROR;
 
     int idx = hmgeti(m_jit_methods, method);
@@ -34,31 +34,28 @@ tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** resu
 
     // TODO: maybe we should just have a way to save the optimized spidir
     //       instead of re-emitting every time...
-    if (method->MethodPtr != NULL && method->MethodBody == NULL) {
-        // the method is implemented by the runtime/host, so
-        // emit it as an extern
-        jit_queue_emit_extern(jmethod);
-
-        // extern doesn't need verification
-        jmethod->verifying = true;
-
-    } else if (method->MethodBody == NULL) {
+    if (method->MethodBody == NULL) {
         if (method->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_RUNTIME) {
             // the method is a runtime method, we will
             // need to emit it manually, this will be done
             // later on
-            jit_queue_emit(jmethod);
+            CHECK_FAIL();
+
         } else {
+            // idr when this path makes sense
             CHECK(method->MethodImplFlags.CodeType == TDN_METHOD_IMPL_CODE_TYPE_IL);
             CHECK(method->Attributes.Abstract);
+            CHECK_FAIL();
         }
 
         // runtime methods don't need verification
-        jmethod->verifying = true;
+        jmethod->verified = true;
 
-    } else {
-        // just a normal method
-        jit_queue_emit(jmethod);
+    } else if (method->MethodPtr != NULL) {
+        // we have a method pointer already, meaning this was jitted before
+        // we are going to mark it as verified, and the code in the emitter
+        // will know to create the extern for it
+        jmethod->verified = true;
     }
 
     // we can now put the function -> method lookup for later use
@@ -70,9 +67,9 @@ cleanup:
     return err;
 }
 
-void jit_method_register_thunk(jit_method_t* method) {
-    hmput(m_jit_functions, method->thunk, method);
-}
+// void jit_method_register_thunk(jit_method_t* method) {
+//     hmput(m_jit_functions, method->global_state.thunk, method);
+// }
 
 jit_method_t* jit_get_method_from_function(spidir_function_t function) {
     int idx = hmgeti(m_jit_functions, function);
@@ -120,33 +117,82 @@ static void free_basic_block(jit_basic_block_t* block) {
 }
 
 void jit_clean() {
-    for (int i = 0; i < hmlen(m_jit_methods); i++) {
-        jit_method_t* method = m_jit_methods[i].value;
-        if (method == NULL) {
-            continue;
-        }
-
-        // make sure all the things made while
-        arrfree(method->args);
-        arrfree(method->locals);
-        arrfree(method->block_queue);
-
-        // free the labels
-        hmfree(method->labels);
-
-        // free all the basic block structs
-        for (int j = 0; j < arrlen(method->basic_blocks); j++) {
-            free_basic_block(method->basic_blocks[j]);
-        }
-        arrfree(method->basic_blocks);
-
-        // free all the leave paths
-        for (int j = 0; j < hmlen(method->leave_blocks); j++) {
-            free_basic_block(method->leave_blocks[j].value);
-        }
-        hmfree(method->leave_blocks);
-    }
-
     hmfree(m_jit_methods);
 }
 
+RuntimeTypeInfo jit_get_reduced_type(RuntimeTypeInfo T) {
+    if (T == NULL) return NULL;
+
+    if (T->EnumUnderlyingType != NULL) {
+        if (T->EnumUnderlyingType == tByte) return tSByte;
+        if (T->EnumUnderlyingType == tUInt16) return tInt16;
+        if (T->EnumUnderlyingType == tUInt32) return tInt32;
+        if (T->EnumUnderlyingType == tUInt64) return tInt64;
+        if (T->EnumUnderlyingType == tUIntPtr) return tIntPtr;
+        return T->EnumUnderlyingType;
+    }
+
+    return T;
+}
+
+RuntimeTypeInfo jit_get_verification_type(RuntimeTypeInfo T) {
+    if (T == NULL) return NULL;
+    RuntimeTypeInfo T_reduced = jit_get_reduced_type(T);
+
+    if (T_reduced == tSByte || T_reduced == tBoolean) return tSByte;
+    if (T_reduced == tInt16 || T_reduced == tChar) return tInt16;
+    if (T_reduced == tInt32) return tInt32;
+    if (T_reduced == tInt64) return tInt64;
+
+    if (T->IsByRef) {
+        RuntimeTypeInfo S = T->ElementType;
+        RuntimeTypeInfo S_reduced = jit_get_reduced_type(S);
+
+        if (S_reduced == tSByte || S_reduced == tBoolean) {
+            RuntimeTypeInfo result = NULL;
+            ASSERT(!IS_ERROR(tdn_get_byref_type(tSByte, &result)));
+            return result;
+        }
+
+        if (S_reduced == tInt16 || S_reduced == tChar) {
+            RuntimeTypeInfo result = NULL;
+            ASSERT(!IS_ERROR(tdn_get_byref_type(tInt16, &result)));
+            return result;
+        }
+
+        if (S_reduced == tInt32) {
+            RuntimeTypeInfo result = NULL;
+            ASSERT(!IS_ERROR(tdn_get_byref_type(tInt32, &result)));
+            return result;
+        }
+
+        if (S_reduced == tInt64) {
+            RuntimeTypeInfo result = NULL;
+            ASSERT(!IS_ERROR(tdn_get_byref_type(tInt64, &result)));
+            return result;
+        }
+
+        if (S_reduced == tIntPtr) {
+            RuntimeTypeInfo result = NULL;
+            ASSERT(!IS_ERROR(tdn_get_byref_type(tIntPtr, &result)));
+            return result;
+        }
+    }
+
+    return T;
+}
+
+RuntimeTypeInfo jit_get_intermediate_type(RuntimeTypeInfo T) {
+    RuntimeTypeInfo T_verification = jit_get_verification_type(T);
+    if (
+        T_verification == tSByte ||
+        T_verification == tInt16 ||
+        T_verification == tInt32
+    ) {
+        return tInt32;
+    }
+
+    // TODO: floating point
+
+    return T_verification;
+}

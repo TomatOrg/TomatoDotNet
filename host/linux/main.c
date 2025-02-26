@@ -279,6 +279,7 @@ int main(int argc, char* argv[]) {
     double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
     TRACE("Jit took %f seconds", time_taken);
 
+    CHECK(run->EntryPoint->MethodPtr != NULL);
     int (*entry_point)() = run->EntryPoint->MethodPtr;
     int tests_output = entry_point();
     TRACE("RETURNED = %d", tests_output);

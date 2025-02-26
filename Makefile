@@ -44,15 +44,15 @@ BIN_DIR 		:= $(OUT_DIR)/bin
 BUILD_DIR		:= $(OUT_DIR)/build
 
 # Add some flags that we require to work
-TDN_CFLAGS		:= $(CFLAGS)
-TDN_CFLAGS		+= -Wall -Werror
+TDN_CFLAGS		:= -Wall -Werror
 TDN_CFLAGS		+= -std=gnu17
 TDN_CFLAGS		+= -g
 TDN_CFLAGS		+= -Wno-unused-label
 TDN_CFLAGS		+= -Wno-address-of-packed-member
-TDN_CFLAGS		+= -Wno-unused-function -Wno-format-invalid-specifier
+TDN_CFLAGS		+= -Wno-format-invalid-specifier
 TDN_CFLAGS		+= -fms-extensions -Wno-microsoft-anon-tag
 TDN_CFLAGS		+= -Iinclude -Isrc -Ilibs/spidir/c-api/include
+TDN_CFLAGS		+= $(CFLAGS)
 
 ifeq ($(DEBUG),1)
 TDN_CFLAGS		+= -D__TDN_DEBUG__
@@ -93,7 +93,7 @@ all: $(BIN_DIR)/libtdn.a $(DLLS)
 $(BUILD_DIR)/%.c.o: %.c
 	@echo CC $@
 	@mkdir -p $(@D)
-	@$(CC) $(TDN_CFLAGS) -MMD -c $< -o $@
+	@$(CC) $(TDN_CFLAGS) -MMD -c $(abspath $<) -o $@
 
 $(BIN_DIR)/libtdn.a: $(OBJS)
 	@echo AR $@

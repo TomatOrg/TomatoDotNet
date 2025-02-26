@@ -55,11 +55,10 @@ cleanup:
     return err;
 }
 
-static tdn_err_t jit_common(void) {
+static tdn_err_t jit_common(spidir_module_handle_t module) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // emit everything
-    CHECK_AND_RETHROW(jit_emit());
+    CHECK_AND_RETHROW(jit_emit(module));
 
     // call all the cctors
     jit_call_cctors();
@@ -76,12 +75,19 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
 
     // TODO: take mutex
 
-    CHECK_AND_RETHROW(jit_verify_method(methodInfo));
-    CHECK_AND_RETHROW(jit_common());
+    spidir_module_handle_t module = spidir_module_create();
+
+    // start from the caller
+    CHECK_AND_RETHROW(jit_queue_emit_method(module, methodInfo));
+
+    // and init everything
+    CHECK_AND_RETHROW(jit_common(module));
 
 cleanup:
     // we can now clean the session
     jit_clean();
+
+    spidir_module_destroy(module);
 
     // TODO: release mutex
 
@@ -93,12 +99,22 @@ tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
 
     // TODO: take mutex
 
-    CHECK_AND_RETHROW(jit_verify_type(type));
-    CHECK_AND_RETHROW(jit_common());
+    spidir_module_handle_t module = spidir_module_create();
+
+    // emit everything in the vtable
+    for (int i = 0; i < type->VTable->Length; i++) {
+        RuntimeMethodInfo info = type->VTable->Elements[i];
+        CHECK_AND_RETHROW(jit_queue_emit_method(module, (RuntimeMethodBase)info));
+    }
+
+    // and init everything
+    CHECK_AND_RETHROW(jit_common(module));
 
 cleanup:
     // we can now clean the session
     jit_clean();
+
+    spidir_module_destroy(module);
 
     // TODO: release mutex
 

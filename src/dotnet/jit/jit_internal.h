@@ -6,8 +6,8 @@
 #include <util/defs.h>
 
 // enable printing while verifying
-// #define JIT_VERBOSE_VERIFY
-// #define JIT_DEBUG_VERIFY
+#define JIT_VERBOSE_VERIFY
+#define JIT_DEBUG_VERIFY
 
 #ifdef JIT_VERBOSE_VERIFY
     #define JIT_DEBUG_VERIFY
@@ -23,13 +23,14 @@
     #define JIT_DEBUG_EMIT
 #endif
 
-typedef struct jit_item_attrs {
+typedef struct jit_value_attrs {
     // the known type, only set if we know this is the exact
     // type given, for de-virt
-    union {
-        RuntimeTypeInfo known_type;
-        RuntimeMethodBase method;
-    };
+    RuntimeTypeInfo known_type;
+
+    // the method that this delegate points to,
+    // used for de-virt
+    RuntimeMethodBase method;
 
     // is this a readonly reference
     size_t readonly : 1;
@@ -46,40 +47,34 @@ typedef struct jit_item_attrs {
     // the value holds the this ptr
     size_t this_ptr : 1;
 
-    // the method is valid
-    size_t is_method : 1;
-} jit_item_attrs_t;
+    // was the value assigned
+    // - used to verify out parameters
+    // - used to know when to zero initialize variables
+    size_t is_assigned : 1;
 
-typedef struct jit_stack_value {
+    // do we require the value to be initialized, will only
+    // happen on locals that have a path they are used before
+    // being initialized
+    size_t needs_init : 1;
+
+    // don't generate a phi for this entry, since it
+    // was taken by reference (because it was spilled)
+    size_t spilled : 1;
+} jit_value_attrs_t;
+
+typedef struct jit_value {
     // the type on the verification stack
     RuntimeTypeInfo type;
 
     // the attributes of this slot
-    jit_item_attrs_t attrs;
+    jit_value_attrs_t attrs;
 
     // the jit value of this
     spidir_value_t value;
 
     // the phi we created for this slot
     spidir_phi_t phi;
-} jit_stack_value_t;
-
-typedef enum jit_basic_block_state {
-    // not processed yet
-    JIT_BLOCK_NONE,
-
-    // pending for verification
-    JIT_BLOCK_PENDING_VERIFY,
-
-    // verified
-    JIT_BLOCK_VERIFIED,
-
-    // pending for emit
-    JIT_BLOCK_PENDING_EMIT,
-
-    // the block is emitted
-    JIT_BLOCK_FINISHED,
-} jit_basic_block_state_t;
+} jit_value_t;
 
 typedef struct jit_basic_block {
     // the start and end range of this basic block
@@ -89,14 +84,14 @@ typedef struct jit_basic_block {
     // leave target, larger than zero if any
     uint32_t* leave_target_stack;
 
-    // the stack at the entry point
-    jit_stack_value_t* stack;
+    // the stack at the start of the block
+    jit_value_t* stack;
 
-    // the attributes of all the locals at the entry point
-    jit_item_attrs_t* locals;
+    // the locals at the start of the block
+    jit_value_t* locals;
 
-    // is this block verified
-    jit_basic_block_state_t state;
+    // the locals at the start of the block
+    jit_value_t* args;
 
     // the jit block
     spidir_block_t block;
@@ -104,29 +99,17 @@ typedef struct jit_basic_block {
     // is this block initialized
     bool initialized;
 
-    // do we need a phi on the stack entries
-    bool needs_phi;
+    // the block state
+    bool in_queue;
+
+    // did we emit the block already
+    bool emitted;
+
+    // request to generate phis for the stack
+    // and for locals (only required if the block
+    // has multiple callers)
+    bool need_phis;
 } jit_basic_block_t;
-
-typedef struct jit_arg {
-    // the type of the argument
-    RuntimeTypeInfo type;
-
-    // the value, either the spill location if
-    // was spilled or the argument reference itself
-    spidir_value_t value;
-
-    // is this the this type
-    bool spill_required;
-} jit_arg_t;
-
-typedef struct jit_local {
-    // the type of the local
-    RuntimeTypeInfo type;
-
-    // The value of the local
-    spidir_value_t value;
-} jit_local_t;
 
 typedef struct jit_leave_block_key {
     jit_basic_block_t* block;
@@ -143,11 +126,11 @@ typedef struct jit_method {
     // the list of basic blocks in the method
     jit_basic_block_t** basic_blocks;
 
-    // the locals of the method
-    jit_local_t* locals;
+    // the initial locals state
+    jit_value_t* locals;
 
-    // the args of the method
-    jit_arg_t* args;
+    // the initial args state
+    jit_value_t* args;
 
     // list of labels, from pc -> basic block index
     // this is used to find jump targets
@@ -165,17 +148,21 @@ typedef struct jit_method {
         jit_basic_block_t* value;
     }* leave_blocks;
 
+    // return information for inline
+    spidir_phi_t inline_return_phi;
+    spidir_block_t inline_return_block;
+
+    // are we inlining right now
+    bool is_inline;
+
     // the spidir function for this method
     spidir_function_t function;
 
-    // the static stub of the method
-    spidir_function_t thunk;
+    // is the method verified yet
+    bool verified;
 
     // the method's state
-    bool verifying;
-
-    // do we have a static stub
-    bool has_thunk;
+    bool emitting;
 } jit_method_t;
 
 static inline bool jit_is_interface(RuntimeTypeInfo type) {
@@ -189,12 +176,13 @@ static inline bool jit_is_delegate(RuntimeTypeInfo type) {
 static inline bool jit_is_struct(RuntimeTypeInfo type) {
     // Anything which is not a value type but not a
     // native type is a struct
-    type = tdn_get_intermediate_type(type);
-    return tdn_type_is_valuetype(type) &&
-            type != tInt32 &&
-            type != tInt64 &&
-            type != tIntPtr &&
-            !type->IsByRef;
+    return tdn_type_is_valuetype(type) && !type->IsByRef &&
+            type != tByte && type != tSByte &&
+            type != tInt16 && type != tUInt16 &&
+            type != tInt32 && type != tUInt32 &&
+            type != tInt64 && type != tUInt64 &&
+            type != tIntPtr && type != tUIntPtr &&
+            type != tBoolean && type != tChar;
 }
 
 static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
@@ -211,7 +199,7 @@ static inline size_t jit_get_boxed_value_offset(RuntimeTypeInfo type) {
  * This will also make sure to queue the emitting of the method
  * after the verification stage
  */
-tdn_err_t jit_get_or_create_method(RuntimeMethodBase method, jit_method_t** jit_method);
+tdn_err_t jit_get_method(RuntimeMethodBase method, jit_method_t** jit_method);
 
 /**
  * Register the thunk of the given method
@@ -238,3 +226,8 @@ RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_method_t* method
  * clear the created jit methods, done as part of cleaning up the codegen
  */
 void jit_clean();
+
+RuntimeTypeInfo jit_get_reduced_type(RuntimeTypeInfo type);
+RuntimeTypeInfo jit_get_verification_type(RuntimeTypeInfo type);
+RuntimeTypeInfo jit_get_intermediate_type(RuntimeTypeInfo type);
+

@@ -53,12 +53,14 @@ COMMON_CFLAGS			+= -fsanitize=undefined
 COMMON_CFLAGS 			+= -fno-sanitize=alignment
 COMMON_CFLAGS			+= -fsanitize=address
 COMMON_CFLAGS 			+= -fstack-protector-all
+
+COMMON_CFLAGS			+= -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function
 else
 COMMON_CFLAGS 			+= -DNDEBUG
 endif
 
 # The flags we need
-CFLAGS					:=
+CFLAGS					:= $(COMMON_CFLAGS)
 CFLAGS					+= -Wall -Werror
 CFLAGS					+= -Wno-format-invalid-specifier -Wno-unused-label -Wno-unused-function
 CFLAGS					+= -fms-extensions -Wno-microsoft-anon-tag

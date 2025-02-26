@@ -7,9 +7,4 @@
 /**
  * Verify a specific method
  */
-tdn_err_t jit_verify_method(RuntimeMethodBase method);
-
-/**
- * Verify a type instance
- */
-tdn_err_t jit_verify_type(RuntimeTypeInfo type);
+tdn_err_t jit_verify_method(jit_method_t* method);
