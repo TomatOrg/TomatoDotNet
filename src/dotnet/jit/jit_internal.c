@@ -6,6 +6,7 @@
 
 #include "jit_basic_block.h"
 #include "jit_emit.h"
+#include "jit_helpers.h"
 
 static struct {
     RuntimeMethodBase key;
@@ -117,6 +118,12 @@ static void free_basic_block(jit_basic_block_t* block) {
 }
 
 void jit_clean() {
+    // clean the helpers
+    jit_helper_clean();
+
+    // TODO: clean all functions
+
+    // and finally clear the functions table
     hmfree(m_jit_methods);
 }
 

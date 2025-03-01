@@ -32,6 +32,24 @@ typedef struct jit_value_attrs {
     // used for de-virt
     RuntimeMethodBase method;
 
+    //
+    // Bits required for correct emitter and verifier operations
+    //
+
+    // the known type is exactly as said
+    // if false it is just in the chain
+    // and might be some other higher
+    // in the inheritance tree
+    size_t exact_known_type : 1;
+
+    // don't generate a phi for this entry, since it
+    // was taken by reference (because it was spilled)
+    size_t spilled : 1;
+
+    //
+    // Bits required for correct verifier operations
+    //
+
     // is this a readonly reference
     size_t readonly : 1;
 
@@ -56,10 +74,6 @@ typedef struct jit_value_attrs {
     // happen on locals that have a path they are used before
     // being initialized
     size_t needs_init : 1;
-
-    // don't generate a phi for this entry, since it
-    // was taken by reference (because it was spilled)
-    size_t spilled : 1;
 } jit_value_attrs_t;
 
 typedef struct jit_value {
@@ -166,11 +180,11 @@ typedef struct jit_method {
 } jit_method_t;
 
 static inline bool jit_is_interface(RuntimeTypeInfo type) {
-    return type->Attributes.Interface;
+    return type != NULL && type->Attributes.Interface;
 }
 
 static inline bool jit_is_delegate(RuntimeTypeInfo type) {
-    return type->BaseType == tMulticastDelegate || type == tMulticastDelegate || type == tDelegate;
+    return type != NULL && (type->BaseType == tMulticastDelegate || type == tMulticastDelegate || type == tDelegate);
 }
 
 static inline bool jit_is_struct(RuntimeTypeInfo type) {

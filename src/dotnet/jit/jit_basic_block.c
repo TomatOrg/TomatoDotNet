@@ -93,6 +93,13 @@ tdn_err_t jit_find_basic_blocks(jit_method_t* jmethod) {
         }
 
         // TODO: support for switch
+
+        // if we have something that takes by address we need to spill it
+        if (inst.opcode == CEE_LDARGA) {
+            jmethod->args[inst.operand.variable].attrs.spilled = true;
+        } else if (inst.opcode == CEE_LDLOCA) {
+            jmethod->locals[inst.operand.variable].attrs.spilled = true;
+        }
     }
 
     // sort the basic blocks

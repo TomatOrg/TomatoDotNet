@@ -693,9 +693,6 @@ static tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
     RuntimeMethodBase method = jmethod->method;
     RuntimeMethodBody body = method->MethodBody;
 
-    // start by finding all the basic blocks so we can verify the method
-    CHECK_AND_RETHROW(jit_find_basic_blocks(jmethod));
-
     // if we have a this add it to the local
     if (!method->Attributes.Static) {
         // mark it as a this_ptr
@@ -738,6 +735,7 @@ static tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
         // if its a sealed type, push it correctly
         jit_value_attrs_t attrs = {
             .is_assigned = true,
+            .spilled = jit_is_struct_like(info->ParameterType)
         };
 
         // mark as readonly if need be
@@ -767,9 +765,15 @@ static tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
     if (body->LocalVariables != NULL) {
         for (int i = 0; i < body->LocalVariables->Length; i++) {
             RuntimeLocalVariableInfo info = body->LocalVariables->Elements[i];
-            arrpush(jmethod->locals, ((jit_value_t){ .type = info->LocalType }));
+            jit_value_attrs_t attrs = {
+                .spilled = jit_is_struct_like(info->LocalType)
+            };
+            arrpush(jmethod->locals, ((jit_value_t){ .type = info->LocalType, .attrs = attrs }));
         }
     }
+
+    // and now find all basic blocks
+    CHECK_AND_RETHROW(jit_find_basic_blocks(jmethod));
 
 cleanup:
     return err;
