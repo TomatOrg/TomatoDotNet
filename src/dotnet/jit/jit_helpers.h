@@ -9,7 +9,7 @@ typedef enum jit_helper_type {
     JIT_HELPER_GC_BZERO,
     JIT_HELPER_GC_MEMCPY,
 
-    JIT_HELPER_MAX,
+    JIT_HELPER_THROW,
 } jit_helper_type_t;
 
 /**

@@ -197,13 +197,14 @@ static jit_basic_block_t* jit_emit_get_basic_block(jit_method_t* method, long ta
     return block;
 }
 
-static tdn_err_t jit_verify_merge(jit_value_t* incoming, jit_value_t* target) {
+static tdn_err_t jit_pass_value(jit_value_t* incoming, jit_value_t* target) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK(arrlen(incoming) == arrlen(target));
     for (int i = 0; i < arrlen(incoming); i++) {
         // sanity that everything ended up as we expected
         CHECK(incoming[i].type == target[i].type);
+        target[i].value = incoming[i].value;
     }
 
 cleanup:
@@ -302,9 +303,9 @@ static tdn_err_t jit_emit_merge_basic_block(
         CHECK(!target->emitted);
 
         // for sanity perform merging, this is not required
-        CHECK_AND_RETHROW(jit_verify_merge(stack, target->stack));
-        CHECK_AND_RETHROW(jit_verify_merge(locals, target->locals));
-        CHECK_AND_RETHROW(jit_verify_merge(args, target->args));
+        CHECK_AND_RETHROW(jit_pass_value(stack, target->stack));
+        CHECK_AND_RETHROW(jit_pass_value(locals, target->locals));
+        CHECK_AND_RETHROW(jit_pass_value(args, target->args));
     }
 
     // mark as initialized
@@ -515,6 +516,13 @@ static spidir_value_t jit_convert_pointer(
 // Actual emitting
 //----------------------------------------------------------------------------------------------------------------------
 
+#define SWAP(a, b) \
+    ({ \
+        typeof(a) __tmp = a; \
+        a = b; \
+        b = __tmp; \
+    })
+
 #define EVAL_STACK_PUSH(_type, _value, ...) \
     do { \
         CHECK(arrlen(stack) < body->MaxStackSize); \
@@ -533,6 +541,17 @@ static long get_leave_target(uint32_t* leave_target_stack) {
         return -1;
     }
     return arrlast(leave_target_stack);
+}
+
+static spidir_value_t jit_sign_extend_i32(spidir_builder_handle_t builder, spidir_value_t value, bool signext) {
+    value = spidir_builder_build_iext(builder, value);
+    if (signext) {
+        value = spidir_builder_build_and(builder, value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFF));
+    } else {
+        value = spidir_builder_build_sfill(builder, 32, value);
+    }
+    return value;
 }
 
 static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_handle_t builder, jit_basic_block_t* block) {
@@ -587,6 +606,49 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
         pc += inst.length;
 
         switch (inst.opcode) {
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Arithmetic
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_CEQ:
+            case CEE_CGT:
+            case CEE_CGT_UN:
+            case CEE_CLT:
+            case CEE_CLT_UN: {
+                jit_value_t value2 = EVAL_STACK_POP();
+                jit_value_t value1 = EVAL_STACK_POP();
+
+                spidir_value_t val1 = value1.value, val2 = value2.value;
+                spidir_icmp_kind_t kind;
+                switch (inst.opcode) {
+                    case CEE_CEQ: kind = SPIDIR_ICMP_EQ; break;
+                    case CEE_CGT: SWAP(val1, val2); kind = SPIDIR_ICMP_SLT; break;
+                    case CEE_CGT_UN: SWAP(val1, val2); kind = SPIDIR_ICMP_ULT; break;
+                    case CEE_CLT: kind = SPIDIR_ICMP_SLT; break;
+                    case CEE_CLT_UN: kind = SPIDIR_ICMP_ULT; break;
+                    default: CHECK_FAIL();
+                }
+
+                spidir_value_t result = spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, val1, val2);
+                EVAL_STACK_PUSH(tInt32, result);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Stack manipulation
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDNULL: {
+                EVAL_STACK_PUSH(NULL, spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0));
+            } break;
+
+            case CEE_LDC_I4: {
+                EVAL_STACK_PUSH(tInt32, spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst.operand.uint32));
+            } break;
+
+            case CEE_LDC_I8: {
+                EVAL_STACK_PUSH(tInt64, spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst.operand.uint64));
+            } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Arguments
@@ -648,6 +710,30 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     local->value = value.value;
                     local->attrs = value.attrs;
                 }
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Field access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFLD: {
+                jit_value_t value = EVAL_STACK_POP();
+                RuntimeFieldInfo field = inst.operand.field;
+
+                // get the pointe rto the field
+                spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
+                if (field->Attributes.Static) {
+                    // TODO: use a global
+                    CHECK_FAIL();
+                } else {
+                    field_ptr = spidir_builder_build_ptroff(builder, value.value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, field->FieldOffset));
+                }
+
+                // and load it
+                spidir_value_t field_value = jit_emit_load(builder, field->FieldType, field_ptr);
+                RuntimeTypeInfo stack_type = jit_get_intermediate_type(field->FieldType);
+                EVAL_STACK_PUSH(stack_type, field_value);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -740,7 +826,8 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 
                             // and now load the function pointer
                             func_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-                                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, base_offset));
+                                spidir_builder_build_ptroff(builder, vtable_base,
+                                    spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, base_offset)));
                         }
                     }
                 }
@@ -839,6 +926,28 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     stack, locals, args,
                     get_leave_target(block->leave_target_stack)));
                 spidir_builder_build_branch(builder, new_block);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Exceptions
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_THROW: {
+                jit_value_t obj = EVAL_STACK_POP();
+
+                // call the helper to throw
+                // TODO: turn to control flow whenever possible?
+                spidir_builder_build_call(builder,
+                    jit_helper_get(spidir_builder_get_module(builder), JIT_HELPER_THROW),
+                    1,
+                    (spidir_value_t[]){ obj.value }
+                );
+
+                // can't be reached
+                spidir_builder_build_unreachable(builder);
+
+                // stack should be empty now
+                arrsetlen(stack, 0);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////

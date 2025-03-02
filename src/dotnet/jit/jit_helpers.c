@@ -1,6 +1,7 @@
 #include "jit_helpers.h"
 
 #include <stdbool.h>
+#include <tomatodotnet/types/basic.h>
 #include <util/defs.h>
 #include <util/except.h>
 
@@ -11,7 +12,7 @@ static void* bzero(void* s, size_t n) {
 }
 
 
-void* gc_bzero(void* dest, int c, size_t n) {
+static void* gc_bzero(void* dest, int c, size_t n) {
     void** d = dest;
     n /= sizeof(void*);
     while (n--) {
@@ -20,7 +21,7 @@ void* gc_bzero(void* dest, int c, size_t n) {
     return dest;
 }
 
-void* gc_memcpy(void* dest, const void* src, size_t n) {
+static void* gc_memcpy(void* dest, const void* src, size_t n) {
     void** d = dest;
     void* const* s = src;
     n /= sizeof(void*);
@@ -28,6 +29,14 @@ void* gc_memcpy(void* dest, const void* src, size_t n) {
         *d++ = *s++;
     }
     return dest;
+}
+
+static void jit_throw(Object exception) {
+    if (exception == NULL) {
+        TRACE("jit_throw: <null exception>");
+    } else {
+        TRACE("jit_throw: %T", exception->VTable->Type);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -40,11 +49,12 @@ typedef struct jit_helper {
     bool created;
 } jit_helper_t;
 
-static jit_helper_t m_jit_helpers[JIT_HELPER_MAX] = {
+static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_BZERO] = { .func = bzero },
     [JIT_HELPER_MEMCPY] = { .func = memcpy },
     [JIT_HELPER_GC_BZERO] = { .func = gc_bzero },
     [JIT_HELPER_GC_MEMCPY] = { .func = gc_memcpy },
+    [JIT_HELPER_THROW] = { .func = jit_throw },
 };
 
 spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_t helper) {
@@ -72,6 +82,11 @@ spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_
             m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
                 "jit_gc_memcpy", SPIDIR_TYPE_PTR, 3,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
+
+        case JIT_HELPER_THROW:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_throw", SPIDIR_TYPE_NONE, 1,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
 
         default:
             ASSERT(!"Invalid jit helper");

@@ -10,12 +10,11 @@
 #include <stdatomic.h>
 
 bool tdn_type_is_valuetype(RuntimeTypeInfo type) {
-    return type->BaseType == tValueType ||
-            type->BaseType == tEnum;
+    return type->BaseType == tValueType || type->BaseType == tEnum;
 }
 
 bool tdn_type_is_referencetype(RuntimeTypeInfo type) {
-    return type == NULL || !tdn_type_is_valuetype(type);
+    return type == NULL || (!tdn_type_is_valuetype(type) && !type->IsPointer && !type->IsByRef);
 }
 
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {

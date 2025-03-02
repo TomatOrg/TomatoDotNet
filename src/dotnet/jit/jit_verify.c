@@ -122,12 +122,6 @@ static bool jit_merge_attrs(jit_value_attrs_t* current, jit_value_attrs_t* incom
         modified = true;
     }
 
-    // and same for assigned
-    if (current->is_assigned && !incoming->is_assigned) {
-        current->is_assigned = false;
-        modified = true;
-    }
-
     // and same for this ptr
     if (current->this_ptr && !incoming->this_ptr) {
         current->this_ptr = false;
@@ -351,6 +345,32 @@ typedef enum il_prefix {
         arrpop(stack); \
     })
 
+static tdn_err_t jit_verify_binary_comparison_or_branch(RuntimeTypeInfo value1, RuntimeTypeInfo value2, uint32_t opcode) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (value1 == tInt32) {
+        CHECK(value2 == tInt32);
+        // TODO: allow IntPtr
+
+    } else if (value1 == tInt64) {
+        CHECK(value2 == tInt64);
+
+    } else if (value1 == tIntPtr) {
+        CHECK(value2 == tIntPtr);
+        // TODO: allow Int32
+
+    } else if (tdn_type_is_referencetype(value1)) {
+        CHECK(opcode == CEE_CEQ || opcode == CEE_CGT_UN || opcode == CEE_BEQ || opcode == CEE_BNE_UN);
+        CHECK(tdn_type_is_referencetype(value2));
+
+    } else if (value1->IsByRef) {
+        CHECK(value2->IsByRef);
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t* block) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = jmethod->method;
@@ -425,6 +445,42 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
         switch (inst.opcode) {
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Arithmetic
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_CEQ:
+            case CEE_CGT:
+            case CEE_CGT_UN:
+            case CEE_CLT:
+            case CEE_CLT_UN: {
+                jit_value_t value2 = EVAL_STACK_POP();
+                jit_value_t value1 = EVAL_STACK_POP();
+
+                // check for compatibility
+                CHECK_AND_RETHROW(jit_verify_binary_comparison_or_branch(
+                    value1.type, value2.type, inst.opcode
+                ));
+
+                EVAL_STACK_PUSH(tInt32);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Stack manipulation
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDNULL: {
+                EVAL_STACK_PUSH(NULL);
+            } break;
+
+            case CEE_LDC_I4: {
+                EVAL_STACK_PUSH(tInt32);
+            } break;
+
+            case CEE_LDC_I8: {
+                EVAL_STACK_PUSH(tInt64);
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
             // Arguments
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -451,8 +507,17 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
             case CEE_LDLOC: {
                 CHECK(inst.operand.variable < arrlen(locals));
-                RuntimeTypeInfo type = jit_get_intermediate_type(locals[inst.operand.variable].type);
-                EVAL_STACK_PUSH(type, locals[inst.operand.variable].attrs);
+                jit_value_t* local = &locals[inst.operand.variable];
+                RuntimeTypeInfo type = jit_get_intermediate_type(local->type);
+
+                // if not assigned yet, mark to zero init the variable
+                // at the start of the function
+                if (!local->attrs.is_assigned) {
+                    local->attrs.is_assigned = true;
+                    jmethod->locals[inst.operand.variable].attrs.needs_init = true;
+                }
+
+                EVAL_STACK_PUSH(type, local->attrs);
             } break;
 
             case CEE_STLOC: {
@@ -464,6 +529,54 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
                 // just remember the attributes
                 locals[inst.operand.variable].attrs = value.attrs;
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Field access
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_LDFLD: {
+                jit_value_t value = EVAL_STACK_POP();
+                CHECK(
+                    tdn_type_is_referencetype(value.type) ||
+                    tdn_type_is_valuetype(value.type) ||
+                    value.type->IsByRef ||
+                    (method->Module->Assembly->AllowUnsafe && value.type->IsPointer)
+                );
+
+                RuntimeFieldInfo field = inst.operand.field;
+
+                // ensure the type has the field inside of it
+                bool found = false;
+                RuntimeTypeInfo owner = value.type;
+                if (owner->IsByRef || owner->IsPointer) {
+                    owner = owner->ElementType;
+                }
+                for (; owner != NULL; owner = owner->BaseType) {
+                    if (owner == field->DeclaringType) {
+                        found = true;
+                        break;
+                    }
+                }
+                CHECK(found);
+
+                RuntimeTypeInfo stack_type = jit_get_intermediate_type(field->FieldType);
+                jit_value_attrs_t attrs = {};
+
+                // check if this is a non-local reference
+                if ((value.type->IsByRef && value.type->ElementType->IsByRefStruct) || value.type->IsByRefStruct) {
+                    if (value.attrs.nonlocal_ref_struct) {
+                        // the ref-struct is non-local, meaning that the refs inside of it are not local as well
+                        attrs.nonlocal_ref = true;
+
+                        // loading a by-ref struct from a by-ref struct, so it must be non-local as well
+                        if (value.type->IsByRefStruct) {
+                            attrs.nonlocal_ref_struct = true;
+                        }
+                    }
+                }
+
+                EVAL_STACK_PUSH(stack_type, attrs);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -497,9 +610,6 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                     ParameterInfo parameter = callee->Parameters->Elements[i];
                     jit_value_t value = EVAL_STACK_POP();
                     RuntimeTypeInfo param_type = parameter->ParameterType;
-
-                    // ensures we got an assigned value
-                    CHECK(value.attrs.is_assigned);
 
                     // if this is a by-ref check for byref requirements
                     if (param_type->IsByRef) {
@@ -541,9 +651,6 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                     CHECK(verifier_assignable_to(value.type, callee_this),
                         "%T verifier-assignable-to %T",value.type, callee_this);
 
-                    // ensure the value is assigned
-                    CHECK(value.attrs.is_assigned);
-
                     // if this is a by-ref check for byref requirements
                     if (callee_this->IsByRef) {
                         // does not want a readonly, ensure we don't give it a readonly
@@ -565,9 +672,7 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                 // push the return value
                 RuntimeTypeInfo ret_type = callee->ReturnParameter->ParameterType;
                 if (ret_type != tVoid) {
-                    jit_value_attrs_t attrs = {
-                        .is_assigned = true
-                    };
+                    jit_value_attrs_t attrs = {};
 
                     // if the return is a readonly, mark it as such
                     if (callee->ReturnParameter->IsReadOnly) {
@@ -600,9 +705,6 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
                 if (type != tVoid) {
                     jit_value_t value = EVAL_STACK_POP();
-
-                    // ensure this is an assigned value
-                    CHECK(value.attrs.is_assigned);
 
                     // ensure we don't return a readonly from a non-readonly
                     if (!method->ReturnParameter->IsReadOnly) {
@@ -639,6 +741,17 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                     inst.operand.branch_target,
                     stack, locals, args,
                     copy_leave_targets(block->leave_target_stack)));
+            } break;
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Exceptions
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+            case CEE_THROW: {
+                jit_value_t value = EVAL_STACK_POP();
+                // TODO: must be an exception class, not just a reference
+                CHECK(tdn_type_is_referencetype(value.type));
+                arrsetlen(stack, 0);
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -697,8 +810,7 @@ static tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
     if (!method->Attributes.Static) {
         // mark it as a this_ptr
         jit_value_attrs_t attrs = {
-            .this_ptr = true,
-            .is_assigned = true,
+            .this_ptr = true
         };
 
         RuntimeTypeInfo this_type = method->DeclaringType;
@@ -734,7 +846,6 @@ static tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
 
         // if its a sealed type, push it correctly
         jit_value_attrs_t attrs = {
-            .is_assigned = true,
             .spilled = jit_is_struct_like(info->ParameterType)
         };
 
