@@ -118,5 +118,7 @@ tdn_err_t jit_find_basic_blocks(jit_method_t* jmethod) {
     }
 
 cleanup:
+    arrfree(jmethod->basic_blocks);
+
     return err;
 }

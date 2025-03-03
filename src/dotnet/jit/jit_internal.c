@@ -111,20 +111,44 @@ RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_method_t* method
 }
 
 static void free_basic_block(jit_basic_block_t* block) {
-    arrfree(block->locals);
-    arrfree(block->stack);
-    arrfree(block->leave_target_stack);
-    tdn_host_free(block);
+    if (block != NULL) {
+        TRACE("%p", block);
+        arrfree(block->stack);
+        arrfree(block->locals);
+        arrfree(block->args);
+        arrfree(block->leave_target_stack);
+        tdn_host_free(block);
+    }
+}
+
+void jit_destroy_method(jit_method_t* method) {
+    arrfree(method->block_queue);
+    arrfree(method->locals);
+    arrfree(method->args);
+
+    arrfree(method->basic_blocks);
+    for (int i = 0; i < hmlen(method->labels); i++) {
+        free_basic_block(method->labels[i].value);
+    }
+    hmfree(method->labels);
+
+    for (int i = 0; i < hmlen(method->leave_blocks); i++) {
+        free_basic_block(method->leave_blocks[i].value);
+    }
+    hmfree(method->leave_blocks);
 }
 
 void jit_clean() {
     // clean the helpers
     jit_helper_clean();
 
-    // TODO: clean all functions
+    for (int i = 0; i < hmlen(m_jit_methods); i++) {
+        jit_destroy_method(m_jit_methods[i].value);
+    }
 
     // and finally clear the functions table
     hmfree(m_jit_methods);
+    hmfree(m_jit_functions);
 }
 
 RuntimeTypeInfo jit_get_reduced_type(RuntimeTypeInfo T) {

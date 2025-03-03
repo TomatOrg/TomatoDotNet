@@ -5,6 +5,9 @@
 #include <tomatodotnet/types/reflection.h>
 #include <util/defs.h>
 
+// #define JIT_DISABLE_INLINE
+// #define JIT_DISABLE_OPTIMIZATIONS
+
 // enable printing while verifying
 #define JIT_VERBOSE_VERIFY
 #define JIT_DEBUG_VERIFY
@@ -146,6 +149,9 @@ typedef struct jit_method {
     // the initial args state
     jit_value_t* args;
 
+    // the value used when returning a struct
+    spidir_value_t return_ref;
+
     // list of labels, from pc -> basic block index
     // this is used to find jump targets
     struct {
@@ -167,7 +173,7 @@ typedef struct jit_method {
     spidir_block_t inline_return_block;
 
     // are we inlining right now
-    bool is_inline;
+    int inline_level;
 
     // the spidir function for this method
     spidir_function_t function;
@@ -214,6 +220,11 @@ static inline size_t jit_get_boxed_value_offset(RuntimeTypeInfo type) {
  * after the verification stage
  */
 tdn_err_t jit_get_method(RuntimeMethodBase method, jit_method_t** jit_method);
+
+/**
+ * Destroy a jit method instance
+ */
+void jit_destroy_method(jit_method_t* method);
 
 /**
  * Register the thunk of the given method

@@ -7,6 +7,8 @@
 #include <util/string.h>
 #include <util/string_builder.h>
 
+#include <spidir/opt.h>
+
 #include "jit_builtin.h"
 #include "jit_helpers.h"
 #include "jit_verify.h"
@@ -165,8 +167,143 @@ static RuntimeMethodBase jit_devirt_method(jit_value_t instance, RuntimeMethodBa
 // Inlining
 //----------------------------------------------------------------------------------------------------------------------
 
-static bool jit_emit_should_inline(RuntimeMethodBase method) {
+// these constants are inspired by openjdk
+#define INLINE_SMALL_CODE       1000    /* native function size */
+#define MAX_INLINE_SIZE         35      /* il bytecode size */
+#define MAX_TRIVIAL_SIZE        6       /* il bytecode size */
+#define MAX_INLINE_LEVEL        15      /* the max nesting of inline we allow */
+
+static bool jit_check_should_inline(jit_method_t* from, RuntimeMethodBase method) {
+    if (method->MethodBody == NULL) {
+        return false;
+    }
+
+    // inline is requested
+    if (method->MethodImplFlags.AggressiveInlining) {
+        return true;
+    }
+
+    // TODO: for now assume a method is cold, we might want some logic
+    //       to check for hot methods
+
+    // check if already compiled into a medium method
+    if (method->MethodPtr != NULL && method->MethodSize > (INLINE_SMALL_CODE / 4)) {
+        return false;
+    }
+
+    // method too big for inline
+    if (method->MethodBody->ILSize > MAX_INLINE_SIZE) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool jit_check_should_not_inline(jit_method_t* from, RuntimeMethodBase method) {
+    if (method->MethodBody == NULL) {
+        return true;
+    }
+
+    // make sure we don't recursive too much
+    if (from->inline_level + 1 >= MAX_INLINE_LEVEL) {
+        return true;
+    }
+
+    // don't allow recursive inline
+    if (from->method == method) {
+        return true;
+    }
+
+    // request no inline by attribute
+    if (method->MethodImplFlags.NoInlining) {
+        return true;
+    }
+
+    // requested inline by attribute
+    if (method->MethodImplFlags.AggressiveInlining) {
+        return false;
+    }
+
+    // don't inline if already compiled into a big method
+    if (method->MethodPtr != NULL && method->MethodSize > INLINE_SMALL_CODE) {
+        return true;
+    }
+
+    // small methods should always get inlined
+    if (method->MethodBody->ILSize <= MAX_TRIVIAL_SIZE) {
+        return false;
+    }
+
+    // TODO: based on some heuristics or something?
+
     return false;
+}
+
+static bool jit_emit_should_inline(jit_method_t* from, RuntimeMethodBase method) {
+#ifdef JIT_DISABLE_INLINE
+    return false;
+#else
+    return !jit_check_should_not_inline(from, method) && jit_check_should_inline(from, method);
+#endif
+}
+
+// forward decl
+static tdn_err_t jit_emit_method(jit_method_t* method, spidir_value_t* args, spidir_builder_handle_t builder);
+
+static tdn_err_t jit_perform_inline(
+    spidir_builder_handle_t builder,
+    jit_method_t* from, spidir_value_t* args,
+    RuntimeMethodBase to_inline,
+    spidir_value_t* retval
+) {
+    tdn_err_t err = TDN_NO_ERROR;
+    jit_method_t inlined_method = {
+        .method = to_inline,
+        .inline_level = from->inline_level + 1
+    };
+
+    TRACE("ATTEMPT ONE:");
+    for (int i = 0; hmlen(inlined_method.labels); i++) {
+        TRACE("%p", inlined_method.labels[i].value);
+    }
+
+    // prepare the method
+    CHECK_AND_RETHROW(jit_verify_prepare_method(&inlined_method));
+
+    // TODO: modify the method with the attributes that we have for it
+    //       this should help with de-virt
+
+    // finalize the verification with the new de-virt info
+    CHECK_AND_RETHROW(jit_verify_method(&inlined_method));
+
+    // prepare the return pad
+    spidir_block_t current;
+    CHECK(spidir_builder_cur_block(builder, &current));
+
+    // create the return pad with a phi for setting the return value, we are going to
+    // return the stackslot directly even when its a normal struct
+    inlined_method.inline_return_block = spidir_builder_create_block(builder);
+    spidir_builder_set_block(builder, inlined_method.inline_return_block);
+    spidir_value_t return_value = spidir_builder_build_phi(
+        builder,
+        jit_get_spidir_type(to_inline->ReturnParameter->ParameterType),
+        0, NULL, &inlined_method.inline_return_phi
+    );
+    spidir_builder_set_block(builder, current);
+
+    // and now emit the inlined method
+    CHECK_AND_RETHROW(jit_emit_method(&inlined_method, args, builder));
+
+    // and now that we are done continue from the return pad
+    spidir_builder_set_block(builder, inlined_method.inline_return_block);
+
+    // we are done
+    *retval = return_value;
+
+cleanup:
+    jit_destroy_method(&inlined_method);
+
+    return err;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -744,11 +881,9 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
             case CEE_CALLVIRT: {
                 RuntimeMethodBase callee = inst.operand.method;
                 RuntimeTypeInfo callee_this = NULL;
-                RuntimeTypeInfo callee_this_type = NULL;
 
                 if (!callee->Attributes.Static) {
                     callee_this = method->DeclaringType;
-                    callee_this_type = callee_this;
                     if (tdn_type_is_valuetype(callee_this)) {
                         CHECK_AND_RETHROW(tdn_get_byref_type(callee_this, &callee_this));
                     }
@@ -863,10 +998,20 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     if (emitter != NULL) {
                         return_value = emitter(builder, callee, spidir_args);
 
-                    } else if (jit_emit_should_inline(callee)) {
+                    } else if (jit_emit_should_inline(jmethod, callee)) {
                         // we should perform an inline of the new function
-                        // TODO: this
-                        CHECK_FAIL();
+                        CHECK_AND_RETHROW(jit_perform_inline(
+                            builder, jmethod,
+                            spidir_args,
+                            callee,
+                            &return_value
+                        ));
+
+                        // this is kinda ugly but we need to actually replace the
+                        // result on the top of the stack
+                        if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
+                            arrlast(stack).value = return_value;
+                        }
 
                     } else {
                         // nothing special to be done, just queue to emit it
@@ -895,20 +1040,30 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
             case CEE_RET: {
                 RuntimeTypeInfo type = method->ReturnParameter->ParameterType;
 
-                spidir_value_t ret_value = SPIDIR_VALUE_INVALID;
+                jit_value_t ret_value = { .value = SPIDIR_VALUE_INVALID };
                 if (type != tVoid) {
-                    ret_value = EVAL_STACK_POP().value;
+                    ret_value = EVAL_STACK_POP();
                 }
 
-                if (jmethod->is_inline) {
+                if (jmethod->inline_level) {
                     // we are inside an inline, add output to the phi
-                    // and branch to the continuation
+                    // and branch to the continuation, this also works
+                    // for when we return a struct-like, the stack local
+                    // is just used
                     if (type != tVoid) {
-                        spidir_builder_add_phi_input(builder, jmethod->inline_return_phi, ret_value);
+                        spidir_builder_add_phi_input(builder, jmethod->inline_return_phi, ret_value.value);
                     }
                     spidir_builder_build_branch(builder, jmethod->inline_return_block);
-                } else {
-                    spidir_builder_build_return(builder, ret_value);
+
+                } else if (type != tVoid) {
+                    if (jit_is_struct_like(type)) {
+                        // this is a struct like, copy into the return reference
+                        jit_emit_store(builder, ret_value.type, ret_value.value, type, jmethod->return_ref);
+                        spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
+                    } else {
+                        // just a scalar, return it
+                        spidir_builder_build_return(builder, ret_value.value);
+                    }
                 }
 
                 CHECK(arrlen(stack) == 0);
@@ -996,19 +1151,17 @@ cleanup:
     return err;
 }
 
-static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_builder_handle_t builder) {
+static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_value_t* args, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = jmethod->method;
     RuntimeMethodBody body = method->MethodBody;
 
     // setup the main entry block
-    spidir_block_t entry_block = spidir_builder_create_block(builder);
-    spidir_builder_set_block(builder, entry_block);
-    spidir_builder_set_entry_block(builder, entry_block);
-
-    CHECK(jmethod->basic_blocks != NULL);
-
-    // TODO: check for spilled arguments/locals (taken by reference)
+    if (!jmethod->inline_level) {
+        spidir_block_t entry_block = spidir_builder_create_block(builder);
+        spidir_builder_set_block(builder, entry_block);
+        spidir_builder_set_entry_block(builder, entry_block);
+    }
 
     // if we have a this add it to the local
     int param_i = 0;
@@ -1018,21 +1171,43 @@ static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_builder_h
             // and store it in there
             CHECK_FAIL();
         } else {
-            jmethod->args[param_i].value = spidir_builder_build_param_ref(builder, param_i);
+            if (args != NULL) {
+                jmethod->args[param_i].value = args[param_i];
+            } else {
+                jmethod->args[param_i].value = spidir_builder_build_param_ref(builder, param_i);
+            }
         }
         param_i++;
     }
 
     // now prepare the rest of the arguments
     for (int i = 0; i < method->Parameters->Length; i++) {
-        if (jmethod->args[param_i].attrs.spilled) {
-            // spilled, means we need to copy it to a local
-            // and store it in there
-            CHECK_FAIL();
+        jit_value_t* arg = &jmethod->args[i];
+
+        spidir_value_t arg_value;
+        if (args != NULL) {
+            arg_value = args[param_i];
         } else {
-            jmethod->args[param_i].value = spidir_builder_build_param_ref(builder, param_i);
+            arg_value = spidir_builder_build_param_ref(builder, param_i);
         }
+
+        if (arg->attrs.spilled) {
+            // spilled, means we need to copy it to a stackslot and store it in there
+            arg->value = spidir_builder_build_stackslot(builder, arg->type->StackSize, arg->type->StackAlignment);
+            jit_emit_store(builder, arg->type, arg_value, arg->type, arg->value);
+        } else {
+            arg->value = arg_value;
+        }
+
         param_i++;
+    }
+
+    if (args == NULL) {
+        RuntimeTypeInfo ret_type = method->ReturnParameter->ParameterType;
+        if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
+            jmethod->return_ref = spidir_builder_build_param_ref(builder, param_i);
+            param_i++;
+        }
     }
 
     // and now prepare the locals
@@ -1046,7 +1221,7 @@ static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_builder_h
 
                 // if we need to initialize it emit a bzero
                 if (local->attrs.needs_init) {
-                    CHECK_FAIL();
+                    jit_emit_bzero(builder, local->value, local->type);
                 }
 
             } else {
@@ -1065,15 +1240,16 @@ cleanup:
     return err;
 }
 
-static tdn_err_t jit_emit_method(jit_method_t* method, spidir_builder_handle_t builder) {
+static tdn_err_t jit_emit_method(jit_method_t* method, spidir_value_t* args, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
 
 #ifdef JIT_DEBUG_EMIT
     TRACE("EMIT: %T::%U", method->method->DeclaringType, method->method->Name);
 #endif
 
-    // prepare the method, setting up the initial locals, arguments and so on
-    CHECK_AND_RETHROW(jit_emit_prepare_method(method, builder));
+    // prepare the method, setting up the initial locals, arguments and so on, the
+    // args come from the spidir function itself
+    CHECK_AND_RETHROW(jit_emit_prepare_method(method, args, builder));
 
     // "merge" with the first block, giving it the initial pc for everything
     spidir_block_t il_entry_block;
@@ -1112,7 +1288,7 @@ static void jit_emit_il(spidir_builder_handle_t builder, void* _ctx) {
     tdn_err_t err = TDN_NO_ERROR;
     jit_emit_context_t* ctx = _ctx;
 
-    CHECK_AND_RETHROW(jit_emit_method(ctx->method, builder));
+    CHECK_AND_RETHROW(jit_emit_method(ctx->method, NULL, builder));
 
 cleanup:
     ctx->err = err;
@@ -1190,6 +1366,7 @@ static tdn_err_t jit_emit_all(spidir_module_handle_t module) {
 
         // check if we need to verify it
         if (!method->verified && method->method->MethodBody != NULL) {
+            CHECK_AND_RETHROW(jit_verify_prepare_method(method));
             CHECK_AND_RETHROW(jit_verify_method(method));
             method->verified = true;
         }
@@ -1226,6 +1403,11 @@ tdn_err_t jit_emit(spidir_module_handle_t module) {
 
     // emit everything
     CHECK_AND_RETHROW(jit_emit_all(module));
+
+    // perform optimizations
+#ifndef JIT_DISABLE_OPTIMIZATIONS
+    spidir_opt_run(module);
+#endif
 
     // TODO: code gen and optimizations and stuff
 

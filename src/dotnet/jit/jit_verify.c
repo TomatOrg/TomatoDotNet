@@ -801,7 +801,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
+tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = jmethod->method;
     RuntimeMethodBody body = method->MethodBody;
@@ -897,9 +897,6 @@ tdn_err_t jit_verify_method(jit_method_t* method) {
     TRACE("VERIFY: %T::%U", method->method->DeclaringType, method->method->Name);
 #endif
 
-    // prepare the method, setting up the initial locals, arguments and so on
-    CHECK_AND_RETHROW(jit_verify_prepare_method(method));
-
     // "merge" with the first block, giving it the initial pc for everything
     CHECK_AND_RETHROW(jit_verify_merge_basic_block(method, 0, NULL, method->locals, method->args, NULL));
 
@@ -914,7 +911,5 @@ tdn_err_t jit_verify_method(jit_method_t* method) {
     }
 
 cleanup:
-    arrfree(method->block_queue);
-
     return err;
 }
