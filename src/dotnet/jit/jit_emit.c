@@ -949,7 +949,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                             }
 
                             // now figure the offset of the function in the interface
-                            size_t base_offset = sizeof(void*) + callee->VTableOffset;
+                            size_t base_offset = sizeof(void*) * callee->VTableOffset;
                             if (jit_is_interface(callee_this) && !jit_is_interface(value.type)) {
                                 // calling an interface method on an object, adjust the base offset to
                                 // represent the offset to the iface inside of the object's vtable
