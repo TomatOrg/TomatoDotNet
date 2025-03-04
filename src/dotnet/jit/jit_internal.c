@@ -112,7 +112,6 @@ RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_method_t* method
 
 static void free_basic_block(jit_basic_block_t* block) {
     if (block != NULL) {
-        TRACE("%p", block);
         arrfree(block->stack);
         arrfree(block->locals);
         arrfree(block->args);

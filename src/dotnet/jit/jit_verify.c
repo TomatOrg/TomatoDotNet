@@ -84,16 +84,16 @@ static void jit_verify_queue_basic_block(jit_method_t* ctx, jit_basic_block_t* b
 static bool jit_merge_attrs(jit_value_attrs_t* current, jit_value_attrs_t* incoming) {
     bool modified = false;
 
-    // the only case we get a method in a merge is if we have a delegate with a known
-    // type, so we are going to attempt to de-virt it, but if we got something else
-    // then we need to re-verify
-    if (current->method != NULL) {
-        if (current->method != incoming->method) {
+    // merge known method
+    if (current->is_method) {
+        if (!incoming->is_method) {
+            current->is_method = false;
+            modified = true;
+        } else if (current->method != incoming->method) {
             current->method = NULL;
             modified = true;
         }
     }
-
 
     // if known type changed then change it and mark for another verification run
     // this also handles the case of two known methods not being the same
@@ -104,29 +104,17 @@ static bool jit_merge_attrs(jit_value_attrs_t* current, jit_value_attrs_t* incom
         }
     }
 
-    // wanted readonly, got non-readonly, re-verify
-    if (current->readonly && !incoming->readonly) {
-        current->readonly = false;
-        modified = true;
+#define MERGE_BOOL(x) \
+    if (current->x && !incoming->x) { \
+        current->x = false; \
+        modified = true; \
     }
 
-    // and same for non-local
-    if (current->nonlocal_ref && !incoming->nonlocal_ref) {
-        current->nonlocal_ref = false;
-        modified = true;
-    }
-
-    // and same for ref-structs
-    if (current->nonlocal_ref_struct && !incoming->nonlocal_ref_struct) {
-        current->nonlocal_ref_struct = false;
-        modified = true;
-    }
-
-    // and same for this ptr
-    if (current->this_ptr && !incoming->this_ptr) {
-        current->this_ptr = false;
-        modified = true;
-    }
+    MERGE_BOOL(exact_type);
+    MERGE_BOOL(readonly);
+    MERGE_BOOL(nonlocal_ref);
+    MERGE_BOOL(nonlocal_ref_struct);
+    MERGE_BOOL(this_ptr);
 
     return modified;
 }
@@ -494,11 +482,11 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                 CHECK(inst.operand.variable < arrlen(args));
                 jit_value_t value = EVAL_STACK_POP();
 
-                CHECK(verifier_assignable_to(value.type, args[inst.operand.variable].type),
-                    "%T verifier-assignable-to %T", value.type, args[inst.operand.variable].type);
+                CHECK(verifier_assignable_to(value.type, jmethod->args[inst.operand.variable].type),
+                    "%T verifier-assignable-to %T", value.type, jmethod->args[inst.operand.variable].type);
 
                 // just remember the attributes
-                args[inst.operand.variable].attrs = value.attrs;
+                args[inst.operand.variable] = value;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -510,9 +498,11 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                 jit_value_t* local = &locals[inst.operand.variable];
                 RuntimeTypeInfo type = jit_get_intermediate_type(local->type);
 
-                // if not assigned yet, mark to zero init the variable
-                // at the start of the function
+                // if the local was not marked as initialized then mark
+                // it as needs init right now, on both the global and block
+                // instances
                 if (!local->attrs.is_assigned) {
+                    // just so we don't enter this branch, doesn't really matter
                     local->attrs.is_assigned = true;
                     jmethod->locals[inst.operand.variable].attrs.needs_init = true;
                 }
@@ -524,11 +514,15 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                 CHECK(inst.operand.variable < arrlen(locals));
                 jit_value_t value = EVAL_STACK_POP();
 
-                CHECK(verifier_assignable_to(value.type, locals[inst.operand.variable].type),
-                    "%T verifier-assignable-to %T", value.type, locals[inst.operand.variable].type);
+                // check that this can be assigned to the base type
+                CHECK(verifier_assignable_to(value.type, jmethod->locals[inst.operand.variable].type),
+                    "%T verifier-assignable-to %T", value.type, jmethod->locals[inst.operand.variable].type);
 
-                // just remember the attributes
-                locals[inst.operand.variable].attrs = value.attrs;
+                // mark that the value is assigned
+                value.attrs.is_assigned = true;
+
+                // and copy the type info into the per-block data
+                locals[inst.operand.variable] = value;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -726,6 +720,21 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                     // verify we can actually return this
                     CHECK(verifier_assignable_to(value.type, type),
                         "%T verifier-assignable-to %T", value.type, type);
+
+                    // update ethe return type info
+                    if (jmethod->has_return_type_info) {
+                        // merge the attributes
+                        jit_merge_attrs(&jmethod->return_attrs, &value.attrs);
+
+                        // if the basic type is not the same, then fallback to the real return type
+                        if (jmethod->return_type != value.type) {
+                            jmethod->return_type = type;
+                        }
+                    } else {
+                        jmethod->return_type = value.type;
+                        jmethod->return_attrs = value.attrs;
+                        jmethod->has_return_type_info = true;
+                    }
                 }
 
                 CHECK(arrlen(stack) == 0);
@@ -844,10 +853,7 @@ tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
 
         // TODO: support for scoped attribute
 
-        // if its a sealed type, push it correctly
-        jit_value_attrs_t attrs = {
-            .spilled = jit_is_struct_like(info->ParameterType)
-        };
+        jit_value_attrs_t attrs = {};
 
         // mark as readonly if need be
         if (info->IsReadOnly) {
@@ -876,9 +882,7 @@ tdn_err_t jit_verify_prepare_method(jit_method_t* jmethod) {
     if (body->LocalVariables != NULL) {
         for (int i = 0; i < body->LocalVariables->Length; i++) {
             RuntimeLocalVariableInfo info = body->LocalVariables->Elements[i];
-            jit_value_attrs_t attrs = {
-                .spilled = jit_is_struct_like(info->LocalType)
-            };
+            jit_value_attrs_t attrs = {};
             arrpush(jmethod->locals, ((jit_value_t){ .type = info->LocalType, .attrs = attrs }));
         }
     }

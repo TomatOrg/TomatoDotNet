@@ -105,7 +105,6 @@ clean:
 	rm -rf libs/spidir/target
 	rm -rf TdnCoreLib/*/bin
 	rm -rf TdnCoreLib/*/obj
-	$(MAKE) -C host/linux clean
 
 #-----------------------------------------------------------------------------------------------------------------------
 # C# rules

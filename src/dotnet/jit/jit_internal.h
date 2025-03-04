@@ -27,30 +27,25 @@
 #endif
 
 typedef struct jit_value_attrs {
-    // the known type, only set if we know this is the exact
-    // type given, for de-virt
-    RuntimeTypeInfo known_type;
+    union {
+        // the actual known type, used whenever the type on the stack
+        // doesn't represent the correct type, either because of boxing
+        // locals or whatever else
+        RuntimeTypeInfo known_type;
 
-    // the method that this delegate points to,
-    // used for de-virt
-    RuntimeMethodBase method;
+        // when its a method, the method this references
+        RuntimeMethodBase method;
+    };
 
-    //
-    // Bits required for correct emitter and verifier operations
-    //
+    // The type info is exact (either boxed or the actual type)
+    // encodes the exact real type
+    size_t exact_type : 1;
 
-    // the known type is exactly as said
-    // if false it is just in the chain
-    // and might be some other higher
-    // in the inheritance tree
-    size_t exact_known_type : 1;
-
-    // don't generate a phi for this entry, since it
-    // was taken by reference (because it was spilled)
-    size_t spilled : 1;
+    // does this have a method instead of a known type
+    size_t is_method : 1;
 
     //
-    // Bits required for correct verifier operations
+    // Only used for the verifier, emitter completely ignores it
     //
 
     // is this a readonly reference
@@ -68,15 +63,20 @@ typedef struct jit_value_attrs {
     // the value holds the this ptr
     size_t this_ptr : 1;
 
-    // was the value assigned
-    // - used to verify out parameters
-    // - used to know when to zero initialize variables
+    //
+    // Only used by the args/locals in the jit method itself
+    // not used for normal stack entries
+    //
+
+    // does the local need an initialized, only used for global locals
+    size_t needs_init : 1;
+
+    // was the local variable assigned already, only used for per-block locals
     size_t is_assigned : 1;
 
-    // do we require the value to be initialized, will only
-    // happen on locals that have a path they are used before
-    // being initialized
-    size_t needs_init : 1;
+    // don't generate a phi for this entry, since it
+    // was taken by reference (because it was spilled)
+    size_t spilled : 1;
 } jit_value_attrs_t;
 
 typedef struct jit_value {
@@ -92,6 +92,11 @@ typedef struct jit_value {
     // the phi we created for this slot
     spidir_phi_t phi;
 } jit_value_t;
+
+static inline void jit_copy_type(jit_value_t* dst, jit_value_t* src) {
+    dst->attrs = src->attrs;
+    dst->type = src->type;
+}
 
 typedef struct jit_basic_block {
     // the start and end range of this basic block
@@ -168,7 +173,11 @@ typedef struct jit_method {
         jit_basic_block_t* value;
     }* leave_blocks;
 
-    // return information for inline
+    // more advanced return information used mainly for inline
+    jit_value_attrs_t return_attrs;
+    RuntimeTypeInfo return_type;
+    bool has_return_type_info;
+
     spidir_phi_t inline_return_phi;
     spidir_block_t inline_return_block;
 

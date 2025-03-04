@@ -156,11 +156,12 @@ static RuntimeMethodBase jit_devirt_method(jit_value_t instance, RuntimeMethodBa
     // type then we can just return the real method
     // if the type is known to be exactly as said
     // then we are also going to handle it like so
-    if (real_method->Attributes.Final || type->Attributes.Sealed || instance.attrs.exact_known_type) {
+    if (real_method->Attributes.Final || type->Attributes.Sealed || instance.attrs.exact_type) {
         return real_method;
     }
 
-    return method;
+    // don't devirt
+    return NULL;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -254,18 +255,13 @@ static tdn_err_t jit_perform_inline(
     spidir_builder_handle_t builder,
     jit_method_t* from, spidir_value_t* args,
     RuntimeMethodBase to_inline,
-    spidir_value_t* retval
+    jit_value_t* retval
 ) {
     tdn_err_t err = TDN_NO_ERROR;
     jit_method_t inlined_method = {
         .method = to_inline,
         .inline_level = from->inline_level + 1
     };
-
-    TRACE("ATTEMPT ONE:");
-    for (int i = 0; hmlen(inlined_method.labels); i++) {
-        TRACE("%p", inlined_method.labels[i].value);
-    }
 
     // prepare the method
     CHECK_AND_RETHROW(jit_verify_prepare_method(&inlined_method));
@@ -298,7 +294,9 @@ static tdn_err_t jit_perform_inline(
     spidir_builder_set_block(builder, inlined_method.inline_return_block);
 
     // we are done
-    *retval = return_value;
+    retval->attrs = inlined_method.return_attrs;
+    retval->type = inlined_method.return_type;
+    retval->value = return_value;
 
 cleanup:
     jit_destroy_method(&inlined_method);
@@ -340,8 +338,7 @@ static tdn_err_t jit_pass_value(jit_value_t* incoming, jit_value_t* target) {
     CHECK(arrlen(incoming) == arrlen(target));
     for (int i = 0; i < arrlen(incoming); i++) {
         // sanity that everything ended up as we expected
-        CHECK(incoming[i].type == target[i].type);
-        target[i].value = incoming[i].value;
+        target[i] = incoming[i];
     }
 
 cleanup:
@@ -700,7 +697,10 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
     jit_value_t* stack = NULL;
     jit_value_t* locals = NULL;
     jit_value_t* args = NULL;
+
     spidir_value_t* spidir_args = NULL;
+    jit_value_t* temp_args = NULL;
+
     RuntimeTypeInfo this_type = NULL;
 
     // figure the this type if this is a non-static method
@@ -813,8 +813,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     arg->attrs = value.attrs;
                     arg->attrs.spilled = true;
                 } else {
-                    arg->value = value.value;
-                    arg->attrs = value.attrs;
+                    *arg = value;
                 }
             } break;
 
@@ -824,13 +823,13 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 
             case CEE_LDLOC: {
                 CHECK(inst.operand.variable < arrlen(locals));
-                jit_value_t* arg = &locals[inst.operand.variable];
-                RuntimeTypeInfo type = jit_get_intermediate_type(arg->type);
+                jit_value_t* local = &locals[inst.operand.variable];
+                RuntimeTypeInfo type = jit_get_intermediate_type(local->type);
 
-                if (arg->attrs.spilled) {
-                    EVAL_STACK_PUSH(type, jit_emit_load(builder, arg->type, arg->value), .attrs = arg->attrs);
+                if (local->attrs.spilled) {
+                    EVAL_STACK_PUSH(type, jit_emit_load(builder, local->type, local->value), .attrs = local->attrs);
                 } else {
-                    EVAL_STACK_PUSH(type, arg->value, .attrs = arg->attrs);
+                    EVAL_STACK_PUSH(type, local->value, .attrs = local->attrs);
                 }
             } break;
 
@@ -844,8 +843,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     local->attrs = value.attrs;
                     local->attrs.spilled = true;
                 } else {
-                    local->value = value.value;
-                    local->attrs = value.attrs;
+                    *local = value;
                 }
             } break;
 
@@ -899,6 +897,8 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                 // for the types
                 for (int i = callee->Parameters->Length - 1; i >= 0; i--) {
                     jit_value_t value = EVAL_STACK_POP();
+                    arrins(temp_args, 0, value);
+
                     arrins(spidir_args, 0, jit_convert_pointer(builder,
                         value.type, value.value,
                         callee->Parameters->Elements[i]->ParameterType)
@@ -909,6 +909,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                 spidir_value_t func_ptr = SPIDIR_VALUE_INVALID;
                 if (callee_this != NULL) {
                     jit_value_t value = EVAL_STACK_POP();
+                    arrins(temp_args, 0, value);
 
                     if (jit_is_interface(value.type)) {
                         // we have an interface on the stack, get the instance from it
@@ -929,7 +930,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     // successful then replace the callvirt with a normal call
                     if (inst.opcode == CEE_CALLVIRT) {
                         RuntimeMethodBase new_callee = jit_devirt_method(value, callee);
-                        if (new_callee != callee) {
+                        if (new_callee != NULL) {
                             // needs an explicit null check now that we don't access the
                             // the vtable anymore
                             explicit_null_check = true;
@@ -969,21 +970,31 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 
                 // get the ret type
                 RuntimeTypeInfo ret_type = callee->ReturnParameter->ParameterType;
-                spidir_value_t return_value = SPIDIR_VALUE_INVALID;
+                jit_value_t ret_value = {
+                    .type = ret_type,
+                    .value = SPIDIR_VALUE_INVALID
+                };
+
+                // emit an explicit null check, we will just load the vtable pointer as
+                // something with the least amount of resistance
+                if (explicit_null_check) {
+                    spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, spidir_args[0]);
+                }
 
                 // if the return type is a struct like, then we need to allocate an implicit
                 // argument for it
                 if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
-                    return_value = spidir_builder_build_stackslot(builder, ret_type->StackSize, ret_type->StackAlignment);
-                    arrpush(spidir_args, return_value);
-                    EVAL_STACK_PUSH(ret_type, return_value);
+                    ret_value.value = spidir_builder_build_stackslot(builder, ret_type->StackSize, ret_type->StackAlignment);
+                    arrpush(spidir_args, ret_value.value);
                 }
 
+                spidir_value_t spidir_ret_value = SPIDIR_VALUE_INVALID;
                 if (inst.opcode == CEE_CALLVIRT) {
                     // perform an indirect call
                     spidir_value_type_t* arg_types = jit_get_spidir_arg_types(callee);
                     CHECK(arg_types != NULL);
-                    return_value = spidir_builder_build_callind(builder,
+                    TRACE("%T", temp_args[0].type);
+                    spidir_ret_value = spidir_builder_build_callind(builder,
                         jit_get_spidir_ret_type(callee),
                         arrlen(arg_types),
                         arg_types,
@@ -996,7 +1007,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     // attempt to call as a builtin
                     jit_builtin_emitter_t emitter = jit_get_builtin_emitter(callee);
                     if (emitter != NULL) {
-                        return_value = emitter(builder, callee, spidir_args);
+                        spidir_ret_value = emitter(builder, callee, spidir_args);
 
                     } else if (jit_emit_should_inline(jmethod, callee)) {
                         // we should perform an inline of the new function
@@ -1004,14 +1015,8 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                             builder, jmethod,
                             spidir_args,
                             callee,
-                            &return_value
+                            &ret_value
                         ));
-
-                        // this is kinda ugly but we need to actually replace the
-                        // result on the top of the stack
-                        if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
-                            arrlast(stack).value = return_value;
-                        }
 
                     } else {
                         // nothing special to be done, just queue to emit it
@@ -1022,7 +1027,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                         CHECK_AND_RETHROW(jit_get_method(callee, &jit_callee));
 
                         // and now emit the call itself
-                        return_value = spidir_builder_build_call(
+                        spidir_ret_value = spidir_builder_build_call(
                             builder,
                             jit_callee->function,
                             arrlen(spidir_args),
@@ -1031,9 +1036,15 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     }
                 }
 
+                // if the value is invalid, then use the one returned
+                // from spidir instead
+                if (ret_value.value.id == SPIDIR_VALUE_INVALID.id) {
+                    ret_value.value = spidir_ret_value;
+                }
+
                 // handle primitive return types
-                if (ret_type != tVoid && !jit_is_struct_like(ret_type)) {
-                    EVAL_STACK_PUSH(ret_type, return_value);
+                if (ret_type != tVoid) {
+                    EVAL_STACK_PUSH(ret_value.type, ret_value.value, .attrs = ret_value.attrs);
                 }
             } break;
 
@@ -1064,6 +1075,9 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                         // just a scalar, return it
                         spidir_builder_build_return(builder, ret_value.value);
                     }
+
+                } else {
+                    spidir_builder_build_return(builder, SPIDIR_VALUE_INVALID);
                 }
 
                 CHECK(arrlen(stack) == 0);
@@ -1120,6 +1134,7 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 #endif
 
         arrfree(spidir_args);
+        arrfree(temp_args);
     }
 
     // we have a fallthrough
@@ -1144,6 +1159,8 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 
 cleanup:
     arrfree(spidir_args);
+    arrfree(temp_args);
+
     arrfree(stack);
     arrfree(locals);
     arrfree(args);
@@ -1182,7 +1199,7 @@ static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_value_t* 
 
     // now prepare the rest of the arguments
     for (int i = 0; i < method->Parameters->Length; i++) {
-        jit_value_t* arg = &jmethod->args[i];
+        jit_value_t* arg = &jmethod->args[param_i];
 
         spidir_value_t arg_value;
         if (args != NULL) {
@@ -1190,6 +1207,7 @@ static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_value_t* 
         } else {
             arg_value = spidir_builder_build_param_ref(builder, param_i);
         }
+        param_i++;
 
         if (arg->attrs.spilled) {
             // spilled, means we need to copy it to a stackslot and store it in there
@@ -1198,8 +1216,6 @@ static tdn_err_t jit_emit_prepare_method(jit_method_t* jmethod, spidir_value_t* 
         } else {
             arg->value = arg_value;
         }
-
-        param_i++;
     }
 
     if (args == NULL) {
@@ -1336,6 +1352,11 @@ static spidir_function_t create_spidir_function(spidir_module_handle_t module, R
 tdn_err_t jit_queue_emit_method(spidir_module_handle_t module, RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // we can ignore this method, it was already emitted before
+    if (method->MethodPtr != NULL) {
+        goto cleanup;
+    }
+
     jit_method_t* jit_method = NULL;
     CHECK_AND_RETHROW(jit_get_method(method, &jit_method));
 
@@ -1400,6 +1421,11 @@ cleanup:
 
 tdn_err_t jit_emit(spidir_module_handle_t module) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    // doesn't need to do anything, skip
+    if (arrlen(m_methods_to_emit) == 0) {
+        goto cleanup;
+    }
 
     // emit everything
     CHECK_AND_RETHROW(jit_emit_all(module));
