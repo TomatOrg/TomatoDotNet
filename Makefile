@@ -74,7 +74,7 @@ LIBSPIDIR	:= libs/spidir/target/$(SPIDIR_TARGET)/release/libspidir.a
 endif
 
 # The dlls that we need for the runtime
-DLLS 		:= $(BIN_DIR)/System.Runtime.dll
+DLLS 		:= $(BIN_DIR)/System.Private.CoreLib.dll
 
 # The default rule
 .PHONY: default
@@ -119,12 +119,12 @@ endif
 
 # TODO: turn into a macro
 
-$(BIN_DIR)/System.Runtime.dll: TdnCoreLib/System.Runtime/bin/$(DOTNET_CONFIG)/net8.0/System.Runtime.dll
+$(BIN_DIR)/System.Private.CoreLib.dll: TdnCoreLib/System.Private.CoreLib/bin/$(DOTNET_CONFIG)/net8.0/System.Private.CoreLib.dll
 	@mkdir -p $(@D)
 	cp $^ $@
 
-TdnCoreLib/System.Runtime/bin/$(DOTNET_CONFIG)/net8.0/System.Runtime.dll: force
-	cd TdnCoreLib/System.Runtime && dotnet build --configuration $(DOTNET_CONFIG)
+TdnCoreLib/System.Private.CoreLib/bin/$(DOTNET_CONFIG)/net8.0/System.Private.CoreLib.dll: force
+	cd TdnCoreLib/System.Private.CoreLib && dotnet build --configuration $(DOTNET_CONFIG)
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Spidir rules

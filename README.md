@@ -29,7 +29,7 @@ Then you will want to include it in your source:
 - Libraries:
   - `./out/{debug,release}/libtdn.a`: The actual static library
 - C# Core libraries:
-  - `./out/{debug,release}/bin/System.Runtime.dll`: The main corelib, must be loaded first
+  - `./out/{debug,release}/bin/System.Private.CoreLib.dll`: The main corelib, must be loaded first
 
 All you need to do then is to call `tdn_load_assembly_from_memory` giving the corelib, once you loaded the corelib 
 you can continue and load the rest of the DLLs you need. 

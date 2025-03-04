@@ -393,7 +393,8 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
     // the pending prefixes
     il_prefix_t pending_prefix = 0;
-    bool must_be_newobj = false;
+    RuntimeMethodBase delegate_method = NULL;
+    RuntimeMethodBase devirt_delegate_method = NULL;
     tdn_il_opcode_t last_opcode;
 
     // get the pc
@@ -425,9 +426,8 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
         // we got a delegate creation sequence, so this
         // opcode must be newobj
-        if (must_be_newobj) {
+        if (delegate_method != NULL) {
             CHECK(inst.opcode == CEE_NEWOBJ);
-            must_be_newobj = false;
         }
 
         switch (inst.opcode) {
@@ -466,6 +466,13 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
             case CEE_LDC_I8: {
                 EVAL_STACK_PUSH(tInt64);
+            } break;
+
+            case CEE_LDFTN: {
+                delegate_method = inst.operand.method;
+
+                // in this case we take the exact method
+                devirt_delegate_method = delegate_method;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -577,20 +584,39 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
             // Calls
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_NEWOBJ:
             case CEE_CALL:
             case CEE_CALLVIRT: {
                 RuntimeMethodBase callee = inst.operand.method;
                 RuntimeTypeInfo callee_this = NULL;
+                bool creating_delegate = false;
 
                 // TODO: check accessibility
 
                 if (inst.opcode == CEE_CALL) {
                     // ensure we don't attempt to call an abstract method
                     CHECK(!callee->Attributes.Abstract);
+
+                }
+
+                if (inst.opcode == CEE_NEWOBJ) {
+                    if (jit_is_delegate(callee->DeclaringType)) {
+                        // must be creating a delegate
+                        CHECK(delegate_method != NULL);
+                        creating_delegate = true;
+                        CHECK(callee->Attributes.RTSpecialName);
+                        CHECK(tdn_compare_string_to_cstr(callee->Name, ".ctor"));
+                    } else {
+                        // must not be creating a delegate
+                        CHECK(delegate_method == NULL);
+                    }
+                } else {
+                    // check not a ctor unless its a ctor of the parent
+                    // or something like that
                 }
 
                 if (!callee->Attributes.Static) {
-                    callee_this = method->DeclaringType;
+                    callee_this = callee->DeclaringType;
                     if (tdn_type_is_valuetype(callee_this)) {
                         CHECK_AND_RETHROW(tdn_get_byref_type(callee_this, &callee_this));
                     }
@@ -600,47 +626,67 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
 
                 // pop the arguments and verify them
                 bool might_return_local_ref = false;
-                for (int i = callee->Parameters->Length - 1; i >= 0; i--) {
-                    ParameterInfo parameter = callee->Parameters->Elements[i];
-                    jit_value_t value = EVAL_STACK_POP();
-                    RuntimeTypeInfo param_type = parameter->ParameterType;
+                if (!creating_delegate) {
+                    for (int i = callee->Parameters->Length - 1; i >= 0; i--) {
+                        ParameterInfo parameter = callee->Parameters->Elements[i];
+                        jit_value_t value = EVAL_STACK_POP();
+                        RuntimeTypeInfo param_type = parameter->ParameterType;
 
-                    // if this is a by-ref check for byref requirements
-                    if (param_type->IsByRef) {
-                        // does not want a readonly, ensure we don't give it a readonly
-                        if (!param_type->IsReadOnly) {
-                            CHECK(!value.attrs.readonly);
-                        }
+                        // if this is a by-ref check for byref requirements
+                        if (param_type->IsByRef) {
+                            // does not want a readonly, ensure we don't give it a readonly
+                            if (!param_type->IsReadOnly) {
+                                CHECK(!value.attrs.readonly);
+                            }
 
-                        // if this is a local ref, the returned value might also be
-                        // a local ref, remember that so we don't reattach it
-                        // TODO: scoped references
-                        if (!value.attrs.nonlocal_ref) {
-                            might_return_local_ref = true;
-                        }
+                            // if this is a local ref, the returned value might also be
+                            // a local ref, remember that so we don't reattach it
+                            // TODO: scoped references
+                            if (!value.attrs.nonlocal_ref) {
+                                might_return_local_ref = true;
+                            }
 
-                        // if this is a ref to a ref-struct, and the elements of the ref-struct
-                        // might contain local references, then also mark that we might leak
-                        // a reference
-                        if (param_type->ElementType->IsByRefStruct) {
+                            // if this is a ref to a ref-struct, and the elements of the ref-struct
+                            // might contain local references, then also mark that we might leak
+                            // a reference
+                            if (param_type->ElementType->IsByRefStruct) {
+                                if (!value.attrs.nonlocal_ref_struct) {
+                                    might_return_local_ref = true;
+                                }
+                            }
+                        } else if (param_type->IsByRefStruct) {
+                            // same as above, but for by-value nonlocal
                             if (!value.attrs.nonlocal_ref_struct) {
                                 might_return_local_ref = true;
                             }
                         }
-                    } else if (param_type->ElementType->IsByRefStruct) {
-                        // same as above, but for by-value nonlocal
-                        if (!value.attrs.nonlocal_ref_struct) {
-                            might_return_local_ref = true;
+
+                        // verify we can perform the call
+                        CHECK(verifier_assignable_to(value.type, param_type),
+                            "%T verifier-assignable-to %T",value.type, param_type);
+                    }
+                } else {
+                    jit_value_t instance = EVAL_STACK_POP();
+
+                    // we are creating a delegate, has some special path in here
+                    CHECK(callee->Parameters->Length == 2);
+                    if (delegate_method->Attributes.Static) {
+                        // instance must be null
+                        CHECK(instance.type == NULL);
+                    } else {
+                        // verify the instance can be combined with the method pointer
+                        RuntimeTypeInfo delegate_this_type = delegate_method->DeclaringType;
+                        if (tdn_type_is_valuetype(delegate_this_type)) {
+                            CHECK_AND_RETHROW(tdn_get_byref_type(delegate_this_type, &delegate_this_type));
                         }
+                        CHECK(verifier_assignable_to(instance.type, delegate_this_type));
                     }
 
-                    // verify we can perform the call
-                    CHECK(verifier_assignable_to(value.type, param_type),
-                        "%T verifier-assignable-to %T",value.type, param_type);
+                    // TODO: verify the Invoke and the method share the same type
                 }
 
                 // check the this type
-                if (callee_this != NULL) {
+                if (inst.opcode != CEE_NEWOBJ && callee_this != NULL) {
                     jit_value_t value = EVAL_STACK_POP();
                     CHECK(verifier_assignable_to(value.type, callee_this),
                         "%T verifier-assignable-to %T",value.type, callee_this);
@@ -691,7 +737,48 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
                     }
 
                     EVAL_STACK_PUSH(ret_type, attrs);
+
+                } else if (inst.opcode == CEE_NEWOBJ) {
+                    // push the new type
+                    jit_value_attrs_t attrs = {
+                        .exact_type = true,
+                    };
+
+                    // if the return is a readonly, mark it as such
+                    if (callee_this->IsReadOnly) {
+                        attrs.readonly = true;
+                    }
+
+                    // if we have an exact target, then we are going to
+                    // set it as the delegate's method right now
+                    if (devirt_delegate_method != NULL) {
+                        attrs.is_method = true;
+                        attrs.method = devirt_delegate_method;
+                    }
+
+                    // we will not leak a by-ref, check if we need to mark anything
+                    if (!might_return_local_ref) {
+                        // the return is a byref
+                        if (callee_this->IsByRef) {
+                            attrs.nonlocal_ref = true;
+
+                            // its not possible to return a ref to a by-ref struct unless we passed on
+                            // by reference as well, since it can't be alive anywhere else
+                            CHECK(!callee_this->ElementType->IsByRefStruct);
+
+                        } else if (callee_this->IsByRefStruct) {
+                            // the ref-struct contains non-nonlocal fields if it was
+                            // returned and we could not have passed anything
+                            attrs.nonlocal_ref_struct = true;
+                        }
+                    }
+
+                    EVAL_STACK_PUSH(callee_this, attrs);
                 }
+
+                // no longer creating a delegate
+                delegate_method = NULL;
+                devirt_delegate_method = NULL;
             } break;
 
             case CEE_RET: {
@@ -786,6 +873,9 @@ static tdn_err_t jit_verify_basic_block(jit_method_t* jmethod, jit_basic_block_t
         indent = tdn_disasm_print_end(body, pc, indent);
 #endif
     }
+
+    // must not reach this point with a floating method reference
+    CHECK(delegate_method == NULL);
 
     // we have a fallthrough
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {

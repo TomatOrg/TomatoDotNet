@@ -10,6 +10,8 @@ typedef enum jit_helper_type {
     JIT_HELPER_GC_MEMCPY,
 
     JIT_HELPER_THROW,
+
+    JIT_HELPER_GC_NEW,
 } jit_helper_type_t;
 
 /**

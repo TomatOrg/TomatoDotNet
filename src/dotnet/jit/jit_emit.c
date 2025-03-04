@@ -138,6 +138,17 @@ static RuntimeMethodBase jit_devirt_method(jit_value_t instance, RuntimeMethodBa
         return method;
     }
 
+    // if this is a delegate that we know the original method of we can
+    // run it right away
+    if (instance.attrs.is_method) {
+        return instance.attrs.method;
+    }
+
+    // Check if this is a builtin method, if so we can always inline it
+    if (jit_get_builtin_emitter(method) != NULL) {
+        return method;
+    }
+
     // choose either the knwon or the generic type
     RuntimeTypeInfo type = instance.attrs.known_type != NULL ? instance.attrs.known_type : instance.type;
 
@@ -727,6 +738,8 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
     int indent = 0;
 #endif
 
+    RuntimeMethodBase devirt_delegate_method = NULL;
+
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     uint32_t pc = block->start;
@@ -785,6 +798,26 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 
             case CEE_LDC_I8: {
                 EVAL_STACK_PUSH(tInt64, spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst.operand.uint64));
+            } break;
+
+            case CEE_LDFTN: {
+                // queue the emit
+                // NOTE: even tho de-virtualization might be done later on the delegate
+                //       that will be created, for simplicity we still emit the spidir
+                //       and hope that spidir itself will remove the reference to the function
+                //       removing our need to emit it
+                CHECK_AND_RETHROW(jit_queue_emit_method(spidir_builder_get_module(builder), inst.operand.method));
+
+                // get the jit function for it
+                jit_method_t* jit_callee = NULL;
+                CHECK_AND_RETHROW(jit_get_method(inst.operand.method, &jit_callee));
+
+                // and push the function address
+                spidir_value_t value = spidir_builder_build_funcaddr(builder, jit_callee->function);
+                EVAL_STACK_PUSH(NULL, value, .attrs = { .method = inst.operand.method });
+
+                // use the direct method
+                devirt_delegate_method = inst.operand.method;
             } break;
 
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -875,13 +908,14 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
             // Calls
             ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+            case CEE_NEWOBJ:
             case CEE_CALL:
             case CEE_CALLVIRT: {
                 RuntimeMethodBase callee = inst.operand.method;
                 RuntimeTypeInfo callee_this = NULL;
 
                 if (!callee->Attributes.Static) {
-                    callee_this = method->DeclaringType;
+                    callee_this = callee->DeclaringType;
                     if (tdn_type_is_valuetype(callee_this)) {
                         CHECK_AND_RETHROW(tdn_get_byref_type(callee_this, &callee_this));
                     }
@@ -907,7 +941,50 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
 
                 // add the this type
                 spidir_value_t func_ptr = SPIDIR_VALUE_INVALID;
-                if (callee_this != NULL) {
+                if (inst.opcode == CEE_NEWOBJ) {
+                    // we need to create a new object instead of taking the object from the stack
+
+                    jit_value_t this_value = {
+                        .type = callee_this,
+                    };
+
+                    if (callee_this->IsByRef) {
+                        // needs to be stack allocated
+                        this_value.value = spidir_builder_build_stackslot(builder,
+                            callee_this->ElementType->StackSize,
+                            callee_this->ElementType->StackAlignment
+                        );
+
+                    } else if (jit_is_struct_like(callee_this)) {
+                        // needs to be stack allocated
+                        this_value.value = spidir_builder_build_stackslot(builder,
+                            callee_this->StackSize,
+                            callee_this->StackAlignment
+                        );
+
+                    } else {
+                        // needs to be heap allocated
+                        spidir_function_t gc_new = jit_helper_get(spidir_builder_get_module(builder), JIT_HELPER_GC_NEW);
+                        this_value.value = spidir_builder_build_call(builder,
+                            gc_new,
+                            1,
+                            (spidir_value_t[]){ spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)callee_this) }
+                        );
+                    }
+
+                    // if we are creating a delegate, mark it as such
+                    if (devirt_delegate_method != NULL) {
+                        this_value.attrs.is_method = true;
+                        this_value.attrs.method = devirt_delegate_method;
+                    }
+
+                    // this is an exact type, not an estimate
+                    this_value.attrs.exact_type = true;
+                    arrins(temp_args, 0, this_value);
+                    arrins(spidir_args, 0, this_value.value);
+                    EVAL_STACK_PUSH(callee_this, this_value.value, .attrs = this_value.attrs);
+
+                } else if (callee_this != NULL) {
                     jit_value_t value = EVAL_STACK_POP();
                     arrins(temp_args, 0, value);
 
@@ -993,7 +1070,6 @@ static tdn_err_t jit_emit_basic_block(jit_method_t* jmethod, spidir_builder_hand
                     // perform an indirect call
                     spidir_value_type_t* arg_types = jit_get_spidir_arg_types(callee);
                     CHECK(arg_types != NULL);
-                    TRACE("%T", temp_args[0].type);
                     spidir_ret_value = spidir_builder_build_callind(builder,
                         jit_get_spidir_ret_type(callee),
                         arrlen(arg_types),

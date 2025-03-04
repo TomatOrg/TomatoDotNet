@@ -199,7 +199,7 @@ static inline bool jit_is_interface(RuntimeTypeInfo type) {
 }
 
 static inline bool jit_is_delegate(RuntimeTypeInfo type) {
-    return type != NULL && (type->BaseType == tMulticastDelegate || type == tMulticastDelegate || type == tDelegate);
+    return type != NULL && type->BaseType == tMulticastDelegate;
 }
 
 static inline bool jit_is_struct(RuntimeTypeInfo type) {

@@ -1,6 +1,7 @@
 #include "jit_helpers.h"
 
 #include <stdbool.h>
+#include <dotnet/gc/gc.h>
 #include <tomatodotnet/types/basic.h>
 #include <util/defs.h>
 #include <util/except.h>
@@ -39,6 +40,10 @@ static void jit_throw(Object exception) {
     }
 }
 
+static Object jit_new(RuntimeTypeInfo type) {
+    return gc_new(type, type->HeapSize);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helper abstraction
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -55,6 +60,7 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_GC_BZERO] = { .func = gc_bzero },
     [JIT_HELPER_GC_MEMCPY] = { .func = gc_memcpy },
     [JIT_HELPER_THROW] = { .func = jit_throw },
+    [JIT_HELPER_GC_NEW] = { .func = jit_new },
 };
 
 spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_t helper) {
@@ -86,6 +92,11 @@ spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_
         case JIT_HELPER_THROW:
             m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
                 "jit_throw", SPIDIR_TYPE_NONE, 1,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
+
+        case JIT_HELPER_GC_NEW:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_gc_new", SPIDIR_TYPE_PTR, 1,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
 
         default:
