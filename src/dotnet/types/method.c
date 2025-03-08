@@ -62,7 +62,7 @@ tdn_err_t tdn_method_make_generic(
     if (idx == -1) {
         // create it and set it incase we need it again
         // for expansion
-        RuntimeMethodInfo new_method = GC_NEW(RuntimeMethodInfo);
+        RuntimeMethodInfo new_method = TDN_GC_NEW(RuntimeMethodInfo);
 
         hmput(base->GenericMethodInstances, hash, new_method);
 

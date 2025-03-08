@@ -10,21 +10,26 @@ typedef enum jit_helper_type {
     JIT_HELPER_GC_MEMCPY,
 
     JIT_HELPER_THROW,
+    JIT_HELPER_THROW_OUT_OF_MEMORY,
+    JIT_HELPER_THROW_NULL_REFERENCE,
+    JIT_HELPER_THROW_INDEX_OUT_OF_RANGE,
+    JIT_HELPER_THROW_OVERFLOW,
 
-    JIT_HELPER_GC_NEW,
+    JIT_HELPER_NEWOBJ,
+    JIT_HELPER_NEWARR,
 } jit_helper_type_t;
 
 /**
  * Get (or create) a helper for the given helper type
  */
-spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_t helper);
+spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper);
 
 /**
  * Get the helper pointer (assuming its an helper) or NULL if not found
  */
-void* jit_helper_get_ptr(spidir_function_t function);
+void* jit_get_helper_ptr(spidir_function_t function);
 
 /**
  * Clean all the helpers for this run
  */
-void jit_helper_clean(void);
+void jit_clean_helpers(void);

@@ -179,7 +179,7 @@ static tdn_err_t sig_parse_genericinst(
     CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &gen_arg_count));
 
     // get the arguments
-    RuntimeTypeInfo_Array args = GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
+    RuntimeTypeInfo_Array args = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
     for (size_t i = 0; i < gen_arg_count; i++) {
         RuntimeTypeInfo arg = NULL;
         CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, &arg));
@@ -238,7 +238,7 @@ static tdn_err_t sig_parse_type(
             CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &number));
             if (methodArgs == NULL) {
                 CHECK(create_mvar_type);
-                RuntimeTypeInfo typ = GC_NEW(RuntimeTypeInfo);
+                RuntimeTypeInfo typ = TDN_GC_NEW(RuntimeTypeInfo);
                 typ->IsGenericParameter = 1;
                 typ->IsGenericMethodParameter = 1;
                 typ->GenericParameterPosition = number;
@@ -324,7 +324,7 @@ static tdn_err_t sig_parse_ret_type(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    ParameterInfo parameter_info = GC_NEW(ParameterInfo);
+    ParameterInfo parameter_info = TDN_GC_NEW(ParameterInfo);
     parameter_info->Position = -1;
 
     // Parse custom modifiers
@@ -641,9 +641,9 @@ tdn_err_t sig_parse_method_def(
                                          &signature->return_parameter));
 
     // Get the Params
-    signature->parameters = GC_NEW_ARRAY(ParameterInfo, param_count);
+    signature->parameters = TDN_GC_NEW_ARRAY(ParameterInfo, param_count);
     for (int i = 0; i < param_count; i++) {
-        ParameterInfo parameter_info = GC_NEW(ParameterInfo);
+        ParameterInfo parameter_info = TDN_GC_NEW(ParameterInfo);
         parameter_info->Position = i;
         CHECK_AND_RETHROW(sig_parse_param(blob, assembly, typeArgs, methodArgs, create_mvar_type, parameter_info));
         signature->parameters->Elements[i] = parameter_info;
@@ -670,7 +670,7 @@ tdn_err_t sig_parse_method_spec(
     CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &gen_arg_count));
 
     // Get the Params
-    RuntimeTypeInfo_Array gen_args = GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
+    RuntimeTypeInfo_Array gen_args = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, gen_arg_count);
     for (int i = 0; i < gen_arg_count; i++) {
         RuntimeTypeInfo gen_arg;
         CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, &gen_arg));
@@ -698,9 +698,9 @@ tdn_err_t sig_parse_local_var_sig(
     CHECK_AND_RETHROW(sig_parse_compressed_int(blob, &count));
     CHECK(1 <= count && count <= 0xFFFE);
 
-    RuntimeLocalVariableInfo_Array arr = GC_NEW_ARRAY(RuntimeLocalVariableInfo, count);
+    RuntimeLocalVariableInfo_Array arr = TDN_GC_NEW_ARRAY(RuntimeLocalVariableInfo, count);
     for (size_t i = 0; i < count; i++) {
-        RuntimeLocalVariableInfo variable = GC_NEW(RuntimeLocalVariableInfo);
+        RuntimeLocalVariableInfo variable = TDN_GC_NEW(RuntimeLocalVariableInfo);
         arr->Elements[i] = variable;
         variable->LocalIndex = (int)i;
 

@@ -8,7 +8,9 @@
 #include "dotnet/metadata/metadata.h"
 #include "util/stb_ds.h"
 
-void* gc_new(RuntimeTypeInfo type, size_t size) {
+#include <sanitizer/asan_interface.h>
+
+void* tdn_gc_new(RuntimeTypeInfo type, size_t size) {
     if (type == NULL) {
         ASSERT(!"Tried to allocate object with null type?");
     } else {
@@ -45,16 +47,4 @@ void* gc_new(RuntimeTypeInfo type, size_t size) {
     object->VTable = type->JitVTable;
 
     return object;
-}
-
-void* gc_raw_alloc(size_t size) {
-    Object object = tdn_host_gc_alloc(size, alignof(size_t));
-    if (object == NULL) {
-        return NULL;
-    }
-    return object;
-}
-
-void gc_register_root(void* ptr) {
-    tdn_host_gc_register_root(ptr);
 }

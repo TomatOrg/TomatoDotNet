@@ -167,7 +167,7 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
                 size_t char_count = (blob_size - 1) / 2;
 
                 // create it
-                string = gc_new(tString, sizeof(struct String) + char_count * sizeof(Char));
+                string = tdn_gc_new(tString, sizeof(struct String) + char_count * sizeof(Char));
                 CHECK_ERROR(string != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
                 // copy the bytes

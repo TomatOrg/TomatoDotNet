@@ -22,31 +22,53 @@ void* tdn_host_mallocz(size_t size, size_t align);
 void* tdn_host_realloc(void* ptr, size_t new_size);
 void tdn_host_free(void* ptr);
 
-// allocate memory that is located between 2gb and 4gb
-void* tdn_host_mallocz_low(size_t size);
-void tdn_host_free_low(void* ptr);
+//----------------------------------------------------------------------------------------------------------------------
+// Jit related allocations
+//----------------------------------------------------------------------------------------------------------------------
 
 /**
- * Request a new mapping, the mapping starts as read-write
+ * Request new memory where we will place the jitted code inside of
+ *
+ * At this point the region should be read-write
  */
-void* tdn_host_map(size_t size);
+void* tdn_host_jit_alloc(size_t size);
 
 /**
- * Turn a mapping into read-execute only region
+ * Turn a jit allocation into rx, the region does not need to be writable anymore
  */
-void tdn_host_map_rx(void* ptr, size_t size);
+void tdn_host_jit_set_exec(void* ptr, size_t size);
 
-// gc operation
+/**
+ * Perform a patch on the code, can be called after set_exec was set
+ */
+void tdn_host_jit_patch(void* dst, void* src, size_t size);
+
+//----------------------------------------------------------------------------------------------------------------------
+// GC allocation primitives
+//----------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Request memory meant for garbage collection
+ *
+ * Memory must be set to zero before you return
+ *
+ * It is allowed to return NULL
+ */
 void* tdn_host_gc_alloc(size_t size, size_t alignment);
-void tdn_host_gc_register_root(void* root);
-void tdn_host_gc_pin_object(void* object);
+
+//----------------------------------------------------------------------------------------------------------------------
+// Jit spidir dump
+//----------------------------------------------------------------------------------------------------------------------
 
 // used for debugging the jit, will dump spidir modules
 // using these functions
-// TODO: ugly
 void* tdn_host_jit_start_dump(void);
 void tdn_host_jit_end_dump(void* ctx);
 spidir_dump_status_t tdn_host_jit_dump_callback(const char* data, size_t size, void* ctx);
+
+//----------------------------------------------------------------------------------------------------------------------
+// File access API
+//----------------------------------------------------------------------------------------------------------------------
 
 // file management
 typedef void* tdn_file_t;

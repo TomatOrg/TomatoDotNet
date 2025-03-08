@@ -12,6 +12,8 @@
 #include "tomatodotnet/tdn.h"
 #include <printf.h>
 #include <time.h>
+#include <dotnet/metadata/metadata.h>
+#include <util/stb_ds.h>
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;
@@ -253,8 +255,34 @@ static void console_write_line(String str) {
 
 extern const char* g_assembly_search_path;
 
+void** m_objects = NULL;
+
+static void free_type(RuntimeTypeInfo type) {
+    for (int i = 0; i < hmlen(type->GenericTypeInstances); i++) {
+        free_type(type->GenericTypeInstances[i].value);
+    }
+    hmfree(type->GenericTypeInstances);
+    hmfree(type->InterfaceImpls);
+    tdn_host_free(type->JitVTable);
+}
+
+static void free_assembly(RuntimeAssembly assembly) {
+    if (assembly != NULL) {
+        assembly->Metadata->file.close_handle(assembly->Metadata->file.handle);
+        dotnet_free_file(assembly->Metadata);
+        tdn_host_free(assembly->Metadata);
+
+        for (int i = 0; i < assembly->TypeDefs->Length; i++) {
+            free_type(assembly->TypeDefs->Elements[i]);
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
+    RuntimeAssembly corelib = NULL;
+    RuntimeAssembly run = NULL;
+
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
@@ -264,11 +292,9 @@ int main(int argc, char* argv[]) {
     g_assembly_search_path = argv[2];
 
     // load the corelib first
-    RuntimeAssembly corelib = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path(argv[1], &corelib));
 
     // now load the assembly we want to run
-    RuntimeAssembly run = NULL;
     CHECK_AND_RETHROW(load_assembly_from_path(argv[3], &run));
 
     // and now jit it and let it run
@@ -279,14 +305,21 @@ int main(int argc, char* argv[]) {
     double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
     TRACE("Jit took %f seconds", time_taken);
 
-    CHECK(run->EntryPoint->MethodPtr != NULL);
-    int (*entry_point)() = run->EntryPoint->MethodPtr;
-    int tests_output = entry_point();
-    TRACE("RETURNED = %d", tests_output);
+    // CHECK(run->EntryPoint->MethodPtr != NULL);
+    // int (*entry_point)() = run->EntryPoint->MethodPtr;
+    // int tests_output = entry_point();
+    // TRACE("RETURNED = %d", tests_output);
 
 cleanup:
+    free_assembly(corelib);
+    free_assembly(run);
+    for (int i = 0; i < arrlen(m_objects); i++) {
+        free(m_objects[i]);
+    }
+    arrfree(m_objects);
+
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 // TODO: remove once we have a GC
-const char* __asan_default_options() { return "detect_leaks=0"; }
+// const char* __asan_default_options() { return "detect_leaks=0"; }

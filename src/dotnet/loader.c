@@ -192,7 +192,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(init_type->namespace, type_def->type_namespace) == 0 &&
             strcmp(init_type->name, type_def->type_name) == 0
         ) {
-            RuntimeTypeInfo type = *init_type->dest ? *init_type->dest : GC_NEW(RuntimeTypeInfo);
+            RuntimeTypeInfo type = *init_type->dest ? *init_type->dest : TDN_GC_NEW(RuntimeTypeInfo);
             type->StackSize = init_type->stack_size;
             type->StackAlignment = init_type->stack_alignment;
             type->HeapSize = init_type->heap_size;
@@ -217,7 +217,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(load_type->namespace, type_def->type_namespace) == 0 &&
             strcmp(load_type->name, type_def->type_name) == 0
         ) {
-            RuntimeTypeInfo type = *load_type->dest ? *load_type->dest : GC_NEW(RuntimeTypeInfo);
+            RuntimeTypeInfo type = *load_type->dest ? *load_type->dest : TDN_GC_NEW(RuntimeTypeInfo);
             if (type->JitVTable == NULL) {
                 CHECK_AND_RETHROW(create_vtable(type, load_type->vtable_size));
             }
@@ -362,7 +362,7 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
         goto skip_field_allocation;
     }
 
-    RuntimeFieldInfo_Array fields = GC_NEW_ARRAY(RuntimeFieldInfo, count);
+    RuntimeFieldInfo_Array fields = TDN_GC_NEW_ARRAY(RuntimeFieldInfo, count);
     count = 0;
     for (int i = 0; i < type->DeclaredFields->Length; i++) {
         if (!type->DeclaredFields->Elements[i]->Attributes.Static) {
@@ -661,7 +661,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     }
 
     // now allocate the new vtable
-    info->VTable = GC_NEW_ARRAY(RuntimeMethodInfo, vtable_offset);
+    info->VTable = TDN_GC_NEW_ARRAY(RuntimeMethodInfo, vtable_offset);
 
     // allocate the native vtable
     if (info->JitVTable == NULL) {
@@ -805,7 +805,7 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
     // figure the count before hand
     size_t count = size / (fat ? sizeof(coril_exception_clause_fat_t) : sizeof(coril_exception_clause_small_t));
 
-    RuntimeExceptionHandlingClause_Array clauses = GC_NEW_ARRAY(RuntimeExceptionHandlingClause, count);
+    RuntimeExceptionHandlingClause_Array clauses = TDN_GC_NEW_ARRAY(RuntimeExceptionHandlingClause, count);
     method_base->MethodBody->ExceptionHandlingClauses = clauses;
 
     // iterate all the clauses
@@ -863,7 +863,7 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
         }
 
         // and now create it and fill it
-        RuntimeExceptionHandlingClause c = GC_NEW(RuntimeExceptionHandlingClause);
+        RuntimeExceptionHandlingClause c = TDN_GC_NEW(RuntimeExceptionHandlingClause);
         c->Flags = clause.flags;
         c->TryOffset = clause.try_offset;
         c->TryLength = clause.try_length;
@@ -893,7 +893,7 @@ tdn_err_t tdn_parser_method_body(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    RuntimeMethodBody body = GC_NEW(RuntimeMethodBody);
+    RuntimeMethodBody body = TDN_GC_NEW(RuntimeMethodBody);
     methodBase->MethodBody = body;
 
     // get the tiny header for the start
@@ -1205,7 +1205,7 @@ static tdn_err_t corelib_bootstrap() {
     tdn_err_t err = TDN_NO_ERROR;
 
     // start by initializing the System.Type type first
-    tRuntimeTypeInfo = gc_raw_alloc(sizeof(struct RuntimeTypeInfo));
+    tRuntimeTypeInfo = tdn_host_gc_alloc(sizeof(struct RuntimeTypeInfo), _Alignof(struct RuntimeTypeInfo));
     CHECK_ERROR(tRuntimeTypeInfo != NULL, TDN_ERROR_OUT_OF_MEMORY);
 
     // make sure to set its type id properly
@@ -1213,10 +1213,10 @@ static tdn_err_t corelib_bootstrap() {
     tRuntimeTypeInfo->Object.VTable = tRuntimeTypeInfo->JitVTable;
 
     // hard-code types we require for proper bootstrap
-    tArray = GC_NEW(RuntimeTypeInfo); // for creating a Type[]
-    tString = GC_NEW(RuntimeTypeInfo); // for creating a string
-    tRuntimeAssembly = GC_NEW(RuntimeTypeInfo); // for creating the main assembly
-    tRuntimeModule = GC_NEW(RuntimeTypeInfo); // for creating the main module
+    tArray = TDN_GC_NEW(RuntimeTypeInfo); // for creating a Type[]
+    tString = TDN_GC_NEW(RuntimeTypeInfo); // for creating a string
+    tRuntimeAssembly = TDN_GC_NEW(RuntimeTypeInfo); // for creating the main assembly
+    tRuntimeModule = TDN_GC_NEW(RuntimeTypeInfo); // for creating the main module
 
     // hard code to the correct amount of entries
     CHECK_AND_RETHROW(create_vtable(tArray, 4));
@@ -1224,7 +1224,7 @@ static tdn_err_t corelib_bootstrap() {
     CHECK_AND_RETHROW(create_vtable(tRuntimeAssembly, 4));
     CHECK_AND_RETHROW(create_vtable(tRuntimeModule, 4));
 
-    // setup the basic type so GC_NEW_ARRAY can work
+    // setup the basic type so TDN_GC_NEW_ARRAY can work
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("RuntimeTypeInfo", &tRuntimeTypeInfo->Name));
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("System.Reflection", &tRuntimeTypeInfo->Namespace));
 
@@ -1239,7 +1239,7 @@ static tdn_err_t corelib_bootstrap_types(RuntimeAssembly assembly) {
     // finish setting up the type
     //
     tRuntimeTypeInfo->Module = assembly->Module;
-    assembly->TypeDefs = GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->type_defs_count);
+    assembly->TypeDefs = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->type_defs_count);
 
     //
     // start by setting up the corelib types
@@ -1315,7 +1315,7 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
     tdn_file_t current_file = NULL;
 
     // and now create it
-    assembly->AssemblyRefs = (RuntimeAssembly_Array)GC_NEW_ARRAY(RuntimeAssembly, assembly->Metadata->assembly_refs_count);
+    assembly->AssemblyRefs = (RuntimeAssembly_Array)TDN_GC_NEW_ARRAY(RuntimeAssembly, assembly->Metadata->assembly_refs_count);
     for (int i = 0; i < assembly->Metadata->assembly_refs_count; i++) {
         metadata_assembly_ref_t* assembly_ref = &assembly->Metadata->assembly_refs[i];
 
@@ -1357,7 +1357,7 @@ cleanup:
 static tdn_err_t assembly_load_type_refs(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    assembly->TypeRefs = (RuntimeTypeInfo_Array)GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->type_refs_count);
+    assembly->TypeRefs = (RuntimeTypeInfo_Array)TDN_GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->type_refs_count);
     for (int i = 0; i < assembly->Metadata->type_refs_count; i++) {
         metadata_type_ref_t* type_ref = &assembly->Metadata->type_refs[i];
         RuntimeTypeInfo wanted_type = NULL;
@@ -1425,7 +1425,7 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
 
-    assembly->MethodDefs = (RuntimeMethodBase_Array)GC_NEW_ARRAY(MethodBase, assembly->Metadata->method_defs_count);
+    assembly->MethodDefs = (RuntimeMethodBase_Array)TDN_GC_NEW_ARRAY(MethodBase, assembly->Metadata->method_defs_count);
     for (int i = 0; i < assembly->Metadata->method_defs_count; i++) {
         metadata_method_def_t* method_def = &assembly->Metadata->method_defs[i];
         MethodAttributes attributes = { .Attributes = method_def->flags };
@@ -1468,9 +1468,9 @@ static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
         // now that we are sure this looks correct, continue and setup the
         RuntimeMethodBase base = NULL;
         if (is_ctor) {
-            base = (RuntimeMethodBase)GC_NEW(RuntimeConstructorInfo);
+            base = (RuntimeMethodBase)TDN_GC_NEW(RuntimeConstructorInfo);
         } else {
-            base = (RuntimeMethodBase)GC_NEW(RuntimeMethodInfo);
+            base = (RuntimeMethodBase)TDN_GC_NEW(RuntimeMethodInfo);
         }
         base->MetadataToken = ((token_t){ .table = METADATA_METHOD_DEF, .index = i + 1 }).token;
         base->Attributes = attributes;
@@ -1492,7 +1492,7 @@ static tdn_err_t assembly_load_fields(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
 
-    assembly->Fields = GC_NEW_ARRAY(RuntimeFieldInfo, assembly->Metadata->fields_count);
+    assembly->Fields = TDN_GC_NEW_ARRAY(RuntimeFieldInfo, assembly->Metadata->fields_count);
     for (int i = 0; i < assembly->Metadata->fields_count; i++) {
         metadata_field_t* field = &assembly->Metadata->fields[i];
         FieldAttributes attributes = { .Attributes = field->flags };
@@ -1503,7 +1503,7 @@ static tdn_err_t assembly_load_fields(RuntimeAssembly assembly) {
         if (attributes.RTSpecialName) CHECK(attributes.SpecialName);
 
         // create and save the type
-        RuntimeFieldInfo field_info = GC_NEW(RuntimeFieldInfo);
+        RuntimeFieldInfo field_info = TDN_GC_NEW(RuntimeFieldInfo);
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(field->name, &field_info->Name));
         CHECK(field_info->Name != NULL);
         field_info->Attributes = attributes;
@@ -1620,7 +1620,7 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
     }
 
     // initialize all the fields, we just need the stack size from them for now
-    type->DeclaredFields = GC_NEW_ARRAY(RuntimeFieldInfo, fields_count);
+    type->DeclaredFields = TDN_GC_NEW_ARRAY(RuntimeFieldInfo, fields_count);
     for (int i = 0; i < fields_count; i++) {
         metadata_field_t* field = &assembly->Metadata->fields[type_def->field_list.index - 1 + i];
         RuntimeFieldInfo fieldInfo = assembly->Fields->Elements[type_def->field_list.index - 1 + i];
@@ -1689,8 +1689,8 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
 
     // now we can allocate and init all of them
     bool delegate_found_ctor = false, delegate_found_invoke = false;
-    type->DeclaredConstructors = GC_NEW_ARRAY(RuntimeConstructorInfo, ctors);
-    type->DeclaredMethods = GC_NEW_ARRAY(RuntimeMethodInfo, methods);
+    type->DeclaredConstructors = TDN_GC_NEW_ARRAY(RuntimeConstructorInfo, ctors);
+    type->DeclaredMethods = TDN_GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
     methods = 0;
     for (int i = 0; i < methods_count; i++) {
@@ -1847,7 +1847,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
 
         // and set it up properly
         if (last_object != NULL && current_object != last_object) {
-            RuntimeTypeInfo_Array arr = GC_NEW_ARRAY(RuntimeTypeInfo, count);
+            RuntimeTypeInfo_Array arr = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, count);
             if (last_table == METADATA_TYPE_DEF) {
                 CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
                 ((RuntimeTypeInfo)last_object)->GenericArguments = arr;
@@ -1872,7 +1872,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
     }
 
     if (count != 0) {
-        RuntimeTypeInfo_Array arr = GC_NEW_ARRAY(RuntimeTypeInfo, count);
+        RuntimeTypeInfo_Array arr = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, count);
         if (last_table == METADATA_TYPE_DEF) {
             CHECK(((RuntimeTypeInfo)last_object)->GenericArguments == NULL);
             ((RuntimeTypeInfo)last_object)->GenericArguments = arr;
@@ -1888,12 +1888,12 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
     }
 
     // now fill it properly
-    assembly->GenericParams = GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->generic_params_count);
+    assembly->GenericParams = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->generic_params_count);
     for (int i = 0; i < assembly->Metadata->generic_params_count; i++) {
         metadata_generic_param_t* generic_param = &assembly->Metadata->generic_params[i];
         token_t owner = generic_param->owner;
 
-        RuntimeTypeInfo param = GC_NEW(RuntimeTypeInfo);
+        RuntimeTypeInfo param = TDN_GC_NEW(RuntimeTypeInfo);
         param->GenericParameterPosition = generic_param->number;
         param->GenericParameterAttributes = (GenericParameterAttributes){ .value = generic_param->flags };
         param->IsGenericParameter = 1;
@@ -1945,7 +1945,7 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
         // and set it up properly
         if (last_object != NULL && current_object != last_object) {
             CHECK(last_object->GenericParameterConstraints == NULL);
-            last_object->GenericParameterConstraints = GC_NEW_ARRAY(RuntimeTypeInfo, count);
+            last_object->GenericParameterConstraints = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, count);
             count = 0;
             last_object = NULL;
         }
@@ -1957,7 +1957,7 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
 
     if (count != 0) {
         CHECK(last_object->GenericParameterConstraints == NULL);
-        last_object->GenericParameterConstraints = GC_NEW_ARRAY(RuntimeTypeInfo, count);
+        last_object->GenericParameterConstraints = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, count);
     }
 
     // now fill it properly
@@ -2157,7 +2157,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     // now we need to create the assembly, if we are at boostrap we need
     // to do something a bit more special
-    assembly = GC_NEW(RuntimeAssembly);
+    assembly = TDN_GC_NEW(RuntimeAssembly);
     assembly->Metadata = file;
 
     // special case for core assembly
@@ -2167,7 +2167,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     }
 
     // setup the basic type
-    RuntimeModule module = GC_NEW(RuntimeModule);
+    RuntimeModule module = TDN_GC_NEW(RuntimeModule);
     module->Assembly = assembly;
     assembly->Module = module;
 
@@ -2179,7 +2179,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         CHECK_AND_RETHROW(corelib_bootstrap_types(assembly));
     } else {
         // this is the normal initialization path
-        assembly->TypeDefs = GC_NEW_ARRAY(RuntimeTypeInfo, file->type_defs_count);
+        assembly->TypeDefs = TDN_GC_NEW_ARRAY(RuntimeTypeInfo, file->type_defs_count);
     }
 
     //
@@ -2192,7 +2192,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
             CHECK(mCoreAssembly == NULL);
             type = assembly->TypeDefs->Elements[i];
         } else {
-            type = GC_NEW(RuntimeTypeInfo);
+            type = TDN_GC_NEW(RuntimeTypeInfo);
             assembly->TypeDefs->Elements[i] = type;
         }
 
@@ -2216,7 +2216,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     CHECK_AND_RETHROW(assembly_load_generics(assembly));
     CHECK_AND_RETHROW(assembly_load_generic_constraints(assembly));
 
-    assembly->Params = GC_NEW_ARRAY(ParameterInfo, assembly->Metadata->params_count);
+    assembly->Params = TDN_GC_NEW_ARRAY(ParameterInfo, assembly->Metadata->params_count);
 
     // connect the parent types of methods, this is required for
     // the custom properties connection to work
@@ -2263,7 +2263,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     if (mCoreAssembly == NULL) {
         // jit all the types required
         // for the runtime to work
-        CHECK_AND_RETHROW(corelib_jit_types(assembly));
+        // CHECK_AND_RETHROW(corelib_jit_types(assembly));
 
         mCoreAssembly = assembly;
     }

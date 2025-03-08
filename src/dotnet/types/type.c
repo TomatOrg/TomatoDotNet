@@ -36,7 +36,7 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // which is to set it to an invalid token into the TypeDef
     // table
     //
-    new_type = GC_NEW(RuntimeTypeInfo);
+    new_type = TDN_GC_NEW(RuntimeTypeInfo);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -72,7 +72,7 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     if (atomic_compare_exchange_strong(&type->ArrayType, &result, new_type)) {
         result = new_type;
     } else {
-        tdn_host_free_low(new_type->JitVTable);
+        tdn_host_free(new_type->JitVTable);
     }
 
     *out_type = result;
@@ -101,7 +101,7 @@ tdn_err_t tdn_get_byref_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     // which is to set it to an invalid token into the TypeDef
     // table
     //
-    new_type = GC_NEW(RuntimeTypeInfo);
+    new_type = TDN_GC_NEW(RuntimeTypeInfo);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -155,7 +155,7 @@ tdn_err_t tdn_get_pointer_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) 
     // which is to set it to an invalid token into the TypeDef
     // table
     //
-    new_type = GC_NEW(RuntimeTypeInfo);
+    new_type = TDN_GC_NEW(RuntimeTypeInfo);
     new_type->MetadataToken = (token_t){ .table = METADATA_TYPE_DEF }.token;
     new_type->DeclaringType = NULL;
     new_type->Module = type->Module;
@@ -246,10 +246,10 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
                             type_def[1].method_list.index - 1) - (type_def->method_list.index - 1);
 
     // initialize all the fields, we just need the stack size from them for now
-    type->DeclaredFields = GC_NEW_ARRAY(RuntimeFieldInfo, fields_count);
+    type->DeclaredFields = TDN_GC_NEW_ARRAY(RuntimeFieldInfo, fields_count);
     for (int i = 0; i < fields_count; i++) {
         metadata_field_t* field = &assembly->Metadata->fields[type_def->field_list.index - 1 + i];
-        RuntimeFieldInfo field_info = GC_NEW(RuntimeFieldInfo);
+        RuntimeFieldInfo field_info = TDN_GC_NEW(RuntimeFieldInfo);
         field_info->DeclaringType = type;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(field->name, &field_info->Name));
         field_info->Attributes = (FieldAttributes){ .Attributes = field->flags };
@@ -277,8 +277,8 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
     }
 
     // now we can allocate and init all of them
-    type->DeclaredConstructors = GC_NEW_ARRAY(RuntimeConstructorInfo, ctors);
-    type->DeclaredMethods = GC_NEW_ARRAY(RuntimeMethodInfo, methods);
+    type->DeclaredConstructors = TDN_GC_NEW_ARRAY(RuntimeConstructorInfo, ctors);
+    type->DeclaredMethods = TDN_GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
     methods = 0;
     for (size_t i = 0; i < methods_count; i++) {
@@ -289,7 +289,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
         // get the correct version
         RuntimeMethodBase base = NULL;
         if (attributes.RTSpecialName) {
-            base = (RuntimeMethodBase)GC_NEW(RuntimeConstructorInfo);
+            base = (RuntimeMethodBase)TDN_GC_NEW(RuntimeConstructorInfo);
             type->DeclaredConstructors->Elements[ctors++] = (RuntimeConstructorInfo)base;
 
             // set this as the type initialized
@@ -297,7 +297,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
                 type->TypeInitializer = (RuntimeConstructorInfo)base;
             }
         } else {
-            base = (RuntimeMethodBase)GC_NEW(RuntimeMethodInfo);
+            base = (RuntimeMethodBase)TDN_GC_NEW(RuntimeMethodInfo);
             type->DeclaredMethods->Elements[methods++] = (RuntimeMethodInfo)base;
         }
 
@@ -402,7 +402,7 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
     if (idx == -1) {
         // create it and set it incase we need it again
         // for expansion
-        RuntimeTypeInfo new_type = GC_NEW(RuntimeTypeInfo);
+        RuntimeTypeInfo new_type = TDN_GC_NEW(RuntimeTypeInfo);
 
         hmput(base->GenericTypeInstances, hash, new_type);
 

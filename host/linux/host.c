@@ -11,6 +11,7 @@
 #include <sys/mman.h>
 
 #include <util/except.h>
+#include <util/stb_ds.h>
 
 void tdn_host_log_trace(const char* format, ...) {
     printf("[*] ");
@@ -66,23 +67,6 @@ void tdn_host_free(void* ptr) {
     free(ptr);
 }
 
-static void* m_low_memory = NULL;
-
-void* tdn_host_mallocz_low(size_t size) {
-    if (m_low_memory == NULL) {
-        m_low_memory = mmap((void*)BASE_2GB, SIZE_2GB, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
-        ASSERT(m_low_memory != MAP_FAILED);
-        ASSERT((uintptr_t)m_low_memory == BASE_2GB);
-    }
-    void* ptr = m_low_memory;
-    m_low_memory += ALIGN_UP(size, 8);
-    return ptr;
-}
-
-void tdn_host_free_low(void* ptr) {
-
-}
-
 size_t tdn_host_strnlen(const char* string, size_t maxlen) {
     return strnlen(string, maxlen);
 }
@@ -124,19 +108,17 @@ const char* tdn_host_error_to_string(int error) {
     return strerror(error);
 }
 
+extern void** m_objects;
+
 void* tdn_host_gc_alloc(size_t size, size_t alignment) {
-    return calloc(1, size);
+    void* ptr = calloc(1, size);
+    if (ptr != NULL) {
+        arrpush(m_objects, ptr);
+    }
+    return ptr;
 }
 
-void tdn_host_gc_register_root(void* root) {
-    (void)root;
-}
-
-void tdn_host_gc_pin_object(void* object) {
-
-}
-
-void* tdn_host_map(size_t size) {
+void* tdn_host_jit_alloc(size_t size) {
     void* ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (ptr == MAP_FAILED) {
         return NULL;
@@ -144,8 +126,14 @@ void* tdn_host_map(size_t size) {
     return ptr;
 }
 
-void tdn_host_map_rx(void* ptr, size_t size) {
-    mprotect(ptr, size, PROT_READ | PROT_EXEC);
+void tdn_host_jit_set_exec(void* ptr, size_t size) {
+    ASSERT(mprotect(ptr, size, PROT_READ | PROT_EXEC) == 0);
+}
+
+void tdn_host_jit_patch(void* dst, void* src, size_t size) {
+    ASSERT(mprotect(dst, size, PROT_READ | PROT_WRITE | PROT_EXEC) == 0);
+    memcpy(dst, src, size);
+    ASSERT(mprotect(dst, size, PROT_READ | PROT_EXEC) == 0);
 }
 
 static int m_debug_counter = 0;

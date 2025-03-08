@@ -1,30 +1,29 @@
 #pragma once
 
+#include <spidir/module.h>
 #include <tomatodotnet/except.h>
+#include <tomatodotnet/types/type.h>
 
-#include "jit_internal.h"
+typedef struct jit_emitter_block {
+    // the entry block to jump into this block
+    spidir_block_t block;
 
-/**
- * Initialize the emit backend
- */
-tdn_err_t jit_init_emit();
+    // the phis for this block, NULL if there
+    // is only one entry into this block
+    spidir_phi_t* arg_phis;
+    spidir_phi_t* local_phis;
+    spidir_phi_t* stack_phis;
 
-/**
- * Queue a type for vtable fixes
- */
-tdn_err_t jit_queue_emit_method(spidir_module_handle_t module, RuntimeMethodBase method);
+    // the values we actually use when looking
+    // at the elements of this function
+    spidir_value_t* arg_values;
+    spidir_value_t* local_values;
+    spidir_value_t* stack_values;
 
-/**
- * Wait until emitting is finished, only call this once you finished
- * queueing all of the methods required
- */
-tdn_err_t jit_emit(spidir_module_handle_t module);
+    // is this block already in the queue
+    bool in_queue;
+} jit_emitter_block_t;
 
-/**
- * Clean everything to do with the jit init
- */
-void jit_emit_clean(void);
+typedef struct jit_emitter {
 
-spidir_value_type_t jit_get_spidir_type(RuntimeTypeInfo type);
-spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method);
-spidir_value_type_t* jit_get_spidir_arg_types(RuntimeMethodBase method);
+} jit_emitter_t;

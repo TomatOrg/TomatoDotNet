@@ -38,10 +38,49 @@ static void jit_throw(Object exception) {
     } else {
         TRACE("jit_throw: %T", exception->VTable->Type);
     }
+    ASSERT(!"jit_throw");
 }
 
-static Object jit_new(RuntimeTypeInfo type) {
-    return gc_new(type, type->HeapSize);
+static void jit_throw_out_of_memory(void) {
+    ASSERT(!"jit_throw_out_of_memory");
+}
+
+static void jit_throw_null_reference(void) {
+    ASSERT(!"jit_throw_null_reference");
+}
+
+static void jit_throw_index_out_of_range(void) {
+    ASSERT(!"jit_throw_index_out_of_range");
+}
+
+static void jit_throw_overflow(void) {
+    ASSERT(!"jit_throw_overflow");
+}
+
+static Object jit_newobj(RuntimeTypeInfo type) {
+    void* ptr = tdn_gc_new(type, type->HeapSize);
+    if (ptr == NULL) {
+        jit_throw_out_of_memory();
+    }
+    return ptr;
+}
+
+static Object jit_newarr(RuntimeTypeInfo arrType, int64_t num_elements) {
+    RuntimeTypeInfo element_type = arrType->ElementType;
+
+    // calculate the total length, make sure to take into account overflows
+    size_t total_length;
+    if (num_elements < 0) jit_throw_overflow();
+    if (num_elements <= INT32_MAX) jit_throw_out_of_memory();
+    if (__builtin_mul_overflow(num_elements, element_type->StackSize, &total_length)) jit_throw_out_of_memory();
+    if (__builtin_add_overflow(total_length, ALIGN_UP(sizeof(struct Array), element_type->StackAlignment), &total_length)) jit_throw_out_of_memory();
+
+    // and allocate it
+    void* ptr = tdn_gc_new(arrType, total_length);
+    if (ptr == NULL) {
+        jit_throw_out_of_memory();
+    }
+    return ptr;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -60,10 +99,15 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_GC_BZERO] = { .func = gc_bzero },
     [JIT_HELPER_GC_MEMCPY] = { .func = gc_memcpy },
     [JIT_HELPER_THROW] = { .func = jit_throw },
-    [JIT_HELPER_GC_NEW] = { .func = jit_new },
+    [JIT_HELPER_THROW_OUT_OF_MEMORY] = { .func = jit_throw_out_of_memory },
+    [JIT_HELPER_THROW_NULL_REFERENCE] = { .func = jit_throw_null_reference },
+    [JIT_HELPER_THROW_INDEX_OUT_OF_RANGE] = { .func = jit_throw_index_out_of_range },
+    [JIT_HELPER_THROW_OVERFLOW] = { .func = jit_throw_overflow },
+    [JIT_HELPER_NEWOBJ] = { .func = jit_newobj },
+    [JIT_HELPER_NEWARR] = { .func = jit_newarr },
 };
 
-spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_t helper) {
+spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
     if (m_jit_helpers[helper].created) {
         return m_jit_helpers[helper].function;
     }
@@ -94,10 +138,31 @@ spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_
                 "jit_throw", SPIDIR_TYPE_NONE, 1,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
 
-        case JIT_HELPER_GC_NEW:
+        case JIT_HELPER_THROW_OUT_OF_MEMORY:
             m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
-                "jit_gc_new", SPIDIR_TYPE_PTR, 1,
+                "jit_throw_out_of_memory", SPIDIR_TYPE_NONE, 0, NULL); break;
+
+        case JIT_HELPER_THROW_NULL_REFERENCE:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_throw_null_reference", SPIDIR_TYPE_NONE, 0, NULL); break;
+
+        case JIT_HELPER_THROW_INDEX_OUT_OF_RANGE:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_throw_index_out_of_range", SPIDIR_TYPE_NONE, 0, NULL); break;
+
+        case JIT_HELPER_THROW_OVERFLOW:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_throw_overflow", SPIDIR_TYPE_NONE, 0, NULL); break;
+
+        case JIT_HELPER_NEWOBJ:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_newobj", SPIDIR_TYPE_PTR, 1,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
+
+        case JIT_HELPER_NEWARR:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_newarr", SPIDIR_TYPE_PTR, 2,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
 
         default:
             ASSERT(!"Invalid jit helper");
@@ -106,7 +171,7 @@ spidir_function_t jit_helper_get(spidir_module_handle_t module, jit_helper_type_
     return m_jit_helpers[helper].function;
 }
 
-void* jit_helper_get_ptr(spidir_function_t function) {
+void* jit_get_helper_ptr(spidir_function_t function) {
     for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
         if (m_jit_helpers[i].created && function.id == m_jit_helpers[i].function.id) {
             return m_jit_helpers[i].func;
@@ -115,7 +180,7 @@ void* jit_helper_get_ptr(spidir_function_t function) {
     return NULL;
 }
 
-void jit_helper_clean() {
+void jit_clean_helpers() {
     for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
         m_jit_helpers[i].created = false;
     }
