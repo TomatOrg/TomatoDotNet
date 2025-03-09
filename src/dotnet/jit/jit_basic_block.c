@@ -45,7 +45,7 @@ static void sort_basic_blocks(jit_basic_block_t* arr, int low, int high) {
     }
 }
 
-static void jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_blocks_t** out_basic_blocks, uint32_t pc) {
+static void jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_block_entry_t** out_basic_blocks, uint32_t pc) {
     if (hmgeti(*out_basic_blocks, pc) < 0) {
         jit_basic_block_t block = {
             .start = pc,
@@ -57,7 +57,7 @@ static void jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_bloc
     }
 }
 
-tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_blocks_t** out_basic_blocks) {
+tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_t** out_basic_blocks) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBody body = method->MethodBody;
     jit_basic_block_t* ctx = {};

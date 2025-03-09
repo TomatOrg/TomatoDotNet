@@ -6,13 +6,8 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 
-typedef enum il_pop {
-    VarPop = -1,
-    Pop0 = 0,
-    Pop1 = 1,
-} il_pop_t;
+#include "jit_type.h"
 
-// just alias the rest
 #define VarPop  (-1)
 #define Pop0    0
 #define Pop1    1
@@ -22,13 +17,27 @@ typedef enum il_pop {
 #define PopR4   Pop1
 #define PopR8   Pop1
 
+#define VarPush     (-1)
+#define Push0       0
+#define Push1       1
+#define PushRef     Push1
+#define PushI       Push1
+#define PushI8      Push1
+#define PushR4      Push1
+#define PushR8      Push1
+
+typedef struct il_stack_behavior {
+    int pop;
+    int push;
+} il_stack_behavior_t;
+
 /**
  * Metadata for all the opcodes, used for decoding, this is turned
  * into another struct which is a bit more useful
  */
-static int m_il_pop_count[] = {
+static il_stack_behavior_t m_il_stack_behavior[] = {
 #define OPDEF_REAL_OPCODES_ONLY
-#define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) [c] = pop,
+#define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) [c] = { pop, push },
 #include "tomatodotnet/opcode.def"
 #undef OPDEF
 #undef OPDEF_REAL_OPCODES_ONLY
@@ -67,6 +76,60 @@ static void verifier_queue_block(jit_verifier_t* verifier, jit_verifier_block_t*
     }
 }
 
+#define MERGE_BOOL(name) \
+    do { \
+        if (previous->name && !new->name) { \
+            previous->name = false; \
+            modified = true; \
+        } \
+    } while (0)
+
+static RuntimeTypeInfo verifier_merge_type(RuntimeTypeInfo S, RuntimeTypeInfo T) {
+    // TODO: find a common base
+    if (verifier_assignable_to(S, T)) {
+        return S;
+    } else if (verifier_assignable_to(T, S)) {
+        return T;
+    } else {
+        return NULL;
+    }
+}
+
+static bool verifier_merge_stack(jit_verifier_stack_t* previous, jit_verifier_stack_t* new) {
+    bool modified = false;
+
+    RuntimeTypeInfo U = verifier_merge_type(previous->type, new->type);
+    if (U != previous->type) {
+        previous->type = U;
+        modified = true;
+    }
+
+    U = verifier_merge_type(previous->boxed_type, new->boxed_type);
+    if (U != previous->boxed_type) {
+        previous->boxed_type = U;
+        modified = true;
+    }
+
+    MERGE_BOOL(is_exact_type);
+    MERGE_BOOL(readonly_ref);
+    MERGE_BOOL(non_local_ref);
+    MERGE_BOOL(non_local_ref_struct);
+
+    return modified;
+}
+
+static bool verifier_merge_block_local(jit_verifier_block_local_t* previous, jit_verifier_block_local_t* new) {
+    bool modified = false;
+
+    if (verifier_merge_stack(&previous->stack, &new->stack)) {
+        modified = true;
+    }
+
+    MERGE_BOOL(initialized);
+
+    return modified;
+}
+
 static tdn_err_t verifier_merge_block(jit_verifier_t* verifier, jit_verifier_block_t* from, jit_verifier_block_t* target) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -75,7 +138,33 @@ static tdn_err_t verifier_merge_block(jit_verifier_t* verifier, jit_verifier_blo
         // type instead of setting everything as is
         target->multiple_predecessors = true;
 
-        CHECK_FAIL();
+        bool modified = false;
+
+        for (int i = 0; i < arrlen(from->args); i++) {
+            if (verifier_merge_block_local(&target->args[i], &from->args[i])) {
+                modified = true;
+            }
+            CHECK(target->args[i].stack.type != NULL);
+        }
+
+        for (int i = 0; i < arrlen(from->locals); i++) {
+            if (verifier_merge_block_local(&target->locals[i], &from->locals[i])) {
+                modified = true;
+            }
+            CHECK(target->locals[i].stack.type != NULL);
+        }
+
+        for (int i = 0; i < arrlen(from->stack); i++) {
+            if (verifier_merge_stack(&target->stack[i], &from->stack[i])) {
+                modified = true;
+            }
+            CHECK(target->stack[i].type != NULL);
+        }
+
+        // the metadata of the block was modified, we must
+        if (modified) {
+            verifier_queue_block(verifier, target);
+        }
 
     } else {
         // first time being visited, copy over all the type information as is
@@ -100,10 +189,10 @@ cleanup:
 // Verifiers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define STACK_PUSH(_type) \
+#define STACK_PUSH() \
     ({ \
         jit_verifier_stack_t* __item = arraddnptr(block->stack, 1); \
-        __item->type = _type; \
+        memset(__item, 0, sizeof(*__item)); \
         __item; \
     })
 
@@ -111,8 +200,59 @@ cleanup:
 // Misc instructions
 //----------------------------------------------------------------------------------------------------------------------
 
+// Use as a template for adding new instructions
 static tdn_err_t verify_nop(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
-    return TDN_NO_ERROR;
+    tdn_err_t err = TDN_NO_ERROR;
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Local access
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_ldloc(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->locals));
+    jit_verifier_block_local_t* local = &block->locals[inst->operand.variable];
+
+    // check if we need to zero initialize
+    if (!local->initialized) {
+        // TODO: should we fail if the method is not marked as InitLocals?
+        verifier->locals[inst->operand.variable].zero_initialize = true;
+        local->initialized = true;
+    }
+
+    // fixup the type to be the intermediate type,
+    // and push it to the stack
+    jit_verifier_stack_t item = local->stack;
+    item.type = verifier_get_intermediate_type(item.type);
+    *STACK_PUSH() = item;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_stloc(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->locals));
+    jit_verifier_block_local_t* local = &block->locals[inst->operand.variable];
+
+    // check that the type matches
+    CHECK(verifier_assignable_to(stack[0].type, verifier->locals[inst->operand.variable].type),
+        "%T verifier-assignable-to %T", stack[0].type, verifier->locals[inst->operand.variable].type);
+
+    // copy as is
+    local->stack = stack[0];
+    local->initialized = true;
+
+cleanup:
+    return err;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -120,13 +260,69 @@ static tdn_err_t verify_nop(jit_verifier_t* verifier, jit_verifier_block_t* bloc
 //----------------------------------------------------------------------------------------------------------------------
 
 static tdn_err_t verify_ldc_i4(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
-    STACK_PUSH(tInt32);
+    STACK_PUSH()->type = tInt32;
     return TDN_NO_ERROR;
 }
 
 static tdn_err_t verify_ldc_i8(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
-    STACK_PUSH(tInt64);
+    STACK_PUSH()->type = tInt64;
     return TDN_NO_ERROR;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Method related
+//----------------------------------------------------------------------------------------------------------------------
+
+// Use as a template for adding new instructions
+static tdn_err_t verify_ret(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    ParameterInfo ret = verifier->method->ReturnParameter;
+
+    // the stack must be empty at this point
+    CHECK(arrlen(block->stack) == 0);
+
+    RuntimeTypeInfo ret_type = ret->ParameterType;
+    if (ret_type != tVoid) {
+        // ensure the return type is valid
+        CHECK(verifier_assignable_to(stack[0].type, ret_type),
+            "%T verifier-assignable-to %T", stack[0].type, ret_type);
+
+        // readonly consistency
+        if (!ret->IsReadOnly) {
+            CHECK(!stack[0].readonly_ref);
+        }
+
+        // consistency of refs
+        if (ret_type->IsByRef) {
+            CHECK(stack[0].non_local_ref);
+            if (ret_type->ElementType->IsByRefStruct) {
+                CHECK(stack[0].non_local_ref_struct);
+            }
+        } else if (ret_type->IsByRefStruct) {
+            CHECK(stack[0].non_local_ref_struct);
+        }
+    }
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Branching
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_br(jit_verifier_t* verifier, jit_verifier_block_t* block, tdn_il_inst_t* inst, jit_verifier_stack_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the target block
+    jit_basic_block_entry_t* target = hmgetp_null(verifier->labels, inst->operand.branch_target);
+    CHECK(target != NULL);
+
+    // check that we can merge with it
+    CHECK_AND_RETHROW(verifier_merge_block(verifier, block, &verifier->blocks[target->value.index]));
+
+cleanup:
+    return err;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -140,9 +336,15 @@ typedef tdn_err_t (*verify_instruction_t)(jit_verifier_t* verifier, jit_verifier
  */
 static verify_instruction_t m_verify_table[] = {
     [CEE_NOP] = verify_nop,
+    [CEE_LDLOC] = verify_ldloc,
+    [CEE_STLOC] = verify_stloc,
 
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
+
+    [CEE_RET] = verify_ret,
+
+    [CEE_BR] = verify_br,
 };
 
 static tdn_err_t jit_verify_basic_block(jit_verifier_t* verifier, jit_verifier_block_t* in_block) {
@@ -186,20 +388,45 @@ static tdn_err_t jit_verify_basic_block(jit_verifier_t* verifier, jit_verifier_b
 
         // TODO: verify the stack push
 
+        //
         // figure how much we need to pop from the stack
-        int pop_count = m_il_pop_count[inst.opcode];
-        if (pop_count < 0) {
+        //
+        il_stack_behavior_t stack_behavior = m_il_stack_behavior[inst.opcode];
+
+        if (stack_behavior.push < 0) {
             // TODO: calculate how many needed
             CHECK_FAIL();
-        } else {
-            arrsetlen(stack_items, pop_count);
         }
 
+        if (stack_behavior.pop < 0) {
+            switch (inst.opcode) {
+                case CEE_RET: {
+                    if (method->ReturnParameter->ParameterType != tVoid) {
+                        stack_behavior.pop = 1;
+                    } else {
+                        stack_behavior.pop = 0;
+                    }
+                } break;
+
+                default:
+                    CHECK_FAIL("Invalid PopVar for %s", tdn_get_opcode_name(inst.opcode));
+            }
+        }
+
+        arrsetlen(stack_items, stack_behavior.pop);
+
+        //
         // pop from the stack
-        CHECK(arrlen(block.stack) >= pop_count);
-        for (int i = pop_count - 1; i >= 0; i--) {
+        //
+        CHECK(arrlen(block.stack) >= arrlen(stack_items));
+        for (int i = arrlen(stack_items) - 1; i >= 0; i--) {
             stack_items[i] = arrpop(block.stack);
         }
+
+        //
+        // Ensure we can push to the stack enough items
+        //
+        CHECK(arrlen(block.stack) + stack_behavior.push <= body->MaxStackSize);
 
         // ensure we have a verifier for this opcode
         CHECK(inst.opcode < ARRAY_LENGTH(m_verify_table) && m_verify_table[inst.opcode] != NULL,
@@ -215,9 +442,9 @@ static tdn_err_t jit_verify_basic_block(jit_verifier_t* verifier, jit_verifier_b
 #endif
     }
 
-    // we have a fallthrough
+    // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
-        CHECK_FAIL();
+        CHECK_AND_RETHROW(verifier_merge_block(verifier, &block, &verifier->blocks[block.block.index + 1]));
     }
 
     // last must be a valid instruction
@@ -227,6 +454,11 @@ static tdn_err_t jit_verify_basic_block(jit_verifier_t* verifier, jit_verifier_b
     );
 
 cleanup:
+    // free the block data
+    arrfree(block.args);
+    arrfree(block.locals);
+    arrfree(block.stack);
+
     arrfree(stack_items);
 
     return err;
@@ -290,7 +522,7 @@ tdn_err_t jit_verifier_init(jit_verifier_t* verifier, RuntimeMethodBase method) 
 
     // handle the this parameter if non-static
     if (!method->Attributes.Static) {
-        jit_verifier_local_t local = {
+        jit_verifier_block_local_t local = {
             .stack = {
                 .type = get_method_this_type(method),
             },
@@ -315,7 +547,7 @@ tdn_err_t jit_verifier_init(jit_verifier_t* verifier, RuntimeMethodBase method) 
     for (int i = 0; i < method->Parameters->Length; i++) {
         ParameterInfo parameter = method->Parameters->Elements[i];
         RuntimeTypeInfo type = parameter->ParameterType;
-        jit_verifier_local_t local = {
+        jit_verifier_block_local_t local = {
             .stack = {
                 .type = type,
             },
@@ -348,10 +580,28 @@ tdn_err_t jit_verifier_init(jit_verifier_t* verifier, RuntimeMethodBase method) 
     // Initialize the locals
     //
 
+    // the entry block context
     arrsetlen(entry_block->locals, method->MethodBody->LocalVariables->Length);
     memset(entry_block->locals, 0, arrlen(entry_block->locals) * sizeof(*entry_block->locals));
     for (int i = 0; i < arrlen(entry_block->locals); i++) {
         entry_block->locals[i].stack.type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
+    }
+
+
+    //
+    // Set the global context
+    //
+
+    arrsetlen(verifier->locals, arrlen(entry_block->locals));
+    memset(verifier->locals, 0, arrlen(verifier->locals) * sizeof(*verifier->locals));
+    for (int i = 0; i < arrlen(verifier->locals); i++) {
+        verifier->locals[i].type = entry_block->locals[i].stack.type;
+    }
+
+    arrsetlen(verifier->args, arrlen(entry_block->args));
+    memset(verifier->args, 0, arrlen(verifier->args) * sizeof(*verifier->args));
+    for (int i = 0; i < arrlen(verifier->args); i++) {
+        verifier->args[i].type = entry_block->args[i].stack.type;
     }
 
 cleanup:
@@ -368,6 +618,9 @@ void jit_verifier_destroy(jit_verifier_t* verifier) {
         arrfree(verifier->blocks[i].stack);
     }
     arrfree(verifier->blocks);
+
+    arrfree(verifier->locals);
+    arrfree(verifier->args);
 
     hmfree(verifier->labels);
     arrfree(verifier->queue);

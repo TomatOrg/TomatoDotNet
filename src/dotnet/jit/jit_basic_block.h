@@ -20,7 +20,7 @@ typedef struct jit_basic_blocks {
 
     // the basic block range
     jit_basic_block_t value;
-} jit_basic_blocks_t;
+} jit_basic_block_entry_t;
 
 /**
  * Parse the code to get a hashmap of pc -> basic block
@@ -28,4 +28,4 @@ typedef struct jit_basic_blocks {
  * @param method                [IN] The method to find the basic blocks of
  * @param out_basic_blocks      [OUT] Hashmap of basic blocks
  */
-tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_blocks_t** out_basic_blocks);
+tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_t** out_basic_blocks);

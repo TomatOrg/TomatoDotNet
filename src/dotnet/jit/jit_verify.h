@@ -39,29 +39,25 @@ typedef struct jit_verifier_stack {
     bool non_local_ref_struct;
 } jit_verifier_stack_t;
 
-typedef struct jit_verifier_local {
+typedef struct jit_verifier_block_local {
     // the stack related attributes
     jit_verifier_stack_t stack;
-
-    // if ldloca was used then this will be set to true, letting the rest of the function
-    // know that it should be used by reference and not by value
-    bool spilled;
 
     // was the value initialized, whenever stloc is called it will
     // be set to true, if ldloc/ldloca is called with this being false
     // we will zero initialize it at the start of the function
     bool initialized;
-} jit_verifier_local_t;
+} jit_verifier_block_local_t;
 
 typedef struct jit_verifier_block {
     // the basic block range
     jit_basic_block_t block;
 
     // the arguments at the start of the basic block
-    jit_verifier_local_t* args;
+    jit_verifier_block_local_t* args;
 
     // the locals at the start of the basic block
-    jit_verifier_local_t* locals;
+    jit_verifier_block_local_t* locals;
 
     // the stack at the start of the basic block
     jit_verifier_stack_t* stack;
@@ -76,15 +72,33 @@ typedef struct jit_verifier_block {
     bool visited;
 } jit_verifier_block_t;
 
+typedef struct jit_verifier_local {
+    // the original local's type
+    RuntimeTypeInfo type;
+
+    // is zero-initialize required
+    bool zero_initialize;
+
+    // taken by reference, so we have a stack-slot
+    // for this and we must use it no matter what
+    bool spilled;
+} jit_verifier_local_t;
+
 typedef struct jit_verifier {
     // the method that we are dealing with
     RuntimeMethodBase method;
 
     // map of basic blocks
-    jit_basic_blocks_t* labels;
+    jit_basic_block_entry_t* labels;
 
     // the verifier blocks
     jit_verifier_block_t* blocks;
+
+    // the locals of this function
+    jit_verifier_local_t* locals;
+
+    // the locals of this function
+    jit_verifier_local_t* args;
 
     // the queue of blocks to verify
     jit_verifier_block_t** queue;
