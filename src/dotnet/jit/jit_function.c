@@ -3,6 +3,7 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 #include <util/string.h>
+#include <util/string_builder.h>
 
 #include "jit_type.h"
 #include "jit_verify.h"
@@ -333,7 +334,11 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
     tdn_err_t err = TDN_NO_ERROR;
 
     TRACE("========================================");
-    TRACE("%T::%U", function->method->DeclaringType, function->method->Name);
+    string_builder_t str_builder = {};
+    string_builder_push_method_signature(&str_builder, function->method, true);
+    const char* name = string_builder_build(&str_builder);
+    TRACE("%s", name);
+    string_builder_free(&str_builder);
 
     TRACE("----------------------------------------");
     // start with verifying the function fully
