@@ -48,14 +48,14 @@ cleanup:
 
 tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     tdn_err_t err = TDN_NO_ERROR;
-    jit_verifier_t verifier = {};
+    jit_function_t verifier = {};
 
-    CHECK_AND_RETHROW(jit_verifier_init(&verifier, methodInfo));
+    CHECK_AND_RETHROW(jit_function_init(&verifier, methodInfo));
 
-    CHECK_AND_RETHROW(jit_verify(&verifier));
+    CHECK_AND_RETHROW(jit_function(&verifier));
 
 cleanup:
-    jit_verifier_destroy(&verifier);
+    jit_function_destroy(&verifier);
 
     return err;
 }

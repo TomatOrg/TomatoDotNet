@@ -1,0 +1,121 @@
+#pragma once
+
+
+#include <tomatodotnet/disasm.h>
+#include <tomatodotnet/except.h>
+
+#include "jit_basic_block.h"
+
+
+typedef struct jit_stack_item {
+    // the actual type of the slot
+    RuntimeTypeInfo type;
+
+    union {
+        // the underlying type when the value is boxed (type == tObject)
+        RuntimeTypeInfo boxed_type;
+
+        // the underlying method when the value is a delegate (type.BaseType == tMulticastDelegate)
+        RuntimeMethodInfo method;
+    };
+
+    // is the type an exact match, or could it maybe
+    // be something higher up the chain
+    bool is_exact_type;
+
+    //
+    // Reference related
+    //
+
+    // is this a read-only reference
+    bool readonly_ref;
+
+    // the reference is non-local
+    bool non_local_ref;
+
+    // the ref-struct is non-local, so the references it
+    // contains are non-local as well
+    bool non_local_ref_struct;
+} jit_stack_item_t;
+
+typedef struct jit_block_local {
+    // the stack related attributes
+    jit_stack_item_t stack;
+
+    // was the value initialized, whenever stloc is called it will
+    // be set to true, if ldloc/ldloca is called with this being false
+    // we will zero initialize it at the start of the function
+    bool initialized;
+} jit_block_local_t;
+
+typedef struct jit_block {
+    // the basic block range
+    jit_basic_block_t block;
+
+    // the arguments at the start of the basic block
+    jit_block_local_t* args;
+
+    // the locals at the start of the basic block
+    jit_block_local_t* locals;
+
+    // the stack at the start of the basic block
+    jit_stack_item_t* stack;
+
+    // is this block already in the queue?
+    bool in_queue;
+
+    // does this block have multiple predecessors?
+    bool multiple_predecessors;
+
+    // was this block visited once
+    bool visited;
+} jit_block_t;
+
+typedef struct jit_local {
+    // the original local's type
+    RuntimeTypeInfo type;
+
+    // is zero-initialize required
+    bool zero_initialize;
+
+    // taken by reference, so we have a stack-slot
+    // for this and we must use it no matter what
+    bool spilled;
+} jit_local_t;
+
+typedef struct jit_function {
+    // the method that we are dealing with
+    RuntimeMethodBase method;
+
+    // map of basic blocks
+    jit_basic_block_entry_t* labels;
+
+    // the verifier blocks
+    jit_block_t* blocks;
+
+    // the locals of this function
+    jit_local_t* locals;
+
+    // the locals of this function
+    jit_local_t* args;
+
+    // the queue of blocks to verify
+    jit_block_t** queue;
+} jit_function_t;
+
+/**
+ * Initialize a new verifier, this will create the labels lookup
+ * and initialize the attributes of the first block
+ */
+tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method);
+
+/**
+ * Fully run the verifier, until it reaches a stable type information
+ * position.
+ */
+tdn_err_t jit_function(jit_function_t* function);
+
+/**
+ * Destroy the verifier
+ */
+void jit_function_destroy(jit_function_t* function);
