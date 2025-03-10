@@ -1,6 +1,7 @@
 #pragma once
 
 
+#include <spidir/module.h>
 #include <tomatodotnet/disasm.h>
 #include <tomatodotnet/except.h>
 
@@ -18,6 +19,9 @@ typedef struct jit_stack_item {
         // the underlying method when the value is a delegate (type.BaseType == tMulticastDelegate)
         RuntimeMethodInfo method;
     };
+
+    // the value of the stack item
+    spidir_value_t value;
 
     // is the type an exact match, or could it maybe
     // be something higher up the chain
@@ -42,6 +46,9 @@ typedef struct jit_block_local {
     // the stack related attributes
     jit_stack_item_t stack;
 
+    // the phi of the local
+    spidir_phi_t phi;
+
     // was the value initialized, whenever stloc is called it will
     // be set to true, if ldloc/ldloca is called with this being false
     // we will zero initialize it at the start of the function
@@ -52,6 +59,9 @@ typedef struct jit_block {
     // the basic block range
     jit_basic_block_t block;
 
+    // the spidir block
+    spidir_block_t spidir_block;
+
     // the arguments at the start of the basic block
     jit_block_local_t* args;
 
@@ -61,6 +71,9 @@ typedef struct jit_block {
     // the stack at the start of the basic block
     jit_stack_item_t* stack;
 
+    // the phi's of the stack entries
+    spidir_phi_t* stack_phis;
+
     // is this block already in the queue?
     bool in_queue;
 
@@ -69,6 +82,9 @@ typedef struct jit_block {
 
     // was this block visited once
     bool visited;
+
+    // did we initialize the phis yet
+    bool initialized_phis;
 } jit_block_t;
 
 typedef struct jit_local {
@@ -99,6 +115,11 @@ typedef struct jit_function {
     // the locals of this function
     jit_local_t* args;
 
+    // the block that is used to enter the function, this is initialized with
+    // all of the initial type information, and for inline functions should
+    // include the inline values
+    jit_block_t entry_block;
+
     // the queue of blocks to verify
     jit_block_t** queue;
 } jit_function_t;
@@ -113,7 +134,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method);
  * Fully run the verifier, until it reaches a stable type information
  * position.
  */
-tdn_err_t jit_function(jit_function_t* function);
+tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder);
 
 /**
  * Destroy the verifier

@@ -55,7 +55,7 @@ static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
     memcpy(out->stack, in->stack, arrlen(in->stack) * sizeof(*in->stack));
 }
 
-static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in_block) {
+static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in_block, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = verifier->method;
     RuntimeMethodBody body = method->MethodBody;
@@ -135,15 +135,22 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
         // Ensure we can push to the stack enough items
         //
         CHECK(arrlen(block.stack) + stack_behavior.push <= body->MaxStackSize);
+        size_t wanted_stack_size = arrlen(block.stack) + stack_behavior.push;
 
         // ensure we have a verifier for this opcode
         CHECK(inst.opcode < g_verify_dispatch_table_size && g_verify_dispatch_table[inst.opcode] != NULL,
             "Unknown opcode %s", tdn_get_opcode_name(inst.opcode));
-
-        // call the verify function, it will ensure the stack is correct
         CHECK_AND_RETHROW(g_verify_dispatch_table[inst.opcode](verifier, &block, &inst, stack_items));
 
-        // TODO: call the emitter (if need be)
+        // call the emitter (if need be)
+        if (builder != NULL) {
+            CHECK(inst.opcode < g_emit_dispatch_table_size && g_emit_dispatch_table[inst.opcode] != NULL,
+                "Unknown opcode %s", tdn_get_opcode_name(inst.opcode));
+            CHECK_AND_RETHROW(g_emit_dispatch_table[inst.opcode](verifier, builder, &block, &inst, stack_items));
+        }
+
+        // ensure that the instruction was executed correctly
+        CHECK(arrlen(block.stack) == wanted_stack_size);
 
 #ifdef JIT_VERBOSE_VERIFY
         indent = tdn_disasm_print_end(body, pc, indent);
@@ -153,6 +160,9 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
     // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
         CHECK_AND_RETHROW(verifier_on_block_fallthrough(verifier, &block, &verifier->blocks[block.block.index + 1]));
+        if (builder != NULL) {
+            CHECK_AND_RETHROW(emitter_on_block_fallthrough(verifier, builder, &block, &verifier->blocks[block.block.index + 1]));
+        }
     }
 
     // last must be a valid instruction
@@ -172,14 +182,21 @@ cleanup:
     return err;
 }
 
-tdn_err_t jit_visit_function(jit_function_t* function) {
+tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    TRACE("========================================");
-    TRACE("VERIFY: %T::%U", function->method->DeclaringType, function->method->Name);
+    // for the emitter we need a pass in here to initialize all of the block
+    // locals before we enter the real entry block
+    if (builder != NULL) {
+        CHECK_AND_RETHROW(emitter_on_entry_block(function, builder, &function->entry_block));
+    }
 
-    // start with the entry block
-    CHECK_AND_RETHROW(verifier_on_entry_block(function, &function->blocks[0]));
+    // and now we need to merge with the entry block, which contains
+    // all of the initial information about the function entry
+    CHECK_AND_RETHROW(verifier_on_block_fallthrough(function, &function->entry_block, &function->blocks[0]));
+    if (builder != NULL) {
+        CHECK_AND_RETHROW(emitter_on_block_fallthrough(function, builder, &function->entry_block, &function->blocks[0]));
+    }
 
     // and run until all blocks are verifier
     while (arrlen(function->queue) != 0) {
@@ -187,10 +204,10 @@ tdn_err_t jit_visit_function(jit_function_t* function) {
         block->in_queue = false;
 
 #ifdef JIT_VERBOSE_VERIFY
-        TRACE("\tBasic block (IL_%04x):", block->block.start);
+        TRACE("\tBasic block %d (IL_%04x):", block->block.index, block->block.start);
 #endif
 
-        CHECK_AND_RETHROW(jit_visit_basic_block(function, block));
+        CHECK_AND_RETHROW(jit_visit_basic_block(function, block, builder));
     }
 
 cleanup:
@@ -218,7 +235,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         function->blocks[function->labels[i].value.index].block = function->labels[i].value;
     }
 
-    jit_block_t* entry_block = &function->blocks[0];
+    jit_block_t* entry_block = &function->entry_block;
 
     //
     // Initialize the arguments
@@ -253,7 +270,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         RuntimeTypeInfo type = parameter->ParameterType;
         jit_block_local_t local = {
             .stack = {
-                .type = type,
+                .type = type
             },
         };
 
@@ -291,7 +308,6 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         entry_block->locals[i].stack.type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
     }
 
-
     //
     // Set the global context
     //
@@ -313,10 +329,27 @@ cleanup:
     return err;
 }
 
-tdn_err_t jit_function(jit_function_t* function) {
+tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    TRACE("========================================");
+    TRACE("%T::%U", function->method->DeclaringType, function->method->Name);
 
+    TRACE("----------------------------------------");
+    // start with verifying the function fully
+    CHECK_AND_RETHROW(jit_visit_blocks(function, NULL));
+
+    TRACE("----------------------------------------");
+
+    // prepare all the blocks for another pass, this time with a spidir
+    // block ready so it can be jumped to
+    for (int i = 0; i < arrlen(function->blocks); i++) {
+        function->blocks[i].visited = false;
+        function->blocks[i].spidir_block = spidir_builder_create_block(builder);
+    }
+
+    // now we can do the second pass of emitting
+    CHECK_AND_RETHROW(jit_visit_blocks(function, builder));
 
 cleanup:
     return err;

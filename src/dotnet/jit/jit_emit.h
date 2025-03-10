@@ -1,29 +1,27 @@
 #pragma once
 
 #include <spidir/module.h>
-#include <tomatodotnet/except.h>
-#include <tomatodotnet/types/type.h>
 
-typedef struct jit_emitter_block {
-    // the entry block to jump into this block
-    spidir_block_t block;
+#include "jit_function.h"
 
-    // the phis for this block, NULL if there
-    // is only one entry into this block
-    spidir_phi_t* arg_phis;
-    spidir_phi_t* local_phis;
-    spidir_phi_t* stack_phis;
+typedef tdn_err_t (*emit_instruction_t)(
+    jit_function_t* function,
+    spidir_builder_handle_t builder,
+    jit_block_t* block,
+    tdn_il_inst_t* inst,
+    jit_stack_item_t* stack
+);
 
-    // the values we actually use when looking
-    // at the elements of this function
-    spidir_value_t* arg_values;
-    spidir_value_t* local_values;
-    spidir_value_t* stack_values;
+extern emit_instruction_t g_emit_dispatch_table[];
+extern size_t g_emit_dispatch_table_size;
 
-    // is this block already in the queue
-    bool in_queue;
-} jit_emitter_block_t;
+tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block);
 
-typedef struct jit_emitter {
+tdn_err_t emitter_on_block_fallthrough(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block);
 
-} jit_emitter_t;
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Useful spidir helpers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method);
+spidir_value_type_t* jit_get_spidir_arg_types(RuntimeMethodBase method);

@@ -273,9 +273,6 @@ cleanup:
 // Dispatch tables
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * Opcode verification table
- */
 verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_NOP] = verify_nop,
     [CEE_LDLOC] = verify_ldloc,
@@ -293,15 +290,6 @@ size_t g_verify_dispatch_table_size = ARRAY_LENGTH(g_verify_dispatch_table);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Entry points
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-tdn_err_t verifier_on_entry_block(jit_function_t* function, jit_block_t* block) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    verifier_queue_block(function, block);
-
-cleanup:
-    return err;
-}
 
 tdn_err_t verifier_on_block_fallthrough(jit_function_t* function, jit_block_t* from, jit_block_t* block) {
     tdn_err_t err = TDN_NO_ERROR;

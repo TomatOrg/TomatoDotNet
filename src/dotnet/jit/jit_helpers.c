@@ -13,7 +13,7 @@ static void* bzero(void* s, size_t n) {
 }
 
 
-static void* gc_bzero(void* dest, int c, size_t n) {
+static void* gc_bzero(void* dest, size_t n) {
     void** d = dest;
     n /= sizeof(void*);
     while (n--) {

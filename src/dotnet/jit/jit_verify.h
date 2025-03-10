@@ -19,6 +19,4 @@ typedef tdn_err_t (*verify_instruction_t)(
 extern verify_instruction_t g_verify_dispatch_table[];
 extern size_t g_verify_dispatch_table_size;
 
-tdn_err_t verifier_on_entry_block(jit_function_t* function, jit_block_t* block);
-
 tdn_err_t verifier_on_block_fallthrough(jit_function_t* function, jit_block_t* from, jit_block_t* block);
