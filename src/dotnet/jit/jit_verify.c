@@ -20,7 +20,7 @@
         } \
     } while (0)
 
-void verifier_queue_block(jit_function_t* function, jit_block_t* block) {
+static void verifier_queue_block(jit_function_t* function, jit_block_t* block) {
     if (!block->in_queue) {
         arrpush(function->queue, block);
         block->visited = true;
@@ -74,7 +74,7 @@ static bool verifier_merge_block_local(jit_block_local_t* previous, jit_block_lo
     return modified;
 }
 
-tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* from, jit_block_t* target) {
+static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* from, jit_block_t* target) {
     tdn_err_t err = TDN_NO_ERROR;
 
     if (target->visited) {
@@ -270,7 +270,7 @@ cleanup:
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Block visitor
+// Dispatch tables
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -289,3 +289,25 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_BR] = verify_br,
 };
 size_t g_verify_dispatch_table_size = ARRAY_LENGTH(g_verify_dispatch_table);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Entry points
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+tdn_err_t verifier_on_entry_block(jit_function_t* function, jit_block_t* block) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    verifier_queue_block(function, block);
+
+cleanup:
+    return err;
+}
+
+tdn_err_t verifier_on_block_fallthrough(jit_function_t* function, jit_block_t* from, jit_block_t* block) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK_AND_RETHROW(verifier_merge_block(function, from, block));
+
+cleanup:
+    return err;
+}

@@ -152,7 +152,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
 
     // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
-        CHECK_AND_RETHROW(verifier_merge_block(verifier, &block, &verifier->blocks[block.block.index + 1]));
+        CHECK_AND_RETHROW(verifier_on_block_fallthrough(verifier, &block, &verifier->blocks[block.block.index + 1]));
     }
 
     // last must be a valid instruction
@@ -179,7 +179,7 @@ tdn_err_t jit_visit_function(jit_function_t* function) {
     TRACE("VERIFY: %T::%U", function->method->DeclaringType, function->method->Name);
 
     // start with the entry block
-    verifier_queue_block(function, &function->blocks[0]);
+    CHECK_AND_RETHROW(verifier_on_entry_block(function, &function->blocks[0]));
 
     // and run until all blocks are verifier
     while (arrlen(function->queue) != 0) {
