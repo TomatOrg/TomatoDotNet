@@ -254,10 +254,165 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Emitters
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define STACK_TOP() \
+    ({ \
+        &arrlast(block->stack); \
+    })
+
+//----------------------------------------------------------------------------------------------------------------------
+// Misc instructions
+//----------------------------------------------------------------------------------------------------------------------
+
+// Use as a template for adding new instructions
+static tdn_err_t emit_nop(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Local access
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_ldloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->locals));
+    jit_block_local_t* local = &block->locals[inst->operand.variable];
+
+    // load it, if it was spilled then we need to create a copy, otherwise we can
+    // just perform a normal data-flow load
+    spidir_value_t value = SPIDIR_VALUE_INVALID;
+    if (function->locals[inst->operand.variable].spilled) {
+        if (jit_is_struct_like(local->stack.type)) {
+            value = spidir_builder_build_stackslot(builder, local->stack.type->StackSize, local->stack.type->StackAlignment);
+            jit_emit_memcpy(builder, value, local->stack.value, local->stack.type);
+        } else {
+            spidir_mem_size_t mem_size;
+            switch (local->stack.type->StackSize) {
+                case 1: mem_size = SPIDIR_MEM_SIZE_1; break;
+                case 2: mem_size = SPIDIR_MEM_SIZE_2; break;
+                case 4: mem_size = SPIDIR_MEM_SIZE_4; break;
+                case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
+                default: CHECK_FAIL();
+            }
+            value = spidir_builder_build_load(builder, mem_size, get_spidir_type(local->stack.type), local->stack.value);
+        }
+    } else {
+        value = local->stack.value;
+    }
+
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->locals));
+    jit_block_local_t* local = &block->locals[inst->operand.variable];
+
+    if (function->locals[inst->operand.variable].spilled) {
+        jit_emit_store(builder,
+            stack[0].type, stack[0].value,
+            local->stack.type, local->stack.value);
+    } else {
+        // data flow store
+        // TODO: truncate values as required
+    }
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Stack manipulation
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst->operand.uint32);
+    return TDN_NO_ERROR;
+}
+
+static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.uint64);
+    return TDN_NO_ERROR;
+}
+
+
+//----------------------------------------------------------------------------------------------------------------------
+// Method related
+//----------------------------------------------------------------------------------------------------------------------
+
+// Use as a template for adding new instructions
+static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    ParameterInfo ret = function->method->ReturnParameter;
+
+    spidir_value_t value = SPIDIR_VALUE_INVALID;
+    RuntimeTypeInfo ret_type = ret->ParameterType;
+    if (ret_type != tVoid) {
+        // TODO: inline support
+
+        if (jit_is_struct_like(ret_type)) {
+            CHECK_FAIL("TODO: support for returning struct like");
+        } else {
+            value = stack[0].value;
+        }
+    }
+
+    spidir_builder_build_return(builder, value);
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Branching
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_br(jit_function_t* verifier, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the target block
+    jit_basic_block_entry_t* target_block = hmgetp_null(verifier->labels, inst->operand.branch_target);
+    CHECK(target_block != NULL);
+    jit_block_t* target = &verifier->blocks[target_block->value.index];
+
+    // merge with that block
+    emitter_merge_block(verifier, builder, block, target);
+
+    // and branch to it
+    spidir_builder_build_branch(builder, target->spidir_block);
+
+cleanup:
+    return err;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Dispatch tables
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 emit_instruction_t g_emit_dispatch_table[] = {
+    [CEE_NOP] = emit_nop,
+
+    [CEE_LDLOC] = emit_ldloc,
+    [CEE_STLOC] = emit_stloc,
+
+    [CEE_LDC_I4] = emit_ldc_i4,
+    [CEE_LDC_I8] = emit_ldc_i8,
+
+    [CEE_RET] = emit_ret,
+
+    [CEE_BR] = emit_br,
 };
 size_t g_emit_dispatch_table_size = ARRAY_LENGTH(g_emit_dispatch_table);
 

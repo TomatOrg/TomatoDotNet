@@ -45,6 +45,7 @@ static il_stack_behavior_t m_il_stack_behavior[] = {
 
 static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
     out->block = in->block;
+    out->spidir_block = in->spidir_block;
 
     arrsetlen(out->args, arrlen(in->args));
     memcpy(out->args, in->args, arrlen(in->args) * sizeof(*in->args));
@@ -65,6 +66,12 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
     // clone the block into the current frame, so we can modify it
     jit_block_t block = {};
     jit_clone_block(in_block, &block);
+
+    // if we are in emit set the current block to
+    // the basic block we are jitting
+    if (builder != NULL) {
+        spidir_builder_set_block(builder, block.spidir_block);
+    }
 
 #ifdef JIT_VERBOSE_VERIFY
     int indent = 0;
@@ -364,6 +371,12 @@ void jit_function_destroy(jit_function_t* function) {
     if (function == NULL)
         return;
 
+    // free the entry block
+    arrfree(function->entry_block.args);
+    arrfree(function->entry_block.locals);
+    arrfree(function->entry_block.stack);
+
+    // free the rest of the blocks
     for (int i = 0; i < arrlen(function->blocks); i++) {
         arrfree(function->blocks[i].args);
         arrfree(function->blocks[i].locals);

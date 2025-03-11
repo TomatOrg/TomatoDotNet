@@ -145,7 +145,7 @@ cleanup:
 //----------------------------------------------------------------------------------------------------------------------
 
 // Use as a template for adding new instructions
-static tdn_err_t verify_nop(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_nop(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
 cleanup:
@@ -156,7 +156,7 @@ cleanup:
 // Local access
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t verify_ldloc(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_ldloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the local slot
@@ -166,7 +166,7 @@ static tdn_err_t verify_ldloc(jit_function_t* verifier, jit_block_t* block, tdn_
     // check if we need to zero initialize
     if (!local->initialized) {
         // TODO: should we fail if the method is not marked as InitLocals?
-        verifier->locals[inst->operand.variable].zero_initialize = true;
+        function->locals[inst->operand.variable].zero_initialize = true;
         local->initialized = true;
     }
 
@@ -180,7 +180,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t verify_stloc(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the local slot
@@ -188,8 +188,8 @@ static tdn_err_t verify_stloc(jit_function_t* verifier, jit_block_t* block, tdn_
     jit_block_local_t* local = &block->locals[inst->operand.variable];
 
     // check that the type matches
-    CHECK(verifier_assignable_to(stack[0].type, verifier->locals[inst->operand.variable].type),
-        "%T verifier-assignable-to %T", stack[0].type, verifier->locals[inst->operand.variable].type);
+    CHECK(verifier_assignable_to(stack[0].type, function->locals[inst->operand.variable].type),
+        "%T verifier-assignable-to %T", stack[0].type, function->locals[inst->operand.variable].type);
 
     // copy as is
     local->stack = stack[0];
@@ -203,12 +203,12 @@ cleanup:
 // Stack manipulation
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t verify_ldc_i4(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_ldc_i4(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_PUSH()->type = tInt32;
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t verify_ldc_i8(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_ldc_i8(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_PUSH()->type = tInt64;
     return TDN_NO_ERROR;
 }
@@ -218,9 +218,9 @@ static tdn_err_t verify_ldc_i8(jit_function_t* verifier, jit_block_t* block, tdn
 //----------------------------------------------------------------------------------------------------------------------
 
 // Use as a template for adding new instructions
-static tdn_err_t verify_ret(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
-    ParameterInfo ret = verifier->method->ReturnParameter;
+    ParameterInfo ret = function->method->ReturnParameter;
 
     // the stack must be empty at this point
     CHECK(arrlen(block->stack) == 0);
@@ -275,6 +275,7 @@ cleanup:
 
 verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_NOP] = verify_nop,
+
     [CEE_LDLOC] = verify_ldloc,
     [CEE_STLOC] = verify_stloc,
 
