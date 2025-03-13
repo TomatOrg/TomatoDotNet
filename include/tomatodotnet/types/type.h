@@ -156,7 +156,8 @@ typedef struct RuntimeTypeInfo {
     uint32_t FillingVtable : 1;
     uint32_t EndFillingVtable : 1;
     uint32_t TypeInitStarted : 1;
-    uint32_t : 15;
+    uint32_t JitQueued : 1;
+    uint32_t : 14;
     uint32_t QueuedTypeInit : 1;
     uint32_t IsGenericParameter : 1;
     uint32_t IsGenericTypeParameter : 1;

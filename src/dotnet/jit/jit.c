@@ -6,11 +6,13 @@
 #include <spidir/log.h>
 #include <spidir/opt.h>
 #include <spidir/module.h>
+#include <tomatodotnet/types/type.h>
 
 #include <util/string_builder.h>
 
 #include "jit_basic_block.h"
 #include "jit_builtin.h"
+#include "jit_codegen.h"
 #include "jit_emit.h"
 #include "jit_verify.h"
 
@@ -22,6 +24,11 @@
  * queue of methods that need to be dispatched
  */
 static spidir_function_t* m_jit_queue = NULL;
+
+/**
+ * Types that need to be initialized
+ */
+static RuntimeTypeInfo* m_jit_type_queue = NULL;
 
 static struct {
     spidir_function_t key;
@@ -70,6 +77,21 @@ spidir_function_t jit_get_function(spidir_module_handle_t module, RuntimeMethodB
     hmput(m_function_lookup, method, function);
 
     return function;
+}
+
+RuntimeMethodBase jit_get_method_from_function(spidir_function_t function) {
+    int idx = hmgeti(m_method_lookup, function);
+    if (idx < 0) {
+        return NULL;
+    }
+    return m_method_lookup[idx].value;
+}
+
+void jit_queue_type(RuntimeTypeInfo type) {
+    if (type->JitQueued == 0) {
+        arrpush(m_jit_type_queue, type);
+        type->JitQueued = 1;
+    }
 }
 
 static void jit_emit_function(spidir_builder_handle_t builder, void* _ctx) {
@@ -123,7 +145,38 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
     spidir_module_dump(module, tdn_host_jit_dump_callback, ctx);
     tdn_host_jit_end_dump(ctx);
 
+    // now trigger the codegen
+    CHECK_AND_RETHROW(jit_codegen(module));
+
+    // now fill all the vtables
+    for (int i = 0; i < arrlen(m_jit_type_queue); i++) {
+        RuntimeTypeInfo type = m_jit_type_queue[i];
+        for (int j = 0; j < type->VTable->Length; j++) {
+            RuntimeMethodInfo method = type->VTable->Elements[j];
+            CHECK(method->MethodPtr != NULL);
+
+            // put the method pointer into the vtable (when thunk is available
+            // we use that)
+            void* ptr = method->MethodPtr;
+            if (method->ThunkPtr != NULL) {
+                ptr = method->MethodPtr;
+            }
+            type->JitVTable->Functions[j] = ptr;
+        }
+    }
+
+    // TODO:
+
 cleanup:
+    // free the codegen resources
+    jit_codgen_cleanup();
+
+    // free all the jit resources
+    arrfree(m_jit_type_queue);
+    arrfree(m_jit_queue);
+    hmfree(m_method_lookup);
+    hmfree(m_function_lookup);
+
     return err;
 }
 
@@ -145,8 +198,12 @@ static void jit_spidir_log_callback(spidir_log_level_t level, const char* module
 tdn_err_t tdn_jit_init() {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // setup the spidir logger
     spidir_log_init(jit_spidir_log_callback);
     spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+
+    // initialize the codegen
+    jit_codegen_init();
 
 cleanup:
     return err;
@@ -163,7 +220,8 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     spidir_module_handle_t module = spidir_module_create();
 
     // start from the first function
-    jit_get_function(module, methodInfo);
+    spidir_function_t function = jit_get_function(module, methodInfo);
+    jit_codegen_queue(methodInfo, function);
 
     // and start jitting
     CHECK_AND_RETHROW(jit_module(module));
