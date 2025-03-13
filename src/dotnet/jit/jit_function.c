@@ -109,23 +109,33 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
         //
         il_stack_behavior_t stack_behavior = m_il_stack_behavior[inst.opcode];
 
+        // ensure we know how much to push
         if (stack_behavior.push < 0) {
-            // TODO: calculate how many needed
-            CHECK_FAIL();
+            CHECK(inst.opcode == CEE_CALL || inst.opcode == CEE_CALLVIRT,
+                "Invalid PushVar for `%s`", tdn_get_opcode_name(inst.opcode));
+            if (inst.operand.method->ReturnParameter->ParameterType != tVoid) {
+                stack_behavior.push = 1;
+            } else {
+                stack_behavior.push = 0;
+            }
         }
 
+        // ensure we know how much to pop
         if (stack_behavior.pop < 0) {
-            switch (inst.opcode) {
-                case CEE_RET: {
-                    if (method->ReturnParameter->ParameterType != tVoid) {
-                        stack_behavior.pop = 1;
-                    } else {
-                        stack_behavior.pop = 0;
-                    }
-                } break;
+            if (inst.opcode == CEE_RET) {
+                if (method->ReturnParameter->ParameterType != tVoid) {
+                    stack_behavior.pop = 1;
+                } else {
+                    stack_behavior.pop = 0;
+                }
 
-                default:
-                    CHECK_FAIL("Invalid PopVar for %s", tdn_get_opcode_name(inst.opcode));
+            } else if (inst.opcode == CEE_CALL || inst.opcode == CEE_CALLVIRT || inst.opcode == CEE_NEWOBJ) {
+                stack_behavior.pop = inst.operand.method->Parameters->Length;
+                if (inst.opcode != CEE_NEWOBJ && !inst.operand.method->Attributes.Static) {
+                    stack_behavior.pop++;
+                }
+            } else {
+                CHECK_FAIL("Invalid VarPop for `%s`", tdn_get_opcode_name(inst.opcode));
             }
         }
 

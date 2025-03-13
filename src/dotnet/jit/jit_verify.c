@@ -156,6 +156,46 @@ cleanup:
 // Local access
 //----------------------------------------------------------------------------------------------------------------------
 
+static tdn_err_t verify_ldarg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->args));
+    jit_block_local_t* local = &block->args[inst->operand.variable];
+
+    // fixup the type to be the intermediate type,
+    // and push it to the stack
+    jit_stack_item_t item = local->stack;
+    item.type = verifier_get_intermediate_type(item.type);
+    *STACK_PUSH() = item;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->args));
+    jit_block_local_t* local = &block->args[inst->operand.variable];
+
+    // check that the type matches
+    CHECK(verifier_assignable_to(stack[0].type, function->args[inst->operand.variable].type),
+        "%T verifier-assignable-to %T", stack[0].type, function->args[inst->operand.variable].type);
+
+    // copy as is
+    local->stack = stack[0];
+    local->initialized = true;
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Local access
+//----------------------------------------------------------------------------------------------------------------------
+
 static tdn_err_t verify_ldloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -217,6 +257,163 @@ static tdn_err_t verify_ldc_i8(jit_function_t* function, jit_block_t* block, tdn
 // Method related
 //----------------------------------------------------------------------------------------------------------------------
 
+static tdn_err_t verify_method_accessible(RuntimeMethodBase caller, RuntimeMethodBase callee) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* stack, bool* might_leak_local) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // if this is an instance method that is not ctor
+    int arg_offset = 0;
+    if (
+        !callee->Attributes.Static &&
+        !callee->Attributes.RTSpecialName
+    ) {
+        CHECK(arrlen(stack) >= 1);
+        CHECK(verifier_assignable_to(stack[0].type, jit_get_method_this_type(callee)),
+            "%T verifier-assignable-to %T", stack[0].type, jit_get_method_this_type(callee));
+
+        // TODO: unscoped support
+
+        // check if we must not pass a readonly reference
+        if (!callee->IsReadOnly) {
+            CHECK(!stack[0].readonly_ref);
+        }
+
+        // we had a this, skip it when verifying the rest of the parameters
+        arg_offset++;
+    }
+
+    // verify the arguments
+    CHECK(arrlen(stack) - arg_offset == callee->Parameters->Length);
+    for (int i = arg_offset; i < arrlen(stack); i++) {
+        ParameterInfo param = callee->Parameters->Elements[i - arg_offset];
+        CHECK(verifier_assignable_to(stack[i].type, param->ParameterType),
+            "%T verifier-assignable-to %T", stack[i].type, param->ParameterType);
+
+        // TODO: scoped support
+
+        // check if we must not pass a readonly reference
+        if (!param->IsReadOnly) {
+            CHECK(!stack[i].readonly_ref);
+        }
+
+        // check if we might leak a local reference (to prevent marking the returned reference as
+        // a non-local one)
+        if (might_leak_local != NULL && stack[i].type != NULL) {
+            if (stack[i].type->IsByRef) {
+                if (!stack[i].non_local_ref) {
+                    *might_leak_local = true;
+                }
+                if (stack[0].type->ElementType->IsByRefStruct) {
+                    if (!stack[0].non_local_ref_struct) {
+                        *might_leak_local = true;
+                    }
+                }
+            } else if (stack[i].type->IsByRefStruct && stack[i].non_local_ref_struct) {
+                *might_leak_local = true;
+            }
+        }
+    }
+
+cleanup:
+    return err;
+}
+
+static void verify_call_return(jit_block_t* block, RuntimeMethodBase callee, bool might_leak_local) {
+    RuntimeTypeInfo ret_type = callee->ReturnParameter->ParameterType;
+    if (ret_type == tVoid) {
+        return;
+    }
+
+    // we have something to return
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = ret_type;
+
+    // mark as non-local if we are returning a reference
+    if (!might_leak_local) {
+        if (ret_type->IsByRef) {
+            item->non_local_ref = true;
+            if (ret_type->ElementType->IsByRefStruct) {
+                item->non_local_ref_struct = true;
+            }
+        } else if (ret_type->IsByRefStruct) {
+            item->non_local_ref_struct = true;
+        }
+    }
+
+    // mark as readonly if returns a readonly
+    if (callee->ReturnParameter->IsReadOnly) {
+        item->readonly_ref = true;
+    }
+}
+
+static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we can access the callee
+    CHECK_AND_RETHROW(verify_method_accessible(function->method, inst->operand.method));
+
+    // ensure we have a method body (otherwise must use callvirt)
+    CHECK(inst->operand.method->MethodBody != NULL);
+
+    // TODO: other checks for call
+
+    // verify the call arguments
+    bool might_leak_local = false;
+    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, &might_leak_local));
+    verify_call_return(block, inst->operand.method, might_leak_local);
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_callvirt(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we can access the callee
+    CHECK_AND_RETHROW(verify_method_accessible(function->method, inst->operand.method));
+
+    // ensure the method is not static
+    CHECK(!inst->operand.method->Attributes.Static);
+
+    // TODO: other checks for callvirt?
+
+    // verify the call arguments
+    bool might_leak_local = false;
+    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, &might_leak_local));
+    verify_call_return(block, inst->operand.method, might_leak_local);
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_newobj(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we can access the callee
+    CHECK_AND_RETHROW(verify_method_accessible(function->method, inst->operand.method));
+
+    // ensure this is a ctor
+    CHECK(inst->operand.method->Attributes.RTSpecialName);
+    CHECK(tdn_compare_string_to_cstr(inst->operand.method->Name, ".ctor"));
+
+    // verify the call parameters
+    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, NULL));
+
+    // TODO: push the new instance
+    CHECK_FAIL();
+
+cleanup:
+    return err;
+}
+
 // Use as a template for adding new instructions
 static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -276,11 +473,18 @@ cleanup:
 verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_NOP] = verify_nop,
 
+    [CEE_LDARG] = verify_ldarg,
+    [CEE_STARG] = verify_starg,
+
     [CEE_LDLOC] = verify_ldloc,
     [CEE_STLOC] = verify_stloc,
 
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
+
+    [CEE_NEWOBJ] = verify_newobj,
+    [CEE_CALL] = verify_call,
+    [CEE_CALLVIRT] = verify_callvirt,
 
     [CEE_RET] = verify_ret,
 

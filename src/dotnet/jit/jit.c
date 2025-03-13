@@ -241,7 +241,18 @@ tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
 
     spidir_module_handle_t module = spidir_module_create();
 
-    CHECK_FAIL();
+    // queue the type
+    jit_queue_type(type);
+
+    // queue all the virtual methods
+    for (int i = 0; i < type->VTable->Length; i++) {
+        RuntimeMethodBase methodInfo = (RuntimeMethodBase)type->VTable->Elements[i];
+        spidir_function_t function = jit_get_function(module, methodInfo);
+        jit_codegen_queue(methodInfo, function);
+    }
+
+    // and start jitting
+    CHECK_AND_RETHROW(jit_module(module));
 
 cleanup:
     spidir_module_destroy(module);

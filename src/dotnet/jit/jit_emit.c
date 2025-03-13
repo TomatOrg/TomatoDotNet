@@ -4,6 +4,8 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 
+#include "jit.h"
+#include "jit_builtin.h"
 #include "jit_helpers.h"
 #include "jit_type.h"
 
@@ -109,17 +111,25 @@ static void jit_emit_store(
     RuntimeTypeInfo from_type, spidir_value_t from_value,
     RuntimeTypeInfo to_type, spidir_value_t to_value
 ) {
-    // TODO: check if we nee to convert from NULL -> interface
+    if (from_type == NULL && to_type->Attributes.Interface) {
+        // we need to convert from NULL -> interface
+        jit_emit_bzero(builder, to_value, to_type);
 
-    // TODO: check if we need to convert from object -> interface
+    } else if (!jit_is_interface(from_type) && jit_is_interface(to_type)) {
+        // we need to convert from object -> interface
+        ASSERT(!"TODO: get the interface offset and move the vtable");
 
-    // TODO: check if we need to convert from interface -> object
+    } else if (jit_is_interface(from_type) && !jit_is_interface(to_type)) {
+        // we need to perform interface -> object
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, to_value);
 
-    // TODO: check for interface downcast
+    } else if (jit_is_interface(from_type) && jit_is_interface(to_type) && from_type != to_type) {
+        // interface downcast
+        ASSERT(!"TODO: get the interface offset and move the vtable");
 
-    // TODO: check if we need to box a delegate
-
-    if (jit_is_struct_like(from_type)) {
+    } else if (jit_is_struct_like(from_type)) {
         // only struct types in here and
         ASSERT(from_type == to_type);
         jit_emit_memcpy(builder, to_value, from_value, from_type);
@@ -150,11 +160,26 @@ static spidir_value_t jit_convert_value(
     RuntimeTypeInfo from_type, spidir_value_t from_value,
     RuntimeTypeInfo to_type
 ) {
-    // TODO: check if we need to convert from NULL -> interface
+    if (jit_is_interface(from_type) && jit_is_interface(to_type) && from_type != to_type) {
+        // both stay as interface, but they are not the same interface
+        jit_emit_store(builder, from_type, from_value, to_type, from_value);
+        return from_value;
 
-    // TODO: check if we need to convert from object -> interface
+    } else if (!jit_is_interface(from_type) && jit_is_interface(to_type)) {
+        // we need to turn non-interface to interface, put it in a new stackslot
+        spidir_value_t to_value = spidir_builder_build_stackslot(builder,
+            to_type->StackSize, to_type->StackAlignment);
+        jit_emit_store(builder, from_type, from_value, to_type, to_value);
+        return to_value;
 
-    return from_value;
+    } else if (jit_is_interface(from_type) && !jit_is_interface(to_type)) {
+        // we need to perform interface -> object
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        return spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+
+    } else {
+        return from_value;
+    }
 }
 
 static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block) {
@@ -275,6 +300,65 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Argument access
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_ldarg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->args));
+    jit_block_local_t* arg = &block->args[inst->operand.variable];
+
+    // load it, if it was spilled then we need to create a copy, otherwise we can
+    // just perform a normal data-flow load
+    spidir_value_t value = SPIDIR_VALUE_INVALID;
+    if (function->args[inst->operand.variable].spilled) {
+        if (jit_is_struct_like(arg->stack.type)) {
+            value = spidir_builder_build_stackslot(builder, arg->stack.type->StackSize, arg->stack.type->StackAlignment);
+            jit_emit_memcpy(builder, value, arg->stack.value, arg->stack.type);
+        } else {
+            spidir_mem_size_t mem_size;
+            switch (arg->stack.type->StackSize) {
+                case 1: mem_size = SPIDIR_MEM_SIZE_1; break;
+                case 2: mem_size = SPIDIR_MEM_SIZE_2; break;
+                case 4: mem_size = SPIDIR_MEM_SIZE_4; break;
+                case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
+                default: CHECK_FAIL();
+            }
+            value = spidir_builder_build_load(builder, mem_size, get_spidir_type(arg->stack.type), arg->stack.value);
+        }
+    } else {
+        value = arg->stack.value;
+    }
+
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->args));
+    jit_block_local_t* arg = &block->args[inst->operand.variable];
+
+    if (function->args[inst->operand.variable].spilled) {
+        jit_emit_store(builder,
+            stack[0].type, stack[0].value,
+            arg->stack.type, arg->stack.value);
+    } else {
+        // data flow store
+        // TODO: truncate values as required
+    }
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // Local access
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -352,6 +436,211 @@ static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t b
 // Method related
 //----------------------------------------------------------------------------------------------------------------------
 
+static size_t jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
+    int idx = hmgeti(type->InterfaceImpls, iface);
+    if (idx < 0) {
+        return -1;
+    }
+    return type->InterfaceImpls[idx].value;
+}
+
+// TODO: variant interface arguments
+
+static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase target) {
+    // not virtual, we know it exactly
+    if (!target->Attributes.Virtual) {
+        return target;
+    }
+
+    // has builtin emitter, we know what to call directly
+    if (jit_get_builtin_emitter(target) != NULL) {
+        return target;
+    }
+
+    // get the real type
+    RuntimeTypeInfo cur_type = item->type;
+    if (item->boxed_type != NULL) {
+        cur_type = item->boxed_type;
+    }
+
+    // find the method that implements this
+    if (target->DeclaringType->Attributes.Interface) {
+        int offset = jit_get_interface_offset(cur_type, target->DeclaringType);
+        ASSERT(offset >= 0);
+        target = (RuntimeMethodBase)cur_type->VTable->Elements[offset + target->VTableOffset];
+    } else {
+        target = (RuntimeMethodBase)cur_type->VTable->Elements[target->VTableOffset];
+    }
+
+    // if this is a final type/method or we know that this is
+    // the exact type we can devirt it
+    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->is_exact_type) {
+        return target;
+    }
+
+    return NULL;
+}
+
+static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, RuntimeMethodBase callee, jit_stack_item_t* stack) {
+    spidir_value_t* values = NULL;
+
+    // check if we need to skip the this
+    int convert_offset = 0;
+    if (!callee->Attributes.Static) {
+        convert_offset = 1;
+    }
+
+    // gather all arguments
+    for (int i = 0; i < arrlen(stack); i++) {
+        spidir_value_t value = stack[i].value;
+
+        if (i > convert_offset) {
+            // convert other arguments
+            value = jit_convert_value(
+                builder,
+                stack[i].type, stack[i].value,
+                callee->Parameters->Elements[i - convert_offset]->ParameterType
+            );
+        } else {
+            // convert the this
+            value = jit_convert_value(
+                builder,
+                stack[i].type, stack[i].value,
+                jit_get_method_this_type(callee)
+            );
+        }
+
+        arrpush(values, value);
+    }
+
+    // push return argument
+    if (jit_is_struct_like(callee->ReturnParameter->ParameterType)) {
+        arrpush(values, spidir_builder_build_stackslot(builder,
+            callee->ReturnParameter->ParameterType->StackSize,
+            callee->ReturnParameter->ParameterType->StackAlignment));
+    }
+
+    return values;
+}
+
+static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_t* values = NULL;
+
+    RuntimeMethodBase callee = inst->operand.method;
+
+    // TODO: check if we should inline, if so perform inline
+
+    // gather all the parameters for a call
+    values = emit_gather_arguments(builder, callee, stack);
+
+    // first attempt and use a builtin emitter if available
+    spidir_value_t return_value = SPIDIR_VALUE_INVALID;
+    jit_builtin_emitter_t emitter = jit_get_builtin_emitter(callee);
+    if (emitter != NULL) {
+        return_value = emitter(builder, callee, values);
+    } else {
+        // lastly, get a direct function to it
+        spidir_function_t function = jit_get_function(spidir_builder_get_module(builder), callee);
+        return_value = spidir_builder_build_call(builder, function, arrlen(values), values);
+    }
+
+    // push it if needed
+    if (callee->ReturnParameter->ParameterType != tVoid) {
+        if (jit_is_struct_like(callee->ReturnParameter->ParameterType)) {
+            return_value = arrlast(values);
+        }
+        STACK_TOP()->value = return_value;
+    }
+
+cleanup:
+    arrfree(values);
+
+    return err;
+}
+
+static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_t* values = NULL;
+
+    // attempt to de-virtualize the method, if we could then
+    // replace the instruction and call the normal emit_call
+    // method
+    RuntimeMethodBase known = devirt_method(&stack[0], inst->operand.method);
+    if (known != NULL) {
+        // TODO: perform explicit null check
+
+        // the devirt was into a valuetype, move the pointer
+        // forward since this will call the non-thunk version
+        if (tdn_type_is_valuetype(known->DeclaringType)) {
+            stack[0].value = spidir_builder_build_ptroff(builder, stack[0].value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,
+                    jit_get_boxed_value_offset(known->DeclaringType)));
+        }
+
+        inst->operand.method = known;
+        CHECK_AND_RETHROW(emit_call(function, builder, block, inst, stack));
+        goto cleanup;
+    }
+
+    RuntimeMethodBase callee = inst->operand.method;
+    RuntimeTypeInfo callee_this = callee->DeclaringType;
+
+    // gather all the parameters for a call
+    values = emit_gather_arguments(builder, callee, stack);
+
+    // load the vtable of the object on the stack
+    spidir_value_t vtable_base = SPIDIR_VALUE_INVALID;
+    if (jit_is_interface(stack[0].type)) {
+        vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+            spidir_builder_build_ptroff(builder, stack[0].value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+    } else {
+        vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
+    }
+
+    // now figure the offset of the function in the interface
+    size_t base_offset = sizeof(void*) * callee->VTableOffset;
+    if (jit_is_interface(callee_this) && !jit_is_interface(stack[0].type)) {
+        // calling an interface method on an object, adjust the base offset to
+        // represent the offset to the iface inside of the object's vtable
+        size_t iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
+        ASSERT(iface_offset != -1);
+        base_offset += iface_offset * sizeof(void*);
+        base_offset += offsetof(ObjectVTable, Functions);
+    }
+
+    // and now load the function pointer
+    spidir_value_t func_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+        spidir_builder_build_ptroff(builder, vtable_base,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, base_offset)));
+
+    // perform an indirect call
+    spidir_value_type_t* arg_types = jit_get_spidir_arg_types(callee);
+    CHECK(arg_types != NULL);
+    spidir_value_t return_value = spidir_builder_build_callind(builder,
+        jit_get_spidir_ret_type(callee),
+        arrlen(arg_types),
+        arg_types,
+        func_ptr,
+        values
+    );
+    arrfree(arg_types);
+
+    // push it if needed
+    if (callee->ReturnParameter->ParameterType != tVoid) {
+        if (jit_is_struct_like(callee->ReturnParameter->ParameterType)) {
+            return_value = arrlast(values);
+        }
+        STACK_TOP()->value = return_value;
+    }
+
+cleanup:
+    arrfree(values);
+
+    return err;
+}
+
 // Use as a template for adding new instructions
 static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -404,12 +693,17 @@ cleanup:
 emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_NOP] = emit_nop,
 
+    [CEE_LDARG] = emit_ldarg,
+    [CEE_STARG] = emit_starg,
+
     [CEE_LDLOC] = emit_ldloc,
     [CEE_STLOC] = emit_stloc,
 
     [CEE_LDC_I4] = emit_ldc_i4,
     [CEE_LDC_I8] = emit_ldc_i8,
 
+    [CEE_CALL] = emit_call,
+    [CEE_CALLVIRT] = emit_callvirt,
     [CEE_RET] = emit_ret,
 
     [CEE_BR] = emit_br,

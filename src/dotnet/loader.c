@@ -2263,7 +2263,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     if (mCoreAssembly == NULL) {
         // jit all the types required
         // for the runtime to work
-        // CHECK_AND_RETHROW(corelib_jit_types(assembly));
+        CHECK_AND_RETHROW(corelib_jit_types(assembly));
 
         mCoreAssembly = assembly;
     }

@@ -298,8 +298,6 @@ int main(int argc, char* argv[]) {
     // now load the assembly we want to run
     CHECK_AND_RETHROW(load_assembly_from_path(argv[3], &run));
 
-    CHECK_AND_RETHROW(tdn_jit_init());
-
     // and now jit it and let it run
     clock_t t;
     t = clock();
