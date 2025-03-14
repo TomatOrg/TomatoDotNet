@@ -240,8 +240,74 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Misc instructions
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_field_access(jit_function_t* function, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check the type is valid
+    CHECK(
+        tdn_type_is_referencetype(stack[0].type) ||
+        stack[0].type->IsByRef ||
+        (function->method->Module->Assembly->AllowUnsafe && stack[0].type->IsPointer)
+    );
+
+    // check that the type has the field
+    RuntimeTypeInfo owner = stack[0].type;
+    if (owner != NULL) {
+        bool found = false;
+        if (owner->IsByRef || owner->IsPointer) owner = owner->ElementType;
+        for (; owner != NULL; owner = owner->BaseType) {
+            if (owner == inst->operand.field->DeclaringType) {
+                found = true;
+                break;
+            }
+        }
+        CHECK(found);
+    }
+
+    // TODO: check the field is accessible
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
+static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // verify we can access the field
+    CHECK_AND_RETHROW(verify_field_access(function, inst, stack));
+
+    // push the type into the stack
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = verifier_get_intermediate_type(inst->operand.field->FieldType);
+
+    // loaded a by-ref, check if its non-local
+    // TODO: how does readonly plays in here?
+    if (item->type->IsByRef) {
+        if (stack[0].non_local_ref_struct) {
+            item->non_local_ref = true;
+        }
+    } else if (item->type->IsByRefStruct) {
+        if (stack[0].non_local_ref_struct) {
+            item->non_local_ref_struct = true;
+        }
+    }
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // Stack manipulation
 //----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_ldnull(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    STACK_PUSH()->type = NULL;
+    return TDN_NO_ERROR;
+}
 
 static tdn_err_t verify_ldc_i4(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_PUSH()->type = tInt32;
@@ -251,6 +317,49 @@ static tdn_err_t verify_ldc_i4(jit_function_t* function, jit_block_t* block, tdn
 static tdn_err_t verify_ldc_i8(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_PUSH()->type = tInt64;
     return TDN_NO_ERROR;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Arith and compare operations
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_binary_compare(tdn_il_opcode_t opcode, RuntimeTypeInfo type1, RuntimeTypeInfo type2) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (type1 == tInt32) {
+        CHECK(type2 == tInt32);
+
+    } else if (type1 == tInt64) {
+        CHECK(type2 == tInt64);
+
+    } else if (type1 == tIntPtr) {
+        CHECK(type2 == tInt32);
+
+    } else if (tdn_type_is_referencetype(type1)) {
+        CHECK(tdn_type_is_referencetype(type2));
+        CHECK(opcode == CEE_CEQ || opcode == CEE_CGT_UN);
+
+    } else {
+        CHECK_FAIL("%T binary-compare %T", type1, type2);
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_compare(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // validate that both are good
+    RuntimeTypeInfo value1 = stack[0].type;
+    RuntimeTypeInfo value2 = stack[1].type;
+    CHECK_AND_RETHROW(verify_binary_compare(inst->opcode, value1, value2));
+
+    // always pushes as an int32
+    STACK_PUSH()->type = tInt32;
+
+cleanup:
+    return err;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -466,6 +575,23 @@ cleanup:
     return err;
 }
 
+//----------------------------------------------------------------------------------------------------------------------
+// Exceptions
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_throw(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // TODO: check throwing an exception and nothing else
+    CHECK(tdn_type_is_referencetype(stack[0].type));
+
+    // empty the stack
+    arrsetlen(block->stack, 0);
+
+cleanup:
+    return err;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Dispatch tables
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -479,8 +605,17 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDLOC] = verify_ldloc,
     [CEE_STLOC] = verify_stloc,
 
+    [CEE_LDFLD] = verify_ldfld,
+
+    [CEE_LDNULL] = verify_ldnull,
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
+
+    [CEE_CEQ] = verify_compare,
+    [CEE_CGT] = verify_compare,
+    [CEE_CGT_UN] = verify_compare,
+    [CEE_CLT] = verify_compare,
+    [CEE_CLT_UN] = verify_compare,
 
     [CEE_NEWOBJ] = verify_newobj,
     [CEE_CALL] = verify_call,
@@ -489,6 +624,8 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_RET] = verify_ret,
 
     [CEE_BR] = verify_br,
+
+    [CEE_THROW] = verify_throw,
 };
 size_t g_verify_dispatch_table_size = ARRAY_LENGTH(g_verify_dispatch_table);
 

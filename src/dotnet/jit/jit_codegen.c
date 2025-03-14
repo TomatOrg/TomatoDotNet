@@ -28,7 +28,7 @@ static jit_codegen_entry_t* m_function_blobs = NULL;
 
 void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function) {
     // if already in queue skip
-    if (hmgeti(m_function_blobs, function) >= 0) {
+    if (hmgeti(m_function_blobs, function) >= 0 || method->MethodPtr != NULL) {
         return;
     }
 
@@ -46,13 +46,13 @@ void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function) {
 /**
  * Perform the actual relocation on the given blob
  */
-static tdn_err_t jit_relocate_function(void* method_ptr, spidir_codegen_blob_handle_t blob) {
+static tdn_err_t jit_relocate_function(RuntimeMethodBase method, spidir_codegen_blob_handle_t blob) {
     tdn_err_t err = TDN_NO_ERROR;
 
     size_t reloc_count = spidir_codegen_blob_get_reloc_count(blob);
     const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(blob);
     for (size_t j = 0; j < reloc_count; j++) {
-        uint64_t P = (uint64_t)(method_ptr + relocs[j].offset);
+        uint64_t P = (uint64_t)(method->MethodPtr + relocs[j].offset);
         int64_t A = relocs[j].addend;
 
         // resolve the target, will either be a builtin or a
@@ -61,7 +61,8 @@ static tdn_err_t jit_relocate_function(void* method_ptr, spidir_codegen_blob_han
         RuntimeMethodBase target = jit_get_method_from_function(relocs[j].target);
         if (target == NULL) {
             void* ptr = jit_get_helper_ptr(relocs[j].target);
-            CHECK(ptr != NULL);
+            CHECK(ptr != NULL, "Failed to get function reference to %d while relocating %T::%U",
+                relocs[j].target, method->DeclaringType, method->Name);
             F = (uint64_t)ptr;
         } else {
             CHECK(target->MethodPtr != NULL);
@@ -132,6 +133,10 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         total_size += spidir_codegen_blob_get_code_size(entry->blob);
     }
 
+    if (total_size == 0) {
+        goto cleanup;
+    }
+
     // now we can map the area
     void* jit_area = tdn_host_jit_alloc(total_size);
     CHECK(jit_area != NULL);
@@ -179,7 +184,7 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
     // now perform the relocations
     for (int i = 0; i < hmlen(m_function_blobs); i++) {
         jit_codegen_entry_t* entry = &m_function_blobs[i];
-        CHECK_AND_RETHROW(jit_relocate_function(entry->method->MethodPtr, entry->blob));
+        CHECK_AND_RETHROW(jit_relocate_function(entry->method, entry->blob));
     }
 
     // turn the area into executable memory

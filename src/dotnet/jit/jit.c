@@ -14,6 +14,7 @@
 #include "jit_builtin.h"
 #include "jit_codegen.h"
 #include "jit_emit.h"
+#include "jit_helpers.h"
 #include "jit_verify.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -170,6 +171,7 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
 cleanup:
     // free the codegen resources
     jit_codgen_cleanup();
+    jit_clean_helpers();
 
     // free all the jit resources
     arrfree(m_jit_type_queue);

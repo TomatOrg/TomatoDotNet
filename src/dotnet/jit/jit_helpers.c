@@ -108,9 +108,13 @@ static jit_helper_t m_jit_helpers[] = {
 };
 
 spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
+
     if (m_jit_helpers[helper].created) {
+        TRACE("GET HELPER: %d -> already exists", helper);
         return m_jit_helpers[helper].function;
     }
+
+    TRACE("GET HELPER: %d -> creating", helper);
 
     switch (helper) {
         case JIT_HELPER_BZERO:
@@ -168,6 +172,7 @@ spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_
             ASSERT(!"Invalid jit helper");
     }
 
+    m_jit_helpers[helper].created = true;
     return m_jit_helpers[helper].function;
 }
 

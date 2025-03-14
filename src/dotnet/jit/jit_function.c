@@ -320,10 +320,12 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
     //
 
     // the entry block context
-    arrsetlen(entry_block->locals, method->MethodBody->LocalVariables->Length);
-    memset(entry_block->locals, 0, arrlen(entry_block->locals) * sizeof(*entry_block->locals));
-    for (int i = 0; i < arrlen(entry_block->locals); i++) {
-        entry_block->locals[i].stack.type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
+    if (method->MethodBody->LocalVariables != NULL) {
+        arrsetlen(entry_block->locals, method->MethodBody->LocalVariables->Length);
+        memset(entry_block->locals, 0, arrlen(entry_block->locals) * sizeof(*entry_block->locals));
+        for (int i = 0; i < arrlen(entry_block->locals); i++) {
+            entry_block->locals[i].stack.type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
+        }
     }
 
     //

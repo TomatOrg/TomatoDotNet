@@ -147,6 +147,40 @@ static void jit_emit_store(
     }
 }
 
+static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, RuntimeTypeInfo from_type, spidir_value_t from) {
+    spidir_value_t value = SPIDIR_VALUE_INVALID;
+    if (jit_is_struct_like(from_type)) {
+        value = spidir_builder_build_stackslot(builder, from_type->StackSize, from_type->StackAlignment);
+        jit_emit_memcpy(builder, value, from, from_type);
+    } else {
+        spidir_mem_size_t mem_size;
+        switch (from_type->StackSize) {
+            case 1: mem_size = SPIDIR_MEM_SIZE_1; break;
+            case 2: mem_size = SPIDIR_MEM_SIZE_2; break;
+            case 4: mem_size = SPIDIR_MEM_SIZE_4; break;
+            case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
+            default: ASSERT(!"WTF");
+        }
+        return spidir_builder_build_load(builder, mem_size, get_spidir_type(from_type), from);
+    }
+    return value;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Exception helpers
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static void jit_emit_null_reference(spidir_builder_handle_t builder) {
+    // emit a call to null reference exception
+    spidir_function_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_NULL_REFERENCE);
+    spidir_builder_build_call(builder, function, 0, NULL);
+    spidir_builder_build_unreachable(builder);
+
+    // create a new dummy block so we can actually continue with the emit even tho we reached an
+    // explicit null pointer
+    spidir_builder_set_block(builder, spidir_builder_create_block(builder));
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Merging stack values
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -314,20 +348,7 @@ static tdn_err_t emit_ldarg(jit_function_t* function, spidir_builder_handle_t bu
     // just perform a normal data-flow load
     spidir_value_t value = SPIDIR_VALUE_INVALID;
     if (function->args[inst->operand.variable].spilled) {
-        if (jit_is_struct_like(arg->stack.type)) {
-            value = spidir_builder_build_stackslot(builder, arg->stack.type->StackSize, arg->stack.type->StackAlignment);
-            jit_emit_memcpy(builder, value, arg->stack.value, arg->stack.type);
-        } else {
-            spidir_mem_size_t mem_size;
-            switch (arg->stack.type->StackSize) {
-                case 1: mem_size = SPIDIR_MEM_SIZE_1; break;
-                case 2: mem_size = SPIDIR_MEM_SIZE_2; break;
-                case 4: mem_size = SPIDIR_MEM_SIZE_4; break;
-                case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
-                default: CHECK_FAIL();
-            }
-            value = spidir_builder_build_load(builder, mem_size, get_spidir_type(arg->stack.type), arg->stack.value);
-        }
+        value = jit_emit_load(builder, arg->stack.type, arg->stack.value);
     } else {
         value = arg->stack.value;
     }
@@ -373,20 +394,7 @@ static tdn_err_t emit_ldloc(jit_function_t* function, spidir_builder_handle_t bu
     // just perform a normal data-flow load
     spidir_value_t value = SPIDIR_VALUE_INVALID;
     if (function->locals[inst->operand.variable].spilled) {
-        if (jit_is_struct_like(local->stack.type)) {
-            value = spidir_builder_build_stackslot(builder, local->stack.type->StackSize, local->stack.type->StackAlignment);
-            jit_emit_memcpy(builder, value, local->stack.value, local->stack.type);
-        } else {
-            spidir_mem_size_t mem_size;
-            switch (local->stack.type->StackSize) {
-                case 1: mem_size = SPIDIR_MEM_SIZE_1; break;
-                case 2: mem_size = SPIDIR_MEM_SIZE_2; break;
-                case 4: mem_size = SPIDIR_MEM_SIZE_4; break;
-                case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
-                default: CHECK_FAIL();
-            }
-            value = spidir_builder_build_load(builder, mem_size, get_spidir_type(local->stack.type), local->stack.value);
-        }
+        value = jit_emit_load(builder, local->stack.type, local->stack.value);
     } else {
         value = local->stack.value;
     }
@@ -418,8 +426,46 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Misc instructions
+//----------------------------------------------------------------------------------------------------------------------
+
+// Use as a template for adding new instructions
+static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the field offset
+    spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
+
+    if (inst->operand.field->Attributes.Static) {
+        CHECK_FAIL("TODO: static field support");
+    } else {
+        // emit an explicit null reference exception
+        if (stack[0].type == NULL) {
+            jit_emit_null_reference(builder);
+            goto cleanup;
+        }
+
+        // add the offset to the field and access it
+        field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.field->FieldOffset));
+    }
+
+    // perform the load
+    STACK_TOP()->value = jit_emit_load(builder, inst->operand.field->FieldType, field_ptr);
+
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // Stack manipulation
 //----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_ldnull(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
+    return TDN_NO_ERROR;
+}
 
 static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst->operand.uint32);
@@ -431,6 +477,38 @@ static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t b
     return TDN_NO_ERROR;
 }
 
+//----------------------------------------------------------------------------------------------------------------------
+// Arith and compare operations
+//----------------------------------------------------------------------------------------------------------------------
+
+#define SWAP(a, b) \
+    do { \
+        typeof(a) __temp = a; \
+        a = b; \
+        b = __temp; \
+    } while (0)
+
+static spidir_value_t emit_binary_compare(spidir_builder_handle_t builder, tdn_il_opcode_t opcode, spidir_value_t value1, spidir_value_t value2) {
+    spidir_icmp_kind_t kind;
+    switch (opcode) {
+        case CEE_CEQ: kind = SPIDIR_ICMP_EQ; break;
+        case CEE_CGT: kind = SPIDIR_ICMP_SLT; SWAP(value1, value2); break;
+        case CEE_CGT_UN: kind = SPIDIR_ICMP_ULT; SWAP(value1, value2); break;
+        case CEE_CLT: kind = SPIDIR_ICMP_SLT; break;
+        case CEE_CLT_UN: kind = SPIDIR_ICMP_ULT; break;
+        default: ASSERT(!"Invalid opcode");
+    }
+    return spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
+}
+
+static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    STACK_TOP()->value = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
+
+cleanup:
+    return err;
+}
 
 //----------------------------------------------------------------------------------------------------------------------
 // Method related
@@ -686,6 +764,23 @@ cleanup:
     return err;
 }
 
+//----------------------------------------------------------------------------------------------------------------------
+// Exceptions
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_throw(jit_function_t* verifier, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // call the runtime throw function
+    spidir_function_t func = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW);
+    spidir_builder_build_call(builder, func, 1, (spidir_value_t[]){ stack[0].value });
+
+    spidir_builder_build_unreachable(builder);
+
+cleanup:
+    return err;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Dispatch tables
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -699,14 +794,25 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDLOC] = emit_ldloc,
     [CEE_STLOC] = emit_stloc,
 
+    [CEE_LDFLD] = emit_ldfld,
+
+    [CEE_LDNULL] = emit_ldnull,
     [CEE_LDC_I4] = emit_ldc_i4,
     [CEE_LDC_I8] = emit_ldc_i8,
+
+    [CEE_CEQ] = emit_compare,
+    [CEE_CGT] = emit_compare,
+    [CEE_CGT_UN] = emit_compare,
+    [CEE_CLT] = emit_compare,
+    [CEE_CLT_UN] = emit_compare,
 
     [CEE_CALL] = emit_call,
     [CEE_CALLVIRT] = emit_callvirt,
     [CEE_RET] = emit_ret,
 
     [CEE_BR] = emit_br,
+
+    [CEE_THROW] = emit_throw,
 };
 size_t g_emit_dispatch_table_size = ARRAY_LENGTH(g_emit_dispatch_table);
 
