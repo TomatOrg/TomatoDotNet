@@ -28,6 +28,14 @@ typedef struct jit_stack_item {
     bool is_exact_type;
 
     //
+    // verification related
+    //
+
+    // does this argument refer to the `this`
+    // of the method
+    bool is_this;
+
+    //
     // Reference related
     //
 
@@ -122,6 +130,31 @@ typedef struct jit_function {
 
     // the queue of blocks to verify
     jit_block_t** queue;
+
+    // allow merging the stack
+    // entries or not (when emitting
+    // we are not allowed to)
+    bool emitting;
+
+    // the item used when returning from the method
+    jit_stack_item_t return_item;
+
+    // was the return item initialized
+    bool return_item_initialized;
+
+    //
+    // inline information
+    //
+
+    // the phi for setting the return
+    spidir_phi_t return_phi;
+
+    // the block to return to when returning from the inline
+    spidir_block_t return_block;
+
+    // the depth of the inline, 0 meaning not inlining, 1 or
+    // more means we are part of an inline
+    int inline_depth;
 } jit_function_t;
 
 /**

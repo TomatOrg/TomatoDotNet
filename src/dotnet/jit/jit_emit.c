@@ -601,38 +601,155 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
     return values;
 }
 
+// these constants are inspired by openjdk
+#define INLINE_SMALL_CODE       1000    /* native function size */
+#define MAX_INLINE_SIZE         35      /* il bytecode size */
+#define MAX_TRIVIAL_SIZE        6       /* il bytecode size */
+#define MAX_INLINE_LEVEL        15      /* the max nesting of inline we allow */
+
+static bool jit_should_inline(jit_function_t* caller, RuntimeMethodBase callee) {
+    // can't inline something without a body
+    if (callee->MethodBody == NULL) {
+        return false;
+    }
+
+    // inline is requested
+    if (callee->MethodImplFlags.AggressiveInlining) {
+        return true;
+    }
+
+    // TODO: for now assume a method is cold, we might want some logic
+    //       to check for hot methods
+
+    // check if already compiled into a medium method
+    if (callee->MethodPtr != NULL && callee->MethodSize > (INLINE_SMALL_CODE / 4)) {
+        return false;
+    }
+
+    // method too big for inline
+    if (callee->MethodBody->ILSize > MAX_INLINE_SIZE) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool jit_should_not_inline(jit_function_t* caller, RuntimeMethodBase callee) {
+    // don't inline if marked as no inline
+    if (callee->MethodImplFlags.NoInlining) {
+        return true;
+    }
+
+    // don't allow to inline too much
+    if (caller->inline_depth + 1 > MAX_INLINE_LEVEL) {
+        return true;
+    }
+
+    // don't allow recursion
+    if (caller->method == callee) {
+        return true;
+    }
+
+    // requested inline, ignore the rest of the logic
+    if (callee->MethodImplFlags.AggressiveInlining) {
+        return false;
+    }
+
+    // don't inline big methods if they are already compiled
+    if (callee->MethodPtr != NULL && callee->MethodSize > INLINE_SMALL_CODE) {
+        return true;
+    }
+
+    // small methods should always get inlined
+    if (callee->MethodBody->ILSize <= MAX_TRIVIAL_SIZE) {
+        return false;
+    }
+
+    // TODO: something else?
+
+    return false;
+}
+
 static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t* values = NULL;
+    jit_function_t inlinee = {};
 
     RuntimeMethodBase callee = inst->operand.method;
-
-    // TODO: check if we should inline, if so perform inline
-
-    // gather all the parameters for a call
-    values = emit_gather_arguments(builder, callee, stack);
-
-    // first attempt and use a builtin emitter if available
-    spidir_value_t return_value = SPIDIR_VALUE_INVALID;
     jit_builtin_emitter_t emitter = jit_get_builtin_emitter(callee);
-    if (emitter != NULL) {
-        return_value = emitter(builder, callee, values);
-    } else {
-        // lastly, get a direct function to it
-        spidir_function_t function = jit_get_function(spidir_builder_get_module(builder), callee);
-        return_value = spidir_builder_build_call(builder, function, arrlen(values), values);
-    }
 
-    // push it if needed
-    if (callee->ReturnParameter->ParameterType != tVoid) {
-        if (jit_is_struct_like(callee->ReturnParameter->ParameterType)) {
-            return_value = arrlast(values);
+    // check if we should inline, special case for builtin emitters since they have a special inline semantic
+    if (emitter == NULL && jit_should_inline(function, callee) && !jit_should_not_inline(function, callee)) {
+        // initialize the function
+        CHECK_AND_RETHROW(jit_function_init(&inlinee, callee));
+
+        // create the entry block and jump into it
+        inlinee.entry_block.spidir_block = spidir_builder_create_block(builder);
+        spidir_builder_build_branch(builder, inlinee.entry_block.spidir_block);
+
+        // pass the arguments and known type info
+        for (int i = 0; i < arrlen(inlinee.entry_block.args); i++) {
+            // copy the relevant information
+            inlinee.entry_block.args[i].stack.value = stack[i].value;
+            inlinee.entry_block.args[i].stack.type = stack[i].type;
+            inlinee.entry_block.args[i].stack.boxed_type = stack[i].boxed_type;
+            inlinee.entry_block.args[i].stack.is_exact_type = stack[i].is_exact_type;
         }
-        STACK_TOP()->value = return_value;
+
+        // setup the inline information
+        inlinee.inline_depth = function->inline_depth + 1;
+        inlinee.return_block = spidir_builder_create_block(builder);
+        spidir_builder_set_block(builder, inlinee.return_block);
+
+        // prepare the return phi if needed
+        spidir_value_t return_value = SPIDIR_VALUE_INVALID;
+        if (callee->ReturnParameter->ParameterType != tVoid) {
+            return_value = spidir_builder_build_phi(builder,
+                get_spidir_type(callee->ReturnParameter->ParameterType),
+                0, NULL, &inlinee.return_phi);
+        }
+
+        // now let it cook
+        CHECK_AND_RETHROW(jit_function(&inlinee, builder));
+
+        // and set the return value, unline a normal call, struct likes are
+        // returned directly instead of by-reference
+        if (callee->ReturnParameter->ParameterType != tVoid) {
+            // propagate the new type info we have about the return
+            // we will not fully propagate it but just enough so we can
+            // have a handful of more optimizations
+            *STACK_TOP() = inlinee.return_item;
+            STACK_TOP()->value = return_value;
+        }
+
+        // continue at the return block
+        spidir_builder_set_block(builder, inlinee.return_block);
+    } else {
+        // gather all the parameters for a call
+        values = emit_gather_arguments(builder, callee, stack);
+
+        // first attempt and use a builtin emitter if available
+        spidir_value_t return_value = SPIDIR_VALUE_INVALID;
+        if (emitter != NULL) {
+            return_value = emitter(builder, callee, values);
+        } else {
+            // lastly, get a direct function to it
+            spidir_function_t function = jit_get_function(spidir_builder_get_module(builder), callee);
+            return_value = spidir_builder_build_call(builder, function, arrlen(values), values);
+        }
+
+        // push it if needed
+        if (callee->ReturnParameter->ParameterType != tVoid) {
+            if (jit_is_struct_like(callee->ReturnParameter->ParameterType)) {
+                return_value = arrlast(values);
+            }
+            STACK_TOP()->value = return_value;
+        }
     }
 
 cleanup:
     arrfree(values);
+    jit_function_destroy(&inlinee);
 
     return err;
 }
@@ -724,19 +841,29 @@ static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t buil
     tdn_err_t err = TDN_NO_ERROR;
     ParameterInfo ret = function->method->ReturnParameter;
 
-    spidir_value_t value = SPIDIR_VALUE_INVALID;
     RuntimeTypeInfo ret_type = ret->ParameterType;
-    if (ret_type != tVoid) {
-        // TODO: inline support
 
-        if (jit_is_struct_like(ret_type)) {
-            CHECK_FAIL("TODO: support for returning struct like");
-        } else {
-            value = stack[0].value;
+    if (function->inline_depth) {
+        // for inline we need to add a phi input and jump into the return block
+        if (ret_type != tVoid) {
+            spidir_builder_add_phi_input(builder, function->return_phi, stack[0].value);
         }
-    }
+        spidir_builder_build_branch(builder, function->return_block);
+    } else {
+        // resolve the return value, for struct likes we need a full on copy
+        spidir_value_t value = SPIDIR_VALUE_INVALID;
+        if (ret_type != tVoid) {
+            if (jit_is_struct_like(ret_type)) {
+                // use a store to ensure we do any conversions correctly
+                spidir_value_t ret_ref = spidir_builder_build_param_ref(builder, arrlen(function->args));
+                jit_emit_store(builder, stack[0].type, stack[0].value, ret_type, ret_ref);
+            } else {
+                value = stack[0].value;
+            }
+        }
 
-    spidir_builder_build_return(builder, value);
+        spidir_builder_build_return(builder, value);
+    }
 
 cleanup:
     return err;
@@ -823,21 +950,28 @@ size_t g_emit_dispatch_table_size = ARRAY_LENGTH(g_emit_dispatch_table);
 tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // create and set this as the entry block, we don't care if this will end up as
-    // empty because it will just be cleaned up in the optimizer
-    block->spidir_block = spidir_builder_create_block(builder);
+    // if we are not coming from an inline create the entry block, otherwise
+    // assume the caller is in charge of that
+    if (!function->inline_depth) {
+        block->spidir_block = spidir_builder_create_block(builder);
+        spidir_builder_set_entry_block(builder, block->spidir_block);
+    }
     spidir_builder_set_block(builder, block->spidir_block);
-    spidir_builder_set_entry_block(builder, block->spidir_block);
 
     //
     // initialize and spill the arguments
-    // TODO: inline
     //
     for (int i = 0; i < arrlen(block->args); i++) {
         jit_block_local_t* arg = &block->args[i];
 
-        // get the param for this slot
-        spidir_value_t value = spidir_builder_build_param_ref(builder, i);
+        // get the param for this slot, if we are inlining assume the value
+        // is already stored inside
+        spidir_value_t value = SPIDIR_VALUE_INVALID;
+        if (!function->inline_depth) {
+            value = spidir_builder_build_param_ref(builder, i);
+        } else {
+            value = block->args[i].stack.value;
+        }
 
         // if we need to spill, spill it now
         if (function->args[i].spilled) {

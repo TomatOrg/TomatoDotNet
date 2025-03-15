@@ -54,8 +54,17 @@ static bool verifier_merge_stack(jit_stack_item_t* previous, jit_stack_item_t* n
         modified = true;
     }
 
+    // if something was not readonly the last round, but is readonly now,
+    // we need to keep the readonly and verify again
+    if (!previous->readonly_ref && new->readonly_ref) {
+        previous->readonly_ref = true;
+        modified = true;
+    }
+
+    // these get set to false once something that does not
+    // match them is merged in
     MERGE_BOOL(is_exact_type);
-    MERGE_BOOL(readonly_ref);
+    MERGE_BOOL(is_this);
     MERGE_BOOL(non_local_ref);
     MERGE_BOOL(non_local_ref_struct);
 
@@ -77,7 +86,9 @@ static bool verifier_merge_block_local(jit_block_local_t* previous, jit_block_lo
 static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* from, jit_block_t* target) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    if (target->visited) {
+    // we check against multiple_predecessors as well for the case of the second pass
+    // so we will know we need to merge nicely
+    if (target->visited || target->multiple_predecessors) {
         // already visited once, need to merge with the
         // type instead of setting everything as is
         target->multiple_predecessors = true;
@@ -107,6 +118,7 @@ static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* fro
 
         // the metadata of the block was modified, we must
         if (modified) {
+            CHECK(!function->emitting); // TODO: fix when we get here
             verifier_queue_block(function, target);
         }
 
@@ -550,6 +562,14 @@ static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il
             }
         } else if (ret_type->IsByRefStruct) {
             CHECK(stack[0].non_local_ref_struct);
+        }
+
+        // merge the return item type, used mainly for inline
+        if (function->return_item_initialized) {
+            verifier_merge_stack(&function->return_item, &stack[0]);
+        } else {
+            function->return_item = stack[0];
+            function->return_item_initialized = true;
         }
     }
 

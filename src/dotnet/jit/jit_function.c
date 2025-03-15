@@ -264,6 +264,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         jit_block_local_t local = {
             .stack = {
                 .type = jit_get_method_this_type(method),
+                .is_this = true,
             },
         };
 
@@ -364,6 +365,9 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
     CHECK_AND_RETHROW(jit_visit_blocks(function, NULL));
 
     TRACE("----------------------------------------");
+
+    // don't allow
+    function->emitting = true;
 
     // prepare all the blocks for another pass, this time with a spidir
     // block ready so it can be jumped to
