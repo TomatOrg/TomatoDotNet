@@ -79,8 +79,11 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
 
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
+    tdn_il_inst_t last_inst;
     uint32_t pc = block.block.start;
     while (pc < block.block.end) {
+        last_inst = inst;
+
         // can only parse more instructions if we had no block
         // terminating instruction
         CHECK(
@@ -147,6 +150,17 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
         CHECK(arrlen(block.stack) >= arrlen(stack_items));
         for (int i = arrlen(stack_items) - 1; i >= 0; i--) {
             stack_items[i] = arrpop(block.stack);
+        }
+
+        // if the last opcode is an ldftn or ldvirtftn then
+        // this must be a newobj
+        if (last_inst.opcode == CEE_LDFTN || last_inst.opcode == CEE_LDVIRTFTN) {
+            CHECK(inst.opcode == CEE_NEWOBJ);
+        }
+
+        // before ldvirtftn we must have a dup
+        if (inst.opcode == CEE_LDVIRTFTN) {
+            CHECK(last_inst.opcode == CEE_DUP);
         }
 
         //

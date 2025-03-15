@@ -5,6 +5,11 @@
 #include <tomatodotnet/types/basic.h>
 #include <util/defs.h>
 #include <util/except.h>
+#include <util/stb_ds.h>
+#include <util/string_builder.h>
+
+#include "jit.h"
+#include "jit_emit.h"
 
 void* memcpy(void* dest, const void* src, size_t n);
 
@@ -71,7 +76,7 @@ static Object jit_newarr(RuntimeTypeInfo arrType, int64_t num_elements) {
     // calculate the total length, make sure to take into account overflows
     size_t total_length;
     if (num_elements < 0) jit_throw_overflow();
-    if (num_elements <= INT32_MAX) jit_throw_out_of_memory();
+    if (num_elements > INT32_MAX) jit_throw_out_of_memory();
     if (__builtin_mul_overflow(num_elements, element_type->StackSize, &total_length)) jit_throw_out_of_memory();
     if (__builtin_add_overflow(total_length, ALIGN_UP(sizeof(struct Array), element_type->StackAlignment), &total_length)) jit_throw_out_of_memory();
 
@@ -110,11 +115,8 @@ static jit_helper_t m_jit_helpers[] = {
 spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
 
     if (m_jit_helpers[helper].created) {
-        TRACE("GET HELPER: %d -> already exists", helper);
         return m_jit_helpers[helper].function;
     }
-
-    TRACE("GET HELPER: %d -> creating", helper);
 
     switch (helper) {
         case JIT_HELPER_BZERO:
@@ -185,8 +187,83 @@ void* jit_get_helper_ptr(spidir_function_t function) {
     return NULL;
 }
 
+static struct {
+    spidir_function_t key;
+    RuntimeMethodBase value;
+}* m_thunk_lookup;
+
+RuntimeMethodBase jit_get_thunk_method(spidir_function_t function) {
+    return hmget(m_thunk_lookup, function);
+}
+
+static void jit_emit_static_delegate_thunk(spidir_builder_handle_t builder, void* _ctx) {
+    RuntimeMethodBase method = _ctx;
+    spidir_function_t function = jit_get_function(spidir_builder_get_module(builder), method);
+
+    // setup the call
+    spidir_block_t entry = spidir_builder_create_block(builder);
+    spidir_builder_set_block(builder, entry);
+    spidir_builder_set_entry_block(builder, entry);
+
+    // load all the arguments
+    spidir_value_t* args = NULL;
+    for (int i = 0; i < method->Parameters->Length; i++) {
+        arrpush(args, spidir_builder_build_param_ref(builder, i + 1));
+    }
+
+    // perform the indirect call
+    spidir_value_t result = spidir_builder_build_call(
+        builder,
+        function,
+        arrlen(args), args
+    );
+
+    // and return it
+    spidir_builder_build_return(builder, result);
+
+    arrfree(args);
+}
+
+spidir_function_t jit_generate_static_delegate_thunk(spidir_module_handle_t module, RuntimeMethodBase method) {
+    spidir_value_type_t* args = NULL;
+
+    // build the name
+    string_builder_t builder = {};
+    string_builder_push_method_signature(&builder, method, true);
+    string_builder_push_cstr(&builder, " [static-delegate-thunk]");
+    const char* name = string_builder_build(&builder);
+
+    // build the arg types, insert a dummy ptr to the first argument
+    // to simulate the thiscall
+    args = jit_get_spidir_arg_types(method);
+    arrins(args, 0, SPIDIR_TYPE_PTR);
+
+    // create the function
+    spidir_function_t thunk = spidir_module_create_function(
+        module,
+        name,
+        jit_get_spidir_ret_type(method),
+        arrlen(args), args
+    );
+    string_builder_free(&builder);
+    arrfree(args);
+
+    // build the function
+    spidir_module_build_function(
+        module,
+        thunk,
+        jit_emit_static_delegate_thunk,
+        method
+    );
+
+    hmput(m_thunk_lookup, thunk, method);
+
+    return thunk;
+}
+
 void jit_clean_helpers() {
     for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
         m_jit_helpers[i].created = false;
     }
+    hmfree(m_thunk_lookup);
 }

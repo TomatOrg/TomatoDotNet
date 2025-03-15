@@ -1,6 +1,7 @@
 #pragma once
 
 #include <spidir/module.h>
+#include <tomatodotnet/types/type.h>
 
 typedef enum jit_helper_type {
     JIT_HELPER_BZERO,
@@ -28,6 +29,16 @@ spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_
  * Get the helper pointer (assuming its an helper) or NULL if not found
  */
 void* jit_get_helper_ptr(spidir_function_t function);
+
+/**
+ * Get the method that the thunk belongs to
+ */
+RuntimeMethodBase jit_get_thunk_method(spidir_function_t function);
+
+/**
+ * Generate a static delegate thunk for the given method
+ */
+spidir_function_t jit_generate_static_delegate_thunk(spidir_module_handle_t module, RuntimeMethodBase method);
 
 /**
  * Clean all the helpers for this run

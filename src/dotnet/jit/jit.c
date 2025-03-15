@@ -131,7 +131,9 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
             CHECK(method->MethodBody == NULL);
             spidir_module_build_function(module, spidir_function, jit_emit_builtin, &emitter);
         } else {
-            CHECK(method->MethodBody != NULL);
+            CHECK(method->MethodBody != NULL,
+                "Missing method body %T::%U", method->DeclaringType, method->Name);
+
             spidir_module_build_function(module, spidir_function, jit_emit_function, &emitter);
         }
         CHECK_AND_RETHROW(emitter.err);
@@ -223,7 +225,7 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
 
     // start from the first function
     spidir_function_t function = jit_get_function(module, methodInfo);
-    jit_codegen_queue(methodInfo, function);
+    jit_codegen_queue(methodInfo, function, false);
 
     // and start jitting
     CHECK_AND_RETHROW(jit_module(module));
@@ -250,7 +252,7 @@ tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
     for (int i = 0; i < type->VTable->Length; i++) {
         RuntimeMethodBase methodInfo = (RuntimeMethodBase)type->VTable->Elements[i];
         spidir_function_t function = jit_get_function(module, methodInfo);
-        jit_codegen_queue(methodInfo, function);
+        jit_codegen_queue(methodInfo, function, false);
     }
 
     // and start jitting

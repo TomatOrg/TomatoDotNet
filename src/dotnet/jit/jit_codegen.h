@@ -11,7 +11,7 @@ void jit_codegen_init(void);
 /**
  * Queue a method to be emitted
  */
-void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function);
+void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function, bool thunk);
 
 /**
  * Perform the full codegen

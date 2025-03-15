@@ -176,6 +176,11 @@ bool verifier_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
         return true;
     }
 
+    // 9. T is a null type, and U is a reference type
+    if (T == NULL && tdn_type_is_referencetype(U)) {
+        return true;
+    }
+
     return false;
 }
 

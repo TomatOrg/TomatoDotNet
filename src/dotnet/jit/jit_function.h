@@ -17,7 +17,7 @@ typedef struct jit_stack_item {
         RuntimeTypeInfo boxed_type;
 
         // the underlying method when the value is a delegate (type.BaseType == tMulticastDelegate)
-        RuntimeMethodInfo method;
+        RuntimeMethodBase method;
     };
 
     // the value of the stack item
@@ -25,7 +25,11 @@ typedef struct jit_stack_item {
 
     // is the type an exact match, or could it maybe
     // be something higher up the chain
-    bool is_exact_type;
+    size_t is_exact_type : 1;
+
+    // do we have a method stored in here, pushed
+    // by either ldftn or ldvftn
+    size_t is_method : 1;
 
     //
     // verification related
@@ -33,21 +37,21 @@ typedef struct jit_stack_item {
 
     // does this argument refer to the `this`
     // of the method
-    bool is_this;
+    size_t is_this : 1;
 
     //
     // Reference related
     //
 
     // is this a read-only reference
-    bool readonly_ref;
+    size_t readonly_ref : 1;
 
     // the reference is non-local
-    bool non_local_ref;
+    size_t non_local_ref : 1;
 
     // the ref-struct is non-local, so the references it
     // contains are non-local as well
-    bool non_local_ref_struct;
+    size_t non_local_ref_struct : 1;
 } jit_stack_item_t;
 
 typedef struct jit_block_local {

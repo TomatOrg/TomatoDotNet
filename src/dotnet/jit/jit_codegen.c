@@ -21,15 +21,28 @@ typedef struct jit_codegen_entry {
     spidir_function_t key;
     spidir_codegen_blob_handle_t blob;
     RuntimeMethodBase method;
+    bool thunk;
 } jit_codegen_entry_t;
 
 static spidir_function_t* m_functions_to_jit = NULL;
 static jit_codegen_entry_t* m_function_blobs = NULL;
 
-void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function) {
+void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function, bool thunk) {
     // if already in queue skip
-    if (hmgeti(m_function_blobs, function) >= 0 || method->MethodPtr != NULL) {
+    if (hmgeti(m_function_blobs, function) >= 0) {
         return;
+    }
+
+    // if already fully jitted no reason to queue it again for codegen,
+    // including for the thunk case
+    if (thunk) {
+        if (method->ThunkPtr != NULL) {
+            return;
+        }
+    } else {
+        if (method->MethodPtr != NULL) {
+            return;
+        }
     }
 
     // queue the function
@@ -38,7 +51,8 @@ void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function) {
     // add to the blobs list
     jit_codegen_entry_t entry = {
         .method = method,
-        .key = function
+        .key = function,
+        .thunk = thunk
     };
     hmputs(m_function_blobs, entry);
 }
@@ -46,27 +60,42 @@ void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function) {
 /**
  * Perform the actual relocation on the given blob
  */
-static tdn_err_t jit_relocate_function(RuntimeMethodBase method, spidir_codegen_blob_handle_t blob) {
+static tdn_err_t jit_relocate_function(RuntimeMethodBase method, bool thunk, spidir_codegen_blob_handle_t blob) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    void* code = thunk ? method->ThunkPtr : method->MethodPtr;
 
     size_t reloc_count = spidir_codegen_blob_get_reloc_count(blob);
     const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(blob);
     for (size_t j = 0; j < reloc_count; j++) {
-        uint64_t P = (uint64_t)(method->MethodPtr + relocs[j].offset);
+        uint64_t P = (uint64_t)(code + relocs[j].offset);
         int64_t A = relocs[j].addend;
 
         // resolve the target, will either be a builtin or a
         // method pointer we jitted
         uint64_t F;
         RuntimeMethodBase target = jit_get_method_from_function(relocs[j].target);
+        bool thunk = false;
+        if (target == NULL) {
+            target = jit_get_thunk_method(relocs[j].target);
+            if (target != NULL) {
+                thunk = true;
+            }
+        }
+
         if (target == NULL) {
             void* ptr = jit_get_helper_ptr(relocs[j].target);
             CHECK(ptr != NULL, "Failed to get function reference to %d while relocating %T::%U",
                 relocs[j].target, method->DeclaringType, method->Name);
             F = (uint64_t)ptr;
         } else {
-            CHECK(target->MethodPtr != NULL);
-            F = (uint64_t)target->MethodPtr;
+            if (thunk) {
+                CHECK(target->ThunkPtr != NULL);
+                F = (uint64_t)target->ThunkPtr;
+            } else {
+                CHECK(target->MethodPtr != NULL);
+                F = (uint64_t)target->MethodPtr;
+            }
         }
 
         switch (relocs[j].kind) {
@@ -114,8 +143,16 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         for (int i = 0; i < reloc_count; i++) {
             spidir_function_t callee = relocs[i].target;
             RuntimeMethodBase callee_method = jit_get_method_from_function(callee);
+            bool thunk = false;
+            if (callee_method == NULL) {
+                callee_method = jit_get_thunk_method(callee);
+                if (callee_method != NULL) {
+                    thunk = true;
+                }
+            }
+
             if (callee_method != NULL) {
-                jit_codegen_queue(callee_method, callee);
+                jit_codegen_queue(callee_method, callee, thunk);
             }
         }
     }
@@ -156,9 +193,14 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         // copy the code
         size_t code_size = spidir_codegen_blob_get_code_size(entry->blob);
         const void* code = spidir_codegen_blob_get_code(entry->blob);
-        method->MethodSize = code_size;
-        method->MethodPtr = jit_area + offset;
-        memcpy(method->MethodPtr, code, method->MethodSize);
+        if (entry->thunk) {
+            method->ThunkSize = code_size;
+            method->ThunkPtr = jit_area + offset;
+        } else {
+            method->MethodSize = code_size;
+            method->MethodPtr = jit_area + offset;
+        }
+        memcpy(jit_area + offset, code, code_size);
 
         // generate a value type virtual thunk
         if (method->Attributes.Virtual && tdn_type_is_valuetype(method->DeclaringType)) {
@@ -167,13 +209,12 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
             CHECK(object_header_size <= 0x7F);
 
             // add rdi, $object_header_size
+            CHECK(method->ThunkPtr == NULL);
             uint8_t opcode[4] = { 0x48, 0x83, 0xC7, object_header_size };
             method->ThunkPtr = jit_area + offset - sizeof(opcode);
             method->ThunkSize = sizeof(opcode);
             memcpy(method->ThunkPtr, opcode, method->ThunkSize);
         }
-
-        // TODO: static delegate thunk with 3 or less arguments
 
         offset += code_size;
     }
@@ -184,7 +225,7 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
     // now perform the relocations
     for (int i = 0; i < hmlen(m_function_blobs); i++) {
         jit_codegen_entry_t* entry = &m_function_blobs[i];
-        CHECK_AND_RETHROW(jit_relocate_function(entry->method, entry->blob));
+        CHECK_AND_RETHROW(jit_relocate_function(entry->method, entry->thunk, entry->blob));
     }
 
     // turn the area into executable memory

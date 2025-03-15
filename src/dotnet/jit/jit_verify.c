@@ -120,6 +120,8 @@ static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* fro
         if (modified) {
             CHECK(!function->emitting); // TODO: fix when we get here
             verifier_queue_block(function, target);
+        } else if (!target->visited) {
+            verifier_queue_block(function, target);
         }
 
     } else {
@@ -331,6 +333,16 @@ static tdn_err_t verify_ldc_i8(jit_function_t* function, jit_block_t* block, tdn
     return TDN_NO_ERROR;
 }
 
+static tdn_err_t verify_dup(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    *STACK_PUSH() = stack[0];
+    *STACK_PUSH() = stack[0];
+    return TDN_NO_ERROR;
+}
+
+static tdn_err_t verify_pop(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return TDN_NO_ERROR;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Arith and compare operations
 //----------------------------------------------------------------------------------------------------------------------
@@ -339,13 +351,13 @@ static tdn_err_t verify_binary_compare(tdn_il_opcode_t opcode, RuntimeTypeInfo t
     tdn_err_t err = TDN_NO_ERROR;
 
     if (type1 == tInt32) {
-        CHECK(type2 == tInt32);
+        CHECK(type2 == tInt32 || type2 == tIntPtr);
 
     } else if (type1 == tInt64) {
         CHECK(type2 == tInt64);
 
     } else if (type1 == tIntPtr) {
-        CHECK(type2 == tInt32);
+        CHECK(type2 == tIntPtr || type2 == tInt32);
 
     } else if (tdn_type_is_referencetype(type1)) {
         CHECK(tdn_type_is_referencetype(type2));
@@ -354,6 +366,68 @@ static tdn_err_t verify_binary_compare(tdn_il_opcode_t opcode, RuntimeTypeInfo t
     } else {
         CHECK_FAIL("%T binary-compare %T", type1, type2);
     }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_binary_op(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // validate that both are good
+    RuntimeTypeInfo type1 = stack[0].type;
+    RuntimeTypeInfo type2 = stack[1].type;
+
+    RuntimeTypeInfo result_type = NULL;
+    if (type1 == tInt32) {
+        CHECK(type2 == tInt32);
+        result_type = tInt32;
+
+    } else if (type1 == tInt64) {
+        CHECK(type2 == tInt64);
+        result_type = tInt64;
+
+    } else if (type1 == tIntPtr) {
+        CHECK(type2 == tIntPtr);
+        result_type = tIntPtr;
+
+    } else {
+        CHECK_FAIL();
+    }
+
+    // always pushes as an int32
+    STACK_PUSH()->type = result_type;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // validate that both are good
+    CHECK(
+        stack[0].type == tInt32 ||
+        stack[0].type == tInt64 ||
+        stack[0].type == tIntPtr
+    );
+
+    // always pushes as an int32
+    RuntimeTypeInfo type = NULL;
+    switch (inst->opcode) {
+        case CEE_CONV_I1:
+        case CEE_CONV_I2:
+        case CEE_CONV_I4:
+        case CEE_CONV_U1:
+        case CEE_CONV_U2:
+        case CEE_CONV_U4: type = tInt32; break;
+        case CEE_CONV_I8:
+        case CEE_CONV_U8: type = tInt64; break;
+        case CEE_CONV_I:
+        case CEE_CONV_U: type = tIntPtr; break;
+        default: CHECK_FAIL();
+    }
+    STACK_PUSH()->type = type;
 
 cleanup:
     return err;
@@ -375,6 +449,98 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Array related
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_newarr(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // validate the size
+    CHECK(stack[0].type == tInt32 || stack[0].type == tIntPtr);
+
+    // validate the item can be turned into an array
+    CHECK(!inst->operand.type->IsByRef);
+    CHECK(!inst->operand.type->IsByRefStruct);
+
+    // push the array type
+    jit_stack_item_t* item = STACK_PUSH();
+    CHECK_AND_RETHROW(tdn_get_array_type(inst->operand.type, &item->type));
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_ldlen(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure this is an array
+    CHECK(stack[0].type == NULL || stack[0].type->IsArray);
+
+    // return value is an intptr
+    STACK_PUSH()->type = tIntPtr;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_ldelem(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_item_t* array = &stack[0];
+    jit_stack_item_t* index = &stack[1];
+
+    CHECK(index->type == tInt32 || index->type == tIntPtr);
+
+    // if the array is null everything is assumed to be correct,
+    // and it will fail at runtime
+    if (array->type == NULL) {
+        STACK_PUSH()->type = inst->operand.type;
+        goto cleanup;
+    }
+
+    // must be an array type
+    CHECK(array->type->IsArray);
+
+    // ensure the types match nicely
+    CHECK(verifier_array_element_compatible_with(inst->operand.type, array->type->ElementType),
+        "%T array-element-compatible-with %T", inst->operand.type, array->type->ElementType);
+
+    // track the result
+    STACK_PUSH()->type = verifier_get_intermediate_type(array->type->ElementType);
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_stelem(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_item_t* array = &stack[0];
+    jit_stack_item_t* index = &stack[1];
+    jit_stack_item_t* value = &stack[2];
+
+    CHECK(index->type == tInt32 || index->type == tIntPtr);
+
+    // if the array is null everything is assumed to be correct,
+    // and it will fail at runtime
+    if (array->type == NULL) {
+        goto cleanup;
+    }
+
+    // must be an array type
+    CHECK(array->type->IsArray);
+
+    // ensure the types match nicely
+    CHECK(verifier_array_element_compatible_with(value->type, inst->operand.type),
+        "%T array-element-compatible-with %T", value->type, inst->operand.type);
+    CHECK(verifier_array_element_compatible_with(inst->operand.type, array->type->ElementType),
+        "%T array-element-compatible-with %T", inst->operand.type, array->type->ElementType);
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // Method related
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -382,6 +548,21 @@ static tdn_err_t verify_method_accessible(RuntimeMethodBase caller, RuntimeMetho
     tdn_err_t err = TDN_NO_ERROR;
 
 
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_ldftn(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check we can access the method at all
+    CHECK_AND_RETHROW(verify_method_accessible(function->method, inst->operand.method));
+
+    // and pushhh it
+    jit_stack_item_t* item = STACK_PUSH();
+    item->is_method = true;
+    item->method = inst->operand.method;
 
 cleanup:
     return err;
@@ -517,19 +698,62 @@ cleanup:
 
 static tdn_err_t verify_newobj(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
+    RuntimeMethodBase callee = inst->operand.method;
 
     // ensure we can access the callee
-    CHECK_AND_RETHROW(verify_method_accessible(function->method, inst->operand.method));
+    CHECK_AND_RETHROW(verify_method_accessible(function->method, callee));
 
     // ensure this is a ctor
-    CHECK(inst->operand.method->Attributes.RTSpecialName);
-    CHECK(tdn_compare_string_to_cstr(inst->operand.method->Name, ".ctor"));
+    CHECK(callee->Attributes.RTSpecialName);
+    CHECK(tdn_compare_string_to_cstr(callee->Name, ".ctor"));
 
-    // verify the call parameters
-    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, NULL));
+    // if we are constructing a delegate, this is a special case
+    if (jit_is_delegate(callee->DeclaringType)) {
+        CHECK(stack[1].is_method);
+        RuntimeMethodBase target = stack[1].method;
 
-    // TODO: push the new instance
-    CHECK_FAIL();
+        // ensure the instance matches the delegate, for static
+        // target the instance must be a null
+        if (target->Attributes.Static) {
+            CHECK(stack[0].type == NULL);
+        } else {
+            // TODO: how do value types work in here?
+            CHECK(verifier_assignable_to(stack[0].type, target->DeclaringType),
+                "%T verifier-assignable-to %T", stack[0].type, target->DeclaringType);
+        }
+
+        // ensure the delegate matches the wanted function signature
+        CHECK(callee->DeclaringType->DeclaredMethods->Length == 1);
+        RuntimeMethodBase signature = (RuntimeMethodBase)callee->DeclaringType->DeclaredMethods->Elements[0];
+        CHECK(signature->Parameters->Length == target->Parameters->Length);
+        for (int i = 0; i < signature->Parameters->Length; i++) {
+            ParameterInfo signature_param = signature->Parameters->Elements[i];
+            ParameterInfo target_param = target->Parameters->Elements[i];
+            CHECK(signature_param->ParameterType == target_param->ParameterType);
+            CHECK(signature_param->Attributes.Attributes == target_param->Attributes.Attributes);
+            CHECK(signature_param->IsReadOnly == target_param->IsReadOnly);
+        }
+
+        // ensure the return type is the same
+        CHECK(signature->ReturnParameter->ParameterType == target->ReturnParameter->ParameterType);
+        CHECK(signature->ReturnParameter->Attributes.Attributes == target->ReturnParameter->Attributes.Attributes);
+        CHECK(signature->ReturnParameter->IsReadOnly == target->ReturnParameter->IsReadOnly);
+    } else {
+        // verify the call parameters
+        CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, NULL));
+    }
+
+    // push the new instance
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = jit_get_method_this_type(callee);
+    item->is_exact_type = true;
+
+    // we built a delegate, mark its function
+    if (jit_is_delegate(callee->DeclaringType)) {
+        item->method = stack[1].method;
+    }
+
+    // TODO: mark ref-struct as non-local if only had non-local arguments
 
 cleanup:
     return err;
@@ -595,6 +819,37 @@ cleanup:
     return err;
 }
 
+
+static tdn_err_t verify_br_unary_cond(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check its a valid type
+    CHECK(
+        stack[0].type == tInt32 ||
+        stack[0].type == tInt64 ||
+        stack[0].type == NULL ||
+        stack[0].type->IsByRef ||
+        stack[0].type->IsPointer ||
+        tdn_type_is_referencetype(stack[0].type)
+    );
+
+    // get the target block
+    jit_basic_block_entry_t* target_block = hmgetp_null(verifier->labels, inst->operand.branch_target);
+    CHECK(target_block != NULL);
+    jit_block_t* target = &verifier->blocks[target_block->value.index];
+    jit_block_t* next = &verifier->blocks[block->block.index + 1];
+
+    // check that we can merge with the next block as well
+    CHECK_AND_RETHROW(verifier_merge_block(verifier, block, target));
+
+    // check that we can merge with it
+    CHECK_AND_RETHROW(verifier_merge_block(verifier, block, next));
+
+cleanup:
+    return err;
+}
+
+
 //----------------------------------------------------------------------------------------------------------------------
 // Exceptions
 //----------------------------------------------------------------------------------------------------------------------
@@ -630,12 +885,43 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDNULL] = verify_ldnull,
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
+    [CEE_DUP] = verify_dup,
+    [CEE_POP] = verify_pop,
+
+    [CEE_ADD] = verify_binary_op,
+    [CEE_SUB] = verify_binary_op,
+    [CEE_MUL] = verify_binary_op,
+    [CEE_DIV] = verify_binary_op,
+    [CEE_DIV_UN] = verify_binary_op,
+    [CEE_REM] = verify_binary_op,
+    [CEE_REM_UN] = verify_binary_op,
+    [CEE_AND] = verify_binary_op,
+    [CEE_OR] = verify_binary_op,
+    [CEE_XOR] = verify_binary_op,
+
+    [CEE_CONV_I1] = verify_conv,
+    [CEE_CONV_I2] = verify_conv,
+    [CEE_CONV_I4] = verify_conv,
+    [CEE_CONV_I8] = verify_conv,
+    [CEE_CONV_U1] = verify_conv,
+    [CEE_CONV_U2] = verify_conv,
+    [CEE_CONV_U4] = verify_conv,
+    [CEE_CONV_U8] = verify_conv,
+    [CEE_CONV_I] = verify_conv,
+    [CEE_CONV_U] = verify_conv,
 
     [CEE_CEQ] = verify_compare,
     [CEE_CGT] = verify_compare,
     [CEE_CGT_UN] = verify_compare,
     [CEE_CLT] = verify_compare,
     [CEE_CLT_UN] = verify_compare,
+
+    [CEE_NEWARR] = verify_newarr,
+    [CEE_LDLEN] = verify_ldlen,
+    [CEE_LDELEM] = verify_ldelem,
+    [CEE_STELEM] = verify_stelem,
+
+    [CEE_LDFTN] = verify_ldftn,
 
     [CEE_NEWOBJ] = verify_newobj,
     [CEE_CALL] = verify_call,
@@ -644,6 +930,8 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_RET] = verify_ret,
 
     [CEE_BR] = verify_br,
+    [CEE_BRFALSE] = verify_br_unary_cond,
+    [CEE_BRTRUE] = verify_br_unary_cond,
 
     [CEE_THROW] = verify_throw,
 };
