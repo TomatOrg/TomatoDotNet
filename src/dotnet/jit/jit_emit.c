@@ -757,6 +757,12 @@ static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase
         return target;
     }
 
+    // if this is a delegate with a known instance call then
+    // we can perform a direct call
+    if (jit_is_delegate(item->type) && item->method != NULL) {
+        return item->method;
+    }
+
     // has builtin emitter, we know what to call directly
     if (jit_get_builtin_emitter(target) != NULL) {
         return target;
@@ -1049,6 +1055,20 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
     if (known != NULL) {
         // TODO: perform explicit null check
 
+        // the devirt was from a delegate, load the this pointer properly
+        if (jit_is_delegate(stack[0].type)) {
+            if (known->Attributes.Static) {
+                // no need for the `this`
+                stack = &stack[1];
+            } else {
+                // load the this from the delegate
+                stack[0].type = jit_get_method_this_type(known);
+                stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+                            spidir_builder_build_ptroff(builder, stack[0].value,
+                                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Instance))));
+            }
+        }
+
         // the devirt was into a valuetype, move the pointer
         // forward since this will call the non-thunk version
         if (tdn_type_is_valuetype(known->DeclaringType)) {
@@ -1057,6 +1077,7 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
                     jit_get_boxed_value_offset(known->DeclaringType)));
         }
 
+        // and now we can perform the direct call
         inst->operand.method = known;
         CHECK_AND_RETHROW(emit_call(function, builder, block, inst, stack));
         goto cleanup;
