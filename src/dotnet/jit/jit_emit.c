@@ -509,11 +509,21 @@ static spidir_value_t emit_extend_int(spidir_builder_handle_t builder, spidir_va
 static spidir_value_t emit_binary_compare(spidir_builder_handle_t builder, tdn_il_opcode_t opcode, spidir_value_t value1, spidir_value_t value2) {
     spidir_icmp_kind_t kind;
     switch (opcode) {
+        case CEE_BEQ:
         case CEE_CEQ: kind = SPIDIR_ICMP_EQ; break;
+        case CEE_BNE_UN: kind = SPIDIR_ICMP_NE; break;
+        case CEE_BGT:
         case CEE_CGT: kind = SPIDIR_ICMP_SLT; SWAP(value1, value2); break;
+        case CEE_BGE: kind = SPIDIR_ICMP_SLE; SWAP(value1, value2); break;
+        case CEE_BGT_UN:
         case CEE_CGT_UN: kind = SPIDIR_ICMP_ULT; SWAP(value1, value2); break;
+        case CEE_BGE_UN: kind = SPIDIR_ICMP_ULE; SWAP(value1, value2); break;
+        case CEE_BLT:
         case CEE_CLT: kind = SPIDIR_ICMP_SLT; break;
+        case CEE_BLE: kind = SPIDIR_ICMP_SLE; break;
+        case CEE_BLT_UN:
         case CEE_CLT_UN: kind = SPIDIR_ICMP_ULT; break;
+        case CEE_BLE_UN: kind = SPIDIR_ICMP_ULE; break;
         default: ASSERT(!"Invalid opcode");
     }
     return spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
@@ -825,10 +835,9 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
     }
 
     // push return argument
-    if (jit_is_struct_like(callee->ReturnParameter->ParameterType)) {
-        arrpush(values, spidir_builder_build_stackslot(builder,
-            callee->ReturnParameter->ParameterType->StackSize,
-            callee->ReturnParameter->ParameterType->StackAlignment));
+    RuntimeTypeInfo ret_type = callee->ReturnParameter->ParameterType;
+    if (ret_type != tVoid && jit_is_struct_like(ret_type)) {
+        arrpush(values, spidir_builder_build_stackslot(builder, ret_type->StackSize, ret_type->StackAlignment));
     }
 
     return values;
@@ -1195,6 +1204,17 @@ cleanup:
     return err;
 }
 
+static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_item_t* item) {
+    if (jit_is_interface(item->type)) {
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, item->value);
+    } else if (jit_is_delegate(item->type)) {
+        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+            spidir_builder_build_ptroff(builder, item->value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
+    }
+}
+
 static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1210,16 +1230,10 @@ static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_han
 
     // interface and delegate are a fat pointer, we need to
     // load the instance/function and check against that
-    if (jit_is_interface(stack[0].type)) {
-        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
-        stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
-    } else if (jit_is_delegate(stack[0].type)) {
-        stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-            spidir_builder_build_ptroff(builder, stack[0].value,
-                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
-    }
+    emit_load_reference(builder, &stack[0]);
 
     // if this is a reference need to turn into an integer
+    // TODO: use a compare instead?
     if (tdn_type_is_referencetype(stack[0].type)) {
         stack[0].value = spidir_builder_build_ptrtoint(builder, stack[0].value);
     }
@@ -1235,6 +1249,50 @@ static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_han
 cleanup:
     return err;
 }
+
+
+
+static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
+
+    // sign extend as required
+    if (stack[0].type == tInt32 && stack[1].type != tInt32) {
+        stack[0].type = tIntPtr;
+        stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+    } else if (stack[1].type == tInt32 && stack[0].type != tInt32) {
+        stack[1].type = tIntPtr;
+        stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+    }
+
+    // interface and delegate are a fat pointer, we need to
+    // load the instance/function and check against that
+    emit_load_reference(builder, &stack[0]);
+    emit_load_reference(builder, &stack[1]);
+
+    // NOTE: in here we don't need to inttoptr since compare can
+    //       just take in a pointer without a problem
+
+    // perform the condition
+    spidir_value_t cond = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
+
+    // get the target block
+    jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
+    CHECK(target != NULL);
+    jit_block_t* next = jit_function_get_block(function, block->end, block->leave_target_stack);
+    CHECK(next != NULL);
+
+    // merge with both blocks
+    emitter_merge_block(function, builder, block, target);
+    emitter_merge_block(function, builder, block, next);
+
+    // and branch to it
+    spidir_builder_build_brcond(builder, cond, target->spidir_block, next->spidir_block);
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Exceptions
 //----------------------------------------------------------------------------------------------------------------------
@@ -1339,6 +1397,16 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_BR] = emit_br,
     [CEE_BRFALSE] = emit_br_unary_cond,
     [CEE_BRTRUE] = emit_br_unary_cond,
+    [CEE_BEQ] = emit_br_binary_cond,
+    [CEE_BGE] = emit_br_binary_cond,
+    [CEE_BGT] = emit_br_binary_cond,
+    [CEE_BLE] = emit_br_binary_cond,
+    [CEE_BLT] = emit_br_binary_cond,
+    [CEE_BNE_UN] = emit_br_binary_cond,
+    [CEE_BGE_UN] = emit_br_binary_cond,
+    [CEE_BGT_UN] = emit_br_binary_cond,
+    [CEE_BLE_UN] = emit_br_binary_cond,
+    [CEE_BLT_UN] = emit_br_binary_cond,
 
     [CEE_LEAVE] = emit_leave,
     [CEE_ENDFINALLY] = emit_endfinally,

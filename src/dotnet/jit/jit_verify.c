@@ -361,7 +361,7 @@ static tdn_err_t verify_binary_compare(tdn_il_opcode_t opcode, RuntimeTypeInfo t
 
     } else if (tdn_type_is_referencetype(type1)) {
         CHECK(tdn_type_is_referencetype(type2));
-        CHECK(opcode == CEE_CEQ || opcode == CEE_CGT_UN);
+        CHECK(opcode == CEE_CEQ || opcode == CEE_CGT_UN || opcode == CEE_BEQ || opcode == CEE_BNE_UN);
 
     } else {
         CHECK_FAIL("%T binary-compare %T", type1, type2);
@@ -819,7 +819,6 @@ cleanup:
     return err;
 }
 
-
 static tdn_err_t verify_br_unary_cond(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -832,6 +831,30 @@ static tdn_err_t verify_br_unary_cond(jit_function_t* function, jit_block_t* blo
         stack[0].type->IsPointer ||
         tdn_type_is_referencetype(stack[0].type)
     );
+
+    // get the target block
+    jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
+    CHECK(target != NULL);
+    jit_block_t* next = jit_function_get_block(function, block->end, block->leave_target_stack);
+    CHECK(next != NULL);
+
+    // check that we can merge with the next block as well
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, target));
+
+    // check that we can merge with it
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, next));
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_br_binary_cond(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // validate that both are good
+    RuntimeTypeInfo value1 = stack[0].type;
+    RuntimeTypeInfo value2 = stack[1].type;
+    CHECK_AND_RETHROW(verify_binary_compare(inst->opcode, value1, value2));
 
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
@@ -999,6 +1022,16 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_BR] = verify_br,
     [CEE_BRFALSE] = verify_br_unary_cond,
     [CEE_BRTRUE] = verify_br_unary_cond,
+    [CEE_BEQ] = verify_br_binary_cond,
+    [CEE_BGE] = verify_br_binary_cond,
+    [CEE_BGT] = verify_br_binary_cond,
+    [CEE_BLE] = verify_br_binary_cond,
+    [CEE_BLT] = verify_br_binary_cond,
+    [CEE_BNE_UN] = verify_br_binary_cond,
+    [CEE_BGE_UN] = verify_br_binary_cond,
+    [CEE_BGT_UN] = verify_br_binary_cond,
+    [CEE_BLE_UN] = verify_br_binary_cond,
+    [CEE_BLT_UN] = verify_br_binary_cond,
 
     [CEE_LEAVE] = verify_leave,
     [CEE_ENDFINALLY] = verify_endfinally,

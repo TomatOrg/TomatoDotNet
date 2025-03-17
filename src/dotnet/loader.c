@@ -859,7 +859,7 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
             CHECK(clause.try_offset + clause.try_length == clause.filter_offset);
         } else {
             // try must be before the handler
-            CHECK(clause.try_offset + clause.try_length == clause.handler_offset);
+            CHECK(clause.try_offset + clause.try_length <= clause.handler_offset);
         }
 
         // and now create it and fill it

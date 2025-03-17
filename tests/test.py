@@ -32,6 +32,9 @@ SKIP = [
     'DblRem.csproj',
     'DblSub.csproj',
     'DblVar.csproj',
+
+    # TODO: exception support
+    'div2.csproj',
 ]
 
 
@@ -62,12 +65,14 @@ def main():
         for filename in os.listdir(test_dir):
             if not filename.endswith('.dll') or filename in IGNORE_DLLS:
                 continue
-            print(f'Running test {os.path.join(test_dir, filename)}')
+
+            test_path = os.path.join(test_dir, filename)
+            print(f'Running test {test_path}')
             assert subprocess.call(
                 [
-                    TDN_BINARY, TDN_CORELIB, CURRENT_DIR, os.path.join(test_dir, filename)
+                    TDN_BINARY, TDN_CORELIB, CURRENT_DIR, test_path
                 ],
-            ) == 100
+            ) == 100, f"Test {test_path} failed"
 
 
 if __name__ == '__main__':
