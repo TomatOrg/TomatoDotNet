@@ -432,6 +432,23 @@ cleanup:
     return err;
 }
 
+static tdn_err_t emit_ldloca(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->locals));
+    jit_block_local_t* local = &block->locals[inst->operand.variable];
+
+    // must be spilled
+    CHECK(function->locals[inst->operand.variable].spilled);
+
+    // just give the pointer
+    STACK_TOP()->value = local->stack.value;
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Misc instructions
 //----------------------------------------------------------------------------------------------------------------------
@@ -1345,6 +1362,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
 
     [CEE_LDLOC] = emit_ldloc,
     [CEE_STLOC] = emit_stloc,
+    [CEE_LDLOCA] = emit_ldloca,
 
     [CEE_LDFLD] = emit_ldfld,
 

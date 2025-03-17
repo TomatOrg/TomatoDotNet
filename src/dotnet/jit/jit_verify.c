@@ -253,6 +253,40 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_ldloca(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block->locals));
+    jit_block_local_t* local = &block->locals[inst->operand.variable];
+
+    // check if we need to zero initialize
+    if (!local->initialized) {
+        // TODO: should we fail if the method is not marked as InitLocals?
+        function->locals[inst->operand.variable].zero_initialize = true;
+        local->initialized = true;
+    }
+
+    // mark as spilled
+    function->locals[inst->operand.variable].spilled = true;
+
+    // fixup the type to be the intermediate type,
+    // and push it to the stack
+    jit_stack_item_t item = {};
+
+    // this had a non-local ref-struct, mark the item as such
+    if (local->stack.non_local_ref_struct) {
+        item.non_local_ref_struct = true;
+    }
+
+    item.type = verifier_get_verification_type(local->stack.type);
+    CHECK_AND_RETHROW(tdn_get_byref_type(item.type, &item.type));
+    *STACK_PUSH() = item;
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Misc instructions
 //----------------------------------------------------------------------------------------------------------------------
@@ -969,6 +1003,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
 
     [CEE_LDLOC] = verify_ldloc,
     [CEE_STLOC] = verify_stloc,
+    [CEE_LDLOCA] = verify_ldloca,
 
     [CEE_LDFLD] = verify_ldfld,
 

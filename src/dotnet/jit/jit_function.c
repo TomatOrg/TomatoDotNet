@@ -223,13 +223,13 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
         // ensure we have a verifier for this opcode
         CHECK(inst.opcode < g_verify_dispatch_table_size && g_verify_dispatch_table[inst.opcode] != NULL,
-            "Unknown opcode %s", tdn_get_opcode_name(inst.opcode));
+            "Unimplemented opcode %s in verifier", tdn_get_opcode_name(inst.opcode));
         CHECK_AND_RETHROW(g_verify_dispatch_table[inst.opcode](function, &block, &inst, stack_items));
 
         // call the emitter (if need be)
         if (builder != NULL) {
             CHECK(inst.opcode < g_emit_dispatch_table_size && g_emit_dispatch_table[inst.opcode] != NULL,
-                "Unknown opcode %s", tdn_get_opcode_name(inst.opcode));
+                "Unimplemented opcode %s in emitter", tdn_get_opcode_name(inst.opcode));
             CHECK_AND_RETHROW(g_emit_dispatch_table[inst.opcode](function, builder, &block, &inst, stack_items));
         }
 
