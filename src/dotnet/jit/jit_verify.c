@@ -175,11 +175,11 @@ static tdn_err_t verify_ldarg(jit_function_t* function, jit_block_t* block, tdn_
 
     // get the local slot
     CHECK(inst->operand.variable < arrlen(block->args));
-    jit_block_local_t* local = &block->args[inst->operand.variable];
+    jit_block_local_t* arg = &block->args[inst->operand.variable];
 
     // fixup the type to be the intermediate type,
     // and push it to the stack
-    jit_stack_item_t item = local->stack;
+    jit_stack_item_t item = arg->stack;
     item.type = verifier_get_intermediate_type(item.type);
     *STACK_PUSH() = item;
 
@@ -192,15 +192,17 @@ static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_
 
     // get the local slot
     CHECK(inst->operand.variable < arrlen(block->args));
-    jit_block_local_t* local = &block->args[inst->operand.variable];
+    jit_block_local_t* arg = &block->args[inst->operand.variable];
 
     // check that the type matches
     CHECK(verifier_assignable_to(stack[0].type, function->args[inst->operand.variable].type),
         "%T verifier-assignable-to %T", stack[0].type, function->args[inst->operand.variable].type);
 
     // copy as is
-    local->stack = stack[0];
-    local->initialized = true;
+    arg->stack.flags = stack[0].flags;
+    arg->stack.type = stack[0].type;
+    arg->stack.boxed_type = stack[0].boxed_type;
+    arg->initialized = true;
 
 cleanup:
     return err;
@@ -246,7 +248,9 @@ static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_
         "%T verifier-assignable-to %T", stack[0].type, function->locals[inst->operand.variable].type);
 
     // copy as is
-    local->stack = stack[0];
+    local->stack.flags = stack[0].flags;
+    local->stack.type = stack[0].type;
+    local->stack.boxed_type = stack[0].boxed_type;
     local->initialized = true;
 
 cleanup:
@@ -343,6 +347,27 @@ static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_
             item->non_local_ref_struct = true;
         }
     }
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Reference access
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_stind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_item_t* addr = &stack[0];
+    jit_stack_item_t* val = &stack[1];
+
+    // must be a byref
+    CHECK(addr->type != NULL && addr->type->IsByRef);
+
+    // ensure we can assign the value to the indirect reference
+    CHECK(verifier_assignable_to(val->type, addr->type->ElementType),
+        "%T verifier-assignable-to %T", val->type, addr->type->ElementType);
 
 cleanup:
     return err;
@@ -1006,6 +1031,12 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDLOCA] = verify_ldloca,
 
     [CEE_LDFLD] = verify_ldfld,
+
+    [CEE_STIND_I] = verify_stind,
+    [CEE_STIND_I1] = verify_stind,
+    [CEE_STIND_I2] = verify_stind,
+    [CEE_STIND_I4] = verify_stind,
+    [CEE_STIND_REF] = verify_stind,
 
     [CEE_LDNULL] = verify_ldnull,
     [CEE_LDC_I4] = verify_ldc_i4,

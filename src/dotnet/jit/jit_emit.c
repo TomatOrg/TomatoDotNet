@@ -247,18 +247,24 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
 
             // create local phis
             for (int i = 0; i < arrlen(block->locals); i++) {
-                if (function->locals[i].spilled) continue;
-                block->locals[i].stack.value = spidir_builder_build_phi(builder,
-                    get_spidir_type(block->locals[i].stack.type),
-                    0, NULL, &block->locals[i].phi);
+                if (function->locals[i].spilled) {
+                    block->locals[i].stack.value = from->locals[i].stack.value;
+                } else {
+                    block->locals[i].stack.value = spidir_builder_build_phi(builder,
+                        get_spidir_type(block->locals[i].stack.type),
+                        0, NULL, &block->locals[i].phi);
+                }
             }
 
             // create arg phis
             for (int i = 0; i < arrlen(block->args); i++) {
-                if (function->args[i].spilled) continue;
-                block->args[i].stack.value = spidir_builder_build_phi(builder,
-                    get_spidir_type(block->args[i].stack.type),
-                    0, NULL, &block->args[i].phi);
+                if (function->args[i].spilled) {
+                    block->args[i].stack.value = from->args[i].stack.value;
+                } else {
+                    block->args[i].stack.value = spidir_builder_build_phi(builder,
+                        get_spidir_type(block->args[i].stack.type),
+                        0, NULL, &block->args[i].phi);
+                }
             }
 
             // switch back to the old block
@@ -380,6 +386,7 @@ static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t bu
     } else {
         // data flow store
         // TODO: truncate values as required
+        arg->stack.value = stack[0].value;
     }
 
 cleanup:
@@ -426,6 +433,7 @@ static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t bu
     } else {
         // data flow store
         // TODO: truncate values as required
+        local->stack.value = stack[0].value;
     }
 
 cleanup:
@@ -480,6 +488,16 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
 
 cleanup:
     return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Indirect reference access
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    // we just need to store into the given item
+    jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type, stack[0].value);
+    return TDN_NO_ERROR;
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -1366,6 +1384,12 @@ emit_instruction_t g_emit_dispatch_table[] = {
 
     [CEE_LDFLD] = emit_ldfld,
 
+    [CEE_STIND_I] = emit_stind,
+    [CEE_STIND_I1] = emit_stind,
+    [CEE_STIND_I2] = emit_stind,
+    [CEE_STIND_I4] = emit_stind,
+    [CEE_STIND_REF] = emit_stind,
+
     [CEE_LDNULL] = emit_ldnull,
     [CEE_LDC_I4] = emit_ldc_i4,
     [CEE_LDC_I8] = emit_ldc_i8,
@@ -1491,12 +1515,12 @@ tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle
         // if we need to spill it, or this is a struct like that needs to be zero initialized
         // then allocate a stackslot
         if (spilled || (zero_initialize && jit_is_struct_like(local->stack.type))) {
-            spidir_value_t stackslot = spidir_builder_build_stackslot(builder,
+            value = spidir_builder_build_stackslot(builder,
                 local->stack.type->StackSize, local->stack.type->StackAlignment);
 
             // we need to zero init it
             if (zero_initialize) {
-                jit_emit_bzero(builder, stackslot, local->stack.type);
+                jit_emit_bzero(builder, value, local->stack.type);
             }
         } else if (zero_initialize) {
             // this is a value type, but we need to zero init it

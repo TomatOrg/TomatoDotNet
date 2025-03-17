@@ -25,35 +25,41 @@ typedef struct jit_stack_item {
     // the value of the stack item
     spidir_value_t value;
 
-    // is the type an exact match, or could it maybe
-    // be something higher up the chain
-    size_t is_exact_type : 1;
+    union {
+        struct {
+            // is the type an exact match, or could it maybe
+            // be something higher up the chain
+            size_t is_exact_type : 1;
 
-    // do we have a method stored in here, pushed
-    // by either ldftn or ldvftn
-    size_t is_method : 1;
+            // do we have a method stored in here, pushed
+            // by either ldftn or ldvftn
+            size_t is_method : 1;
 
-    //
-    // verification related
-    //
+            //
+            // verification related
+            //
 
-    // does this argument refer to the `this`
-    // of the method
-    size_t is_this : 1;
+            // does this argument refer to the `this`
+            // of the method
+            size_t is_this : 1;
 
-    //
-    // Reference related
-    //
+            //
+            // Reference related
+            //
 
-    // is this a read-only reference
-    size_t readonly_ref : 1;
+            // is this a read-only reference
+            size_t readonly_ref : 1;
 
-    // the reference is non-local
-    size_t non_local_ref : 1;
+            // the reference is non-local
+            size_t non_local_ref : 1;
 
-    // the ref-struct is non-local, so the references it
-    // contains are non-local as well
-    size_t non_local_ref_struct : 1;
+            // the ref-struct is non-local, so the references it
+            // contains are non-local as well
+            size_t non_local_ref_struct : 1;
+        };
+
+        size_t flags;
+    };
 } jit_stack_item_t;
 
 typedef struct jit_block_local {
