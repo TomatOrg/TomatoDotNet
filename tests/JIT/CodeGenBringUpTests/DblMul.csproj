@@ -1,0 +1,17 @@
+
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <DebugType>Full</DebugType>
+    <Optimize>True</Optimize>
+    <UseAppHost>false</UseAppHost>
+    <NoStdLib>true</NoStdLib>
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="DblMul.cs" />
+    <ProjectReference Include="..\..\..\TdnCoreLib\System.Private.CoreLib\System.Private.CoreLib.csproj" />
+  </ItemGroup>
+</Project>

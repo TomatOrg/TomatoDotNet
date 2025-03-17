@@ -636,7 +636,7 @@ static void verify_call_return(jit_block_t* block, RuntimeMethodBase callee, boo
 
     // we have something to return
     jit_stack_item_t* item = STACK_PUSH();
-    item->type = ret_type;
+    item->type = verifier_get_intermediate_type(ret_type);
 
     // mark as non-local if we are returning a reference
     if (!might_leak_local) {

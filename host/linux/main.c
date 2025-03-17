@@ -319,7 +319,7 @@ cleanup:
     }
     arrfree(m_objects);
 
-    return (err != TDN_NO_ERROR) ? EXIT_FAILURE : EXIT_SUCCESS;
+    return (err != TDN_NO_ERROR) ? EXIT_FAILURE : tests_output;
 }
 
 // TODO: remove once we have a GC

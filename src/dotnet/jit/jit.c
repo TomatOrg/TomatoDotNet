@@ -219,6 +219,8 @@ cleanup:
 tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK(methodInfo != NULL);
+
     // TODO: take mutex
 
     spidir_module_handle_t module = spidir_module_create();
@@ -231,7 +233,9 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     CHECK_AND_RETHROW(jit_module(module));
 
 cleanup:
-    spidir_module_destroy(module);
+    if (methodInfo != NULL) {
+        spidir_module_destroy(module);
+    }
 
     // TODO: release mutex
 
