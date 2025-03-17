@@ -4,6 +4,8 @@
 #include <spidir/module.h>
 #include <tomatodotnet/disasm.h>
 #include <tomatodotnet/except.h>
+#include <util/stb_ds.h>
+#include <util/string.h>
 
 #include "jit_basic_block.h"
 
@@ -69,7 +71,9 @@ typedef struct jit_block_local {
 
 typedef struct jit_block {
     // the basic block range
-    jit_basic_block_t block;
+    uint32_t start;
+    uint32_t end;
+    uint32_t* leave_target_stack;
 
     // the spidir block
     spidir_block_t spidir_block;
@@ -111,6 +115,11 @@ typedef struct jit_local {
     bool spilled;
 } jit_local_t;
 
+typedef struct jit_leave_block_key {
+    jit_block_t* block;
+    uint64_t leave_target;
+} jit_leave_block_key_t;
+
 typedef struct jit_function {
     // the method that we are dealing with
     RuntimeMethodBase method;
@@ -120,6 +129,13 @@ typedef struct jit_function {
 
     // the verifier blocks
     jit_block_t* blocks;
+
+    // blocks duplicated so they can be a part of
+    // a finally leave chain
+    struct {
+        jit_leave_block_key_t key;
+        jit_block_t* value;
+    }* leave_blocks;
 
     // the locals of this function
     jit_local_t* locals;
@@ -161,6 +177,23 @@ typedef struct jit_function {
     int inline_depth;
 } jit_function_t;
 
+static inline uint32_t* jit_copy_leave_targets(uint32_t* targets) {
+    if (arrlen(targets) == 0) {
+        return NULL;
+    }
+
+    uint32_t* new = NULL;
+    arrsetlen(new, arrlen(targets));
+    memcpy(new, targets, sizeof(uint32_t) * arrlen(targets));
+    return new;
+}
+
+/**
+ * Returns the basic block at the target pc, if given a leave stack it will return the next finally block
+ * that needs to run before going into the real target
+ */
+jit_block_t* jit_function_get_block(jit_function_t* function, uint32_t target_pc, uint32_t* leave_target_stack);
+
 /**
  * Initialize a new verifier, this will create the labels lookup
  * and initialize the attributes of the first block
@@ -177,3 +210,8 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
  * Destroy the verifier
  */
 void jit_function_destroy(jit_function_t* function);
+
+/**
+ * Search for a clause in the function, if previous is given will continue from that point
+ */
+RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous);

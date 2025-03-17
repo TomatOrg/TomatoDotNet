@@ -1178,16 +1178,15 @@ cleanup:
 // Branching
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_br(jit_function_t* verifier, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_br(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the target block
-    jit_basic_block_entry_t* target_block = hmgetp_null(verifier->labels, inst->operand.branch_target);
-    CHECK(target_block != NULL);
-    jit_block_t* target = &verifier->blocks[target_block->value.index];
+    jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
+    CHECK(target != NULL);
 
     // merge with that block
-    emitter_merge_block(verifier, builder, block, target);
+    emitter_merge_block(function, builder, block, target);
 
     // and branch to it
     spidir_builder_build_branch(builder, target->spidir_block);
@@ -1196,18 +1195,18 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_br_unary_cond(jit_function_t* verifier, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the target block
-    jit_basic_block_entry_t* target_block = hmgetp_null(verifier->labels, inst->operand.branch_target);
-    CHECK(target_block != NULL);
-    jit_block_t* target = &verifier->blocks[target_block->value.index];
-    jit_block_t* next = &verifier->blocks[block->block.index + 1];
+    jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
+    CHECK(target != NULL);
+    jit_block_t* next = jit_function_get_block(function, block->end, block->leave_target_stack);
+    CHECK(next != NULL);
 
     // merge with both blocks
-    emitter_merge_block(verifier, builder, block, target);
-    emitter_merge_block(verifier, builder, block, next);
+    emitter_merge_block(function, builder, block, target);
+    emitter_merge_block(function, builder, block, next);
 
     // interface and delegate are a fat pointer, we need to
     // load the instance/function and check against that
@@ -1240,7 +1239,30 @@ cleanup:
 // Exceptions
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_throw(jit_function_t* verifier, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+//
+// Both leave and endfinally act as a branch from the emitter viewpoint, and the verifier
+// already fixes the instruction to have the correct jump target
+//
+
+static tdn_err_t emit_leave(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK_AND_RETHROW(emit_br(function, builder, block, inst, stack));
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_endfinally(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK_AND_RETHROW(emit_br(function, builder, block, inst, stack));
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_throw(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // call the runtime throw function
@@ -1318,6 +1340,8 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_BRFALSE] = emit_br_unary_cond,
     [CEE_BRTRUE] = emit_br_unary_cond,
 
+    [CEE_LEAVE] = emit_leave,
+    [CEE_ENDFINALLY] = emit_endfinally,
     [CEE_THROW] = emit_throw,
 };
 size_t g_emit_dispatch_table_size = ARRAY_LENGTH(g_emit_dispatch_table);

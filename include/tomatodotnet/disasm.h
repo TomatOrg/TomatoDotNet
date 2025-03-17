@@ -73,6 +73,9 @@ typedef struct tdn_il_inst {
 
     // the operand control flow
     tdn_il_control_flow_t control_flow;
+
+    // the pc of the opcode
+    uint32_t pc;
 } tdn_il_inst_t;
 
 const char* tdn_get_opcode_name(tdn_il_opcode_t opcode);

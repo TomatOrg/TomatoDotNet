@@ -74,6 +74,7 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
 
     uint32_t start_pc = pc;
     memset(inst, 0, sizeof(*inst));
+    inst->pc = start_pc;
 
     // fetch and build the opcode and resolve its metadata, making sure
     // it is a valid opcode

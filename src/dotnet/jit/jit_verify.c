@@ -805,22 +805,22 @@ cleanup:
 // Branching
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t verify_br(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_br(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the target block
-    jit_basic_block_entry_t* target = hmgetp_null(verifier->labels, inst->operand.branch_target);
+    jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
     CHECK(target != NULL);
 
     // check that we can merge with it
-    CHECK_AND_RETHROW(verifier_merge_block(verifier, block, &verifier->blocks[target->value.index]));
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, target));
 
 cleanup:
     return err;
 }
 
 
-static tdn_err_t verify_br_unary_cond(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_br_unary_cond(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // check its a valid type
@@ -834,27 +834,94 @@ static tdn_err_t verify_br_unary_cond(jit_function_t* verifier, jit_block_t* blo
     );
 
     // get the target block
-    jit_basic_block_entry_t* target_block = hmgetp_null(verifier->labels, inst->operand.branch_target);
-    CHECK(target_block != NULL);
-    jit_block_t* target = &verifier->blocks[target_block->value.index];
-    jit_block_t* next = &verifier->blocks[block->block.index + 1];
+    jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
+    CHECK(target != NULL);
+    jit_block_t* next = jit_function_get_block(function, block->end, block->leave_target_stack);
+    CHECK(next != NULL);
 
     // check that we can merge with the next block as well
-    CHECK_AND_RETHROW(verifier_merge_block(verifier, block, target));
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, target));
 
     // check that we can merge with it
-    CHECK_AND_RETHROW(verifier_merge_block(verifier, block, next));
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, next));
 
 cleanup:
     return err;
 }
 
-
 //----------------------------------------------------------------------------------------------------------------------
 // Exceptions
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t verify_throw(jit_function_t* verifier, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_leave(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // empty the stack
+    arrsetlen(block->stack, 0);
+
+    // find the block that is around the target
+    RuntimeExceptionHandlingClause target_clause = jit_get_enclosing_try_clause(function, inst->operand.branch_target, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+
+    // find all the handlers that we need to go through and remember them
+    int inst_off = arrlen(block->leave_target_stack);
+    RuntimeExceptionHandlingClause clause = NULL;
+    for (;;) {
+        // we reached the same clause as the one around the leave target, so we can stop now, we found
+        // the real target to jump to
+        clause = jit_get_enclosing_try_clause(function, inst->pc, COR_ILEXCEPTION_CLAUSE_FINALLY, clause);
+        if (target_clause == clause) {
+            break;
+        }
+        CHECK(clause != NULL);
+
+        // remember that we need to call this
+        arrins(block->leave_target_stack, inst_off, clause->HandlerOffset);
+    }
+
+    // add the actual target we want to have, since this is where we want to eventually go
+    arrins(block->leave_target_stack, inst_off, inst->operand.branch_target);
+
+    // now find the actual entry we want to go to
+    uint32_t target_pc = arrpop(block->leave_target_stack);
+    jit_block_t* target = jit_function_get_block(function, target_pc, block->leave_target_stack);
+    CHECK(target != NULL);
+
+    // and now merge with the target
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, target));
+
+    // override the target pc with the actual target we want to go to
+    inst->operand.branch_target = target_pc;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_endfinally(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // empty the stack
+    arrsetlen(block->stack, 0);
+
+    // ensure we have a valid leave target stack
+    CHECK(block->leave_target_stack != NULL);
+
+    // get the target we need to jump to
+    uint32_t target_pc = arrpop(block->leave_target_stack);
+    jit_block_t* target = jit_function_get_block(function, target_pc, block->leave_target_stack);
+    CHECK(target != NULL);
+
+    // and now merge with the target
+    CHECK_AND_RETHROW(verifier_merge_block(function, block, target));
+
+    // override the target pc in the instruction
+    // for the emitter to know where to jump into
+    inst->operand.branch_target = target_pc;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_throw(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // TODO: check throwing an exception and nothing else
@@ -933,6 +1000,8 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_BRFALSE] = verify_br_unary_cond,
     [CEE_BRTRUE] = verify_br_unary_cond,
 
+    [CEE_LEAVE] = verify_leave,
+    [CEE_ENDFINALLY] = verify_endfinally,
     [CEE_THROW] = verify_throw,
 };
 size_t g_verify_dispatch_table_size = ARRAY_LENGTH(g_verify_dispatch_table);

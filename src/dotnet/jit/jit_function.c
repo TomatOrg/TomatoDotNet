@@ -43,9 +43,53 @@ static il_stack_behavior_t m_il_stack_behavior[] = {
 #undef OPDEF_REAL_OPCODES_ONLY
 };
 
+jit_block_t* jit_function_get_block(jit_function_t* function, uint32_t target_pc, uint32_t* leave_target_stack) {
+    jit_basic_block_entry_t* b = hmgetp_null(function->labels, target_pc);
+    if (b == NULL) {
+        return NULL;
+    }
+
+    // get the real block
+    jit_block_t* block = &function->blocks[b->value.index];
+
+    // do we have a leave target we are after?
+    if (arrlen(leave_target_stack) != 0) {
+        jit_leave_block_key_t key = {
+            .block = block,
+            .leave_target = arrlast(leave_target_stack)
+        };
+        jit_block_t* leave_block = hmget(function->leave_blocks, key);
+
+        // if we don't have a block in the leave chain to this target
+        // then create one right now (only if not emitting)
+        if (leave_block == NULL && !function->emitting) {
+            leave_block = tdn_host_mallocz(sizeof(jit_block_t), _Alignof(jit_block_t));
+            if (leave_block == NULL) {
+                return NULL;
+            }
+
+            // copy the info into the block
+            leave_block->start = b->value.start;
+            leave_block->end = b->value.end;
+            leave_block->leave_target_stack = jit_copy_leave_targets(leave_target_stack);
+
+            // store it
+            hmput(function->leave_blocks, key, leave_block);
+        }
+
+        block = leave_block;
+    }
+
+    return block;
+}
+
 static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
-    out->block = in->block;
+    out->start = in->start;
+    out->end = in->end;
     out->spidir_block = in->spidir_block;
+
+    // steal the leave target stack, its not needed anymore
+    out->leave_target_stack = jit_copy_leave_targets(in->leave_target_stack);
 
     arrsetlen(out->args, arrlen(in->args));
     memcpy(out->args, in->args, arrlen(in->args) * sizeof(*in->args));
@@ -57,9 +101,17 @@ static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
     memcpy(out->stack, in->stack, arrlen(in->stack) * sizeof(*in->stack));
 }
 
-static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in_block, spidir_builder_handle_t builder) {
+static void jit_destroy_block(jit_block_t* block) {
+    arrfree(block->stack);
+    arrfree(block->stack_phis);
+    arrfree(block->locals);
+    arrfree(block->args);
+    arrfree(block->leave_target_stack);
+}
+
+static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in_block, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
-    RuntimeMethodBase method = verifier->method;
+    RuntimeMethodBase method = function->method;
     RuntimeMethodBody body = method->MethodBody;
     jit_stack_item_t* stack_items = NULL;
 
@@ -80,8 +132,8 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
     // get the pc
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     tdn_il_inst_t last_inst;
-    uint32_t pc = block.block.start;
-    while (pc < block.block.end) {
+    uint32_t pc = block.start;
+    while (pc < block.end) {
         last_inst = inst;
 
         // can only parse more instructions if we had no block
@@ -172,13 +224,13 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
         // ensure we have a verifier for this opcode
         CHECK(inst.opcode < g_verify_dispatch_table_size && g_verify_dispatch_table[inst.opcode] != NULL,
             "Unknown opcode %s", tdn_get_opcode_name(inst.opcode));
-        CHECK_AND_RETHROW(g_verify_dispatch_table[inst.opcode](verifier, &block, &inst, stack_items));
+        CHECK_AND_RETHROW(g_verify_dispatch_table[inst.opcode](function, &block, &inst, stack_items));
 
         // call the emitter (if need be)
         if (builder != NULL) {
             CHECK(inst.opcode < g_emit_dispatch_table_size && g_emit_dispatch_table[inst.opcode] != NULL,
                 "Unknown opcode %s", tdn_get_opcode_name(inst.opcode));
-            CHECK_AND_RETHROW(g_emit_dispatch_table[inst.opcode](verifier, builder, &block, &inst, stack_items));
+            CHECK_AND_RETHROW(g_emit_dispatch_table[inst.opcode](function, builder, &block, &inst, stack_items));
         }
 
         // ensure that the instruction was executed correctly
@@ -191,9 +243,12 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
 
     // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
-        CHECK_AND_RETHROW(verifier_on_block_fallthrough(verifier, &block, &verifier->blocks[block.block.index + 1]));
+        jit_block_t* next = jit_function_get_block(function, block.end, block.leave_target_stack);
+        CHECK(next != NULL);
+
+        CHECK_AND_RETHROW(verifier_on_block_fallthrough(function, &block, next));
         if (builder != NULL) {
-            CHECK_AND_RETHROW(emitter_on_block_fallthrough(verifier, builder, &block, &verifier->blocks[block.block.index + 1]));
+            CHECK_AND_RETHROW(emitter_on_block_fallthrough(function, builder, &block, next));
         }
     }
 
@@ -205,9 +260,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* verifier, jit_block_t* in
 
 cleanup:
     // free the block data
-    arrfree(block.args);
-    arrfree(block.locals);
-    arrfree(block.stack);
+    jit_destroy_block(&block);
 
     arrfree(stack_items);
 
@@ -236,7 +289,7 @@ tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t bui
         block->in_queue = false;
 
 #ifdef JIT_VERBOSE_VERIFY
-        TRACE("\tBasic block %d (IL_%04x):", block->block.index, block->block.start);
+        TRACE("\tBasic block (IL_%04x):", block->start);
 #endif
 
         CHECK_AND_RETHROW(jit_visit_basic_block(function, block, builder));
@@ -264,7 +317,8 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
 
     // copy over the block information
     for (int i = 0; i < hmlen(function->labels); i++) {
-        function->blocks[function->labels[i].value.index].block = function->labels[i].value;
+        function->blocks[function->labels[i].value.index].start = function->labels[i].value.start;
+        function->blocks[function->labels[i].value.index].end = function->labels[i].value.end;
     }
 
     jit_block_t* entry_block = &function->entry_block;
@@ -386,8 +440,16 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
     // prepare all the blocks for another pass, this time with a spidir
     // block ready so it can be jumped to
     for (int i = 0; i < arrlen(function->blocks); i++) {
-        function->blocks[i].visited = false;
-        function->blocks[i].spidir_block = spidir_builder_create_block(builder);
+        jit_block_t* block = &function->blocks[i];
+        block->visited = false;
+        block->spidir_block = spidir_builder_create_block(builder);
+    }
+
+    // prepare all the leave blocks as well
+    for (int i = 0; i < hmlen(function->leave_blocks); i++) {
+        jit_block_t* block = function->leave_blocks[i].value;
+        block->visited = false;
+        block->spidir_block = spidir_builder_create_block(builder);
     }
 
     // now we can do the second pass of emitting
@@ -408,15 +470,49 @@ void jit_function_destroy(jit_function_t* function) {
 
     // free the rest of the blocks
     for (int i = 0; i < arrlen(function->blocks); i++) {
-        arrfree(function->blocks[i].args);
-        arrfree(function->blocks[i].locals);
-        arrfree(function->blocks[i].stack);
+        jit_destroy_block(&function->blocks[i]);
     }
     arrfree(function->blocks);
+
+    for (int i = 0; i < hmlen(function->leave_blocks); i++) {
+        jit_destroy_block(function->leave_blocks[i].value);
+        tdn_host_free(function->leave_blocks[i].value);
+    }
+    hmfree(function->leave_blocks);
 
     arrfree(function->locals);
     arrfree(function->args);
 
     hmfree(function->labels);
     arrfree(function->queue);
+}
+
+RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous) {
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+    RuntimeExceptionHandlingClause matched = NULL;
+
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+        if (previous == clause) {
+            break;
+        }
+
+        if (clause->Flags != type) {
+            continue;
+        }
+
+        if (clause->TryOffset <= pc && pc < clause->TryOffset + clause->TryLength) {
+            if (
+                matched == NULL ||
+                (
+                    matched->TryOffset < clause->TryOffset &&
+                    matched->TryOffset + matched->TryLength > clause->TryOffset + clause->TryLength
+                )
+            ) {
+                matched = clause;
+            }
+        }
+    }
+
+    return matched;
 }

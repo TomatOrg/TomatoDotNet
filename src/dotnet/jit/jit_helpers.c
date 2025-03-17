@@ -11,6 +11,7 @@
 #include "jit.h"
 #include "jit_emit.h"
 
+#undef memcpy
 void* memcpy(void* dest, const void* src, size_t n);
 
 static void* bzero(void* s, size_t n) {
