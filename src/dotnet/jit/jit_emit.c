@@ -675,6 +675,25 @@ cleanup:
     return err;
 }
 
+static tdn_err_t emit_neg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    // emulate neg via `0 - value`
+    spidir_value_t zero = spidir_builder_build_iconst(builder, get_spidir_type(stack[0].type), 0);
+    STACK_TOP()->value = spidir_builder_build_isub(builder, zero, stack[0].value);
+    return TDN_NO_ERROR;
+}
+
+static tdn_err_t emit_not(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    // emulate neg via `value ^ -1`
+    spidir_value_t ones;
+    if (stack[0].type == tInt32) {
+        ones = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0xFFFFFFFF);
+    } else {
+        ones = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFFFFFFFFFF);
+    }
+    STACK_TOP()->value = spidir_builder_build_xor(builder, ones, stack[0].value);
+    return TDN_NO_ERROR;
+}
+
 static tdn_err_t emit_shift(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1655,6 +1674,9 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_AND] = emit_binary_op,
     [CEE_OR] = emit_binary_op,
     [CEE_XOR] = emit_binary_op,
+
+    [CEE_NEG] = emit_neg,
+    [CEE_NOT] = emit_not,
 
     [CEE_SHL] = emit_shift,
     [CEE_SHR] = emit_shift,
