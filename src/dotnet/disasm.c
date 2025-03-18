@@ -304,6 +304,7 @@ void tdn_normalize_inst(tdn_il_inst_t* inst) {
 //        case CEE_STELEM_R8: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
         case CEE_STELEM_I: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
 
+        case CEE_LDIND_I: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
         case CEE_LDIND_I1: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSByte; break;
         case CEE_LDIND_I2: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt16; break;
         case CEE_LDIND_I4: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt32; break;

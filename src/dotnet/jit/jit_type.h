@@ -16,8 +16,7 @@ RuntimeTypeInfo verifier_get_verification_type(RuntimeTypeInfo T);
 RuntimeTypeInfo verifier_get_intermediate_type(RuntimeTypeInfo T);
 
 bool verifier_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
-bool verifier_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U);
-bool verifier_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R);
+bool verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R);
 bool verifier_array_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U);
 
 //----------------------------------------------------------------------------------------------------------------------

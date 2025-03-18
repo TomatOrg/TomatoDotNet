@@ -35,13 +35,17 @@ RuntimeTypeInfo verifier_get_underlying_type(RuntimeTypeInfo type) {
 RuntimeTypeInfo verifier_get_reduced_type(RuntimeTypeInfo T) {
     if (T == NULL) return NULL;
 
-    if (T->EnumUnderlyingType != NULL) {
-        if (T->EnumUnderlyingType == tByte) return tSByte;
-        if (T->EnumUnderlyingType == tUInt16) return tInt16;
-        if (T->EnumUnderlyingType == tUInt32) return tInt32;
-        if (T->EnumUnderlyingType == tUInt64) return tInt64;
-        if (T->EnumUnderlyingType == tUIntPtr) return tIntPtr;
-        return T->EnumUnderlyingType;
+    T = verifier_get_underlying_type(T);
+    if (T == tByte) {
+        T = tSByte;
+    } else if (T == tUInt16) {
+        T = tInt16;
+    } else if (T == tUInt32) {
+        T = tInt32;
+    } else if (T == tUInt64) {
+        T = tInt64;
+    } else if (T == tUIntPtr) {
+        T = tIntPtr;
     }
 
     return T;
@@ -148,7 +152,7 @@ bool verifier_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     return false;
 }
 
-bool verifier_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
+static bool assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     // 1. T is identical to U.
     if (T == U) {
         return true;
@@ -176,15 +180,10 @@ bool verifier_assignable_to(RuntimeTypeInfo T, RuntimeTypeInfo U) {
         return true;
     }
 
-    // 9. T is a null type, and U is a reference type
-    if (T == NULL && tdn_type_is_referencetype(U)) {
-        return true;
-    }
-
     return false;
 }
 
-bool verifier_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
+bool verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
     RuntimeTypeInfo T = verifier_get_verification_type(Q);
     RuntimeTypeInfo U = verifier_get_verification_type(R);
 
@@ -196,7 +195,7 @@ bool verifier_verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
     // TODO: 2. There exists some V such that T is verifier-assignable-to V and V is verifier-assignable-to U
 
     // 3. T is assignable-to U
-    if (verifier_assignable_to(T, U)) {
+    if (assignable_to(T, U)) {
         return true;
     }
 

@@ -356,6 +356,33 @@ cleanup:
 // Reference access
 //----------------------------------------------------------------------------------------------------------------------
 
+static tdn_err_t verify_ldind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_item_t* addr = &stack[0];
+
+    // must be a byref
+    CHECK(addr->type != NULL && addr->type->IsByRef);
+
+    // ensure the type is consistent
+    RuntimeTypeInfo type;
+    if (inst->operand.type != NULL) {
+        CHECK(verifier_assignable_to(addr->type->ElementType, inst->operand.type),
+            "%T verifier-assignable-to %T", addr->type->ElementType, inst->operand.type);
+
+        type = verifier_get_intermediate_type(inst->operand.type);
+
+    } else {
+        CHECK(tdn_type_is_referencetype(inst->operand.type));
+        type = verifier_get_verification_type(addr->type->ElementType);
+    }
+
+    STACK_PUSH()->type = type;
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_stind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -672,7 +699,7 @@ static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* 
                 if (!stack[i].non_local_ref) {
                     *might_leak_local = true;
                 }
-                if (stack[0].type->ElementType->IsByRefStruct) {
+                if (stack[i].type->ElementType->IsByRefStruct) {
                     if (!stack[0].non_local_ref_struct) {
                         *might_leak_local = true;
                     }
@@ -1032,11 +1059,23 @@ verify_instruction_t g_verify_dispatch_table[] = {
 
     [CEE_LDFLD] = verify_ldfld,
 
+    [CEE_LDIND_I1] = verify_ldind,
+    [CEE_LDIND_U1] = verify_ldind,
+    [CEE_LDIND_I2] = verify_ldind,
+    [CEE_LDIND_U2] = verify_ldind,
+    [CEE_LDIND_I4] = verify_ldind,
+    [CEE_LDIND_U4] = verify_ldind,
+    [CEE_LDIND_I8] = verify_ldind,
+    [CEE_LDIND_I] = verify_ldind,
+    [CEE_LDIND_REF] = verify_ldind,
+    [CEE_LDOBJ] = verify_ldind,
+
     [CEE_STIND_I] = verify_stind,
     [CEE_STIND_I1] = verify_stind,
     [CEE_STIND_I2] = verify_stind,
     [CEE_STIND_I4] = verify_stind,
     [CEE_STIND_REF] = verify_stind,
+    [CEE_STOBJ] = verify_stind,
 
     [CEE_LDNULL] = verify_ldnull,
     [CEE_LDC_I4] = verify_ldc_i4,

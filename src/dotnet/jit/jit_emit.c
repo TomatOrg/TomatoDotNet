@@ -162,7 +162,12 @@ static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, RuntimeType
             case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
             default: ASSERT(!"WTF");
         }
-        return spidir_builder_build_load(builder, mem_size, get_spidir_type(from_type), from);
+        value = spidir_builder_build_load(builder, mem_size, get_spidir_type(from_type), from);
+
+        // loaded from a signed integer, so sign extend it instead of the default zero extension
+        if (from_type == tSByte || from_type == tInt16) {
+            value = spidir_builder_build_sfill(builder, from_type->StackSize * 8, value);
+        }
     }
     return value;
 }
@@ -493,6 +498,11 @@ cleanup:
 //----------------------------------------------------------------------------------------------------------------------
 // Indirect reference access
 //----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    STACK_TOP()->value = jit_emit_load(builder, inst->operand.type, stack[0].value);
+    return TDN_NO_ERROR;
+}
 
 static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     // we just need to store into the given item
@@ -1384,11 +1394,23 @@ emit_instruction_t g_emit_dispatch_table[] = {
 
     [CEE_LDFLD] = emit_ldfld,
 
+    [CEE_LDIND_I1] = emit_ldind,
+    [CEE_LDIND_U1] = emit_ldind,
+    [CEE_LDIND_I2] = emit_ldind,
+    [CEE_LDIND_U2] = emit_ldind,
+    [CEE_LDIND_I4] = emit_ldind,
+    [CEE_LDIND_U4] = emit_ldind,
+    [CEE_LDIND_I8] = emit_ldind,
+    [CEE_LDIND_I] = emit_ldind,
+    [CEE_LDIND_REF] = emit_ldind,
+    [CEE_LDOBJ] = emit_ldind,
+
     [CEE_STIND_I] = emit_stind,
     [CEE_STIND_I1] = emit_stind,
     [CEE_STIND_I2] = emit_stind,
     [CEE_STIND_I4] = emit_stind,
     [CEE_STIND_REF] = emit_stind,
+    [CEE_STOBJ] = emit_stind,
 
     [CEE_LDNULL] = emit_ldnull,
     [CEE_LDC_I4] = emit_ldc_i4,
