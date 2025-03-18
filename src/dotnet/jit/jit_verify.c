@@ -409,6 +409,11 @@ static tdn_err_t verify_ldnull(jit_function_t* function, jit_block_t* block, tdn
     return TDN_NO_ERROR;
 }
 
+static tdn_err_t verify_ldstr(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    STACK_PUSH()->type = tString;
+    return TDN_NO_ERROR;
+}
+
 static tdn_err_t verify_ldc_i4(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_PUSH()->type = tInt32;
     return TDN_NO_ERROR;
@@ -678,15 +683,12 @@ cleanup:
     return err;
 }
 
-static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* stack, bool* might_leak_local) {
+static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* stack, bool newobj, bool* might_leak_local) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // if this is an instance method that is not ctor
     int arg_offset = 0;
-    if (
-        !callee->Attributes.Static &&
-        !callee->Attributes.RTSpecialName
-    ) {
+    if (!callee->Attributes.Static && !newobj) {
         CHECK(arrlen(stack) >= 1);
         CHECK(verifier_assignable_to(stack[0].type, jit_get_method_this_type(callee)),
             "%T verifier-assignable-to %T", stack[0].type, jit_get_method_this_type(callee));
@@ -779,7 +781,7 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
 
     // verify the call arguments
     bool might_leak_local = false;
-    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, &might_leak_local));
+    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, false, &might_leak_local));
     verify_call_return(block, inst->operand.method, might_leak_local);
 
 cleanup:
@@ -799,7 +801,7 @@ static tdn_err_t verify_callvirt(jit_function_t* function, jit_block_t* block, t
 
     // verify the call arguments
     bool might_leak_local = false;
-    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, &might_leak_local));
+    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, false, &might_leak_local));
     verify_call_return(block, inst->operand.method, might_leak_local);
 
 cleanup:
@@ -850,7 +852,7 @@ static tdn_err_t verify_newobj(jit_function_t* function, jit_block_t* block, tdn
         CHECK(signature->ReturnParameter->IsReadOnly == target->ReturnParameter->IsReadOnly);
     } else {
         // verify the call parameters
-        CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, NULL));
+        CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, true, NULL));
     }
 
     // push the new instance
@@ -1147,6 +1149,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STOBJ] = verify_stind,
 
     [CEE_LDNULL] = verify_ldnull,
+    [CEE_LDSTR] = verify_ldstr,
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
     [CEE_DUP] = verify_dup,

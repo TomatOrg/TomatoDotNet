@@ -527,6 +527,12 @@ static tdn_err_t emit_ldnull(jit_function_t* function, spidir_builder_handle_t b
     return TDN_NO_ERROR;
 }
 
+static tdn_err_t emit_ldstr(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    // TODO: pin the string
+    STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.string);
+    return TDN_NO_ERROR;
+}
+
 static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst->operand.uint32);
     return TDN_NO_ERROR;
@@ -1117,6 +1123,9 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
             callee->DeclaringType->StackSize, callee->DeclaringType->StackAlignment);
         jit_emit_bzero(builder, obj, callee->DeclaringType);
     } else {
+        // we initialize the type, ensure we have the full vtable available
+        jit_queue_type(spidir_builder_get_module(builder), inst->operand.type);
+
         obj = spidir_builder_build_call(builder,
             jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWOBJ), 1,
             (spidir_value_t[]){ spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)callee->DeclaringType) });
@@ -1403,6 +1412,9 @@ static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t buil
         STACK_TOP()->value = stack[0].value;
 
     } else if (tdn_type_is_valuetype(inst->operand.type)) {
+        // because we box the type we need an initialized vtable
+        jit_queue_type(spidir_builder_get_module(builder), inst->operand.type);
+
         // set the type as a boxed one
         spidir_value_t obj = spidir_builder_build_call(builder,
             jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWOBJ), 1,
@@ -1659,6 +1671,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STOBJ] = emit_stind,
 
     [CEE_LDNULL] = emit_ldnull,
+    [CEE_LDSTR] = emit_ldstr,
     [CEE_LDC_I4] = emit_ldc_i4,
     [CEE_LDC_I8] = emit_ldc_i8,
     [CEE_DUP] = emit_nop,

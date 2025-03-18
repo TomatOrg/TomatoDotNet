@@ -88,10 +88,19 @@ RuntimeMethodBase jit_get_method_from_function(spidir_function_t function) {
     return m_method_lookup[idx].value;
 }
 
-void jit_queue_type(RuntimeTypeInfo type) {
+void jit_queue_type(spidir_module_handle_t module, RuntimeTypeInfo type) {
     if (type->JitQueued == 0) {
         arrpush(m_jit_type_queue, type);
         type->JitQueued = 1;
+
+        // queue all the virtual methods
+        for (int i = 0; i < type->VTable->Length; i++) {
+            RuntimeMethodBase methodInfo = (RuntimeMethodBase)type->VTable->Elements[i];
+            if (methodInfo->MethodPtr == NULL) {
+                spidir_function_t function = jit_get_function(module, methodInfo);
+                jit_codegen_queue(methodInfo, function, false);
+            }
+        }
     }
 }
 
@@ -250,14 +259,7 @@ tdn_err_t tdn_jit_type(RuntimeTypeInfo type) {
     spidir_module_handle_t module = spidir_module_create();
 
     // queue the type
-    jit_queue_type(type);
-
-    // queue all the virtual methods
-    for (int i = 0; i < type->VTable->Length; i++) {
-        RuntimeMethodBase methodInfo = (RuntimeMethodBase)type->VTable->Elements[i];
-        spidir_function_t function = jit_get_function(module, methodInfo);
-        jit_codegen_queue(methodInfo, function, false);
-    }
+    jit_queue_type(module, type);
 
     // and start jitting
     CHECK_AND_RETHROW(jit_module(module));

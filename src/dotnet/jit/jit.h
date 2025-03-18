@@ -16,7 +16,7 @@ RuntimeMethodBase jit_get_method_from_function(spidir_function_t function);
 /**
  * Queue a type to be initialized
  */
-void jit_queue_type(RuntimeTypeInfo type);
+void jit_queue_type(spidir_module_handle_t module, RuntimeTypeInfo type);
 
 /**
  * Initialize anything that needs to be initialized
