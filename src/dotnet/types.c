@@ -40,6 +40,8 @@ RuntimeTypeInfo tParameterInfo = NULL;
 RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
 RuntimeTypeInfo tRuntimeTypeHandle = NULL;
 
+RuntimeTypeInfo tNullable = NULL;
+
 RuntimeTypeInfo tUnsafe = NULL;
 
 RuntimeTypeInfo tInAttribute = NULL;
@@ -60,13 +62,16 @@ tdn_err_t tdn_check_generic_argument_constraints(
 ) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK(!arg_type->IsByRef);
+    CHECK(!arg_type->IsByRefStruct);
+
     // special constraints
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE) {
-        CHECK(!tdn_type_is_valuetype(arg_type));
+        CHECK(tdn_type_is_referencetype(arg_type));
     }
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
-        // CHECK(arg_type->GenericTypeDefinition != tNullable);
+        CHECK(arg_type->GenericTypeDefinition != tNullable);
         CHECK(tdn_type_is_valuetype(arg_type));
     }
 

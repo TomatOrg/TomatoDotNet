@@ -17,6 +17,10 @@ bool tdn_type_is_referencetype(RuntimeTypeInfo type) {
     return type == NULL || (!tdn_type_is_valuetype(type) && !type->IsPointer && !type->IsByRef);
 }
 
+bool tdn_type_is_nullable(RuntimeTypeInfo type) {
+    return type->GenericTypeDefinition == tNullable;
+}
+
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     tdn_err_t err = TDN_NO_ERROR;
 

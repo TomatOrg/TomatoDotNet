@@ -18,6 +18,7 @@
 #include <util/prime.h>
 
 #include "jit/jit.h"
+#include "jit/jit_type.h"
 
 typedef struct memory_file_handle {
      void* buffer;
@@ -151,6 +152,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, Delegate),
     LOAD_TYPE(System, MulticastDelegate),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
+    { "System", "Nullable`1", &tNullable, 4 },
 };
 static int m_loaded_types = 0;
 

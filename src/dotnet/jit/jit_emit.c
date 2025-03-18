@@ -1,5 +1,6 @@
 #include "jit_emit.h"
 
+#include <dotnet/loader.h>
 #include <tomatodotnet/types/type.h>
 #include <util/except.h>
 #include <util/stb_ds.h>
@@ -185,6 +186,13 @@ static void jit_emit_null_reference(spidir_builder_handle_t builder) {
     // create a new dummy block so we can actually continue with the emit even tho we reached an
     // explicit null pointer
     spidir_builder_set_block(builder, spidir_builder_create_block(builder));
+}
+
+static void jit_emit_invalid_cast(spidir_builder_handle_t builder) {
+    // emit a call to null reference exception
+    spidir_function_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_INVALID_CAST);
+    spidir_builder_build_call(builder, function, 0, NULL);
+    spidir_builder_build_unreachable(builder);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1088,6 +1096,7 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
     if (jit_is_struct_like(callee->DeclaringType)) {
         obj = spidir_builder_build_stackslot(builder,
             callee->DeclaringType->StackSize, callee->DeclaringType->StackAlignment);
+        jit_emit_bzero(builder, obj, callee->DeclaringType);
     } else {
         obj = spidir_builder_build_call(builder,
             jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWOBJ), 1,
@@ -1238,6 +1247,208 @@ static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t buil
         }
 
         spidir_builder_build_return(builder, value);
+    }
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Boxing
+//----------------------------------------------------------------------------------------------------------------------
+
+static spidir_value_t jit_emit_type_check(spidir_builder_handle_t builder, spidir_value_t obj, RuntimeTypeInfo target) {
+    spidir_value_t vtable = SPIDIR_VALUE_INVALID;
+
+    // load the vtable pointer from the object
+    vtable = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, obj);
+
+    // and now check
+    if (jit_is_interface(target)) {
+        // checking against an interface
+
+        // load the interface product
+        spidir_value_t product = spidir_builder_build_load(
+            builder,
+            SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I64,
+            spidir_builder_build_ptroff(
+                builder,
+                vtable,
+                spidir_builder_build_iconst(
+                    builder,
+                    SPIDIR_TYPE_I64,
+                    offsetof(ObjectVTable, InterfaceProduct)
+                )
+            )
+        );
+
+        // if this is the first time someone is doing type checking
+        // against this interface, generate the prime for it, this recudes
+        // the amount of primes needed to only those used by the type checking
+        if (target->InterfacePrime == 0) {
+            ASSERT(!IS_ERROR(tdn_generate_interface_prime(target)));
+        }
+
+        // and now check that the prime is dividable by the interface product, if it is (and the reminder
+        // is zero) then we know that the type implements the interface, otherwise it does not implement it
+        //  (obj->product % target->prime) == 0
+        return spidir_builder_build_icmp(
+            builder,
+            SPIDIR_ICMP_EQ,
+            SPIDIR_TYPE_I32,
+            spidir_builder_build_urem(
+                builder,
+                product,
+                spidir_builder_build_iconst(
+                    builder,
+                    SPIDIR_TYPE_I64,
+                    target->InterfacePrime
+                )
+            ),
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0)
+        );
+    } else if (tdn_type_is_valuetype(target)) {
+        // checking against a boxed value type, just compare the vtables
+        // themselves
+        return spidir_builder_build_icmp(
+            builder,
+            SPIDIR_ICMP_EQ,
+            SPIDIR_TYPE_I32,
+            vtable,
+            spidir_builder_build_iconst(
+                builder,
+                SPIDIR_TYPE_PTR,
+                (uintptr_t)target->JitVTable
+            )
+        );
+
+    } else {
+        // checking against a normal class
+
+        // load the type hierarchy
+        spidir_value_t hierarchy = spidir_builder_build_load(
+            builder,
+            SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_I64,
+            spidir_builder_build_ptroff(
+                builder,
+                vtable,
+                spidir_builder_build_iconst(
+                    builder,
+                    SPIDIR_TYPE_I64,
+                    offsetof(ObjectVTable, TypeHierarchy)
+                )
+            )
+        );
+
+        // the expected hierarchy
+        spidir_value_t expected_hierarchy = spidir_builder_build_iconst(
+            builder,
+            SPIDIR_TYPE_I64,
+            target->JitVTable->TypeHierarchy
+        );
+
+        // build the mask based on the target type
+        spidir_value_t type_mask = spidir_builder_build_iconst(
+            builder,
+            SPIDIR_TYPE_I64,
+            (1ull << target->TypeMaskLength) - 1ull
+        );
+
+        // and now check that the bits at the start of the hierarchy are the same
+        // as the target type
+        //  (obj->type_hierarchy & target->type_mask) == target->type_hierarchy
+        return spidir_builder_build_icmp(
+            builder,
+            SPIDIR_ICMP_EQ,
+            SPIDIR_TYPE_I32,
+            spidir_builder_build_and(
+                builder,
+                hierarchy,
+                type_mask
+            ),
+            expected_hierarchy
+        );
+    }
+}
+
+static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (tdn_type_is_nullable(inst->operand.type)) {
+        // boxes the value instance
+        // TODO: support this properly
+        CHECK_FAIL();
+
+    } else if (tdn_type_is_referencetype(inst->operand.type)) {
+        // just keep the exact same value when its a reference type
+        STACK_TOP()->value = stack[0].value;
+
+    } else if (tdn_type_is_valuetype(inst->operand.type)) {
+        // set the type as a boxed one
+        spidir_value_t obj = spidir_builder_build_call(builder,
+            jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWOBJ), 1,
+            (spidir_value_t[]){ spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.type) });
+
+        // get the offset to the value
+        spidir_value_t value_ptr = spidir_builder_build_ptroff(builder, obj,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(inst->operand.type)));
+
+        // store it
+        jit_emit_store(builder, stack[0].type, stack[0].value, inst->operand.type, value_ptr);
+
+        // point to the instance
+        STACK_TOP()->value = obj;
+
+    } else {
+        CHECK_FAIL();
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_unbox_any(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // the operand is a reference type
+    if (tdn_type_is_referencetype(inst->operand.type)) {
+        // TODO: perform castclass instead
+        CHECK_FAIL();
+
+    } else if (tdn_type_is_nullable(inst->operand.type)) {
+        // we either get a null nullable, or a value nullable
+        CHECK_FAIL();
+
+    } else if (stack[0].type == NULL) {
+        // we have a hard-coded null value, throw a null-reference
+        jit_emit_null_reference(builder);
+
+    } else {
+        // get the object instance
+        spidir_value_t obj = stack[0].value;
+        if (jit_is_interface(stack[0].type)) {
+            ASSERT(offsetof(Interface, Instance) == 0);
+            obj = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, obj);
+        }
+
+        // normal logic, perform the type check, this will fail on
+        // a null reference on its own
+        spidir_value_t cond_result = jit_emit_type_check(builder, stack[0].value, inst->operand.type);
+        spidir_block_t success = spidir_builder_create_block(builder);
+        spidir_block_t invalid_cast = spidir_builder_create_block(builder);
+        spidir_builder_build_brcond(builder, cond_result, success, invalid_cast);
+
+        // if we failed then throw an invalid cast
+        spidir_builder_set_block(builder, invalid_cast);
+        jit_emit_invalid_cast(builder);
+
+        // the value is correct, load it
+        spidir_builder_set_block(builder, success);
+
+        // get the pointer to the value and load it
+        spidir_value_t ptr = spidir_builder_build_ptroff(builder, obj,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(inst->operand.type)));
+        STACK_TOP()->value = jit_emit_load(builder, inst->operand.type, ptr);
     }
 
 cleanup:
@@ -1477,6 +1688,9 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_CALL] = emit_call,
     [CEE_CALLVIRT] = emit_callvirt,
     [CEE_RET] = emit_ret,
+
+    [CEE_BOX] = emit_box,
+    [CEE_UNBOX_ANY] = emit_unbox_any,
 
     [CEE_BR] = emit_br,
     [CEE_BRFALSE] = emit_br_unary_cond,

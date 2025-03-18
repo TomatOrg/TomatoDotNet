@@ -180,6 +180,7 @@ bool tdn_type_contains_generic_parameters(RuntimeTypeInfo type);
 
 bool tdn_type_is_valuetype(RuntimeTypeInfo type);
 bool tdn_type_is_referencetype(RuntimeTypeInfo type);
+bool tdn_type_is_nullable(RuntimeTypeInfo type);
 
 tdn_err_t tdn_get_array_type(RuntimeTypeInfo type,
                              RuntimeTypeInfo* out_type);

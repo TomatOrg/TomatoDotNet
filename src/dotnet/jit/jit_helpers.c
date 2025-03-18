@@ -10,6 +10,7 @@
 
 #include "jit.h"
 #include "jit_emit.h"
+#include "jit_type.h"
 
 #undef memcpy
 void* memcpy(void* dest, const void* src, size_t n);
@@ -63,8 +64,16 @@ static void jit_throw_overflow(void) {
     ASSERT(!"jit_throw_overflow");
 }
 
+static void jit_throw_invalid_cast(void) {
+    ASSERT(!"jit_throw_invalid_cast");
+}
+
 static Object jit_newobj(RuntimeTypeInfo type) {
-    void* ptr = tdn_gc_new(type, type->HeapSize);
+    size_t size = type->HeapSize;
+    if (tdn_type_is_valuetype(type)) {
+        size += jit_get_boxed_value_offset(type);
+    }
+    void* ptr = tdn_gc_new(type, size);
     if (ptr == NULL) {
         jit_throw_out_of_memory();
     }
@@ -109,6 +118,7 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_THROW_NULL_REFERENCE] = { .func = jit_throw_null_reference },
     [JIT_HELPER_THROW_INDEX_OUT_OF_RANGE] = { .func = jit_throw_index_out_of_range },
     [JIT_HELPER_THROW_OVERFLOW] = { .func = jit_throw_overflow },
+    [JIT_HELPER_THROW_INVALID_CAST] = { .func = jit_throw_invalid_cast },
     [JIT_HELPER_NEWOBJ] = { .func = jit_newobj },
     [JIT_HELPER_NEWARR] = { .func = jit_newarr },
 };
@@ -160,6 +170,10 @@ spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_
         case JIT_HELPER_THROW_OVERFLOW:
             m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
                 "jit_throw_overflow", SPIDIR_TYPE_NONE, 0, NULL); break;
+
+        case JIT_HELPER_THROW_INVALID_CAST:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_throw_invalid_cast", SPIDIR_TYPE_NONE, 0, NULL); break;
 
         case JIT_HELPER_NEWOBJ:
             m_jit_helpers[helper].function = spidir_module_create_extern_function(module,

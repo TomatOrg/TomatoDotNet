@@ -902,6 +902,51 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
+// Boxing
+//----------------------------------------------------------------------------------------------------------------------
+
+static tdn_err_t verify_box(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(verifier_assignable_to(stack[0].type, inst->operand.type),
+        "%T verifier-assignable-to %T", stack[0].type, inst->operand.type);
+
+    jit_stack_item_t* item = STACK_PUSH();
+
+    if (tdn_type_is_nullable(inst->operand.type)) {
+        // boxes the value instance
+        item->type = tObject;
+        item->boxed_type = inst->operand.type->GenericArguments->Elements[0];
+
+    } else if (tdn_type_is_referencetype(inst->operand.type)) {
+        // just keep the exact same value when its a reference type
+        item->type = stack[0].type;
+        item->flags = stack[0].flags;
+
+    } else if (tdn_type_is_valuetype(inst->operand.type)) {
+        // set the type as a boxed one
+        item->type = tObject;
+        item->boxed_type = stack[0].type;
+
+    } else {
+        CHECK_FAIL();
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_unbox_any(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(tdn_type_is_referencetype(stack[0].type));
+    STACK_PUSH()->type = verifier_get_intermediate_type(inst->operand.type);
+
+cleanup:
+    return err;
+}
+
+//----------------------------------------------------------------------------------------------------------------------
 // Branching
 //----------------------------------------------------------------------------------------------------------------------
 
@@ -1141,6 +1186,9 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_CALLVIRT] = verify_callvirt,
 
     [CEE_RET] = verify_ret,
+
+    [CEE_BOX] = verify_box,
+    [CEE_UNBOX_ANY] = verify_unbox_any,
 
     [CEE_BR] = verify_br,
     [CEE_BRFALSE] = verify_br_unary_cond,
