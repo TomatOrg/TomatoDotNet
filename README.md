@@ -53,24 +53,28 @@ And then under `out/bin/tdn.elf` you can run the binary
 ## Implemented
 
 - Mostly complete basic MSIL support 
-  - Properly verifies all operations are memory safe 
-  - Simple object and struct operations 
-  - Type and Method generics
+  - Verifies all operations are memory and type safe
+  - Classes and Structs
+  - Generics
   - Interfaces
     - Virtual static methods
+    - Default implementations
   - Delegates
   - Finally clauses
-- (mostly) Full support for references
-  - properly checking references don't escape
-  - Ref-struct support
+- Full support for references
+  - Ensures references don't escape
   - Readonly reference tracking
+  - Ref-structs
 
 ### To be implemented
-- explicit scoped and unscoped reference support
-- safe stackalloc (which returns Span)
-  - the generated MSIL is not safe, will need to special case it
-- Exceptions
-    - This requires unwind support from the jit which is currently missing
+These are planned and are being worked on
+- Explicit scoped and unscoped reference support
+- Exceptions (missing jit support)
+- Safe stackalloc (The kind that constructs a Span)
+- Virtual generic methods (Need a good design)
+- Boxing a delegate into either a Delegate/MulticastDelegate/object (changes allocation semantics greatly)
+- Reflection (Need a good design)
+- Assembly unload (No idea how to even approach)
 - Much more of the standard library
 
 ## Implementation details
@@ -78,9 +82,10 @@ And then under `out/bin/tdn.elf` you can run the binary
 - The GC is controlled by the host and not the runtime
   - This is to allow control for the host to use OS features for it
 
-- Objects have a small 8 bytes header
-  - 4 byte for VTable pointer
-  - 4 bytes currently reserved
+- Objects have a 16 bytes header
+  - 8 byte for VTable pointer
+  - 4 bytes for flags
+  - 4 bytes for mutex + condvar
 
 - Optimized type checking
   - Uses a simple bitmask to encode the type hierarchy for normal objects 
@@ -109,7 +114,7 @@ And then under `out/bin/tdn.elf` you can run the binary
 
 ## Compromises
 
-- Only 64bit support, we have no plans on supporting 64bit, this simplifies alot of design choices
+- Only 64bit support, we have no plans on supporting 32bit instruction sets, this simplifies alot of design choices
 
 - No support for array variance
     - requires more hidden type checks to work:
@@ -120,14 +125,3 @@ And then under `out/bin/tdn.elf` you can run the binary
         ```
     - Given how interfaces and delegates are implemented as fat pointers, the cast
       doesn't really work on anything that does object<->interface in the cast
-
-- No support for virtual generic methods
-  - Requires a more complex (and expensive) runtime lookup and potentially jitting of a method  
-
-- Boxing a delegate into either a Delegate/MulticastDelegate/object is currently not supported
-  - We might in the future support such things by allocating
-
-- Assembly unload is not supported
-
-- Reflection is not supported 
-  - Main reason is that it allows for bypassing type safety, maybe eventually we will figure a way to support it nicely
