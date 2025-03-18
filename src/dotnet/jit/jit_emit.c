@@ -667,6 +667,22 @@ cleanup:
     return err;
 }
 
+static tdn_err_t emit_shift(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    spidir_value_t value = SPIDIR_VALUE_INVALID;
+    switch (inst->opcode) {
+        case CEE_SHL: value = spidir_builder_build_shl(builder, stack[0].value, stack[1].value); break;
+        case CEE_SHR: value = spidir_builder_build_ashr(builder, stack[0].value, stack[1].value); break;
+        case CEE_SHR_UN: value = spidir_builder_build_lshr(builder, stack[0].value, stack[1].value); break;
+        default: CHECK_FAIL();
+    }
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Array related
 //----------------------------------------------------------------------------------------------------------------------
@@ -1428,6 +1444,10 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_AND] = emit_binary_op,
     [CEE_OR] = emit_binary_op,
     [CEE_XOR] = emit_binary_op,
+
+    [CEE_SHL] = emit_shift,
+    [CEE_SHR] = emit_shift,
+    [CEE_SHR_UN] = emit_shift,
 
     [CEE_CONV_I1] = emit_conv_i4,
     [CEE_CONV_I2] = emit_conv_i4,

@@ -488,6 +488,20 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_shift(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // validate that both are good
+    CHECK(stack[0].type == tInt32 || stack[0].type == tInt64 || stack[0].type == tIntPtr);
+    CHECK(stack[1].type == tInt32 || stack[1].type == tIntPtr);
+
+    // always pushes as an int32
+    STACK_PUSH()->type = stack[0].type;
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1093,6 +1107,10 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_AND] = verify_binary_op,
     [CEE_OR] = verify_binary_op,
     [CEE_XOR] = verify_binary_op,
+
+    [CEE_SHR] = verify_shift,
+    [CEE_SHL] = verify_shift,
+    [CEE_SHR_UN] = verify_shift,
 
     [CEE_CONV_I1] = verify_conv,
     [CEE_CONV_I2] = verify_conv,
