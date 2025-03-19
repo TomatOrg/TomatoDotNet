@@ -44,6 +44,10 @@ typedef enum tdn_il_opcode {
 #undef OPDEF_REAL_OPCODES_ONLY
 } tdn_il_opcode_t;
 
+typedef enum tdn_il_prefix {
+    TDN_IL_PREFIX_VOLATILE = 1 << 0,
+} tdn_il_prefix_t;
+
 typedef struct tdn_il_inst {
     // the opcode we have
     tdn_il_opcode_t opcode;
@@ -73,6 +77,9 @@ typedef struct tdn_il_inst {
 
     // the operand control flow
     tdn_il_control_flow_t control_flow;
+
+    // the prefixes for the instruction
+    tdn_il_prefix_t prefixes;
 
     // the pc of the opcode
     uint32_t pc;

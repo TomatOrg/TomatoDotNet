@@ -295,15 +295,15 @@ cleanup:
 // Misc instructions
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t verify_field_access(jit_function_t* function, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_field_accessible(RuntimeMethodBase caller, RuntimeFieldInfo field) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // check the type is valid
-    CHECK(
-        tdn_type_is_referencetype(stack[0].type) ||
-        stack[0].type->IsByRef ||
-        (function->method->Module->Assembly->AllowUnsafe && stack[0].type->IsPointer)
-    );
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_type_has_field(jit_function_t* function, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
 
     // check that the type has the field
     RuntimeTypeInfo owner = stack[0].type;
@@ -319,7 +319,8 @@ static tdn_err_t verify_field_access(jit_function_t* function, tdn_il_inst_t* in
         CHECK(found);
     }
 
-    // TODO: check the field is accessible
+    // ensure the field is accessible
+    CHECK_AND_RETHROW(verify_field_accessible(function->method, inst->operand.field));
 
 cleanup:
     return err;
@@ -329,8 +330,15 @@ cleanup:
 static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // check the type is valid
+    CHECK(
+        tdn_type_is_referencetype(stack[0].type) ||
+        stack[0].type->IsByRef ||
+        (function->method->Module->Assembly->AllowUnsafe && stack[0].type->IsPointer)
+    );
+
     // verify we can access the field
-    CHECK_AND_RETHROW(verify_field_access(function, inst, stack));
+    CHECK_AND_RETHROW(verify_type_has_field(function, inst, stack));
 
     // push the type into the stack
     jit_stack_item_t* item = STACK_PUSH();
@@ -347,6 +355,74 @@ static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_
             item->non_local_ref_struct = true;
         }
     }
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
+static tdn_err_t verify_stfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check the type is valid
+    CHECK(
+        tdn_type_is_referencetype(stack[0].type) ||
+        tdn_type_is_valuetype(stack[0].type) ||
+        stack[0].type->IsByRef ||
+        (function->method->Module->Assembly->AllowUnsafe && stack[0].type->IsPointer)
+    );
+
+    // verify we can access the field
+    CHECK_AND_RETHROW(verify_type_has_field(function, inst, stack));
+
+    // if we are storing a local ref/ref-struct, then ensure the target is also
+    // a local struct, otherwise we might leak the reference
+    if (stack[1].type != NULL) {
+        if (
+            (stack[1].type->IsByRef && !stack[1].non_local_ref) ||
+            (stack[1].type->IsByRefStruct && !stack[1].non_local_ref_struct)
+        ) {
+            CHECK(!stack[0].non_local_ref_struct);
+        }
+    }
+
+    // ensure it can be assigned
+    CHECK(verifier_assignable_to(stack[1].type, inst->operand.field->FieldType));
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
+static tdn_err_t verify_ldsfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // verify we can access the field
+    CHECK_AND_RETHROW(verify_field_accessible(function->method, inst->operand.field));
+
+    // must be static
+    CHECK(inst->operand.field->Attributes.Static);
+
+    // push the type into the stack
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = verifier_get_intermediate_type(inst->operand.field->FieldType);
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
+static tdn_err_t verify_stsfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // verify we can access the field
+    CHECK_AND_RETHROW(verify_field_accessible(function->method, inst->operand.field));
+
+    // must be static
+    CHECK(inst->operand.field->Attributes.Static);
+
+    // ensure it can be assigned
+    CHECK(verifier_assignable_to(stack[0].type, inst->operand.field->FieldType));
 
 cleanup:
     return err;
@@ -1129,6 +1205,9 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDLOCA] = verify_ldloca,
 
     [CEE_LDFLD] = verify_ldfld,
+    [CEE_STFLD] = verify_stfld,
+    [CEE_LDSFLD] = verify_ldsfld,
+    [CEE_STSFLD] = verify_stsfld,
 
     [CEE_LDIND_I1] = verify_ldind,
     [CEE_LDIND_U1] = verify_ldind,

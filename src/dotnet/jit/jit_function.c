@@ -130,6 +130,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 #endif
 
     // get the pc
+    tdn_il_prefix_t prefix = 0;
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     tdn_il_inst_t last_inst;
     uint32_t pc = block.start;
@@ -154,10 +155,51 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
         // normalize the instruction for easier processing
         tdn_normalize_inst(&inst);
-        uint32_t current_pc = pc;
         pc += inst.length;
 
-        // TODO: verify the stack push
+        // handle prefixes right away
+        if (inst.opcode == CEE_VOLATILE) {
+            prefix |= TDN_IL_PREFIX_VOLATILE;
+            continue;
+        } else {
+            inst.prefixes = prefix;
+            prefix = 0;
+
+            // ensure that the prefix matches
+            if (prefix & TDN_IL_PREFIX_VOLATILE) {
+                switch (inst.opcode) {
+                    case CEE_LDIND_I1:
+                    case CEE_LDIND_U1:
+                    case CEE_LDIND_I2:
+                    case CEE_LDIND_U2:
+                    case CEE_LDIND_I4:
+                    case CEE_LDIND_U4:
+                    case CEE_LDIND_I8:
+                    case CEE_LDIND_I:
+                    case CEE_LDIND_R4:
+                    case CEE_LDIND_R8:
+                    case CEE_LDIND_REF:
+                    case CEE_STIND_REF:
+                    case CEE_STIND_I1:
+                    case CEE_STIND_I2:
+                    case CEE_STIND_I4:
+                    case CEE_STIND_I8:
+                    case CEE_STIND_R4:
+                    case CEE_STIND_R8:
+                    case CEE_LDFLD:
+                    case CEE_STFLD:
+                    case CEE_LDSFLD:
+                    case CEE_STSFLD:
+                    case CEE_LDOBJ:
+                    case CEE_STOBJ:
+                    case CEE_INITBLK:
+                    case CEE_CPBLK:
+                        break;
+                    default:
+                        CHECK_FAIL();
+                }
+            }
+        }
 
         //
         // figure how much we need to pop from the stack

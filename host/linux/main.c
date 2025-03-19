@@ -312,8 +312,20 @@ int main(int argc, char* argv[]) {
     TRACE("RETURNED = %d", tests_output);
 
 cleanup:
+    for (int i = 0; i < arrlen(m_objects); i++) {
+        Object obj = m_objects[i];
+        if (obj->VTable->Type == tRuntimeFieldInfo) {
+            RuntimeFieldInfo field = (RuntimeFieldInfo)obj;
+            if (field->JitFieldPtr != NULL) {
+                free(field->JitFieldPtr);
+                field->JitFieldPtr = NULL;
+            }
+        }
+    }
+
     free_assembly(corelib);
     free_assembly(run);
+
     for (int i = 0; i < arrlen(m_objects); i++) {
         free(m_objects[i]);
     }

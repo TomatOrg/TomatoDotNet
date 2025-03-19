@@ -474,6 +474,22 @@ cleanup:
 // Misc instructions
 //----------------------------------------------------------------------------------------------------------------------
 
+static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, RuntimeFieldInfo field) {
+    ASSERT(field->Attributes.Static);
+
+    // TODO: use an external reference instead eventually
+
+    // allocate it if required
+    if (field->JitFieldPtr == NULL) {
+        field->JitFieldPtr = tdn_host_mallocz(field->FieldType->StackSize, field->FieldType->StackAlignment);
+        ASSERT(field->JitFieldPtr != NULL);
+
+        // TODO: register gc roots
+    }
+
+    return spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)field->JitFieldPtr);
+}
+
 // Use as a template for adding new instructions
 static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -482,14 +498,8 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
     spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
 
     if (inst->operand.field->Attributes.Static) {
-        CHECK_FAIL("TODO: static field support");
+        field_ptr = jit_get_static_field(builder, inst->operand.field);
     } else {
-        // emit an explicit null reference exception
-        if (stack[0].type == NULL) {
-            jit_emit_null_reference(builder);
-            goto cleanup;
-        }
-
         // add the offset to the field and access it
         field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.field->FieldOffset));
@@ -498,6 +508,61 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
     // perform the load
     STACK_TOP()->value = jit_emit_load(builder, inst->operand.field->FieldType, field_ptr);
 
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
+static tdn_err_t emit_stfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the field offset
+    spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
+
+    if (inst->operand.field->Attributes.Static) {
+        field_ptr = jit_get_static_field(builder, inst->operand.field);
+    } else {
+        // add the offset to the field and access it
+        field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.field->FieldOffset));
+    }
+
+    // perform the store
+    jit_emit_store(
+        builder,
+        stack[1].type, stack[1].value,
+        inst->operand.field->FieldType,
+        field_ptr
+    );
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
+static tdn_err_t emit_ldsfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    STACK_TOP()->value = jit_emit_load(
+        builder,
+        inst->operand.field->FieldType,
+        jit_get_static_field(builder, inst->operand.field)
+    );
+
+cleanup:
+    return err;
+}
+// Use as a template for adding new instructions
+static tdn_err_t emit_stsfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_emit_store(
+        builder,
+        stack[0].type, stack[0].value,
+        inst->operand.field->FieldType,
+        jit_get_static_field(builder, inst->operand.field)
+    );
 
 cleanup:
     return err;
@@ -1651,6 +1716,9 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDLOCA] = emit_ldloca,
 
     [CEE_LDFLD] = emit_ldfld,
+    [CEE_STFLD] = emit_stfld,
+    [CEE_LDSFLD] = emit_ldsfld,
+    [CEE_STSFLD] = emit_stsfld,
 
     [CEE_LDIND_I1] = emit_ldind,
     [CEE_LDIND_U1] = emit_ldind,
