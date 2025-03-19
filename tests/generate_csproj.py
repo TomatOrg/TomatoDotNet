@@ -1,3 +1,4 @@
+import shlex
 import shutil
 import tempfile
 import os
@@ -18,19 +19,40 @@ CSPROJ_TEMPLATE = """
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="{}" />
-    <ProjectReference Include="..\\..\\..\\TdnCoreLib\\System.Private.CoreLib\\System.Private.CoreLib.csproj" />
+    <ProjectReference Include="{}\\TdnCoreLib\\System.Private.CoreLib\\System.Private.CoreLib.csproj" />
   </ItemGroup>
 </Project>
 """
 
-for dirpath, dirnames, filenames in os.walk(CURRENT_DIR):
-    # setup a temp dir for the test
-    for filename in filenames:
-        if not filename.endswith('.cs'):
+
+projects = []
+
+
+def generate_csproj(path, depth=1):
+    ticks = "\\".join(['..'] * depth)
+
+    for filename in os.listdir(path):
+        full_path = os.path.join(path, filename)
+
+        if os.path.isdir(full_path):
+            generate_csproj(full_path, depth + 1)
             continue
 
+        if not filename.endswith(".cs"):
+            continue
+
+        print('Generating {}proj'.format(os.path.relpath(full_path, CURRENT_DIR)))
+
+        projects.append(os.path.relpath(full_path, CURRENT_DIR) + 'proj')
+
         # create a project file
-        with open(os.path.join(dirpath, filename + 'proj'), 'w') as f:
-            f.write(CSPROJ_TEMPLATE.format(filename))
+        with open(full_path + 'proj', 'w') as f:
+            f.write(CSPROJ_TEMPLATE.format(filename, ticks))
 
+# generate all the csprojects
+generate_csproj(CURRENT_DIR)
 
+# build the solution
+os.unlink(os.path.join(CURRENT_DIR, 'tests.sln'))
+assert os.system(f'cd {CURRENT_DIR} && dotnet new sln') == 0
+assert os.system(f'cd {CURRENT_DIR} && dotnet sln add {shlex.join(projects)}') == 0

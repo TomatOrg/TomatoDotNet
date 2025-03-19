@@ -11,7 +11,7 @@
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="FPRem.cs" />
-    <ProjectReference Include="..\..\..\TdnCoreLib\System.Private.CoreLib\System.Private.CoreLib.csproj" />
+    <Compile Include="BitTest.cs" />
+    <ProjectReference Include="..\..\..\..\TdnCoreLib\System.Private.CoreLib\System.Private.CoreLib.csproj" />
   </ItemGroup>
 </Project>
