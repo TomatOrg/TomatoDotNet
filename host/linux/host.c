@@ -92,15 +92,15 @@ bool tdn_host_resolve_assembly(const char* name, uint16_t revision, tdn_file_t* 
     return true;
 }
 
-int tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer) {
+tdn_err_t tdn_host_read_file(void* file, size_t offset, size_t size, void* buffer) {
     if (fseek(file, (long)offset, SEEK_SET) != 0)
-        return errno;
+        return -errno;
     if (fread(buffer, size, 1, file) != 1)
-        return errno;
-    return 0;
+        return -errno;
+    return TDN_NO_ERROR;
 }
 
-void tdn_host_close_file(tdn_file_t file) {
+void tdn_host_close_file(void* file) {
     fclose(file);
 }
 

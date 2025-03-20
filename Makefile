@@ -73,16 +73,13 @@ else
 LIBSPIDIR	:= libs/spidir/target/$(SPIDIR_TARGET)/release/libspidir.a
 endif
 
-# The dlls that we need for the runtime
-DLLS 		:= $(BIN_DIR)/System.Private.CoreLib.dll
-
 # The default rule
 .PHONY: default
 default: all
 
 # All the rules
 .PHONY: all
-all: $(BIN_DIR)/libtdn.a $(DLLS)
+all: $(BIN_DIR)/libtdn.a
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Rules
@@ -103,28 +100,6 @@ $(BIN_DIR)/libtdn.a: $(OBJS)
 clean:
 	rm -rf out
 	rm -rf libs/spidir/target
-	rm -rf TdnCoreLib/*/bin
-	rm -rf TdnCoreLib/*/obj
-
-#-----------------------------------------------------------------------------------------------------------------------
-# C# rules
-#-----------------------------------------------------------------------------------------------------------------------
-
-# Choose the build configuration
-ifeq ($(DEBUG),1)
-DOTNET_CONFIG 	:= Debug
-else
-DOTNET_CONFIG 	:= Release
-endif
-
-# TODO: turn into a macro
-
-$(BIN_DIR)/System.Private.CoreLib.dll: TdnCoreLib/System.Private.CoreLib/bin/$(DOTNET_CONFIG)/net8.0/System.Private.CoreLib.dll
-	@mkdir -p $(@D)
-	cp $^ $@
-
-TdnCoreLib/System.Private.CoreLib/bin/$(DOTNET_CONFIG)/net8.0/System.Private.CoreLib.dll: force
-	cd TdnCoreLib/System.Private.CoreLib && dotnet build --configuration $(DOTNET_CONFIG)
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Spidir rules

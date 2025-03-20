@@ -768,8 +768,9 @@ static tdn_err_t verify_stelem(jit_function_t* function, jit_block_t* block, tdn
     CHECK(array->type->IsArray);
 
     // ensure the types match nicely
-    CHECK(verifier_array_element_compatible_with(value->type, inst->operand.type),
-        "%T array-element-compatible-with %T", value->type, inst->operand.type);
+    // NOTE: the only way to make sense of this is to truncate the intermediate type
+    CHECK(verifier_array_element_compatible_with(value->type, verifier_get_intermediate_type(inst->operand.type)),
+        "%T array-element-compatible-with %T", value->type, verifier_get_intermediate_type(inst->operand.type));
     CHECK(verifier_array_element_compatible_with(inst->operand.type, array->type->ElementType),
         "%T array-element-compatible-with %T", inst->operand.type, array->type->ElementType);
 

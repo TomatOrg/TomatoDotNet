@@ -8,9 +8,10 @@
 #include "dotnet/loader.h"
 #include "tomatodotnet/disasm.h"
 #include "tomatodotnet/jit/jit.h"
-
+#include <libgen.h>
 #include "tomatodotnet/tdn.h"
 #include <printf.h>
+#include <string.h>
 #include <time.h>
 #include <dotnet/jit/jit.h>
 #include <dotnet/metadata/metadata.h>
@@ -287,17 +288,26 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    CHECK(argc == 4, "Usage: %s <corelib.dll> <search path> <run.dll>", argv[0]);
+    CHECK(argc == 2 || argc == 3, "Usage: %s <run.dll> [<search path>]", argv[0]);
 
     // set the search path for other assemblies
-    // argv[3] = "../tests/JIT/Directed/BitTest/bin/Debug/net8.0/BitTest.dll";
-    g_assembly_search_path = argv[2];
+    if (argc == 3) {
+        g_assembly_search_path = argv[2];
+    } else {
+        // get the base name from the
+        g_assembly_search_path = dirname(strdup(argv[1]));
+    }
+    TRACE("Search path: %s", g_assembly_search_path);
 
-    // load the corelib first
-    CHECK_AND_RETHROW(load_assembly_from_path(argv[1], &corelib));
+    tdn_file_t corelib_file = NULL;
+    CHECK(tdn_host_resolve_assembly("System.Private.CoreLib", 1, &corelib_file),
+        "Failed to resolve System.Private.CoreLib");
+
+    // load the corelib
+    CHECK_AND_RETHROW(tdn_load_assembly_from_file(corelib_file, &corelib));
 
     // now load the assembly we want to run
-    CHECK_AND_RETHROW(load_assembly_from_path(argv[3], &run));
+    CHECK_AND_RETHROW(load_assembly_from_path(argv[1], &run));
 
     // and now jit it and let it run
     clock_t t;

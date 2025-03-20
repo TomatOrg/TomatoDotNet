@@ -1212,7 +1212,7 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
         jit_emit_bzero(builder, obj, callee->DeclaringType);
     } else {
         // we initialize the type, ensure we have the full vtable available
-        jit_queue_type(spidir_builder_get_module(builder), inst->operand.type);
+        jit_queue_type(spidir_builder_get_module(builder), callee->DeclaringType);
 
         obj = spidir_builder_build_call(builder,
             jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWOBJ), 1,

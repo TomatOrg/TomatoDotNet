@@ -9,7 +9,6 @@ import os
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 TDN_BINARY = os.path.join(CURRENT_DIR, '..', 'host', 'linux', 'out', 'bin', 'tdn.elf')
-TDN_CORELIB = os.path.join(CURRENT_DIR, '..', 'TdnCoreLib', 'System.Private.CoreLib', 'bin', 'Release', 'net8.0', 'System.Private.CoreLib.dll')
 
 
 def build_tests():
@@ -54,7 +53,7 @@ def run_single_test(dll: str, results: Queue) -> bool:
     start_time = time.time()
     proc = subprocess.Popen(
         [
-            TDN_BINARY, TDN_CORELIB, CURRENT_DIR, os.path.join(CURRENT_DIR, dll)
+            TDN_BINARY, os.path.join(CURRENT_DIR, dll)
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -114,20 +113,20 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
                 if isinstance(stderr, bytes):
                     stderr = stderr.decode('utf-8')
 
-                # stdout_output = format_output(stdout)
-                # stderr_output = format_output(stderr)
-                #
+                stdout_output = format_output(stdout)
+                stderr_output = format_output(stderr)
+
                 # if stdout_output:
                 #     print(f"STDOUT FOR {case}:", flush=True)
                 #     print(stdout_output, flush=True)
                 # else:
                 #     print(f"NO STDOUT FROM TEST {case}", flush=True)
-                #
-                # if stderr_output:
-                #     print(f"STDERR FOR {case}:", flush=True)
-                #     print(stderr_output, flush=True)
-                # else:
-                #     print(f"NO STDERR FROM TEST {case}", flush=True)
+
+                if stderr_output:
+                    print(f"STDERR FOR {case}:", flush=True)
+                    print(stderr_output, flush=True)
+                else:
+                    print(f"NO STDERR FROM TEST {case}", flush=True)
 
         pool.close()
         pool.join()

@@ -84,16 +84,13 @@ DEPS 		:= $(OBJS:%.o=%.d)
 # Add tdn to the object list
 OBJS		+= $(TDN_BIN_DIR)/libtdn.a
 
-# The dlls that we need for the runtime
-DLLS 		:= $(BIN_DIR)/Tests.dll
-
 # The default rule
 .PHONY: default
 default: all
 
 # All the rules
 .PHONY: all
-all: $(BIN_DIR)/tdn.elf $(DLLS)
+all: $(BIN_DIR)/tdn.elf
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Rules
@@ -123,23 +120,3 @@ $(TDN_BIN_DIR)/libtdn.a: force
 clean:
 	rm -rf $(OUT_DIR)
 	$(MAKE) -C ../.. clean
-
-#-----------------------------------------------------------------------------------------------------------------------
-# C# rules
-#-----------------------------------------------------------------------------------------------------------------------
-
-# Choose the build configuration
-ifeq ($(DEBUG),1)
-DOTNET_CONFIG 	:= Debug
-else
-DOTNET_CONFIG 	:= Release
-endif
-
-# TODO: turn into a macro
-
-$(BIN_DIR)/Tests.dll: ../../TdnCoreLib/Tests/bin/$(DOTNET_CONFIG)/net8.0/Tests.dll
-	@mkdir -p $(@D)
-	cp $^ $@
-
-../../TdnCoreLib/Tests/bin/$(DOTNET_CONFIG)/net8.0/Tests.dll: force
-	cd ../../TdnCoreLib/Tests && dotnet build --configuration $(DOTNET_CONFIG)

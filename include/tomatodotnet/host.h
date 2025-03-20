@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <spidir/module.h>
 
+#include "except.h"
+
 // logging helpers
 void tdn_host_log_trace(const char* format, ...);
 void tdn_host_log_warn(const char* format, ...);
@@ -82,7 +84,7 @@ bool tdn_host_resolve_assembly(const char* name, uint16_t major_version, tdn_fil
 /**
  * Read a file opened by tdn_host_resolve_assembly
  */
-int tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer);
+tdn_err_t tdn_host_read_file(tdn_file_t file, size_t offset, size_t size, void* buffer);
 
 /**
  * Close a file returned by tdn_host_resolve_assembly

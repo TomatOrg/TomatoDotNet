@@ -212,16 +212,19 @@ bool verifier_assignable_to(RuntimeTypeInfo Q, RuntimeTypeInfo R) {
 }
 
 bool verifier_array_element_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
-    RuntimeTypeInfo V = verifier_get_underlying_type(T);
-    RuntimeTypeInfo W = verifier_get_underlying_type(U);
+    // TODO: the original definition makes no sense?!
+    // RuntimeTypeInfo V = verifier_get_underlying_type(T);
+    // RuntimeTypeInfo W = verifier_get_underlying_type(U);
+    RuntimeTypeInfo V = verifier_get_intermediate_type(T);
+    RuntimeTypeInfo W = verifier_get_intermediate_type(U);
 
     if (verifier_compatible_with(V, W)) {
         return true;
     }
 
-    if (verifier_get_reduced_type(V) == verifier_get_reduced_type(W)) {
-        return true;
-    }
+    // if (verifier_get_reduced_type(V) == verifier_get_reduced_type(W)) {
+    //     return true;
+    // }
 
     return false;
 }

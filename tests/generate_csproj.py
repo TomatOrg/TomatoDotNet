@@ -35,6 +35,8 @@ def generate_csproj(path, depth=1):
         full_path = os.path.join(path, filename)
 
         if os.path.isdir(full_path):
+            if filename in ['bin', 'obj']:
+                continue
             generate_csproj(full_path, depth + 1)
             continue
 
@@ -53,6 +55,7 @@ def generate_csproj(path, depth=1):
 generate_csproj(CURRENT_DIR)
 
 # build the solution
-os.unlink(os.path.join(CURRENT_DIR, 'tests.sln'))
+if os.path.exists(os.path.join(CURRENT_DIR, 'tests.sln')):
+    os.unlink(os.path.join(CURRENT_DIR, 'tests.sln'))
 assert os.system(f'cd {CURRENT_DIR} && dotnet new sln') == 0
 assert os.system(f'cd {CURRENT_DIR} && dotnet sln add {shlex.join(projects)}') == 0
