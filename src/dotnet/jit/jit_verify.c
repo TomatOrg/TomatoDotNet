@@ -198,10 +198,33 @@ static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_
     CHECK(verifier_assignable_to(stack[0].type, function->args[inst->operand.variable].type),
         "%T verifier-assignable-to %T", stack[0].type, function->args[inst->operand.variable].type);
 
-    // copy as is
+    if (stack[0].is_method) {
+        // keep the method
+        arg->stack.method = stack[0].method;
+
+    } else if (jit_is_interface(arg->stack.type)) {
+        // storing object to interface, keep the boxed type
+        // for devirt, otherwise we will perform the interface
+        // cast
+        if (!jit_is_interface(stack[0].type)) {
+            if (stack[0].boxed_type != NULL) {
+                arg->stack.boxed_type = stack[0].boxed_type;
+            } else {
+                arg->stack.boxed_type = stack[0].type;
+            }
+        }
+
+    } else if (tdn_type_is_referencetype(arg->stack.type)) {
+        // storing an object into an object, overwrite the type
+        // with the new known one
+        if (!jit_is_interface(stack[0].type)) {
+            arg->stack.type = stack[0].type;
+            arg->stack.boxed_type = stack[0].boxed_type;
+        }
+    }
+
+    // merge the flags, keep the type
     arg->stack.flags = stack[0].flags;
-    arg->stack.type = stack[0].type;
-    arg->stack.boxed_type = stack[0].boxed_type;
     arg->initialized = true;
 
 cleanup:
@@ -247,10 +270,33 @@ static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_
     CHECK(verifier_assignable_to(stack[0].type, function->locals[inst->operand.variable].type),
         "%T verifier-assignable-to %T", stack[0].type, function->locals[inst->operand.variable].type);
 
-    // copy as is
+    if (stack[0].is_method) {
+        // keep the method
+        local->stack.method = stack[0].method;
+
+    } else if (jit_is_interface(local->stack.type)) {
+        // storing object to interface, keep the boxed type
+        // for devirt, otherwise we will perform the interface
+        // cast
+        if (!jit_is_interface(stack[0].type)) {
+            if (stack[0].boxed_type != NULL) {
+                local->stack.boxed_type = stack[0].boxed_type;
+            } else {
+                local->stack.boxed_type = stack[0].type;
+            }
+        }
+
+    } else if (tdn_type_is_referencetype(local->stack.type)) {
+        // storing an object into an object, overwrite the type
+        // with the new known one
+        if (!jit_is_interface(stack[0].type)) {
+            local->stack.type = stack[0].type;
+            local->stack.boxed_type = stack[0].boxed_type;
+        }
+    }
+
+    // merge the flags, keep the type
     local->stack.flags = stack[0].flags;
-    local->stack.type = stack[0].type;
-    local->stack.boxed_type = stack[0].boxed_type;
     local->initialized = true;
 
 cleanup:

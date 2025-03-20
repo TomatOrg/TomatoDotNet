@@ -290,6 +290,7 @@ int main(int argc, char* argv[]) {
     CHECK(argc == 4, "Usage: %s <corelib.dll> <search path> <run.dll>", argv[0]);
 
     // set the search path for other assemblies
+    // argv[3] = "../tests/JIT/Directed/BitTest/bin/Debug/net8.0/BitTest.dll";
     g_assembly_search_path = argv[2];
 
     // load the corelib first

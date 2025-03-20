@@ -138,7 +138,7 @@ static void jit_emit_store(
     } else {
         // only primitive types in here
         spidir_mem_size_t mem_size;
-        switch (from_type->StackSize) {
+        switch (to_type->StackSize) {
             case 1: mem_size = SPIDIR_MEM_SIZE_1; break;
             case 2: mem_size = SPIDIR_MEM_SIZE_2; break;
             case 4: mem_size = SPIDIR_MEM_SIZE_4; break;
@@ -228,6 +228,31 @@ static spidir_value_t jit_convert_value(
     } else {
         return from_value;
     }
+}
+
+static spidir_value_t jit_convert_local(
+    spidir_builder_handle_t builder,
+    RuntimeTypeInfo from_type, spidir_value_t from_value,
+    RuntimeTypeInfo to_type
+) {
+    // special case only needed for locals, truncate/sign extend as required
+    if (from_type == tInt32 && from_type->StackSize != to_type->StackSize) {
+        int bit_count = to_type->StackSize * 8;
+        if (to_type == tSByte || to_type == tInt16) {
+            from_value = spidir_builder_build_sfill(builder, bit_count, from_value);
+        } else if (to_type == tByte || to_type == tUInt16 || to_type == tBoolean || to_type == tChar) {
+            from_value = spidir_builder_build_and(builder, from_value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (1 << bit_count) - 1));
+        } else {
+            TRACE("%T -> %T", from_type, to_type);
+            ASSERT(!"Invalid");
+        }
+        return from_value;
+
+    }
+
+    // fallback to the normal convert logic
+    return jit_convert_value(builder, from_type, from_value, to_type);
 }
 
 static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block) {
@@ -398,8 +423,7 @@ static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t bu
             arg->stack.type, arg->stack.value);
     } else {
         // data flow store
-        // TODO: truncate values as required
-        arg->stack.value = stack[0].value;
+        arg->stack.value = jit_convert_local(builder, stack[0].type, stack[0].value, arg->stack.type);;
     }
 
 cleanup:
@@ -444,9 +468,8 @@ static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t bu
             stack[0].type, stack[0].value,
             local->stack.type, local->stack.value);
     } else {
-        // data flow store
-        // TODO: truncate values as required
-        local->stack.value = stack[0].value;
+        // data flow store, convert into the type that it should be
+        local->stack.value = jit_convert_local(builder, stack[0].type, stack[0].value, local->stack.type);
     }
 
 cleanup:
@@ -579,7 +602,7 @@ static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t bu
 
 static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     // we just need to store into the given item
-    jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type, stack[0].value);
+    jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type->ElementType, stack[0].value);
     return TDN_NO_ERROR;
 }
 
