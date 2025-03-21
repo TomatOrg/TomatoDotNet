@@ -22,9 +22,7 @@ public class BringUpTest_Swap
     public static int Main()
     {
         int a = 10, b= 20;
-        // TODO: Console.WriteLine("Before swap: " + a + "," + b);
         Swap(ref a, ref b);
-        // TODO: Console.WriteLine("After swap: " + a + "," + b);
         if (a==20 && b== 10) return Pass;
         return Fail;        
     }

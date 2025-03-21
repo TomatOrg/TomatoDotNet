@@ -44,51 +44,36 @@ namespace ShiftTest
 
             // Test >>
 
-            // TODO: Console.WriteLine("The expected result of (0x7FFFFFFF>>4) is: {0}", (0x7FFFFFFF >> 4));
-            // TODO: Console.WriteLine();
 
-            // TODO: Console.WriteLine("The actual result for function argument is: {0}", f1(0x7FFFFFFF));
             loc_data >>= 4;
-            // TODO: Console.WriteLine("The actual result for local variable is: {0}", loc_data);
             s_data >>= 4;
-            // TODO: Console.WriteLine("The actual result for static field is: {0}", s_data);
             arr_data[0] >>= 4;
-            // TODO: Console.WriteLine("The actual result for array element is: {0}", arr_data[0]);
             cl.clm_data >>= 4;
-            // TODO: Console.WriteLine("The actual result for class member is: {0}", cl.clm_data);
             vt.vtm_data >>= 4;
-            // TODO: Console.WriteLine("The actual result for valuestruct member is: {0}", vt.vtm_data);
 
-            // TODO: Console.WriteLine();
 
             if (loc_data != (0x7FFFFFFF >> 4))
             {
-                // TODO: Console.WriteLine("FAILED for local variable");
                 return -1;
             }
             if (f1(0x7FFFFFFF) != (0x7FFFFFFF >> 4))
             {
-                // TODO: Console.WriteLine("FAILED for function argument");
                 return -1;
             }
             if (s_data != (0x7FFFFFFF >> 4))
             {
-                // TODO: Console.WriteLine("FAILED for static field");
                 return -1;
             }
             if (arr_data[0] != (0x7FFFFFFF >> 4))
             {
-                // TODO: Console.WriteLine("FAILED for array element");
                 return -1;
             }
             if (cl.clm_data != (0x7FFFFFFF >> 4))
             {
-                // TODO: Console.WriteLine("FAILED for class member");
                 return -1;
             }
             if (vt.vtm_data != (0x7FFFFFFF >> 4))
             {
-                // TODO: Console.WriteLine("FAILED for valuestruct member");
                 return -1;
             }
 
@@ -100,55 +85,39 @@ namespace ShiftTest
             cl.clm_data = 0x1;
             vt.vtm_data = 0x1;
 
-            // TODO: Console.WriteLine("The expected result of (0x1<<4) is: {0}", ((int)0x1 << 4));
-            // TODO: Console.WriteLine();
 
-            // TODO: Console.WriteLine("The actual result for function argument is: {0}", f2(0x1));
             loc_data <<= 4;
-            // TODO: Console.WriteLine("The actual result for local variable is: {0}", loc_data);
             s_data <<= 4;
-            // TODO: Console.WriteLine("The actual result for static field is: {0}", s_data);
             arr_data[0] <<= 4;
-            // TODO: Console.WriteLine("The actual result for array element is: {0}", arr_data[0]);
             cl.clm_data <<= 4;
-            // TODO: Console.WriteLine("The actual result for class member is: {0}", cl.clm_data);
             vt.vtm_data <<= 4;
-            // TODO: Console.WriteLine("The actual result for valuestruct member is: {0}", vt.vtm_data);
 
-            // TODO: Console.WriteLine();
 
             if (loc_data != (0x1 << 4))
             {
-                // TODO: Console.WriteLine("FAILED for local variable");
                 return -1;
             }
             if (f2(0x1) != (0x1 << 4))
             {
-                // TODO: Console.WriteLine("FAILED for function argument");
                 return -1;
             }
             if (s_data != (0x1 << 4))
             {
-                // TODO: Console.WriteLine("FAILED for static field");
                 return -1;
             }
             if (arr_data[0] != (0x1 << 4))
             {
-                // TODO: Console.WriteLine("FAILED for array element");
                 return -1;
             }
             if (cl.clm_data != (0x1 << 4))
             {
-                // TODO: Console.WriteLine("FAILED for class member");
                 return -1;
             }
             if (vt.vtm_data != (0x1 << 4))
             {
-                // TODO: Console.WriteLine("FAILED for valuestruct member");
                 return -1;
             }
 
-            // TODO: Console.WriteLine("PASSED");
             return 100;
         }
     }

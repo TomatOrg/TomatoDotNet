@@ -901,12 +901,10 @@ public class testout1
 
         if (Sum == 960)
         {
-            // TODO: Console.WriteLine("PASSED");
             return 100;
         }
         else
         {
-            // TODO: Console.WriteLine("FAILED");
             return 1;
         }
     }

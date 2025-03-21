@@ -13,7 +13,6 @@ public class BringUpTest_Gcd
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     internal static void print(int a, int b)
     {
-         // TODO: Console.WriteLine("GCD: " + a + "," + b);
     }
 
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
@@ -35,7 +34,6 @@ public class BringUpTest_Gcd
     public static int Main()
     {
         int s = Gcd(36, 81);
-        // TODO: Console.WriteLine("GCD is " + s);
         if (s != 9) return Fail;
         return Pass;        
     }

@@ -16,11 +16,9 @@ public class P
 
         if (pass)
         {
-            // TODO: Console.WriteLine("PASS");
             return 100;
         }
 
-        // TODO: Console.WriteLine("FAIL");
         return -1;
     }
 

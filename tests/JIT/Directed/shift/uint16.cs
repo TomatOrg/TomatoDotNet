@@ -8,39 +8,39 @@ namespace ShiftTest
 {
     public class CL
     {
-        public short clm_data = 0x7FFF;
+        public ushort clm_data = 0xFFFF;
     }
     public struct VT
     {
-        public short vtm_data;
+        public ushort vtm_data;
     }
-    public class short32Test
+    public class ushort32Test
     {
-        private static short s_data = 0x7FFF;
-        public static short f1(short arg_data)
+        private static ushort s_data = 0xFFFF;
+        public static ushort f1(ushort arg_data)
         {
             arg_data >>= 4;
             return arg_data;
         }
-        public static short f2(short arg_data)
+        public static ushort f2(ushort arg_data)
         {
             arg_data <<= 4;
             return arg_data;
         }
         public static int Main()
         {
-            short loc_data = 0x7FFF;
+            ushort loc_data = 0xFFFF;
 
-            short[] arr_data = new short[1];
+            ushort[] arr_data = new ushort[1];
 
             CL cl = new CL();
             VT vt;
 
-            s_data = 0x7FFF;
-            loc_data = 0x7FFF;
-            arr_data[0] = 0x7FFF;
-            cl.clm_data = 0x7FFF;
-            vt.vtm_data = 0x7FFF;
+            s_data = 0xFFFF;
+            loc_data = 0xFFFF;
+            arr_data[0] = 0xFFFF;
+            cl.clm_data = 0xFFFF;
+            vt.vtm_data = 0xFFFF;
 
             // Test >>
 
@@ -52,27 +52,27 @@ namespace ShiftTest
             vt.vtm_data >>= 4;
 
 
-            if (loc_data != (0x7FFF >> 4))
+            if (loc_data != (0xFFFF >> 4))
             {
                 return -1;
             }
-            if (f1(0x7FFF) != (0x7FFF >> 4))
+            if (f1(0xFFFF) != (0xFFFF >> 4))
             {
                 return -1;
             }
-            if (s_data != (0x7FFF >> 4))
+            if (s_data != (0xFFFF >> 4))
             {
                 return -1;
             }
-            if (arr_data[0] != (0x7FFF >> 4))
+            if (arr_data[0] != (0xFFFF >> 4))
             {
                 return -1;
             }
-            if (cl.clm_data != (0x7FFF >> 4))
+            if (cl.clm_data != (0xFFFF >> 4))
             {
                 return -1;
             }
-            if (vt.vtm_data != (0x7FFF >> 4))
+            if (vt.vtm_data != (0xFFFF >> 4))
             {
                 return -1;
             }

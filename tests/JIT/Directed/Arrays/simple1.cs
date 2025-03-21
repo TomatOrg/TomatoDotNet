@@ -10,7 +10,6 @@ public class Simple_Array_Test
 {
 	public static int Main()
 	{
-		// TODO: Console.WriteLine("Starting...");
 		int SIZE = 10;
 
 	//Create an array that is jagged.
@@ -58,12 +57,10 @@ public class Simple_Array_Test
 					 }
                 if(sum==269325)
                 {
- 		  // TODO: Console.WriteLine("Everything Worked!");
         	  return 100;
                 }
                 else
                 {
- 		  // TODO: Console.WriteLine("Something is broken!");
         	  return 1;
                 }
 

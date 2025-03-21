@@ -8,39 +8,39 @@ namespace ShiftTest
 {
     public class CL
     {
-        public long clm_data = 0x7FFFFFFFFFFFFFFF;
+        public ulong clm_data = 0xFFFFFFFFFFFFFFFF;
     }
     public struct VT
     {
-        public long vtm_data;
+        public ulong vtm_data;
     }
-    public class longTest
+    public class ulong32Test
     {
-        private static long s_data = 0x7FFFFFFFFFFFFFFF;
-        public static long f1(long arg_data)
+        private static ulong s_data = 0xFFFFFFFFFFFFFFFF;
+        public static ulong f1(ulong arg_data)
         {
             arg_data >>= 8;
             return arg_data;
         }
-        public static long f2(long arg_data)
+        public static ulong f2(ulong arg_data)
         {
             arg_data <<= 8;
             return arg_data;
         }
         public static int Main()
         {
-            long loc_data = 0x7FFFFFFFFFFFFFFF;
+            ulong loc_data = 0xFFFFFFFFFFFFFFFF;
 
-            long[] arr_data = new long[1];
+            ulong[] arr_data = new ulong[1];
 
             CL cl = new CL();
             VT vt;
 
-            s_data = 0x7FFFFFFFFFFFFFFF;
-            loc_data = 0x7FFFFFFFFFFFFFFF;
-            arr_data[0] = 0x7FFFFFFFFFFFFFFF;
-            cl.clm_data = 0x7FFFFFFFFFFFFFFF;
-            vt.vtm_data = 0x7FFFFFFFFFFFFFFF;
+            s_data = 0xFFFFFFFFFFFFFFFF;
+            loc_data = 0xFFFFFFFFFFFFFFFF;
+            arr_data[0] = 0xFFFFFFFFFFFFFFFF;
+            cl.clm_data = 0xFFFFFFFFFFFFFFFF;
+            vt.vtm_data = 0xFFFFFFFFFFFFFFFF;
 
             // Test >>
 
@@ -52,27 +52,27 @@ namespace ShiftTest
             vt.vtm_data >>= 8;
 
 
-            if (loc_data != (0x7FFFFFFFFFFFFFFF >> 8))
+            if (loc_data != (0xFFFFFFFFFFFFFFFF >> 8))
             {
                 return -1;
             }
-            if (f1(0x7FFFFFFFFFFFFFFF) != (0x7FFFFFFFFFFFFFFF >> 8))
+            if (f1(0xFFFFFFFFFFFFFFFF) != (0xFFFFFFFFFFFFFFFF >> 8))
             {
                 return -1;
             }
-            if (s_data != (0x7FFFFFFFFFFFFFFF >> 8))
+            if (s_data != (0xFFFFFFFFFFFFFFFF >> 8))
             {
                 return -1;
             }
-            if (arr_data[0] != (0x7FFFFFFFFFFFFFFF >> 8))
+            if (arr_data[0] != (0xFFFFFFFFFFFFFFFF >> 8))
             {
                 return -1;
             }
-            if (cl.clm_data != (0x7FFFFFFFFFFFFFFF >> 8))
+            if (cl.clm_data != (0xFFFFFFFFFFFFFFFF >> 8))
             {
                 return -1;
             }
-            if (vt.vtm_data != (0x7FFFFFFFFFFFFFFF >> 8))
+            if (vt.vtm_data != (0xFFFFFFFFFFFFFFFF >> 8))
             {
                 return -1;
             }
