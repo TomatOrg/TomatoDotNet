@@ -213,7 +213,7 @@ tdn_err_t tdn_jit_init() {
 
     // setup the spidir logger
     spidir_log_init(jit_spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
 
     // initialize the codegen
     jit_codegen_init();

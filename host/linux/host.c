@@ -32,12 +32,13 @@ void tdn_host_log_warn(const char* format, ...) {
 }
 
 void tdn_host_log_error(const char* format, ...) {
-    printf("[-] ");
+    fprintf(stderr, "[-] ");
     va_list va;
     va_start(va, format);
-    vprintf(format, va);
+    vfprintf(stderr, format, va);
     va_end(va);
-    printf("\n");
+    fprintf(stderr, "\n");
+    fflush(stderr);
 }
 
 void tdn_host_printf(const char* format, ...) {

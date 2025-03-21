@@ -728,22 +728,33 @@ static tdn_err_t verify_ldelem(jit_function_t* function, jit_block_t* block, tdn
 
     CHECK(index->type == tInt32 || index->type == tIntPtr);
 
-    // if the array is null everything is assumed to be correct,
-    // and it will fail at runtime
-    if (array->type == NULL) {
-        STACK_PUSH()->type = inst->operand.type;
-        goto cleanup;
+    RuntimeTypeInfo inst_type;
+    RuntimeTypeInfo arr_type;
+    if (inst->opcode == CEE_LDELEM_REF) {
+        if (array->type == NULL) {
+            inst_type = tObject;
+        } else {
+            CHECK(array->type->IsArray);
+            inst_type = array->type->ElementType;
+        }
+        arr_type = inst_type;
+
+        CHECK(tdn_type_is_referencetype(arr_type));
+    } else {
+        inst_type = inst->operand.type;
+        arr_type = inst_type;
+        if (array->type != NULL) {
+            CHECK(array->type->IsArray);
+            arr_type = array->type->ElementType;
+        }
+
+        // ensure the types match nicely
+        CHECK(verifier_array_element_compatible_with(inst_type, arr_type),
+            "%T array-element-compatible-with %T", inst_type, arr_type);
     }
 
-    // must be an array type
-    CHECK(array->type->IsArray);
-
-    // ensure the types match nicely
-    CHECK(verifier_array_element_compatible_with(inst->operand.type, array->type->ElementType),
-        "%T array-element-compatible-with %T", inst->operand.type, array->type->ElementType);
-
     // track the result
-    STACK_PUSH()->type = verifier_get_intermediate_type(array->type->ElementType);
+    STACK_PUSH()->type = verifier_get_intermediate_type(arr_type);
 
 cleanup:
     return err;
@@ -767,12 +778,20 @@ static tdn_err_t verify_stelem(jit_function_t* function, jit_block_t* block, tdn
     // must be an array type
     CHECK(array->type->IsArray);
 
+    RuntimeTypeInfo inst_type;
+    if (inst->opcode == CEE_STELEM_REF) {
+        inst_type = array->type->ElementType;
+        CHECK(tdn_type_is_referencetype(inst_type));
+    } else {
+        inst_type = inst->operand.type;
+    }
+
     // ensure the types match nicely
     // NOTE: the only way to make sense of this is to truncate the intermediate type
-    CHECK(verifier_array_element_compatible_with(value->type, verifier_get_intermediate_type(inst->operand.type)),
-        "%T array-element-compatible-with %T", value->type, verifier_get_intermediate_type(inst->operand.type));
-    CHECK(verifier_array_element_compatible_with(inst->operand.type, array->type->ElementType),
-        "%T array-element-compatible-with %T", inst->operand.type, array->type->ElementType);
+    CHECK(verifier_array_element_compatible_with(value->type, verifier_get_intermediate_type(inst_type)),
+        "%T array-element-compatible-with %T", value->type, verifier_get_intermediate_type(inst_type));
+    CHECK(verifier_array_element_compatible_with(inst_type, array->type->ElementType),
+        "%T array-element-compatible-with %T", inst_type, array->type->ElementType);
 
 cleanup:
     return err;
@@ -1319,7 +1338,9 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_NEWARR] = verify_newarr,
     [CEE_LDLEN] = verify_ldlen,
     [CEE_LDELEM] = verify_ldelem,
+    [CEE_LDELEM_REF] = verify_ldelem,
     [CEE_STELEM] = verify_stelem,
+    [CEE_STELEM_REF] = verify_stelem,
 
     [CEE_LDFTN] = verify_ldftn,
 

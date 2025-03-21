@@ -1807,7 +1807,9 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_NEWARR] = emit_newarr,
     [CEE_LDLEN] = emit_ldlen,
     [CEE_LDELEM] = emit_ldelem,
+    [CEE_LDELEM_REF] = emit_ldelem,
     [CEE_STELEM] = emit_stelem,
+    [CEE_STELEM_REF] = emit_stelem,
 
     [CEE_LDFTN] = emit_ldftn,
     [CEE_NEWOBJ] = emit_newobj,
