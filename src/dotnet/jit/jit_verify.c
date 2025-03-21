@@ -373,12 +373,55 @@ cleanup:
 }
 
 // Use as a template for adding new instructions
+static tdn_err_t verify_ldflda(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // check the type is valid
+    CHECK(
+        tdn_type_is_referencetype(stack[0].type) ||
+        stack[0].type->IsByRef ||
+        (function->method->Module->Assembly->AllowUnsafe && stack[0].type->IsPointer)
+    );
+
+    // verify we can access the field
+    CHECK_AND_RETHROW(verify_type_has_field(function, inst, stack));
+
+    RuntimeTypeInfo ref_type = verifier_get_verification_type(inst->operand.field->FieldType);
+    CHECK_AND_RETHROW(tdn_get_byref_type(ref_type, &ref_type));
+
+    // push the type into the stack
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = ref_type;
+
+    // check if its going to give us a non-local ref
+    if (tdn_type_is_referencetype(stack[0].type) || stack[0].non_local_ref) {
+        item->non_local_ref = true;
+    }
+
+    // check if its going to give us a ref to a ref-struct that is non-local
+    if (stack[0].type != NULL && stack[0].type->IsByRefStruct && stack[0].type->ElementType->IsByRefStruct) {
+        if (stack[0].non_local_ref_struct) {
+            item->non_local_ref_struct = true;
+        }
+    }
+
+    // turn into a readonly reference if the field is readonly
+    if (inst->operand.field->Attributes.InitOnly) {
+        item->readonly_ref = true;
+    }
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
 static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // check the type is valid
     CHECK(
         tdn_type_is_referencetype(stack[0].type) ||
+        tdn_type_is_valuetype(stack[0].type) ||
         stack[0].type->IsByRef ||
         (function->method->Module->Assembly->AllowUnsafe && stack[0].type->IsPointer)
     );
@@ -400,6 +443,11 @@ static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_
         if (stack[0].non_local_ref_struct) {
             item->non_local_ref_struct = true;
         }
+    }
+
+    // check if its a read-only reference
+    if (inst->operand.field->ReferenceIsReadOnly) {
+        item->readonly_ref = true;
     }
 
 cleanup:
@@ -1301,6 +1349,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STLOC] = verify_stloc,
     [CEE_LDLOCA] = verify_ldloca,
 
+    [CEE_LDFLDA] = verify_ldflda,
     [CEE_LDFLD] = verify_ldfld,
     [CEE_STFLD] = verify_stfld,
     [CEE_LDSFLD] = verify_ldsfld,
@@ -1321,6 +1370,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STIND_I1] = verify_stind,
     [CEE_STIND_I2] = verify_stind,
     [CEE_STIND_I4] = verify_stind,
+    [CEE_STIND_I8] = verify_stind,
     [CEE_STIND_REF] = verify_stind,
     [CEE_STOBJ] = verify_stind,
 

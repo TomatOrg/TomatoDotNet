@@ -514,6 +514,29 @@ static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, Runt
 }
 
 // Use as a template for adding new instructions
+static tdn_err_t emit_ldflda(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // get the field offset
+    spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
+
+    if (inst->operand.field->Attributes.Static) {
+        field_ptr = jit_get_static_field(builder, inst->operand.field);
+    } else {
+        // add the offset to the field and access it
+        field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.field->FieldOffset));
+    }
+
+    // perform the load
+    STACK_TOP()->value = field_ptr;
+
+
+cleanup:
+    return err;
+}
+
+// Use as a template for adding new instructions
 static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1759,6 +1782,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STLOC] = emit_stloc,
     [CEE_LDLOCA] = emit_ldloca,
 
+    [CEE_LDFLDA] = emit_ldflda,
     [CEE_LDFLD] = emit_ldfld,
     [CEE_STFLD] = emit_stfld,
     [CEE_LDSFLD] = emit_ldsfld,
@@ -1779,6 +1803,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STIND_I1] = emit_stind,
     [CEE_STIND_I2] = emit_stind,
     [CEE_STIND_I4] = emit_stind,
+    [CEE_STIND_I8] = emit_stind,
     [CEE_STIND_REF] = emit_stind,
     [CEE_STOBJ] = emit_stind,
 
