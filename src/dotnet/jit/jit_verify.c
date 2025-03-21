@@ -720,6 +720,37 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_ldelema(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_item_t* array = &stack[0];
+    jit_stack_item_t* index = &stack[1];
+
+    CHECK(index->type == tInt32 || index->type == tIntPtr);
+
+    RuntimeTypeInfo ref_type;
+    CHECK_AND_RETHROW(tdn_get_byref_type(inst->operand.type, &ref_type));
+
+    // push the item, its non-local since it is
+    // coming from the heap
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = ref_type;
+    item->non_local_ref = true;
+
+    if (array->type == NULL) {
+        goto cleanup;
+    }
+
+    // NOTE: we have a bit more restrictions because we can't perform
+    //       an interface cast from this, so for now assume the exact
+    //       known type
+    CHECK(array->type->IsArray);
+    CHECK(inst->operand.type == array->type->ElementType);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_ldelem(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1337,6 +1368,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
 
     [CEE_NEWARR] = verify_newarr,
     [CEE_LDLEN] = verify_ldlen,
+    [CEE_LDELEMA] = verify_ldelema,
     [CEE_LDELEM] = verify_ldelem,
     [CEE_LDELEM_REF] = verify_ldelem,
     [CEE_STELEM] = verify_stelem,

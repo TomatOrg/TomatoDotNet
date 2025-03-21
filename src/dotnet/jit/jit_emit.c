@@ -885,6 +885,27 @@ static spidir_value_t emit_array_offset(spidir_builder_handle_t builder, Runtime
     return spidir_builder_build_ptroff(builder, array, offset);
 }
 
+static tdn_err_t emit_ldelema(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // array is null, fail
+    if (stack[0].type == NULL) {
+        jit_emit_null_reference(builder);
+        goto cleanup;
+    }
+
+    // sign extend the index
+    if (stack[1].type == tInt32) {
+        stack[1].value = emit_extend_int(builder, stack[1].value, true);
+    }
+
+    // get the value and store into it
+    STACK_TOP()->value = emit_array_offset(builder, stack[0].type->ElementType, stack[0].value, stack[1].value);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t emit_ldelem(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1806,6 +1827,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
 
     [CEE_NEWARR] = emit_newarr,
     [CEE_LDLEN] = emit_ldlen,
+    [CEE_LDELEMA] = emit_ldelema,
     [CEE_LDELEM] = emit_ldelem,
     [CEE_LDELEM_REF] = emit_ldelem,
     [CEE_STELEM] = emit_stelem,
