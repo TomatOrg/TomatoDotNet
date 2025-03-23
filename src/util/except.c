@@ -9,6 +9,7 @@ const char* tdn_get_error_string(tdn_err_t err) {
         case TDN_NO_ERROR: return "Success";
         case TDN_ERROR_CHECK_FAILED: return "Check failed";
         case TDN_ERROR_OUT_OF_MEMORY: return "Out of memory";
+        case TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE: return "verifier expected numeric type";
         default: return "<UNKNOWN>";
     }
 }

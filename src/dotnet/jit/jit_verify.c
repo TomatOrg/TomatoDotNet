@@ -653,7 +653,7 @@ static tdn_err_t verify_binary_op(jit_function_t* function, jit_block_t* block, 
         result_type = tIntPtr;
 
     } else {
-        CHECK_FAIL();
+        CHECK_FAIL_ERROR(TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
     }
 
     // always pushes as an int32

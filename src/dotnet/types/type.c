@@ -217,10 +217,6 @@ bool tdn_type_contains_generic_parameters(RuntimeTypeInfo type) {
 // Expand TypeDef based types
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static bool is_module_type(RuntimeTypeInfo type) {
-    return tdn_compare_string_to_cstr(type->Name, "<Module>") && type->Namespace == NULL;
-}
-
 static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo original_type) {
     tdn_err_t err = TDN_NO_ERROR;
     token_t token = { .token = type->MetadataToken };

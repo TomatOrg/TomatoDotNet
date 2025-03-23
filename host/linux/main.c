@@ -282,6 +282,60 @@ static void free_assembly(RuntimeAssembly assembly) {
     }
 }
 
+static bool tdn_string_ends(String str, const char* pattern) {
+    size_t len = strlen(pattern);
+    for (int j = 0; j < len; j++) {
+        if (str->Chars[(str->Length - len) + j] != pattern[j]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool tdn_string_contains(String str, const char* pattern) {
+    size_t len = strlen(pattern);
+    for (int i = 0; i < (str->Length - len) + 1; i++) {
+        for (int j = 0; j < len; j++) {
+            if (str->Chars[i + j] != pattern[j]) {
+                goto next;
+            }
+        }
+        return true;
+    next: continue;
+    }
+
+    return false;
+}
+
+static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    for (int i = 0; i < assembly->TypeDefs->Length; i++) {
+        RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
+        for (int j = 0; j < type->DeclaredMethods->Length; j++) {
+            RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[j];
+
+            if (tdn_string_ends(method->Name, "_Valid")) {
+                CHECK_AND_RETHROW(tdn_jit_method(method));
+
+            } else if (tdn_string_contains(method->Name, "_Invalid_")) {
+                tdn_err_t err = tdn_jit_method(method);
+                if (tdn_string_ends(method->Name, "ExpectedNumericType")) {
+                    CHECK(err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+                } else {
+                    CHECK_FAIL("%T::%U", method->DeclaringType, method->Name);
+                }
+
+            } else {
+                TRACE("IGNORING %T::%U", method->DeclaringType, method->Name);
+            }
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
@@ -294,12 +348,14 @@ int main(int argc, char* argv[]) {
     int jit_dump = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
+    int il_verify_test = 0;
     struct option options[] = {
         {"search-path", required_argument, 0, 's'},
         {"jit-verbose", no_argument, &jit_verbose, 1},
         {"jit-dump", no_argument, &jit_dump, 1},
         {"jit-dont-optimize", no_argument, &jit_dont_optimize, 1},
         {"jit-dont-inline", no_argument, &jit_dont_inline, 1},
+        {"ilverify-test", no_argument, &il_verify_test, 1},
         {0, 0, 0, 0}
     };
 
@@ -314,8 +370,14 @@ int main(int argc, char* argv[]) {
             } break;
 
             case '?': {
-                exit(EXIT_FAILURE);
+                err = TDN_ERROR_CHECK_FAILED;
+                goto cleanup;
             } break;
+
+            default:
+                printf("?? getopt returned character code 0%o ??\n", opt);
+                break;
+
         }
     }
 
@@ -349,20 +411,27 @@ int main(int argc, char* argv[]) {
     // now load the assembly we want to run
     CHECK_AND_RETHROW(load_assembly_from_path(argv[optind], &run));
 
-    // and now jit it and let it run
-    clock_t t;
-    t = clock();
-    CHECK_AND_RETHROW(tdn_jit_method(run->EntryPoint));
-    t = clock() - t;
-    double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
-    TRACE("Jit took %f seconds", time_taken);
+    int result = 0;
+    if (il_verify_test) {
+        CHECK_AND_RETHROW(tdn_run_ilverify_test(run));
+    } else {
+        // and now jit it and let it run
+        clock_t t;
+        t = clock();
+        CHECK(run->EntryPoint != NULL, "Not an executable assembly");
+        CHECK_AND_RETHROW(tdn_jit_method(run->EntryPoint));
+        t = clock() - t;
+        double time_taken = ((double)t)/CLOCKS_PER_SEC; // in seconds
+        TRACE("Jit took %f seconds", time_taken);
 
-    CHECK(run->EntryPoint->MethodPtr != NULL);
-    int (*entry_point)() = run->EntryPoint->MethodPtr;
-    int tests_output = entry_point();
-    TRACE("RETURNED = %d", tests_output);
+        CHECK(run->EntryPoint->MethodPtr != NULL);
+        int (*entry_point)() = run->EntryPoint->MethodPtr;
+        result = entry_point();
+    }
 
 cleanup:
+    tdn_cleanup();
+
     for (int i = 0; i < arrlen(m_objects); i++) {
         Object obj = m_objects[i];
         if (obj->VTable->Type == tRuntimeFieldInfo) {
@@ -382,8 +451,5 @@ cleanup:
     }
     arrfree(m_objects);
 
-    return (err != TDN_NO_ERROR) ? EXIT_FAILURE : tests_output;
+    return (err != TDN_NO_ERROR) ? EXIT_FAILURE : result;
 }
-
-// TODO: remove once we have a GC
-// const char* __asan_default_options() { return "detect_leaks=0"; }

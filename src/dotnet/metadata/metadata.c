@@ -630,7 +630,7 @@ tdn_err_t dotnet_load_file(dotnet_file_t* file) {
     uint16_t characteristics = file->file.header->FileHeader.Characteristics;
     CHECK((characteristics & IMAGE_FILE_RELOCS_STRIPPED) == 0);
     CHECK(characteristics & IMAGE_FILE_EXECUTABLE_IMAGE);
-    CHECK((characteristics & IMAGE_FILE_32BIT_MACHINE) == 0);
+    // CHECK((characteristics & IMAGE_FILE_32BIT_MACHINE) == 0);
 //    file->dll = characteristics & IMAGE_FILE_DLL;
 
     // II.25.2.3.3 CLI Header

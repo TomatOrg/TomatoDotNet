@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include "loader.h"
 
+#include <string.h>
 #include <tomatodotnet/tdn.h>
 
 #include "tomatodotnet/except.h"
@@ -1323,18 +1324,28 @@ static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
 
         const char* name = assembly_ref->name;
 
+        // TODO: hack
+        if (
+            strcmp(name, "mscorlib") == 0 ||
+            strcmp(name, "System.Runtime") == 0
+        ) {
+            name = "System.Private.CoreLib";
+        }
+
         // get from the hashmap of known assemblies
         // TODO: if not found call a callback to find and load the assembly
         RuntimeAssembly new_assembly = NULL;
         int idx = shgeti(m_loaded_assemblies, name);
         if (idx >= 0) {
             // TODO: maybe this should have an array of major versions we know about
-            new_assembly = m_loaded_assemblies[i].value;
-            CHECK(new_assembly != NULL, "Failed to get assembly `%s` - recursive dependency", name);
+            new_assembly = m_loaded_assemblies[idx].value;
+            CHECK(new_assembly != NULL,
+                "Failed to get assembly `%s` - recursive dependency", name);
 
         } else {
             // attempt to resolve an assembly
-            CHECK(tdn_host_resolve_assembly(name, assembly_ref->major_version, &current_file), "Failed to get assembly `%s` - not found", name);
+            CHECK(tdn_host_resolve_assembly(name, assembly_ref->major_version, &current_file),
+                "Failed to get assembly `%s` - not found", name);
 
             // now actually load the assembly so it can be used
             CHECK_AND_RETHROW(tdn_load_assembly_from_file(current_file, &new_assembly));
@@ -2362,4 +2373,9 @@ cleanup:
     }
 
     return err;
+}
+
+void tdn_cleanup(void) {
+    mCoreAssembly = NULL;
+    shfree(m_loaded_assemblies);
 }

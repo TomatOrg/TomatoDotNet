@@ -1,5 +1,6 @@
 import argparse
 from multiprocessing import Manager, Pool, Queue
+from tempfile import mktemp
 from typing import List
 import subprocess
 import glob
@@ -20,6 +21,7 @@ def gather_tests(dlls_to_include: List[str]):
     # get all the dlls to run
     debug_dlls = glob.glob('**/bin/Debug/net8.0/*.dll', root_dir=CURRENT_DIR, recursive=True)
     release_dlls = glob.glob('**/bin/Release/net8.0/*.dll', root_dir=CURRENT_DIR, recursive=True)
+    ils = glob.glob('**/*.il', root_dir=CURRENT_DIR, recursive=True)
 
     # testse we never want to run
     dlls_to_ignore = [
@@ -32,7 +34,7 @@ def gather_tests(dlls_to_include: List[str]):
 
     # filter the tests
     dlls_to_run = []
-    for dll in debug_dlls + release_dlls:
+    for dll in debug_dlls + release_dlls + ils:
         for ignore in dlls_to_ignore:
             if ignore in dll:
                 break
@@ -48,32 +50,82 @@ def gather_tests(dlls_to_include: List[str]):
     return dlls_to_run
 
 
+def compile_to_dll(path: str):
+    fpath = os.path.join(CURRENT_DIR, path)
+    if fpath.endswith('.dll'):
+        return fpath
+    f = mktemp()
+    assert os.system(f'ilasm {fpath} /dll /output:{f}.dll') == 0
+    return f'{f}.dll'
+
+
 def run_single_test(dll: str, results: Queue) -> bool:
-    timeout = False
-    start_time = time.time()
-    proc = subprocess.Popen(
-        [
-            TDN_BINARY, os.path.join(CURRENT_DIR, dll)
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
     try:
-        stdout, stderr = proc.communicate()
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        stdout, stderr = proc.communicate()
-        timeout = True
+        assert dll.endswith('.dll')
 
-    elapsed_time = time.time() - start_time
+        timeout = False
+        start_time = time.time()
+        proc = subprocess.Popen(
+            [
+                TDN_BINARY, os.path.join(CURRENT_DIR, dll)
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
 
-    if proc.returncode == 100:
-        results.put((True, dll, elapsed_time))
-        return True
-    else:
-        results.put((False, dll, elapsed_time, stdout, stderr, timeout))
-        return False
+        try:
+            stdout, stderr = proc.communicate()
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            timeout = True
+
+        elapsed_time = time.time() - start_time
+
+        if proc.returncode == 100:
+            results.put((True, dll, elapsed_time))
+            return True
+        else:
+            results.put((False, dll, elapsed_time, stdout, stderr, timeout))
+            return False
+
+    except Exception as e:
+        results.put((False, dll, 0, '', e, False))
+
+
+def run_single_ilverify_test(dll: str, results: Queue) -> bool:
+    try:
+        dll = compile_to_dll(dll)
+        print(dll)
+
+        timeout = False
+        start_time = time.time()
+        proc = subprocess.Popen(
+            [
+                TDN_BINARY, '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0', '--ilverify-test', dll
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = proc.communicate()
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            timeout = True
+
+        elapsed_time = time.time() - start_time
+
+        if proc.returncode == 0:
+            results.put((True, dll, elapsed_time))
+            return True
+        else:
+            results.put((False, dll, elapsed_time, stdout, stderr, timeout))
+            return False
+
+    except Exception as e:
+        results.put((False, dll, 0, '', e, False))
 
 
 def run_tests(cases: List[str], parallelism: int) -> bool:
@@ -92,7 +144,8 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
         manager = Manager()
         result_queue = manager.Queue()
 
-        pool.starmap_async(run_single_test, [(case, result_queue) for case in cases])
+        pool.starmap_async(run_single_test, [(case, result_queue) for case in cases if 'ilverify' not in case])
+        pool.starmap_async(run_single_ilverify_test, [(case, result_queue) for case in cases if 'ilverify' in case])
 
         while pass_count + fail_count < len(cases):
             success, case, elapsed_time, *args = result_queue.get()
@@ -106,6 +159,9 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
                 stdout, stderr, timeout = args
 
                 print_test_header(case, False, timeout, elapsed_time)
+
+                if isinstance(stderr, Exception):
+                    raise stderr
 
                 if isinstance(stdout, bytes):
                     stdout = stdout.decode('utf-8')
