@@ -6,6 +6,7 @@
 #include <spidir/log.h>
 #include <spidir/opt.h>
 #include <spidir/module.h>
+#include <tomatodotnet/tdn.h>
 #include <tomatodotnet/types/type.h>
 
 #include <util/string_builder.h>
@@ -150,12 +151,16 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
     }
 
     // run the optimizer
-    spidir_opt_run(module);
+    if (tdn_get_config()->jit_optimize) {
+        spidir_opt_run(module);
+    }
 
     // dump it for debugging
-    void* ctx = tdn_host_jit_start_dump();
-    spidir_module_dump(module, tdn_host_jit_dump_callback, ctx);
-    tdn_host_jit_end_dump(ctx);
+    if (tdn_get_config()->jit_spidir_dump) {
+        void* ctx = tdn_host_jit_start_dump();
+        spidir_module_dump(module, tdn_host_jit_dump_callback, ctx);
+        tdn_host_jit_end_dump(ctx);
+    }
 
     // now trigger the codegen
     CHECK_AND_RETHROW(jit_codegen(module));
@@ -213,7 +218,7 @@ tdn_err_t tdn_jit_init() {
 
     // setup the spidir logger
     spidir_log_init(jit_spidir_log_callback);
-    spidir_log_set_max_level(SPIDIR_LOG_LEVEL_INFO);
+    spidir_log_set_max_level(tdn_get_config()->jit_spidir_log_level);
 
     // initialize the codegen
     jit_codegen_init();

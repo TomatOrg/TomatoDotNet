@@ -6,6 +6,42 @@
 #include "except.h"
 #include "host.h"
 
+typedef struct tdn_config {
+    /**
+     * Trace the opcodes while verifying the IL
+     */
+    bool jit_verify_trace;
+
+    /**
+     * Trace the opcodes while emitting the IL
+     */
+    bool jit_emit_trace;
+
+    /**
+     * The spidir log level to use
+     */
+    int jit_spidir_log_level;
+
+    /**
+     * Dump the spidir after finishing
+     */
+    bool jit_spidir_dump;
+
+    /**
+     * Should we run optimization
+     */
+    bool jit_optimize;
+
+    /**
+     * Should we allow inline
+     */
+    bool jit_inline;
+} tdn_config_t;
+
+/**
+ * Get the Tomato.NET config, you are allowed to modify it at startup
+ */
+tdn_config_t* tdn_get_config(void);
 
 /**
  * Load assembly from a memory buffer

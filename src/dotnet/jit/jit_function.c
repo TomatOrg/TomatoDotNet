@@ -114,6 +114,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     RuntimeMethodBase method = function->method;
     RuntimeMethodBody body = method->MethodBody;
     jit_stack_item_t* stack_items = NULL;
+    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
 
     // clone the block into the current frame, so we can modify it
     jit_block_t block = {};
@@ -125,9 +126,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         spidir_builder_set_block(builder, block.spidir_block);
     }
 
-#ifdef JIT_VERBOSE_VERIFY
     int indent = 0;
-#endif
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
@@ -149,9 +148,9 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         // get the instruction
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
-#ifdef JIT_VERBOSE_VERIFY
-        indent = tdn_disasm_print_start(body, pc, inst, indent);
-#endif
+        if (trace) {
+            indent = tdn_disasm_print_start(body, pc, inst, indent);
+        }
 
         // normalize the instruction for easier processing
         tdn_normalize_inst(&inst);
@@ -278,9 +277,9 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         // ensure that the instruction was executed correctly
         CHECK(arrlen(block.stack) == wanted_stack_size);
 
-#ifdef JIT_VERBOSE_VERIFY
-        indent = tdn_disasm_print_end(body, pc, indent);
-#endif
+        if (trace) {
+            indent = tdn_disasm_print_end(body, pc, indent);
+        }
     }
 
     // if we have a fallthrough, then we need to merge to the next block
@@ -311,6 +310,7 @@ cleanup:
 
 tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
+    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
 
     // for the emitter we need a pass in here to initialize all of the block
     // locals before we enter the real entry block
@@ -330,9 +330,9 @@ tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t bui
         jit_block_t* block = arrpop(function->queue);
         block->in_queue = false;
 
-#ifdef JIT_VERBOSE_VERIFY
-        TRACE("\tBasic block (IL_%04x):", block->start);
-#endif
+        if (trace) {
+            TRACE("\tBasic block (IL_%04x):", block->start);
+        }
 
         CHECK_AND_RETHROW(jit_visit_basic_block(function, block, builder));
     }
@@ -462,19 +462,24 @@ cleanup:
 
 tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
+    bool trace = tdn_get_config()->jit_emit_trace || tdn_get_config()->jit_verify_trace;
 
-    TRACE("========================================");
-    string_builder_t str_builder = {};
-    string_builder_push_method_signature(&str_builder, function->method, true);
-    const char* name = string_builder_build(&str_builder);
-    TRACE("%s", name);
-    string_builder_free(&str_builder);
+    if (trace) {
+        TRACE("========================================");
+        string_builder_t str_builder = {};
+        string_builder_push_method_signature(&str_builder, function->method, true);
+        const char* name = string_builder_build(&str_builder);
+        TRACE("%s", name);
+        string_builder_free(&str_builder);
+        TRACE("----------------------------------------");
+    }
 
-    TRACE("----------------------------------------");
     // start with verifying the function fully
     CHECK_AND_RETHROW(jit_visit_blocks(function, NULL));
 
-    TRACE("----------------------------------------");
+    if (trace) {
+        TRACE("----------------------------------------");
+    }
 
     // don't allow
     function->emitting = true;

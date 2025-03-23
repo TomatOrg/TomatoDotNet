@@ -116,11 +116,11 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
                 stdout_output = format_output(stdout)
                 stderr_output = format_output(stderr)
 
-                # if stdout_output:
-                #     print(f"STDOUT FOR {case}:", flush=True)
-                #     print(stdout_output, flush=True)
-                # else:
-                #     print(f"NO STDOUT FROM TEST {case}", flush=True)
+                if stdout_output:
+                    print(f"STDOUT FOR {case}:", flush=True)
+                    print(stdout_output, flush=True)
+                else:
+                    print(f"NO STDOUT FROM TEST {case}", flush=True)
 
                 if stderr_output:
                     print(f"STDERR FOR {case}:", flush=True)

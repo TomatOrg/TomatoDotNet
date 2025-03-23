@@ -1103,6 +1103,11 @@ static bool jit_should_inline(jit_function_t* caller, RuntimeMethodBase callee) 
 }
 
 static bool jit_should_not_inline(jit_function_t* caller, RuntimeMethodBase callee) {
+    // user doesn't want to enable inline globally
+    if (!tdn_get_config()->jit_inline) {
+        return true;
+    }
+
     // don't inline if marked as no inline
     if (callee->MethodImplFlags.NoInlining) {
         return true;

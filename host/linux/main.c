@@ -16,6 +16,8 @@
 #include <dotnet/jit/jit.h>
 #include <dotnet/metadata/metadata.h>
 #include <util/stb_ds.h>
+#include <getopt.h>
+#include <spidir/log.h>
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;
@@ -288,16 +290,54 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    CHECK(argc == 2 || argc == 3, "Usage: %s <run.dll> [<search path>]", argv[0]);
+    int jit_verbose = 0;
+    int jit_dump = 0;
+    int jit_dont_optimize = 0;
+    int jit_dont_inline = 0;
+    struct option options[] = {
+        {"search-path", required_argument, 0, 's'},
+        {"jit-verbose", no_argument, &jit_verbose, 1},
+        {"jit-dump", no_argument, &jit_dump, 1},
+        {"jit-dont-optimize", no_argument, &jit_dont_optimize, 1},
+        {"jit-dont-inline", no_argument, &jit_dont_inline, 1},
+        {0, 0, 0, 0}
+    };
 
-    // set the search path for other assemblies
-    if (argc == 3) {
-        g_assembly_search_path = argv[2];
-    } else {
-        // get the base name from the
-        g_assembly_search_path = dirname(strdup(argv[1]));
+    int opt, option_index;
+    while ((opt = getopt_long(argc, argv, "s:", options, &option_index)) != -1) {
+        switch (opt) {
+            case 0: break;
+
+            case 's': {
+                g_assembly_search_path = strdup(optarg);
+                CHECK(g_assembly_search_path != NULL);
+            } break;
+
+            case '?': {
+                exit(EXIT_FAILURE);
+            } break;
+        }
     }
-    TRACE("Search path: %s", g_assembly_search_path);
+
+    // Remaining non-option arguments (should be the DLL to run)
+    CHECK(optind < argc, "Expected <dll to run> after options");
+
+    // set the global options
+    tdn_config_t* config = tdn_get_config();
+    if (jit_dont_inline) config->jit_inline = false;
+    if (jit_dont_optimize) config->jit_optimize = false;
+    if (jit_dump) config->jit_spidir_dump = true;
+    if (jit_verbose) {
+        config->jit_emit_trace = true;
+        config->jit_verify_trace = true;
+        config->jit_spidir_log_level = SPIDIR_LOG_LEVEL_TRACE;
+    }
+
+    // auto-resolve the search path from the file to run
+    if (g_assembly_search_path == NULL) {
+        g_assembly_search_path = dirname(strdup(argv[optind]));
+        CHECK(g_assembly_search_path != NULL);
+    }
 
     tdn_file_t corelib_file = NULL;
     CHECK(tdn_host_resolve_assembly("System.Private.CoreLib", 1, &corelib_file),
@@ -307,7 +347,7 @@ int main(int argc, char* argv[]) {
     CHECK_AND_RETHROW(tdn_load_assembly_from_file(corelib_file, &corelib));
 
     // now load the assembly we want to run
-    CHECK_AND_RETHROW(load_assembly_from_path(argv[1], &run));
+    CHECK_AND_RETHROW(load_assembly_from_path(argv[optind], &run));
 
     // and now jit it and let it run
     clock_t t;

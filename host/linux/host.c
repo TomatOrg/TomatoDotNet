@@ -72,7 +72,7 @@ size_t tdn_host_strnlen(const char* string, size_t maxlen) {
     return strnlen(string, maxlen);
 }
 
-const char* g_assembly_search_path = "";
+const char* g_assembly_search_path = NULL;
 
 bool tdn_host_resolve_assembly(const char* name, uint16_t revision, tdn_file_t* out_file) {
     // attempt to search for the file

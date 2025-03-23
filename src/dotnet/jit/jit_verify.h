@@ -7,8 +7,6 @@
 #include "jit_emit.h"
 #include "jit_function.h"
 
-#define JIT_VERBOSE_VERIFY
-
 typedef tdn_err_t (*verify_instruction_t)(
     jit_function_t* function,
     jit_block_t* block,
