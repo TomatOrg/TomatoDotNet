@@ -315,13 +315,14 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
         for (int j = 0; j < type->DeclaredMethods->Length; j++) {
             RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[j];
 
+            tdn_err_t jit_err = tdn_jit_method(method);
+
             if (tdn_string_ends(method->Name, "_Valid")) {
-                CHECK_AND_RETHROW(tdn_jit_method(method));
+                CHECK_AND_RETHROW(jit_err);
 
             } else if (tdn_string_contains(method->Name, "_Invalid_")) {
-                tdn_err_t err = tdn_jit_method(method);
                 if (tdn_string_ends(method->Name, "ExpectedNumericType")) {
-                    CHECK(err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+                    CHECK(jit_err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
                 } else {
                     CHECK_FAIL("%T::%U", method->DeclaringType, method->Name);
                 }
