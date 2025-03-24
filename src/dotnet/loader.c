@@ -838,10 +838,9 @@ static tdn_err_t tdn_parse_method_exception_handling_clauses(
         CHECK(
             clause.flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION ||
             clause.flags == COR_ILEXCEPTION_CLAUSE_FINALLY ||
-            clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FAULT ||
+            clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
         );
-
-        // TODO: clause.flags == COR_ILEXCEPTION_CLAUSE_FILTER
 
         CHECK(clause.handler_offset < code_size);
         CHECK((size_t)clause.handler_offset + clause.handler_length <= code_size);

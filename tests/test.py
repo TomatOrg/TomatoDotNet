@@ -55,7 +55,7 @@ def compile_to_dll(path: str):
     if fpath.endswith('.dll'):
         return fpath
     f = mktemp()
-    assert os.system(f'ilasm {fpath} /dll /output:{f}.dll') == 0
+    assert os.system(f'/home/tomato/Downloads/runtime.linux-x64.microsoft.netcore.ilasm.10.0.0-preview.2.25163.2/runtimes/linux-x64/native/ilasm -dll -output={f}.dll {fpath}') == 0
     return f'{f}.dll'
 
 
@@ -102,7 +102,7 @@ def run_single_ilverify_test(dll: str, results: Queue) -> bool:
         start_time = time.time()
         proc = subprocess.Popen(
             [
-                TDN_BINARY, '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0', '--ilverify-test', dll
+                TDN_BINARY, '--jit-verify-verbose', '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0', '--ilverify-test', dll
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

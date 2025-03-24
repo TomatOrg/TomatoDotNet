@@ -8,6 +8,15 @@
 
 #include "jit_type.h"
 
+#define VERIFIER_ASSIGNABLE_TO(a, b) \
+    do { \
+        RuntimeTypeInfo __a = a; \
+        RuntimeTypeInfo __b = b; \
+        CHECK_ERROR(verifier_assignable_to(__a, __b), \
+            TDN_ERROR_VERIFIER_STACK_UNEXPECTED, \
+            "%T verifier-assignable-to %T", __a, __b); \
+    } while (0)
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -28,27 +37,30 @@ static void verifier_queue_block(jit_function_t* function, jit_block_t* block) {
     }
 }
 
-static RuntimeTypeInfo verifier_merge_type(RuntimeTypeInfo S, RuntimeTypeInfo T) {
+static RuntimeTypeInfo verifier_merge_type(RuntimeTypeInfo S, RuntimeTypeInfo T, RuntimeTypeInfo error_value) {
     // TODO: find a common base
     if (verifier_assignable_to(S, T)) {
         return S;
     } else if (verifier_assignable_to(T, S)) {
         return T;
     } else {
-        return NULL;
+        if (tdn_get_config()->jit_verify_trace) {
+            ERROR("Failed to merge %T and %T", S, T);
+        }
+        return error_value;
     }
 }
 
 static bool verifier_merge_stack(jit_stack_item_t* previous, jit_stack_item_t* new) {
     bool modified = false;
 
-    RuntimeTypeInfo U = verifier_merge_type(previous->type, new->type);
+    RuntimeTypeInfo U = verifier_merge_type(previous->type, new->type, tVoid);
     if (U != previous->type) {
         previous->type = U;
         modified = true;
     }
 
-    U = verifier_merge_type(previous->boxed_type, new->boxed_type);
+    U = verifier_merge_type(previous->boxed_type, new->boxed_type, NULL);
     if (U != previous->boxed_type) {
         previous->boxed_type = U;
         modified = true;
@@ -99,6 +111,7 @@ static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* fro
             if (verifier_merge_block_local(&target->args[i], &from->args[i])) {
                 modified = true;
             }
+            CHECK_ERROR(target->args[i].stack.type != tVoid, TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
             CHECK(target->args[i].stack.type != NULL);
         }
 
@@ -106,6 +119,7 @@ static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* fro
             if (verifier_merge_block_local(&target->locals[i], &from->locals[i])) {
                 modified = true;
             }
+            CHECK_ERROR(target->locals[i].stack.type != tVoid, TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
             CHECK(target->locals[i].stack.type != NULL);
         }
 
@@ -113,7 +127,7 @@ static tdn_err_t verifier_merge_block(jit_function_t* function, jit_block_t* fro
             if (verifier_merge_stack(&target->stack[i], &from->stack[i])) {
                 modified = true;
             }
-            CHECK(target->stack[i].type != NULL);
+            CHECK_ERROR(target->stack[i].type != tVoid, TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
         }
 
         // the metadata of the block was modified, we must
@@ -168,6 +182,7 @@ cleanup:
 
 //----------------------------------------------------------------------------------------------------------------------
 // Local access
+// TODO: merge loc and arg logic since its identical
 //----------------------------------------------------------------------------------------------------------------------
 
 static tdn_err_t verify_ldarg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
@@ -195,8 +210,7 @@ static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_
     jit_block_local_t* arg = &block->args[inst->operand.variable];
 
     // check that the type matches
-    CHECK(verifier_assignable_to(stack[0].type, function->args[inst->operand.variable].type),
-        "%T verifier-assignable-to %T", stack[0].type, function->args[inst->operand.variable].type);
+    VERIFIER_ASSIGNABLE_TO(stack[0].type, function->args[inst->operand.variable].type);
 
     if (stack[0].is_method) {
         // keep the method
@@ -217,7 +231,7 @@ static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_
     } else if (tdn_type_is_referencetype(arg->stack.type)) {
         // storing an object into an object, overwrite the type
         // with the new known one
-        if (!jit_is_interface(stack[0].type)) {
+        if (!jit_is_interface(stack[0].type) && stack[0].type != NULL) {
             arg->stack.type = stack[0].type;
             arg->stack.boxed_type = stack[0].boxed_type;
         }
@@ -267,8 +281,7 @@ static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_
     jit_block_local_t* local = &block->locals[inst->operand.variable];
 
     // check that the type matches
-    CHECK(verifier_assignable_to(stack[0].type, function->locals[inst->operand.variable].type),
-        "%T verifier-assignable-to %T", stack[0].type, function->locals[inst->operand.variable].type);
+    VERIFIER_ASSIGNABLE_TO(stack[0].type, function->locals[inst->operand.variable].type);
 
     if (stack[0].is_method) {
         // keep the method
@@ -288,8 +301,10 @@ static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_
 
     } else if (tdn_type_is_referencetype(local->stack.type)) {
         // storing an object into an object, overwrite the type
-        // with the new known one
-        if (!jit_is_interface(stack[0].type)) {
+        // with the new known one, we specifically ignore null
+        // as well, because once it leaves the eval stack it
+        // doesn't make sense to remember its null
+        if (!jit_is_interface(stack[0].type) && stack[0].type != NULL) {
             local->stack.type = stack[0].type;
             local->stack.boxed_type = stack[0].boxed_type;
         }
@@ -481,7 +496,7 @@ static tdn_err_t verify_stfld(jit_function_t* function, jit_block_t* block, tdn_
     }
 
     // ensure it can be assigned
-    CHECK(verifier_assignable_to(stack[1].type, inst->operand.field->FieldType));
+    VERIFIER_ASSIGNABLE_TO(stack[1].type, inst->operand.field->FieldType);
 
 cleanup:
     return err;
@@ -516,7 +531,7 @@ static tdn_err_t verify_stsfld(jit_function_t* function, jit_block_t* block, tdn
     CHECK(inst->operand.field->Attributes.Static);
 
     // ensure it can be assigned
-    CHECK(verifier_assignable_to(stack[0].type, inst->operand.field->FieldType));
+    VERIFIER_ASSIGNABLE_TO(stack[0].type, inst->operand.field->FieldType);
 
 cleanup:
     return err;
@@ -537,8 +552,7 @@ static tdn_err_t verify_ldind(jit_function_t* function, jit_block_t* block, tdn_
     // ensure the type is consistent
     RuntimeTypeInfo type;
     if (inst->operand.type != NULL) {
-        CHECK(verifier_assignable_to(addr->type->ElementType, inst->operand.type),
-            "%T verifier-assignable-to %T", addr->type->ElementType, inst->operand.type);
+        VERIFIER_ASSIGNABLE_TO(addr->type->ElementType, inst->operand.type);
 
         type = verifier_get_intermediate_type(inst->operand.type);
 
@@ -563,8 +577,7 @@ static tdn_err_t verify_stind(jit_function_t* function, jit_block_t* block, tdn_
     CHECK(addr->type != NULL && addr->type->IsByRef);
 
     // ensure we can assign the value to the indirect reference
-    CHECK(verifier_assignable_to(val->type, addr->type->ElementType),
-        "%T verifier-assignable-to %T", val->type, addr->type->ElementType);
+    VERIFIER_ASSIGNABLE_TO(val->type, addr->type->ElementType);
 
 cleanup:
     return err;
@@ -911,8 +924,7 @@ static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* 
     int arg_offset = 0;
     if (!callee->Attributes.Static && !newobj) {
         CHECK(arrlen(stack) >= 1);
-        CHECK(verifier_assignable_to(stack[0].type, jit_get_method_this_type(callee)),
-            "%T verifier-assignable-to %T", stack[0].type, jit_get_method_this_type(callee));
+        VERIFIER_ASSIGNABLE_TO(stack[0].type, jit_get_method_this_type(callee));
 
         // TODO: unscoped support
 
@@ -929,8 +941,7 @@ static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* 
     CHECK(arrlen(stack) - arg_offset == callee->Parameters->Length);
     for (int i = arg_offset; i < arrlen(stack); i++) {
         ParameterInfo param = callee->Parameters->Elements[i - arg_offset];
-        CHECK(verifier_assignable_to(stack[i].type, param->ParameterType),
-            "%T verifier-assignable-to %T", stack[i].type, param->ParameterType);
+        VERIFIER_ASSIGNABLE_TO(stack[i].type, param->ParameterType);
 
         // TODO: scoped support
 
@@ -1051,8 +1062,7 @@ static tdn_err_t verify_newobj(jit_function_t* function, jit_block_t* block, tdn
             CHECK(stack[0].type == NULL);
         } else {
             // TODO: how do value types work in here?
-            CHECK(verifier_assignable_to(stack[0].type, target->DeclaringType),
-                "%T verifier-assignable-to %T", stack[0].type, target->DeclaringType);
+            VERIFIER_ASSIGNABLE_TO(stack[0].type, target->DeclaringType);
         }
 
         // ensure the delegate matches the wanted function signature
@@ -1103,8 +1113,7 @@ static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il
     RuntimeTypeInfo ret_type = ret->ParameterType;
     if (ret_type != tVoid) {
         // ensure the return type is valid
-        CHECK(verifier_assignable_to(stack[0].type, ret_type),
-            "%T verifier-assignable-to %T", stack[0].type, ret_type);
+        VERIFIER_ASSIGNABLE_TO(stack[0].type, ret_type);
 
         // readonly consistency
         if (!ret->IsReadOnly) {
@@ -1141,8 +1150,7 @@ cleanup:
 static tdn_err_t verify_box(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK(verifier_assignable_to(stack[0].type, inst->operand.type),
-        "%T verifier-assignable-to %T", stack[0].type, inst->operand.type);
+    VERIFIER_ASSIGNABLE_TO(stack[0].type, inst->operand.type);
 
     jit_stack_item_t* item = STACK_PUSH();
 

@@ -293,15 +293,22 @@ static bool tdn_string_ends(String str, const char* pattern) {
 }
 
 static bool tdn_string_contains(String str, const char* pattern) {
-    size_t len = strlen(pattern);
-    for (int i = 0; i < (str->Length - len) + 1; i++) {
-        for (int j = 0; j < len; j++) {
+    size_t pattern_len = strlen(pattern);
+    if (pattern_len == 0) return true;
+    if (pattern_len > str->Length) return false;
+
+    for (size_t i = 0; i <= str->Length - pattern_len; i++) {
+        bool match = true;
+        for (size_t j = 0; j < pattern_len; j++) {
             if (str->Chars[i + j] != pattern[j]) {
-                goto next;
+                match = false;
+                break;
             }
         }
-        return true;
-    next: continue;
+
+        if (match) {
+            return true;
+        }
     }
 
     return false;
@@ -312,20 +319,33 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
 
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
+        if (tdn_is_generic_type_definition(type)) {
+            continue;
+        }
+
         for (int j = 0; j < type->DeclaredMethods->Length; j++) {
             RuntimeMethodBase method = (RuntimeMethodBase)type->DeclaredMethods->Elements[j];
+            if (method->GenericMethodDefinition == (RuntimeMethodInfo)method) {
+                continue;
+            }
 
-            tdn_err_t jit_err = tdn_jit_method(method);
 
             if (tdn_string_ends(method->Name, "_Valid")) {
-                CHECK_AND_RETHROW(jit_err);
+                ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
+                CHECK_AND_RETHROW(tdn_jit_method(method));
 
             } else if (tdn_string_contains(method->Name, "_Invalid_")) {
-                if (tdn_string_ends(method->Name, "ExpectedNumericType")) {
-                    CHECK(jit_err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-                } else {
-                    CHECK_FAIL("%T::%U", method->DeclaringType, method->Name);
-                }
+                ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
+
+                // we expect to get an error from this, if we didn't
+                // then we failed the test
+                tdn_err_t jit_err = tdn_jit_method(method);
+                CHECK(IS_ERROR(jit_err), "Should have failed");
+
+                // check that we got the correct condition
+                if (tdn_string_ends(method->Name, "ExpectedNumericType")) CHECK(jit_err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+                else if (tdn_string_ends(method->Name, "StackUnexpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+                else CHECK_FAIL("Invalid error condition");
 
             } else {
                 TRACE("IGNORING %T::%U", method->DeclaringType, method->Name);
@@ -345,14 +365,16 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    int jit_verbose = 0;
+    int jit_emit_verbose = 0;
+    int jit_verify_verbose = 0;
     int jit_dump = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
     int il_verify_test = 0;
     struct option options[] = {
         {"search-path", required_argument, 0, 's'},
-        {"jit-verbose", no_argument, &jit_verbose, 1},
+        {"jit-emit-verbose", no_argument, &jit_emit_verbose, 1},
+        {"jit-verify-verbose", no_argument, &jit_verify_verbose, 1},
         {"jit-dump", no_argument, &jit_dump, 1},
         {"jit-dont-optimize", no_argument, &jit_dont_optimize, 1},
         {"jit-dont-inline", no_argument, &jit_dont_inline, 1},
@@ -390,9 +412,9 @@ int main(int argc, char* argv[]) {
     if (jit_dont_inline) config->jit_inline = false;
     if (jit_dont_optimize) config->jit_optimize = false;
     if (jit_dump) config->jit_spidir_dump = true;
-    if (jit_verbose) {
+    if (jit_verify_verbose) config->jit_verify_trace = true;
+    if (jit_emit_verbose) {
         config->jit_emit_trace = true;
-        config->jit_verify_trace = true;
         config->jit_spidir_log_level = SPIDIR_LOG_LEVEL_TRACE;
     }
 
