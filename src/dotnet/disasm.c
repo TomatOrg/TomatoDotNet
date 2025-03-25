@@ -325,28 +325,28 @@ void tdn_normalize_inst(tdn_il_inst_t* inst) {
 }
 
 int tdn_disasm_print_start(RuntimeMethodBody body, uint32_t pc, tdn_il_inst_t inst, int indent) {
-    for (int i = 0; body->ExceptionHandlingClauses != NULL && i < body->ExceptionHandlingClauses->Length; i++) {
-        RuntimeExceptionHandlingClause c = body->ExceptionHandlingClauses->Elements[i];
-        if (c->TryOffset == pc) {
-            tdn_host_printf("[*] \t\t\t%*s.try\n", indent, "");
-            tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
-            indent += 4;
-
-        } else if (c->HandlerOffset == pc) {
-            if (c->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-                string_builder_t temp_builder = {};
-                string_builder_push_type_signature(&temp_builder, c->CatchType);
-                tdn_host_printf("[*] \t\t\t%*scatch %s\n", indent, "", string_builder_build(&temp_builder));
-                string_builder_free(&temp_builder);
-            } else if (c->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
-                tdn_host_printf("[*] \t\t\t%*sfinally\n", indent, "");
-            } else {
-                ASSERT(!"TODO");
-            }
-            tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
-            indent += 4;
-        }
-    }
+    // for (int i = 0; body->ExceptionHandlingClauses != NULL && i < body->ExceptionHandlingClauses->Length; i++) {
+    //     RuntimeExceptionHandlingClause c = body->ExceptionHandlingClauses->Elements[i];
+    //     if (c->TryOffset == pc) {
+    //         tdn_host_printf("[*] \t\t\t%*s.try\n", indent, "");
+    //         tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
+    //         indent += 4;
+    //
+    //     } else if (c->HandlerOffset == pc) {
+    //         if (c->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+    //             string_builder_t temp_builder = {};
+    //             string_builder_push_type_signature(&temp_builder, c->CatchType);
+    //             tdn_host_printf("[*] \t\t\t%*scatch %s\n", indent, "", string_builder_build(&temp_builder));
+    //             string_builder_free(&temp_builder);
+    //         } else if (c->Flags == COR_ILEXCEPTION_CLAUSE_FINALLY) {
+    //             tdn_host_printf("[*] \t\t\t%*sfinally\n", indent, "");
+    //         } else {
+    //             ASSERT(!"TODO");
+    //         }
+    //         tdn_host_printf("[*] \t\t\t%*s{\n", indent, "");
+    //         indent += 4;
+    //     }
+    // }
 
     // check if we are getting nested
 
@@ -391,16 +391,16 @@ int tdn_disasm_print_start(RuntimeMethodBody body, uint32_t pc, tdn_il_inst_t in
 }
 
 int tdn_disasm_print_end(RuntimeMethodBody body, uint32_t pc, int indent) {
-    for (int i = 0; body->ExceptionHandlingClauses != NULL && i < body->ExceptionHandlingClauses->Length; i++) {
-        RuntimeExceptionHandlingClause c = body->ExceptionHandlingClauses->Elements[i];
-        if (c->TryOffset + c->TryLength == pc) {
-            indent -= 4;
-            tdn_host_printf("[*] \t\t\t%*s} // end .try - %04x\n", indent, "");
-        } else if (c->HandlerOffset + c->HandlerLength == pc) {
-            indent -= 4;
-            tdn_host_printf("[*] \t\t\t%*s} // end handler\n", indent, "");
-        }
-    }
+    // for (int i = 0; body->ExceptionHandlingClauses != NULL && i < body->ExceptionHandlingClauses->Length; i++) {
+    //     RuntimeExceptionHandlingClause c = body->ExceptionHandlingClauses->Elements[i];
+    //     if (c->TryOffset + c->TryLength == pc) {
+    //         indent -= 4;
+    //         tdn_host_printf("[*] \t\t\t%*s} // end .try - %04x\n", indent, "");
+    //     } else if (c->HandlerOffset + c->HandlerLength == pc) {
+    //         indent -= 4;
+    //         tdn_host_printf("[*] \t\t\t%*s} // end handler\n", indent, "");
+    //     }
+    // }
 
     return indent;
 }

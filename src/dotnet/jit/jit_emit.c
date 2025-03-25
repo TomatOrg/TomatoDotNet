@@ -11,6 +11,16 @@
 #include "jit_helpers.h"
 #include "jit_type.h"
 
+static int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
+    int idx = hmgeti(type->InterfaceImpls, iface);
+    if (idx < 0) {
+        return -1;
+    }
+    return type->InterfaceImpls[idx].value;
+}
+
+// TODO: variant interface arguments
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Type helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -118,8 +128,26 @@ static void jit_emit_store(
         jit_emit_bzero(builder, to_value, to_type);
 
     } else if (!jit_is_interface(from_type) && jit_is_interface(to_type)) {
-        // we need to convert from object -> interface
-        ASSERT(!"TODO: get the interface offset and move the vtable");
+        // store the interface instance
+        ASSERT(offsetof(Interface, Instance) == 0);
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, from_value, to_value);
+
+        // load the vtable of the object on the stack
+        spidir_value_t vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+
+        // calculate the amount needed
+        int iface_offset = jit_get_interface_offset(from_type, to_type);
+        ASSERT(iface_offset >= 0);
+        iface_offset = iface_offset * (int)sizeof(void*) + (int)offsetof(ObjectVTable, Functions);
+
+        // set the new vtable base
+        vtable_base = spidir_builder_build_ptroff(builder, vtable_base,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, iface_offset));
+
+        // and store it into the vtable field
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable_base,
+            spidir_builder_build_ptroff(builder, to_value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
 
     } else if (jit_is_interface(from_type) && !jit_is_interface(to_type)) {
         // we need to perform interface -> object
@@ -129,7 +157,30 @@ static void jit_emit_store(
 
     } else if (jit_is_interface(from_type) && jit_is_interface(to_type) && from_type != to_type) {
         // interface downcast
-        ASSERT(!"TODO: get the interface offset and move the vtable");
+
+        // move the instance along
+        ASSERT(offsetof(Interface, Instance) == 0);
+        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, to_value);
+
+        // load the vtable of the object on the stack
+        spidir_value_t vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+            spidir_builder_build_ptroff(builder, from_value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+
+        // calculate the amount needed
+        int iface_offset = jit_get_interface_offset(from_type, to_type);
+        ASSERT(iface_offset >= 0);
+        iface_offset *= (int)sizeof(void*);
+
+        // set the new vtable base
+        vtable_base = spidir_builder_build_ptroff(builder, vtable_base,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, iface_offset));
+
+        // and store it into the vtable field
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable_base,
+            spidir_builder_build_ptroff(builder, to_value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
 
     } else if (jit_is_struct_like(from_type)) {
         // only struct types in here and
@@ -977,16 +1028,6 @@ cleanup:
 // Method related
 //----------------------------------------------------------------------------------------------------------------------
 
-static size_t jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
-    int idx = hmgeti(type->InterfaceImpls, iface);
-    if (idx < 0) {
-        return -1;
-    }
-    return type->InterfaceImpls[idx].value;
-}
-
-// TODO: variant interface arguments
-
 static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase target) {
     // not virtual, we know it exactly
     if (!target->Attributes.Virtual) {
@@ -1348,8 +1389,8 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
     if (jit_is_interface(callee_this) && !jit_is_interface(stack[0].type)) {
         // calling an interface method on an object, adjust the base offset to
         // represent the offset to the iface inside of the object's vtable
-        size_t iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
-        ASSERT(iface_offset != -1);
+        int iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
+        ASSERT(iface_offset >= 0);
         base_offset += iface_offset * sizeof(void*);
         base_offset += offsetof(ObjectVTable, Functions);
     }

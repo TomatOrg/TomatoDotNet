@@ -71,6 +71,7 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     if (body->ExceptionHandlingClauses != NULL) {
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             RuntimeExceptionHandlingClause clause = body->ExceptionHandlingClauses->Elements[i];
+            jit_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset);
             jit_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset);
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                 jit_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset);

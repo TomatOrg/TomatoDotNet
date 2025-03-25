@@ -279,6 +279,8 @@ static void free_assembly(RuntimeAssembly assembly) {
         for (int i = 0; i < assembly->TypeDefs->Length; i++) {
             free_type(assembly->TypeDefs->Elements[i]);
         }
+
+        hmfree(assembly->StringTable);
     }
 }
 
@@ -343,8 +345,10 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 CHECK(IS_ERROR(jit_err), "Should have failed");
 
                 // check that we got the correct condition
-                if (tdn_string_ends(method->Name, "ExpectedNumericType")) CHECK(jit_err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-                else if (tdn_string_ends(method->Name, "StackUnexpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+                if (tdn_string_contains(method->Name, "_ExpectedNumericType")) CHECK(jit_err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+                else if (tdn_string_contains(method->Name, "_StackUnexpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+                else if (tdn_string_contains(method->Name, "_BranchOutOfTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY);
+                else if (tdn_string_contains(method->Name, "_BranchIntoTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
                 else CHECK_FAIL("Invalid error condition");
 
             } else {

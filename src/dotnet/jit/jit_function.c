@@ -536,30 +536,32 @@ void jit_function_destroy(jit_function_t* function) {
 
 RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous) {
     RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
-    RuntimeExceptionHandlingClause matched = NULL;
 
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    bool found_previous = previous == NULL;
     for (int i = 0; i < arr->Length; i++) {
         RuntimeExceptionHandlingClause clause = arr->Elements[i];
         if (previous == clause) {
-            break;
+            found_previous = true;
+            continue;
         }
 
-        if (clause->Flags != type) {
+        // if we have not found the previous yet continue
+        if (!found_previous) {
+            continue;
+        }
+
+        if (type != -1 && clause->Flags != type) {
             continue;
         }
 
         if (clause->TryOffset <= pc && pc < clause->TryOffset + clause->TryLength) {
-            if (
-                matched == NULL ||
-                (
-                    matched->TryOffset < clause->TryOffset &&
-                    matched->TryOffset + matched->TryLength > clause->TryOffset + clause->TryLength
-                )
-            ) {
-                matched = clause;
-            }
+            return clause;
         }
     }
 
-    return matched;
+    return NULL;
 }

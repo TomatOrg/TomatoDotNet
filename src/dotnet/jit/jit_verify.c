@@ -1191,8 +1191,53 @@ cleanup:
 // Branching
 //----------------------------------------------------------------------------------------------------------------------
 
+static tdn_err_t verify_same_protected_block(jit_function_t* function, uint32_t from_pc, uint32_t to_pc) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    RuntimeExceptionHandlingClause from_clause = jit_get_enclosing_try_clause(function, from_pc, -1, NULL);
+    RuntimeExceptionHandlingClause to_clause = jit_get_enclosing_try_clause(function, to_pc, -1, NULL);
+
+    if (to_clause != from_clause) {
+        // if the clause is NULL we have jumped out of it
+        CHECK_ERROR(to_clause != NULL, TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY);
+
+        // ensure we jump into the start of a protected block, and not into the middle
+        CHECK_ERROR(to_clause->TryOffset == to_pc, TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
+
+        // if we are coming from a protected block, then ensure we go into
+        // a deeper one and not into a completely different one
+        if (from_clause != NULL) {
+            CHECK_ERROR(
+                from_clause->TryOffset <= to_clause->TryOffset &&
+                from_clause->TryOffset + from_clause->TryLength >= to_clause->TryOffset + to_clause->TryLength,
+                TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY
+            );
+        }
+
+        // check that the clause surrounding the
+        for (;;) {
+            RuntimeExceptionHandlingClause to_previous = jit_get_enclosing_try_clause(function, to_pc, -1, to_clause);
+            if (to_previous == from_clause) {
+                break;
+            }
+
+            // its not the same, so ensure its starting at the
+            // same offset so go into the next clause
+            CHECK(to_previous != NULL);
+            CHECK_ERROR(to_previous->TryOffset == to_clause->TryOffset, TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
+            to_clause = to_previous;
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_br(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    // verify we don't try to exit a protected block with this
+    CHECK_AND_RETHROW(verify_same_protected_block(function, inst->pc, inst->operand.branch_target));
 
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
@@ -1218,6 +1263,10 @@ static tdn_err_t verify_br_unary_cond(jit_function_t* function, jit_block_t* blo
         tdn_type_is_referencetype(stack[0].type)
     );
 
+    // verify we don't try to exit a protected block with this
+    CHECK_AND_RETHROW(verify_same_protected_block(function, inst->pc, inst->operand.branch_target));
+    CHECK_AND_RETHROW(verify_same_protected_block(function, inst->pc, block->end));
+
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
     CHECK(target != NULL);
@@ -1241,6 +1290,10 @@ static tdn_err_t verify_br_binary_cond(jit_function_t* function, jit_block_t* bl
     RuntimeTypeInfo value1 = stack[0].type;
     RuntimeTypeInfo value2 = stack[1].type;
     CHECK_AND_RETHROW(verify_binary_compare(inst->opcode, value1, value2));
+
+    // verify we don't try to exit a protected block with this
+    CHECK_AND_RETHROW(verify_same_protected_block(function, inst->pc, inst->operand.branch_target));
+    CHECK_AND_RETHROW(verify_same_protected_block(function, inst->pc, block->end));
 
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);

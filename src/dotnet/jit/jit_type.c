@@ -122,7 +122,9 @@ bool verifier_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
     // 2. There exists some V such that T is compatible-to V and V is compatible-to U
     RuntimeTypeInfo V = verifier_direct_base_class(T);
     if (V != NULL) {
-        return verifier_compatible_with(V, U);
+        if (verifier_compatible_with(V, U)) {
+            return true;
+        }
     }
 
     // 3. T is a reference type, and U is the direct base class of T.
@@ -132,7 +134,7 @@ bool verifier_compatible_with(RuntimeTypeInfo T, RuntimeTypeInfo U) {
 
     // 4. T is a reference type, and U is an interface directly implemented by T.
     if (T != NULL && U != NULL && tdn_type_is_referencetype(T) && U->Attributes.Interface) {
-        for (int i = 0; i < arrlen(T->InterfaceImpls); i++) {
+        for (int i = 0; i < hmlen(T->InterfaceImpls); i++) {
             if (T->InterfaceImpls[i].key == U) {
                 return true;
             }

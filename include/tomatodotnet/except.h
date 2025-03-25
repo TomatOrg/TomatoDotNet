@@ -9,6 +9,8 @@ typedef enum tdn_err {
     // verifier errors
     TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE,
     TDN_ERROR_VERIFIER_STACK_UNEXPECTED,
+    TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY,
+    TDN_ERROR_VERIFIER_BRANCH_INTO_TRY,
 } tdn_err_t;
 
 const char* tdn_get_error_string(tdn_err_t err);

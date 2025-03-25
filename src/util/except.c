@@ -11,6 +11,8 @@ const char* tdn_get_error_string(tdn_err_t err) {
         case TDN_ERROR_OUT_OF_MEMORY: return "Out of memory";
         case TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE: return "VERIFIER_EXPECTED_NUMERIC_TYPE";
         case TDN_ERROR_VERIFIER_STACK_UNEXPECTED: return "VERIFIER_STACK_UNEXPECTED";
+        case TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY: return "VERIFIER_BRANCH_OUT_OF_TRY";
+        case TDN_ERROR_VERIFIER_BRANCH_INTO_TRY: return "VERIFIER_BRANCH_INTO_TRY";
         default: return "<UNKNOWN>";
     }
 }

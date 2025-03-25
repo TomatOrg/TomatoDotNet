@@ -16,7 +16,7 @@ void dump_hex(const void* data, size_t size);
 #define DEFAULT_ERROR TDN_ERROR_CHECK_FAILED
 #define DEFAULT_LABEL cleanup
 
-#ifdef __TDN_DEBUG__
+#if 0
     #define DEBUGGER_TRAP do { __builtin_debugtrap(); } while (0)
 #else
     #define DEBUGGER_TRAP do { } while (0)
