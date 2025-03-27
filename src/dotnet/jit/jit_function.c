@@ -138,11 +138,12 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
         // can only parse more instructions if we had no block
         // terminating instruction
-        CHECK(
+        CHECK_ERROR(
             inst.control_flow == TDN_IL_CF_FIRST ||
             inst.control_flow == TDN_IL_CF_NEXT ||
             inst.control_flow == TDN_IL_CF_META ||
-            inst.control_flow == TDN_IL_CF_CALL
+            inst.control_flow == TDN_IL_CF_CALL,
+            TDN_ERROR_VERIFIER_BAD_JUMP_TARGET
         );
 
         // get the instruction
@@ -159,6 +160,9 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         // handle prefixes right away
         if (inst.opcode == CEE_VOLATILE) {
             prefix |= TDN_IL_PREFIX_VOLATILE;
+            continue;
+        } else if (inst.opcode == CEE_READONLY) {
+            prefix |= TDN_IL_PREFIX_READONLY;
             continue;
         } else {
             inst.prefixes = prefix;
@@ -565,3 +569,36 @@ RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* func
 
     return NULL;
 }
+
+RuntimeExceptionHandlingClause jit_get_enclosing_handler_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous) {
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    bool found_previous = previous == NULL;
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+        if (previous == clause) {
+            found_previous = true;
+            continue;
+        }
+
+        // if we have not found the previous yet continue
+        if (!found_previous) {
+            continue;
+        }
+
+        if (type != -1 && clause->Flags != type) {
+            continue;
+        }
+
+        if (clause->HandlerOffset <= pc && pc < clause->HandlerOffset + clause->HandlerLength) {
+            return clause;
+        }
+    }
+
+    return NULL;
+}
+

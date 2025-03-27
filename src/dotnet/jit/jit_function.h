@@ -221,3 +221,4 @@ void jit_function_destroy(jit_function_t* function);
  * Search for a clause in the function, if previous is given will continue from that point
  */
 RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous);
+RuntimeExceptionHandlingClause jit_get_enclosing_handler_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous);

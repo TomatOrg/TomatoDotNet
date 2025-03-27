@@ -349,6 +349,9 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 else if (tdn_string_contains(method->Name, "_StackUnexpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
                 else if (tdn_string_contains(method->Name, "_BranchOutOfTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY);
                 else if (tdn_string_contains(method->Name, "_BranchIntoTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
+                else if (tdn_string_contains(method->Name, "_BranchOutOfFinally")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY);
+                else if (tdn_string_contains(method->Name, "_FallthroughException")) CHECK(jit_err == TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
+                else if (tdn_string_contains(method->Name, "_BadJumpTarget")) CHECK(jit_err == TDN_ERROR_VERIFIER_BAD_JUMP_TARGET);
                 else CHECK_FAIL("Invalid error condition");
 
             } else {

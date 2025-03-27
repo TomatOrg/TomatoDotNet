@@ -1201,9 +1201,6 @@ static tdn_err_t verify_same_protected_block(jit_function_t* function, uint32_t 
         // if the clause is NULL we have jumped out of it
         CHECK_ERROR(to_clause != NULL, TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY);
 
-        // ensure we jump into the start of a protected block, and not into the middle
-        CHECK_ERROR(to_clause->TryOffset == to_pc, TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
-
         // if we are coming from a protected block, then ensure we go into
         // a deeper one and not into a completely different one
         if (from_clause != NULL) {
@@ -1213,6 +1210,9 @@ static tdn_err_t verify_same_protected_block(jit_function_t* function, uint32_t 
                 TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY
             );
         }
+
+        // ensure we jump into the start of a protected block, and not into the middle
+        CHECK_ERROR(to_clause->TryOffset == to_pc, TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
 
         // check that the clause surrounding the
         for (;;) {
@@ -1228,6 +1228,11 @@ static tdn_err_t verify_same_protected_block(jit_function_t* function, uint32_t 
             to_clause = to_previous;
         }
     }
+
+    // another special case, must not exit of finally without endfinally
+    RuntimeExceptionHandlingClause from_handler = jit_get_enclosing_handler_clause(function, from_pc, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+    RuntimeExceptionHandlingClause to_handler = jit_get_enclosing_handler_clause(function, to_pc, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);
+    CHECK_ERROR(from_handler == to_handler, TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY);
 
 cleanup:
     return err;
@@ -1522,6 +1527,29 @@ size_t g_verify_dispatch_table_size = ARRAY_LENGTH(g_verify_dispatch_table);
 
 tdn_err_t verifier_on_block_fallthrough(jit_function_t* function, jit_block_t* from, jit_block_t* block) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we don't fallthrough into an exception handler
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+    if (arr != NULL) {
+        for (int i = 0; i < arr->Length; i++) {
+            RuntimeExceptionHandlingClause clause = arr->Elements[i];
+
+            // if its a filter ensure we don't fall into it
+            if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+                // ensure we don't fallthrough into an handler
+                CHECK_ERROR(block->start != clause->FilterOffset,
+                    TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
+            }
+
+            // ensure we don't fallthrough into an handler
+            CHECK_ERROR(block->start != clause->HandlerOffset,
+                TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
+
+            // ensure we don't fallthrough out of an handler
+            CHECK_ERROR(block->start != clause->HandlerOffset + clause->HandlerLength,
+                TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
+        }
+    }
 
     CHECK_AND_RETHROW(verifier_merge_block(function, from, block));
 
