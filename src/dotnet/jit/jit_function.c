@@ -246,9 +246,12 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         arrsetlen(stack_items, stack_behavior.pop);
 
         //
-        // pop from the stack
+        // pop from the stack, the weird error
+        // condition is to make the ilverify tests
+        // happy
         //
-        CHECK(arrlen(block.stack) >= arrlen(stack_items));
+        CHECK_ERROR(arrlen(block.stack) >= arrlen(stack_items),
+            inst.opcode == CEE_RET ? TDN_ERROR_VERIFIER_RETURN_MISSING : TDN_ERROR_CHECK_FAILED);
         for (int i = arrlen(stack_items) - 1; i >= 0; i--) {
             stack_items[i] = arrpop(block.stack);
         }
@@ -293,7 +296,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
         jit_block_t* next = jit_function_get_block(function, block.end, block.leave_target_stack);
-        CHECK(next != NULL);
+        CHECK_ERROR(next != NULL, TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH);
 
         CHECK_AND_RETHROW(verifier_on_block_fallthrough(function, &block, next));
         if (builder != NULL) {
@@ -599,6 +602,29 @@ RuntimeExceptionHandlingClause jit_get_enclosing_handler_clause(jit_function_t* 
         }
 
         if (clause->HandlerOffset <= pc && pc < clause->HandlerOffset + clause->HandlerLength) {
+            return clause;
+        }
+    }
+
+    return NULL;
+}
+
+
+RuntimeExceptionHandlingClause jit_get_enclosing_filter_clause(jit_function_t* function, uint32_t pc) {
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+
+        if (clause->Flags != COR_ILEXCEPTION_CLAUSE_FILTER) {
+            continue;
+        }
+
+        if (clause->FilterOffset <= pc && pc < clause->HandlerOffset) {
             return clause;
         }
     }

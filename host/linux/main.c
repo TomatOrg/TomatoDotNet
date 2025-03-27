@@ -265,6 +265,9 @@ static void free_type(RuntimeTypeInfo type) {
     for (int i = 0; i < hmlen(type->GenericTypeInstances); i++) {
         free_type(type->GenericTypeInstances[i].value);
     }
+    // if (type->ArrayType != NULL) free_type(type->ArrayType);
+    // if (type->ByRefType != NULL) free_type(type->ByRefType);
+    // if (type->PointerType != NULL) free_type(type->PointerType);
     hmfree(type->GenericTypeInstances);
     hmfree(type->InterfaceImpls);
     tdn_host_free(type->JitVTable);
@@ -353,6 +356,15 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 else if (tdn_string_contains(method->Name, "_FallthroughException")) CHECK(jit_err == TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
                 else if (tdn_string_contains(method->Name, "_BadJumpTarget")) CHECK(jit_err == TDN_ERROR_VERIFIER_BAD_JUMP_TARGET);
                 else if (tdn_string_contains(method->Name, "_ThisMismatch")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_MISMATCH);
+                else if (tdn_string_contains(method->Name, "_CtorExpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_EXPECTED);
+                else if (tdn_string_contains(method->Name, "_CtorSig")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_SIG);
+                else if (tdn_string_contains(method->Name, "_ReturnVoid")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_VOID);
+                else if (tdn_string_contains(method->Name, "_ReturnMissing")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_MISSING);
+                else if (tdn_string_contains(method->Name, "_ReturnEmpty")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_EMPTY);
+                else if (tdn_string_contains(method->Name, "_ReturnFromTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_FROM_TRY);
+                else if (tdn_string_contains(method->Name, "_ReturnFromHandler")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_FROM_HANDLER);
+                else if (tdn_string_contains(method->Name, "_ReturnPtrToStack")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
+                else if (tdn_string_contains(method->Name, "_MethodFallthrough")) CHECK(jit_err == TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH);
                 else CHECK_FAIL("Invalid error condition");
 
             } else {

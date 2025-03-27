@@ -551,7 +551,6 @@ static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, Runt
     return spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)field->JitFieldPtr);
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t emit_ldflda(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -574,7 +573,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -597,7 +595,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t emit_stfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -624,7 +621,15 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
+static tdn_err_t emit_ldsflda(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    STACK_TOP()->value = jit_get_static_field(builder, inst->operand.field);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t emit_ldsfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -637,7 +642,7 @@ static tdn_err_t emit_ldsfld(jit_function_t* function, spidir_builder_handle_t b
 cleanup:
     return err;
 }
-// Use as a template for adding new instructions
+
 static tdn_err_t emit_stsfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1275,7 +1280,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     jit_stack_item_t* args = NULL;
@@ -1413,7 +1417,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     ParameterInfo ret = function->method->ReturnParameter;
@@ -1819,6 +1822,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDFLDA] = emit_ldflda,
     [CEE_LDFLD] = emit_ldfld,
     [CEE_STFLD] = emit_stfld,
+    [CEE_LDSFLDA] = emit_ldsflda,
     [CEE_LDSFLD] = emit_ldsfld,
     [CEE_STSFLD] = emit_stsfld,
 

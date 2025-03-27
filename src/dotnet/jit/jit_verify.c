@@ -372,7 +372,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t verify_ldflda(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -414,7 +413,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -454,7 +452,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t verify_stfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -487,7 +484,28 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
+static tdn_err_t verify_ldsflda(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // verify we can access the field
+    CHECK_AND_RETHROW(verify_field_accessible(function->method, inst->operand.field));
+
+    // must be static
+    CHECK(inst->operand.field->Attributes.Static);
+
+    RuntimeTypeInfo ref_type = verifier_get_verification_type(inst->operand.field->FieldType);
+    CHECK_AND_RETHROW(tdn_get_byref_type(ref_type, &ref_type));
+
+    // push the type into the stack, its always non-local
+    // because it comes from a global location
+    jit_stack_item_t* item = STACK_PUSH();
+    item->type = ref_type;
+    item->non_local_ref = true;
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_ldsfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -505,7 +523,6 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t verify_stsfld(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1055,9 +1072,13 @@ static tdn_err_t verify_newobj(jit_function_t* function, jit_block_t* block, tdn
     // ensure we can access the callee
     CHECK_AND_RETHROW(verify_method_accessible(function->method, callee));
 
+    // just to make the ilverify tests happy, and I guess its a nice sanity
+    CHECK_ERROR(!callee->Attributes.Static, TDN_ERROR_VERIFIER_CTOR_SIG);
+    CHECK_ERROR(!callee->Attributes.Abstract, TDN_ERROR_VERIFIER_CTOR_SIG);
+
     // ensure this is a ctor
-    CHECK(callee->Attributes.RTSpecialName);
-    CHECK(tdn_compare_string_to_cstr(callee->Name, ".ctor"));
+    CHECK_ERROR(callee->Attributes.RTSpecialName, TDN_ERROR_VERIFIER_CTOR_EXPECTED);
+    CHECK_ERROR(tdn_compare_string_to_cstr(callee->Name, ".ctor"), TDN_ERROR_VERIFIER_CTOR_EXPECTED);
 
     // if we are constructing a delegate, this is a special case
     if (jit_is_delegate(callee->DeclaringType)) {
@@ -1110,13 +1131,25 @@ cleanup:
     return err;
 }
 
-// Use as a template for adding new instructions
 static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     ParameterInfo ret = function->method->ReturnParameter;
 
-    // the stack must be empty at this point
-    CHECK(arrlen(block->stack) == 0);
+    // ensure we don't return directly from a protected block, a handler block
+    // or a filter block
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+    if (arr != NULL) {
+        for (int i = 0; i < arr->Length; i++) {
+            RuntimeExceptionHandlingClause clause = arr->Elements[i];
+
+            CHECK_ERROR(!(clause->TryOffset <= inst->pc && inst->pc < clause->TryOffset + clause->TryLength), TDN_ERROR_VERIFIER_RETURN_FROM_TRY);
+            CHECK_ERROR(!(clause->HandlerOffset <= inst->pc && inst->pc < clause->HandlerOffset + clause->HandlerLength), TDN_ERROR_VERIFIER_RETURN_FROM_HANDLER);
+
+            if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+                CHECK_ERROR(!(clause->FilterOffset <= inst->pc && inst->pc < clause->HandlerOffset), TDN_ERROR_VERIFIER_RETURN_FROM_FILTER);
+            }
+        }
+    }
 
     RuntimeTypeInfo ret_type = ret->ParameterType;
     if (ret_type != tVoid) {
@@ -1130,12 +1163,12 @@ static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il
 
         // consistency of refs
         if (ret_type->IsByRef) {
-            CHECK(stack[0].non_local_ref);
+            CHECK_ERROR(stack[0].non_local_ref, TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
             if (ret_type->ElementType->IsByRefStruct) {
-                CHECK(stack[0].non_local_ref_struct);
+                CHECK_ERROR(stack[0].non_local_ref_struct, TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
             }
         } else if (ret_type->IsByRefStruct) {
-            CHECK(stack[0].non_local_ref_struct);
+            CHECK_ERROR(stack[0].non_local_ref_struct, TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
         }
 
         // merge the return item type, used mainly for inline
@@ -1145,6 +1178,18 @@ static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il
             function->return_item = stack[0];
             function->return_item_initialized = true;
         }
+
+        // the stack must be empty at this point, in this path it
+        // can only happen from having a non-empty stack
+        CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_RETURN_EMPTY);
+
+    } else {
+        // the stack must be empty at this point, in this path it
+        // can either be that we tried to return from a void method
+        // or that we had a non-empty stack, the reason for this weird
+        // condition is for the ilverify tests
+        CHECK_ERROR(arrlen(block->stack) == 0,
+            arrlen(block->stack) > 1 ? TDN_ERROR_VERIFIER_RETURN_EMPTY : TDN_ERROR_VERIFIER_RETURN_VOID);
     }
 
 cleanup:
@@ -1427,6 +1472,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDFLDA] = verify_ldflda,
     [CEE_LDFLD] = verify_ldfld,
     [CEE_STFLD] = verify_stfld,
+    [CEE_LDSFLDA] = verify_ldsflda,
     [CEE_LDSFLD] = verify_ldsfld,
     [CEE_STSFLD] = verify_stsfld,
 
