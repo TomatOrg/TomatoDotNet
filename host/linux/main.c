@@ -352,6 +352,7 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 else if (tdn_string_contains(method->Name, "_BranchOutOfFinally")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY);
                 else if (tdn_string_contains(method->Name, "_FallthroughException")) CHECK(jit_err == TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
                 else if (tdn_string_contains(method->Name, "_BadJumpTarget")) CHECK(jit_err == TDN_ERROR_VERIFIER_BAD_JUMP_TARGET);
+                else if (tdn_string_contains(method->Name, "_ThisMismatch")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_MISMATCH);
                 else CHECK_FAIL("Invalid error condition");
 
             } else {

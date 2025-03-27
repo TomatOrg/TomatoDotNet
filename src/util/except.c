@@ -16,6 +16,7 @@ const char* tdn_get_error_string(tdn_err_t err) {
         case TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY: return "VERIFIER_BRANCH_OUT_OF_FINALLY";
         case TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION: return "VERIFIER_FALLTHROUGH_EXCEPTION";
         case TDN_ERROR_VERIFIER_BAD_JUMP_TARGET: return "VERIFIER_BAD_JUMP_TARGET";
+        case TDN_ERROR_VERIFIER_THIS_MISMATCH: return "VERIFIER_THIS_MISMATCH";
         default: return "<UNKNOWN>";
     }
 }

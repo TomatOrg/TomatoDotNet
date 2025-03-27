@@ -119,6 +119,9 @@ typedef struct jit_local {
     // taken by reference, so we have a stack-slot
     // for this and we must use it no matter what
     bool spilled;
+
+    // is this a valid `this` pointer
+    bool valid_this;
 } jit_local_t;
 
 typedef struct jit_leave_block_key {

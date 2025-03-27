@@ -202,6 +202,10 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
                         CHECK_FAIL();
                 }
             }
+
+            if (prefix & TDN_IL_PREFIX_READONLY) {
+                CHECK(inst.opcode == CEE_LDELEMA);
+            }
         }
 
         //
@@ -457,8 +461,8 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
     memset(function->args, 0, arrlen(function->args) * sizeof(*function->args));
     for (int i = 0; i < arrlen(function->args); i++) {
         function->args[i].type = entry_block->args[i].stack.type;
+        function->args[i].valid_this = entry_block->args[i].stack.is_this;
     }
-
 
 cleanup:
     return err;

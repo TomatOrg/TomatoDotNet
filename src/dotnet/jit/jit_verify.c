@@ -194,6 +194,13 @@ static tdn_err_t verify_load_local(jit_function_t* function, jit_block_t* block,
     CHECK(inst->operand.variable < arrlen(block_locals));
     jit_block_local_t* local = &block_locals[inst->operand.variable];
 
+    // if we are loading the this, then mark it as one as long
+    // as its still valid
+    bool is_this = false;
+    if (is_arg && inst->operand.variable == 0) {
+        is_this = function_locals[inst->operand.variable].valid_this;
+    }
+
     // check if we need to zero initialize
     if (!local->initialized) {
         function_locals[inst->operand.variable].zero_initialize = true;
@@ -204,6 +211,7 @@ static tdn_err_t verify_load_local(jit_function_t* function, jit_block_t* block,
     // and push it to the stack
     jit_stack_item_t item = local->stack;
     item.type = verifier_get_intermediate_type(item.type);
+    item.is_this = is_this;
     *STACK_PUSH() = item;
 
 cleanup:
@@ -219,6 +227,11 @@ static tdn_err_t verify_store_local(jit_function_t* function, jit_block_t* block
     // get the local slot
     CHECK(inst->operand.variable < arrlen(block_locals));
     jit_block_local_t* local = &block_locals[inst->operand.variable];
+
+    // invalidate the `this`
+    if (is_arg && inst->operand.variable == 0) {
+        function_locals[inst->operand.variable].valid_this = false;
+    }
 
     // check that the type matches
     VERIFIER_ASSIGNABLE_TO(stack[0].type, function_locals[inst->operand.variable].type);
@@ -267,6 +280,11 @@ static tdn_err_t verify_load_local_address(jit_function_t* function, jit_block_t
     // get the local slot
     CHECK(inst->operand.variable < arrlen(block_locals));
     jit_block_local_t* local = &block_locals[inst->operand.variable];
+
+    // invalidate the `this`
+    if (is_arg && inst->operand.variable == 0) {
+        function_locals[inst->operand.variable].valid_this = false;
+    }
 
     // check if we need to zero initialize
     if (!local->initialized) {
@@ -765,6 +783,11 @@ static tdn_err_t verify_ldelema(jit_function_t* function, jit_block_t* block, td
     item->type = ref_type;
     item->non_local_ref = true;
 
+    // prefixed by readonly
+    if (inst->prefixes & TDN_IL_PREFIX_READONLY) {
+        item->readonly_ref = true;
+    }
+
     if (array->type == NULL) {
         goto cleanup;
     }
@@ -914,7 +937,8 @@ static tdn_err_t verify_call_params(RuntimeMethodBase callee, jit_stack_item_t* 
 
         // check if we must not pass a readonly reference
         if (!param->IsReadOnly) {
-            CHECK(!stack[i].readonly_ref);
+            CHECK_ERROR(!stack[i].readonly_ref,
+                TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
         }
 
         // check if we might leak a local reference (to prevent marking the returned reference as
@@ -969,19 +993,36 @@ static void verify_call_return(jit_block_t* block, RuntimeMethodBase callee, boo
 
 static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
+    RuntimeMethodBase callee = inst->operand.method;
 
     // ensure we can access the callee
-    CHECK_AND_RETHROW(verify_method_accessible(function->method, inst->operand.method));
+    CHECK_AND_RETHROW(verify_method_accessible(function->method, callee));
 
     // ensure we have a method body (otherwise must use callvirt)
-    CHECK(inst->operand.method->MethodBody != NULL);
+    CHECK(callee->MethodBody != NULL);
 
     // TODO: other checks for call
 
+    // if we are calling a virtual method, then ensure that we
+    // pass it a valid `this`
+    if (callee->Attributes.Virtual && !callee->Attributes.Static) {
+        // special case for boxing
+        RuntimeTypeInfo declaring = callee->DeclaringType;
+        if (stack[0].type == tObject && stack[0].boxed_type != NULL) {
+            declaring = stack[0].boxed_type;
+        }
+
+        // this check is only needed if the type is sealed or the
+        // method is a final one
+        if (!declaring->Attributes.Sealed && !callee->Attributes.Final) {
+            CHECK_ERROR(stack[0].is_this, TDN_ERROR_VERIFIER_THIS_MISMATCH);
+        }
+    }
+
     // verify the call arguments
     bool might_leak_local = false;
-    CHECK_AND_RETHROW(verify_call_params(inst->operand.method, stack, false, &might_leak_local));
-    verify_call_return(block, inst->operand.method, might_leak_local);
+    CHECK_AND_RETHROW(verify_call_params(callee, stack, false, &might_leak_local));
+    verify_call_return(block, callee, might_leak_local);
 
 cleanup:
     return err;

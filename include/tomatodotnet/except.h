@@ -14,6 +14,7 @@ typedef enum tdn_err {
     TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY,
     TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION,
     TDN_ERROR_VERIFIER_BAD_JUMP_TARGET,
+    TDN_ERROR_VERIFIER_THIS_MISMATCH,
 } tdn_err_t;
 
 const char* tdn_get_error_string(tdn_err_t err);
