@@ -439,63 +439,20 @@ cleanup:
 // Argument access
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_ldarg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_load_local(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
+    jit_local_t* function_locals = is_arg ? function->args : function->locals;
+
     // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->args));
-    jit_block_local_t* arg = &block->args[inst->operand.variable];
+    CHECK(inst->operand.variable < arrlen(block_locals));
+    jit_block_local_t* local = &block_locals[inst->operand.variable];
 
     // load it, if it was spilled then we need to create a copy, otherwise we can
     // just perform a normal data-flow load
     spidir_value_t value = SPIDIR_VALUE_INVALID;
-    if (function->args[inst->operand.variable].spilled) {
-        value = jit_emit_load(builder, arg->stack.type, arg->stack.value);
-    } else {
-        value = arg->stack.value;
-    }
-
-    STACK_TOP()->value = value;
-
-cleanup:
-    return err;
-}
-
-static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->args));
-    jit_block_local_t* arg = &block->args[inst->operand.variable];
-
-    if (function->args[inst->operand.variable].spilled) {
-        jit_emit_store(builder,
-            stack[0].type, stack[0].value,
-            arg->stack.type, arg->stack.value);
-    } else {
-        // data flow store
-        arg->stack.value = jit_convert_local(builder, stack[0].type, stack[0].value, arg->stack.type);;
-    }
-
-cleanup:
-    return err;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-// Local access
-//----------------------------------------------------------------------------------------------------------------------
-
-static tdn_err_t emit_ldloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->locals));
-    jit_block_local_t* local = &block->locals[inst->operand.variable];
-
-    // load it, if it was spilled then we need to create a copy, otherwise we can
-    // just perform a normal data-flow load
-    spidir_value_t value = SPIDIR_VALUE_INVALID;
-    if (function->locals[inst->operand.variable].spilled) {
+    if (function_locals[inst->operand.variable].spilled) {
         value = jit_emit_load(builder, local->stack.type, local->stack.value);
     } else {
         value = local->stack.value;
@@ -507,14 +464,17 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_store_local(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->locals));
-    jit_block_local_t* local = &block->locals[inst->operand.variable];
+    jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
+    jit_local_t* function_locals = is_arg ? function->args : function->locals;
 
-    if (function->locals[inst->operand.variable].spilled) {
+    // get the local slot
+    CHECK(inst->operand.variable < arrlen(block_locals));
+    jit_block_local_t* local = &block_locals[inst->operand.variable];
+
+    if (function_locals[inst->operand.variable].spilled) {
         jit_emit_store(builder,
             stack[0].type, stack[0].value,
             local->stack.type, local->stack.value);
@@ -527,21 +487,48 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_ldloca(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_load_local_address(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
+    jit_local_t* function_locals = is_arg ? function->args : function->locals;
+
     // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->locals));
-    jit_block_local_t* local = &block->locals[inst->operand.variable];
+    CHECK(inst->operand.variable < arrlen(block_locals));
+    jit_block_local_t* local = &block_locals[inst->operand.variable];
 
     // must be spilled
-    CHECK(function->locals[inst->operand.variable].spilled);
+    CHECK(function_locals[inst->operand.variable].spilled);
 
     // just give the pointer
     STACK_TOP()->value = local->stack.value;
 
 cleanup:
     return err;
+}
+
+static tdn_err_t emit_ldarg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return emit_load_local(function, builder, block, inst, true);
+}
+
+static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return emit_store_local(function, builder, block, inst, stack, true);
+}
+
+static tdn_err_t emit_ldarga(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return emit_load_local_address(function, block, inst, true);
+}
+
+static tdn_err_t emit_ldloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return emit_load_local(function, builder, block, inst, false);
+}
+
+static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return emit_store_local(function, builder, block, inst, stack, false);
+}
+
+static tdn_err_t emit_ldloca(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return emit_load_local_address(function, block, inst, false);
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -1823,6 +1810,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
 
     [CEE_LDARG] = emit_ldarg,
     [CEE_STARG] = emit_starg,
+    [CEE_LDARGA] = emit_ldarga,
 
     [CEE_LDLOC] = emit_ldloc,
     [CEE_STLOC] = emit_stloc,

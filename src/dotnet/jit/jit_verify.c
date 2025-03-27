@@ -182,84 +182,21 @@ cleanup:
 
 //----------------------------------------------------------------------------------------------------------------------
 // Local access
-// TODO: merge loc and arg logic since its identical
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t verify_ldarg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_load_local(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->args));
-    jit_block_local_t* arg = &block->args[inst->operand.variable];
-
-    // fixup the type to be the intermediate type,
-    // and push it to the stack
-    jit_stack_item_t item = arg->stack;
-    item.type = verifier_get_intermediate_type(item.type);
-    *STACK_PUSH() = item;
-
-cleanup:
-    return err;
-}
-
-static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
+    jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
+    jit_local_t* function_locals = is_arg ? function->args : function->locals;
 
     // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->args));
-    jit_block_local_t* arg = &block->args[inst->operand.variable];
-
-    // check that the type matches
-    VERIFIER_ASSIGNABLE_TO(stack[0].type, function->args[inst->operand.variable].type);
-
-    if (stack[0].is_method) {
-        // keep the method
-        arg->stack.method = stack[0].method;
-
-    } else if (jit_is_interface(arg->stack.type)) {
-        // storing object to interface, keep the boxed type
-        // for devirt, otherwise we will perform the interface
-        // cast
-        if (!jit_is_interface(stack[0].type)) {
-            if (stack[0].boxed_type != NULL) {
-                arg->stack.boxed_type = stack[0].boxed_type;
-            } else {
-                arg->stack.boxed_type = stack[0].type;
-            }
-        }
-
-    } else if (tdn_type_is_referencetype(arg->stack.type)) {
-        // storing an object into an object, overwrite the type
-        // with the new known one
-        if (!jit_is_interface(stack[0].type) && stack[0].type != NULL) {
-            arg->stack.type = stack[0].type;
-            arg->stack.boxed_type = stack[0].boxed_type;
-        }
-    }
-
-    // merge the flags, keep the type
-    arg->stack.flags = stack[0].flags;
-    arg->initialized = true;
-
-cleanup:
-    return err;
-}
-
-//----------------------------------------------------------------------------------------------------------------------
-// Local access
-//----------------------------------------------------------------------------------------------------------------------
-
-static tdn_err_t verify_ldloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->locals));
-    jit_block_local_t* local = &block->locals[inst->operand.variable];
+    CHECK(inst->operand.variable < arrlen(block_locals));
+    jit_block_local_t* local = &block_locals[inst->operand.variable];
 
     // check if we need to zero initialize
     if (!local->initialized) {
-        // TODO: should we fail if the method is not marked as InitLocals?
-        function->locals[inst->operand.variable].zero_initialize = true;
+        function_locals[inst->operand.variable].zero_initialize = true;
         local->initialized = true;
     }
 
@@ -273,15 +210,18 @@ cleanup:
     return err;
 }
 
-static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_store_local(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
+    jit_local_t* function_locals = is_arg ? function->args : function->locals;
+
     // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->locals));
-    jit_block_local_t* local = &block->locals[inst->operand.variable];
+    CHECK(inst->operand.variable < arrlen(block_locals));
+    jit_block_local_t* local = &block_locals[inst->operand.variable];
 
     // check that the type matches
-    VERIFIER_ASSIGNABLE_TO(stack[0].type, function->locals[inst->operand.variable].type);
+    VERIFIER_ASSIGNABLE_TO(stack[0].type, function_locals[inst->operand.variable].type);
 
     if (stack[0].is_method) {
         // keep the method
@@ -318,22 +258,25 @@ cleanup:
     return err;
 }
 
-static tdn_err_t verify_ldloca(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t verify_load_local_address(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
+    jit_local_t* function_locals = is_arg ? function->args : function->locals;
+
     // get the local slot
-    CHECK(inst->operand.variable < arrlen(block->locals));
-    jit_block_local_t* local = &block->locals[inst->operand.variable];
+    CHECK(inst->operand.variable < arrlen(block_locals));
+    jit_block_local_t* local = &block_locals[inst->operand.variable];
 
     // check if we need to zero initialize
     if (!local->initialized) {
         // TODO: should we fail if the method is not marked as InitLocals?
-        function->locals[inst->operand.variable].zero_initialize = true;
+        function_locals[inst->operand.variable].zero_initialize = true;
         local->initialized = true;
     }
 
     // mark as spilled
-    function->locals[inst->operand.variable].spilled = true;
+    function_locals[inst->operand.variable].spilled = true;
 
     // fixup the type to be the intermediate type,
     // and push it to the stack
@@ -350,6 +293,30 @@ static tdn_err_t verify_ldloca(jit_function_t* function, jit_block_t* block, tdn
 
 cleanup:
     return err;
+}
+
+static tdn_err_t verify_ldarg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return verify_load_local(function, block, inst, true);
+}
+
+static tdn_err_t verify_starg(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return verify_store_local(function, block, inst, stack, true);
+}
+
+static tdn_err_t verify_ldarga(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return verify_load_local_address(function, block, inst, true);
+}
+
+static tdn_err_t verify_ldloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return verify_load_local(function, block, inst, false);
+}
+
+static tdn_err_t verify_stloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return verify_store_local(function, block, inst, stack, false);
+}
+
+static tdn_err_t verify_ldloca(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    return verify_load_local_address(function, block, inst, false);
 }
 
 //----------------------------------------------------------------------------------------------------------------------
@@ -1410,6 +1377,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
 
     [CEE_LDARG] = verify_ldarg,
     [CEE_STARG] = verify_starg,
+    [CEE_LDARGA] = verify_ldarga,
 
     [CEE_LDLOC] = verify_ldloc,
     [CEE_STLOC] = verify_stloc,
