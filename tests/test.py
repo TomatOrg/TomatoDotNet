@@ -8,6 +8,9 @@ import time
 import sys
 import os
 
+
+ILASM_PATH = '/home/tomato/Downloads/runtime.linux-x64.microsoft.netcore.ilasm.10.0.0-preview.2.25163.2/runtimes/linux-x64/native/ilasm'
+
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 TDN_BINARY = os.path.join(CURRENT_DIR, '..', 'host', 'linux', 'out', 'bin', 'tdn.elf')
 
@@ -17,7 +20,7 @@ def build_tests():
     assert os.system(f'cd {CURRENT_DIR} && dotnet build --configuration Debug') == 0
 
 
-def gather_tests(dlls_to_include: List[str]):
+def gather_tests(dlls_to_include: List[str], il_verify: False):
     # get all the dlls to run
     debug_dlls = glob.glob('**/bin/Debug/net8.0/*.dll', root_dir=CURRENT_DIR, recursive=True)
     release_dlls = glob.glob('**/bin/Release/net8.0/*.dll', root_dir=CURRENT_DIR, recursive=True)
@@ -27,6 +30,9 @@ def gather_tests(dlls_to_include: List[str]):
     dlls_to_ignore = [
         'System.Private.CoreLib.dll'
     ]
+
+    if not il_verify:
+        dlls_to_ignore.append('ilverify')
 
     # only tests we want to run
     if len(dlls_to_include) == 0:
@@ -51,23 +57,28 @@ def gather_tests(dlls_to_include: List[str]):
 
 
 def compile_to_dll(path: str):
-    fpath = os.path.join(CURRENT_DIR, path)
-    if fpath.endswith('.dll'):
-        return fpath
-    f = mktemp()
-    assert os.system(f'/home/tomato/Downloads/runtime.linux-x64.microsoft.netcore.ilasm.10.0.0-preview.2.25163.2/runtimes/linux-x64/native/ilasm -dll -output={f}.dll {fpath}') == 0
-    return f'{f}.dll'
+    if path.endswith('.dll'):
+        return path
+
+    path = os.path.join(CURRENT_DIR, path)
+    dll_path = os.path.join(os.path.dirname(path), 'bin', os.path.basename(path)[:-2] + 'dll')
+    os.makedirs(os.path.dirname(dll_path), exist_ok=True)
+    assert os.system(f'{ILASM_PATH} -dll -output={dll_path} {path}') == 0
+    return os.path.relpath(dll_path, CURRENT_DIR)
 
 
 def run_single_test(dll: str, results: Queue) -> bool:
     try:
-        assert dll.endswith('.dll')
+        dll = compile_to_dll(dll)
 
         timeout = False
         start_time = time.time()
         proc = subprocess.Popen(
             [
-                TDN_BINARY, os.path.join(CURRENT_DIR, dll)
+                TDN_BINARY,
+                '--jit-verify-verbose',
+                '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0',
+                os.path.join(CURRENT_DIR, dll)
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -96,13 +107,15 @@ def run_single_test(dll: str, results: Queue) -> bool:
 def run_single_ilverify_test(dll: str, results: Queue) -> bool:
     try:
         dll = compile_to_dll(dll)
-        print(dll)
 
         timeout = False
         start_time = time.time()
         proc = subprocess.Popen(
             [
-                TDN_BINARY, '--jit-verify-verbose', '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0', '--ilverify-test', dll
+                TDN_BINARY,
+                '--jit-verify-verbose',
+                '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0',
+                '--ilverify-test', os.path.join(CURRENT_DIR, dll)
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -201,6 +214,9 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Run Tomato.NET tests")
+    parser.add_argument('--ilverify', action='store_true',
+                        default=False,
+                        help="Run the ilverify tests")
     parser.add_argument('-p', '--parallelism', type=int,
                         default=os.cpu_count() or 1,
                         help="Number of test runners to run in parallel")
@@ -209,7 +225,7 @@ def main():
     args = parser.parse_args()
 
     build_tests()
-    run_tests(gather_tests(args.cases), args.parallelism)
+    run_tests(gather_tests(args.cases, args.ilverify), args.parallelism)
 
 
 if __name__ == '__main__':

@@ -662,7 +662,11 @@ cleanup:
 //----------------------------------------------------------------------------------------------------------------------
 
 static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    STACK_TOP()->value = jit_emit_load(builder, inst->operand.type, stack[0].value);
+    RuntimeTypeInfo type = inst->operand.type;
+    if (type == NULL) {
+        type = stack[0].type->ElementType;
+    }
+    STACK_TOP()->value = jit_emit_load(builder, type, stack[0].value);
     return TDN_NO_ERROR;
 }
 
