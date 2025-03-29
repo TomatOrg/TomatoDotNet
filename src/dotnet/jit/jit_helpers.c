@@ -98,6 +98,14 @@ static Object jit_newarr(RuntimeTypeInfo arrType, int64_t num_elements) {
     return ptr;
 }
 
+static void* jit_get_interface_vtable(Object object, RuntimeTypeInfo to_type) {
+    RuntimeTypeInfo from_type = object->VTable->Type;
+    int idx = hmgeti(from_type->InterfaceImpls, to_type);
+    ASSERT(idx >= 0, "Invalid jit_get_interface_vtable(%T, %T)", from_type, to_type);
+    int offset = from_type->InterfaceImpls[idx].value;
+    return &object->VTable->Functions[offset];
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helper abstraction
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -121,6 +129,7 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_THROW_INVALID_CAST] = { .func = jit_throw_invalid_cast },
     [JIT_HELPER_NEWOBJ] = { .func = jit_newobj },
     [JIT_HELPER_NEWARR] = { .func = jit_newarr },
+    [JIT_HELPER_GET_INTERFACE_VTABLE] = { .func = jit_get_interface_vtable },
 };
 
 spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
@@ -184,6 +193,11 @@ spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_
             m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
                 "jit_newarr", SPIDIR_TYPE_PTR, 2,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
+
+        case JIT_HELPER_GET_INTERFACE_VTABLE:
+            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+                "jit_get_interface_vtable", SPIDIR_TYPE_PTR, 2,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR }); break;
 
         default:
             ASSERT(!"Invalid jit helper");

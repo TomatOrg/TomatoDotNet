@@ -53,10 +53,11 @@ void dump_hex(const void* data, size_t size);
 
 #define CHECK_AND_RETHROW(expr) CHECK_AND_RETHROW_LABEL(expr, DEFAULT_LABEL)
 
-#define ASSERT(x) \
+#define ASSERT(x, ...) \
     do { \
         if (!(x)) { \
             ERROR("assertion failed: " #x ", %s:%d", __FILE__, __LINE__); \
+            IF(HAS_ARGS(__VA_ARGS__))(ERROR(__VA_ARGS__)); \
             __builtin_trap(); \
         } \
     } while (0)

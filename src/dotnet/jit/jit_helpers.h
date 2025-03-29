@@ -19,6 +19,8 @@ typedef enum jit_helper_type {
 
     JIT_HELPER_NEWOBJ,
     JIT_HELPER_NEWARR,
+
+    JIT_HELPER_GET_INTERFACE_VTABLE,
 } jit_helper_type_t;
 
 /**

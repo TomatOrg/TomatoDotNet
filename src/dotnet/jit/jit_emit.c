@@ -123,7 +123,7 @@ static void jit_emit_store(
     RuntimeTypeInfo from_type, spidir_value_t from_value,
     RuntimeTypeInfo to_type, spidir_value_t to_value
 ) {
-    if (from_type == NULL && to_type->Attributes.Interface) {
+    if (from_type == NULL && jit_is_struct_like(to_type)) {
         // we need to convert from NULL -> interface
         jit_emit_bzero(builder, to_value, to_type);
 
@@ -133,11 +133,12 @@ static void jit_emit_store(
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, from_value, to_value);
 
         // load the vtable of the object on the stack
+        // TODO: if the object is null we need to actually choose a non-null pointer
         spidir_value_t vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
 
         // calculate the amount needed
         int iface_offset = jit_get_interface_offset(from_type, to_type);
-        ASSERT(iface_offset >= 0);
+        ASSERT(iface_offset >= 0, "Failed to get interface offset %T from %T", to_type, from_type);
         iface_offset = iface_offset * (int)sizeof(void*) + (int)offsetof(ObjectVTable, Functions);
 
         // set the new vtable base
@@ -156,7 +157,7 @@ static void jit_emit_store(
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, to_value);
 
     } else if (jit_is_interface(from_type) && jit_is_interface(to_type) && from_type != to_type) {
-        // interface downcast
+        // interface upcast
 
         // move the instance along
         ASSERT(offsetof(Interface, Instance) == 0);
@@ -186,6 +187,7 @@ static void jit_emit_store(
         // only struct types in here and
         ASSERT(from_type == to_type);
         jit_emit_memcpy(builder, to_value, from_value, from_type);
+
     } else {
         // only primitive types in here
         spidir_mem_size_t mem_size;
@@ -259,17 +261,13 @@ static spidir_value_t jit_convert_value(
     RuntimeTypeInfo from_type, spidir_value_t from_value,
     RuntimeTypeInfo to_type
 ) {
-    if (jit_is_interface(from_type) && jit_is_interface(to_type) && from_type != to_type) {
-        // both stay as interface, but they are not the same interface
-        jit_emit_store(builder, from_type, from_value, to_type, from_value);
-        return from_value;
-
-    } else if (!jit_is_interface(from_type) && jit_is_interface(to_type)) {
-        // we need to turn non-interface to interface, put it in a new stackslot
-        spidir_value_t to_value = spidir_builder_build_stackslot(builder,
-            to_type->StackSize, to_type->StackAlignment);
-        jit_emit_store(builder, from_type, from_value, to_type, to_value);
-        return to_value;
+    if (jit_is_interface(to_type) && from_type != to_type) {
+        // if we need to cast to an interface that is not the exact same type then we are going
+        // to allocate a new stackslot for the result, even if its an interface input fat pointers
+        spidir_value_t value = spidir_builder_build_stackslot(builder, sizeof(Interface), _Alignof(Interface));
+        // are immutable to avoid copying them as much
+        jit_emit_store(builder, from_type, from_value, to_type, value);
+        return value;
 
     } else if (jit_is_interface(from_type) && !jit_is_interface(to_type)) {
         // we need to perform interface -> object
@@ -1048,9 +1046,12 @@ static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase
     }
 
     // find the method that implements this
-    if (target->DeclaringType->Attributes.Interface) {
-        int offset = jit_get_interface_offset(cur_type, target->DeclaringType);
-        ASSERT(offset >= 0);
+    if (jit_is_interface(target->DeclaringType)) {
+        int offset = 0;
+        if (cur_type != target->DeclaringType) {
+            offset = jit_get_interface_offset(cur_type, target->DeclaringType);
+            ASSERT(offset >= 0, "Attempting to get %T from %T", target->DeclaringType, cur_type);
+        }
         target = (RuntimeMethodBase)cur_type->VTable->Elements[offset + target->VTableOffset];
     } else {
         target = (RuntimeMethodBase)cur_type->VTable->Elements[target->VTableOffset];
@@ -1454,7 +1455,7 @@ cleanup:
 }
 
 //----------------------------------------------------------------------------------------------------------------------
-// Boxing
+// Boxing and casting
 //----------------------------------------------------------------------------------------------------------------------
 
 static spidir_value_t jit_emit_type_check(spidir_builder_handle_t builder, spidir_value_t obj, RuntimeTypeInfo target) {
@@ -1571,6 +1572,120 @@ static spidir_value_t jit_emit_type_check(spidir_builder_handle_t builder, spidi
     }
 }
 
+static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (stack[0].type != NULL) {
+        // if we know at jit time that the type is castable to type
+        // then we are actually doing an upcast an no need to generate any extra code
+        bool is_upcast = verifier_assignable_to(stack[0].type, inst->operand.type);
+
+        // if null then return null
+        spidir_block_t type_check = spidir_builder_create_block(builder);
+        spidir_block_t invalid = spidir_builder_create_block(builder);
+        spidir_block_t cast_null = spidir_builder_create_block(builder);
+        spidir_block_t cast = spidir_builder_create_block(builder);
+        spidir_block_t valid = spidir_builder_create_block(builder);
+
+        // load the object instance if its an interface
+        spidir_value_t instance = stack->value;
+        if (jit_is_interface(stack->type)) {
+            STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+            instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, instance);
+        }
+
+        // if its null skip the type check and perform a null cast (eitehr expand to a null
+        // interface or do nothing)
+        spidir_builder_build_brcond(builder,
+            spidir_builder_build_icmp(builder,
+                SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, instance,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0)),
+                cast_null, type_check);
+
+        // emit the type check itself, branch to either valid or invalid based on the failure
+        // of the type check
+        spidir_builder_set_block(builder, type_check);
+        if (is_upcast) {
+            // just go to the valid path, since its valid
+            spidir_builder_build_branch(builder, cast);
+        } else {
+            // we need to make a runtime type verification, if this is an isinst
+            // then we are going to return a null instead
+            spidir_value_t is_type = jit_emit_type_check(builder, instance, inst->operand.type);
+            spidir_builder_build_brcond(builder, is_type,
+                cast,
+                inst->opcode == CEE_ISINST ? cast_null : invalid);
+        }
+
+        // if was invalid handle it in here
+        if (inst->opcode == CEE_CASTCLASS) {
+            spidir_builder_set_block(builder, invalid);
+            jit_emit_invalid_cast(builder);
+        }
+
+        // cast a non-null value
+        spidir_builder_set_block(builder, cast);
+        spidir_value_t cast_value;
+        if (is_upcast) {
+            // can use the common casting code in convert value
+            cast_value = jit_convert_value(builder, stack[0].type, stack[0].value, inst->operand.type);
+        } else {
+            // we need to perform a runtime lookup
+            if (jit_is_interface(inst->operand.type)) {
+                // downcast to interface
+                cast_value = spidir_builder_build_stackslot(builder,
+                    sizeof(Interface), _Alignof(Interface));
+
+                // store the interface instance
+                ASSERT(offsetof(Interface, Instance) == 0);
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, cast_value);
+
+                // perform a runtime call to get the interface offset
+                spidir_value_t vtable = spidir_builder_build_call(builder,
+                    jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_GET_INTERFACE_VTABLE),
+                    2, (spidir_value_t[]){
+                        instance,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.type),
+                    });
+
+                // and store it into the vtable field
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable,
+                    spidir_builder_build_ptroff(builder, cast_value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+
+            } else {
+                cast_value = instance;
+            }
+        }
+        spidir_builder_build_branch(builder, valid);
+
+        // cast a null value, aka just create a null
+        spidir_builder_set_block(builder, cast_null);
+        spidir_value_t null_cast_value = jit_convert_value(builder, NULL,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
+            inst->operand.type);
+        spidir_builder_build_branch(builder, valid);
+
+        // the cast was valid, take the null and non-null cast outputs and
+        // set them as the output
+        spidir_builder_set_block(builder, valid);
+        STACK_TOP()->value = spidir_builder_build_phi(builder, SPIDIR_TYPE_PTR, 2,
+            (spidir_value_t[]){
+                cast_value,
+                null_cast_value
+            }, NULL);
+
+    } else {
+        // hardcode a null cast
+        STACK_TOP()->value = jit_convert_value(builder, NULL,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
+            inst->operand.type);
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1615,8 +1730,8 @@ static tdn_err_t emit_unbox_any(jit_function_t* function, spidir_builder_handle_
 
     // the operand is a reference type
     if (tdn_type_is_referencetype(inst->operand.type)) {
-        // TODO: perform castclass instead
-        CHECK_FAIL();
+        // perform castclass instead
+        CHECK_AND_RETHROW(emit_castclass(function, builder, block, inst, stack));
 
     } else if (tdn_type_is_nullable(inst->operand.type)) {
         // we either get a null nullable, or a value nullable
@@ -1708,13 +1823,14 @@ static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_han
     emit_load_reference(builder, &stack[0]);
 
     // if this is a reference need to turn into an integer
-    // TODO: use a compare instead?
     if (tdn_type_is_referencetype(stack[0].type)) {
-        stack[0].value = spidir_builder_build_ptrtoint(builder, stack[0].value);
-    }
+        stack[0].value = spidir_builder_build_icmp(builder,
+            inst->opcode == CEE_BRFALSE ? SPIDIR_ICMP_EQ : SPIDIR_ICMP_NE,
+            SPIDIR_TYPE_I32,
+            stack[0].value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0));
 
-    // use the same condition but swap args
-    if (inst->opcode == CEE_BRFALSE) {
+    } else if (inst->opcode == CEE_BRFALSE) {
         SWAP(target, next);
     }
 
@@ -1906,6 +2022,8 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_CALLVIRT] = emit_callvirt,
     [CEE_RET] = emit_ret,
 
+    [CEE_CASTCLASS] = emit_castclass,
+    [CEE_ISINST] = emit_castclass,
     [CEE_BOX] = emit_box,
     [CEE_UNBOX_ANY] = emit_unbox_any,
 
