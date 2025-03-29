@@ -661,6 +661,17 @@ cleanup:
 // Reference access
 //----------------------------------------------------------------------------------------------------------------------
 
+static tdn_err_t verify_initobj(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK(stack[0].type != NULL);
+    CHECK(stack[0].type->IsByRef);
+    CHECK(verifier_assignable_to(inst->operand.type, stack[0].type->ElementType));
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_ldind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1235,7 +1246,7 @@ static tdn_err_t verify_newobj(jit_function_t* function, jit_block_t* block, tdn
 
     // push the new instance
     jit_stack_item_t* item = STACK_PUSH();
-    item->type = jit_get_method_this_type(callee);
+    item->type = callee->DeclaringType;
     item->is_exact_type = true;
 
     // we built a delegate, mark its function
@@ -1624,6 +1635,8 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDSFLDA] = verify_ldsflda,
     [CEE_LDSFLD] = verify_ldsfld,
     [CEE_STSFLD] = verify_stsfld,
+
+    [CEE_INITOBJ] = verify_initobj,
 
     [CEE_LDIND_I1] = verify_ldind,
     [CEE_LDIND_U1] = verify_ldind,

@@ -709,7 +709,8 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
                     impl = base;
                 }
             }
-            CHECK(impl != NULL);
+            CHECK(impl != NULL,
+                "Failed to find impl for %T::%U on %T", base->DeclaringType, base->Name, info);
 
             info->VTable->Elements[interface->value + base->VTableOffset] = impl;
         }
@@ -1122,7 +1123,7 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     }
 
     if (arrlen(m_type_queues) == 0) {
-        fill_type(type);
+        CHECK_AND_RETHROW(fill_type(type));
     } else {
         arrpush(arrlast(m_type_queues).types, type);
     }

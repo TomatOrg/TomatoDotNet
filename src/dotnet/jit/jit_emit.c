@@ -659,6 +659,21 @@ cleanup:
 // Indirect reference access
 //----------------------------------------------------------------------------------------------------------------------
 
+static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    RuntimeTypeInfo dest_type = stack[0].type->ElementType;
+    if (jit_is_struct_like(dest_type)) {
+        jit_emit_bzero(builder, stack[0].value, dest_type);
+    } else {
+        // TODO: this
+        CHECK_FAIL();
+    }
+
+cleanup:
+    return TDN_NO_ERROR;
+}
+
 static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
     RuntimeTypeInfo type = inst->operand.type;
     if (type == NULL) {
@@ -1945,6 +1960,8 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDSFLDA] = emit_ldsflda,
     [CEE_LDSFLD] = emit_ldsfld,
     [CEE_STSFLD] = emit_stsfld,
+
+    [CEE_INITOBJ] = emit_initobj,
 
     [CEE_LDIND_I1] = emit_ldind,
     [CEE_LDIND_U1] = emit_ldind,
