@@ -63,7 +63,12 @@ def compile_to_dll(path: str):
     path = os.path.join(CURRENT_DIR, path)
     dll_path = os.path.join(os.path.dirname(path), 'bin', os.path.basename(path)[:-2] + 'dll')
     os.makedirs(os.path.dirname(dll_path), exist_ok=True)
-    assert os.system(f'{ILASM_PATH} -dll -output={dll_path} {path}') == 0
+    assert subprocess.check_call(
+        f'{ILASM_PATH} -dll -output={dll_path} {path}',
+        shell=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL
+    ) == 0
     return os.path.relpath(dll_path, CURRENT_DIR)
 
 

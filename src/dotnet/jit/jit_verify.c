@@ -37,32 +37,150 @@ static void verifier_queue_block(jit_function_t* function, jit_block_t* block) {
     }
 }
 
-static RuntimeTypeInfo verifier_merge_type(RuntimeTypeInfo S, RuntimeTypeInfo T, RuntimeTypeInfo error_value) {
-    // TODO: find a common base
-    if (verifier_assignable_to(S, T)) {
-        return S;
-    } else if (verifier_assignable_to(T, S)) {
-        return T;
-    } else {
-        if (tdn_get_config()->jit_verify_trace) {
-            ERROR("Failed to merge %T and %T", S, T);
-        }
-        return error_value;
+static RuntimeTypeInfo verifier_merge_interface_with_interface(RuntimeTypeInfo interface_a, RuntimeTypeInfo interface_b) {
+    // Interface A extends interface B
+    if (hmgeti(interface_a->InterfaceImpls, interface_b) >= 0) {
+        return interface_b;
     }
+
+    // Interface B extends interface A
+    if (hmgeti(interface_b->InterfaceImpls, interface_a) >= 0) {
+        return interface_a;
+    }
+
+    // nothing common was found, return object
+    return tObject;
 }
 
-static bool verifier_merge_stack(jit_stack_item_t* previous, jit_stack_item_t* new) {
-    bool modified = false;
-
-    RuntimeTypeInfo U = verifier_merge_type(previous->type, new->type, tVoid);
-    if (U != previous->type) {
-        previous->type = U;
-        modified = true;
+static RuntimeTypeInfo verifier_merge_class_with_class(RuntimeTypeInfo class_a, RuntimeTypeInfo class_b) {
+    int a_depth = 0;
+    for (RuntimeTypeInfo cur_type = class_a; cur_type != NULL; cur_type = cur_type->BaseType) {
+        a_depth++;
     }
 
-    U = verifier_merge_type(previous->boxed_type, new->boxed_type, NULL);
-    if (U != previous->boxed_type) {
-        previous->boxed_type = U;
+    int b_depth = 0;
+    for (RuntimeTypeInfo cur_type = class_b; cur_type != NULL; cur_type = cur_type->BaseType) {
+        b_depth++;
+    }
+
+    while (a_depth > b_depth) {
+        class_a = class_a->BaseType;
+        a_depth--;
+    }
+
+    while (b_depth > a_depth) {
+        class_b = class_b->BaseType;
+        b_depth--;
+    }
+
+    while (class_a != class_b) {
+        class_a = class_a->BaseType;
+        class_b = class_b->BaseType;
+    }
+
+    // should have arrived at tObject at this point
+    ASSERT(class_a != NULL);
+
+    return class_a;
+}
+
+static RuntimeTypeInfo verifier_merge_class_with_interface(RuntimeTypeInfo class_type, RuntimeTypeInfo interface_type) {
+    // Check if class implements interface
+    if (hmgeti(class_type->InterfaceImpls, interface_type) >= 0) {
+        return interface_type;
+    }
+
+    // Check if class interface implements common interface
+    for (int i = 0; i < hmlen(interface_type->InterfaceImpls); i++) {
+        RuntimeTypeInfo i_interface = interface_type->InterfaceImpls[i].key;
+
+        if (hmgeti(class_type->InterfaceImpls, i_interface) >= 0) {
+            return i_interface;
+        }
+    }
+
+    // could not find any other merge option, return tObject
+    return tObject;
+}
+
+static RuntimeTypeInfo verifier_merge_object_references(RuntimeTypeInfo class_a, RuntimeTypeInfo class_b) {
+    if (class_a == class_b) {
+        return class_a;
+    }
+
+    if (jit_is_interface(class_b)) {
+        if (jit_is_interface(class_a)) {
+            return verifier_merge_interface_with_interface(class_a, class_b);
+        } else {
+            return verifier_merge_class_with_interface(class_a, class_b);
+        }
+    }
+
+    if (jit_is_interface(class_a)) {
+        return verifier_merge_class_with_interface(class_b, class_a);
+    }
+
+    return verifier_merge_class_with_class(class_a, class_b);
+}
+
+typedef enum merge_result {
+    MERGE_SUCCESS,
+    MERGE_MODIFIED,
+    MERGE_FAILED,
+} merge_result_t;
+
+static merge_result_t verifier_merge_stack(jit_stack_item_t* previous, jit_stack_item_t* new) {
+    bool modified = false;
+
+    // was null is previous iteration, not null anymore
+    if (previous->type == NULL && new->type != NULL) {
+        previous->type = new->type;
+        modified = true;
+
+    } else if (previous->type != new->type) {
+        // we have a different type, need to merge
+
+        if (tdn_type_is_valuetype(previous->type)) {
+            // value types must be the same, fail the merge
+            return MERGE_FAILED;
+        }
+
+        // attempt to merge the type
+        RuntimeTypeInfo U = verifier_merge_object_references(previous->type, new->type);
+        if (previous->type != U) {
+            previous->type = U;
+            modified = true;
+        }
+    }
+
+    // merge the boxed type, a failure in here doesn't hurt us
+    // except for optimizations
+    if (previous->boxed_type != NULL) {
+        if (previous->boxed_type != new->boxed_type) {
+            if (tdn_type_is_valuetype(previous->boxed_type)) {
+                // if not the same value type we can't
+                // know the real boxing value
+                previous->boxed_type = NULL;
+                modified = true;
+
+            } else {
+                // attempt to merge the type
+                RuntimeTypeInfo U = verifier_merge_object_references(previous->boxed_type, new->boxed_type);
+                if (previous->boxed_type != U) {
+                    previous->boxed_type = U;
+                    modified = true;
+                }
+            }
+        }
+    }
+
+    // merge the saved method metadata
+    if (new->is_method != previous->is_method) {
+        previous->is_method = false;
+        previous->method = NULL;
+        modified = true;
+    } else if (new->is_method && new->method != previous->method) {
+        previous->method = NULL;
         modified = true;
     }
 

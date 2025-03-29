@@ -14,13 +14,11 @@ typedef struct jit_stack_item {
     // the actual type of the slot
     RuntimeTypeInfo type;
 
-    union {
-        // the underlying type when the value is boxed (type == tObject)
-        RuntimeTypeInfo boxed_type;
+    // the underlying type when the value is boxed (type == tObject)
+    RuntimeTypeInfo boxed_type;
 
-        // the underlying method when the value is a delegate (type.BaseType == tMulticastDelegate)
-        RuntimeMethodBase method;
-    };
+    // the underlying method when the value is a delegate (type.BaseType == tMulticastDelegate)
+    RuntimeMethodBase method;
 
     // the value of the stack item
     spidir_value_t value;
