@@ -47,6 +47,7 @@ typedef enum tdn_il_opcode {
 typedef enum tdn_il_prefix {
     TDN_IL_PREFIX_VOLATILE = 1 << 0,
     TDN_IL_PREFIX_READONLY = 1 << 1,
+    TDN_IL_PREFIX_UNALIGNED = 1 << 2,
 } tdn_il_prefix_t;
 
 typedef struct tdn_il_inst {

@@ -69,8 +69,7 @@ jit_block_t* jit_function_get_block(jit_function_t* function, uint32_t target_pc
             }
 
             // copy the info into the block
-            leave_block->start = b->value.start;
-            leave_block->end = b->value.end;
+            leave_block->block = b->value;
             leave_block->leave_target_stack = jit_copy_leave_targets(leave_target_stack);
 
             // store it
@@ -84,8 +83,7 @@ jit_block_t* jit_function_get_block(jit_function_t* function, uint32_t target_pc
 }
 
 static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
-    out->start = in->start;
-    out->end = in->end;
+    out->block = in->block;
     out->spidir_block = in->spidir_block;
 
     // steal the leave target stack, its not needed anymore
@@ -113,7 +111,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = function->method;
     RuntimeMethodBody body = method->MethodBody;
-    jit_stack_item_t* stack_items = NULL;
+    jit_stack_value_t* stack_items = NULL;
     bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
 
     // clone the block into the current frame, so we can modify it
@@ -132,8 +130,8 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     tdn_il_prefix_t prefix = 0;
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     tdn_il_inst_t last_inst;
-    uint32_t pc = block.start;
-    while (pc < block.end) {
+    uint32_t pc = block.block.start;
+    while (pc < block.block.end) {
         last_inst = inst;
 
         // can only parse more instructions if we had no block
@@ -295,7 +293,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
     // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
-        jit_block_t* next = jit_function_get_block(function, block.end, block.leave_target_stack);
+        jit_block_t* next = jit_function_get_block(function, block.block.end, block.leave_target_stack);
         CHECK_ERROR(next != NULL, TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH);
 
         CHECK_AND_RETHROW(verifier_on_block_fallthrough(function, &block, next));
@@ -342,7 +340,7 @@ tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t bui
         block->in_queue = false;
 
         if (trace) {
-            TRACE("\tBasic block (IL_%04x):", block->start);
+            TRACE("\tBasic block (IL_%04x):", block->block.start);
         }
 
         CHECK_AND_RETHROW(jit_visit_basic_block(function, block, builder));
@@ -370,8 +368,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
 
     // copy over the block information
     for (int i = 0; i < hmlen(function->labels); i++) {
-        function->blocks[function->labels[i].value.index].start = function->labels[i].value.start;
-        function->blocks[function->labels[i].value.index].end = function->labels[i].value.end;
+        function->blocks[function->labels[i].value.index].block = function->labels[i].value;
     }
 
     jit_block_t* entry_block = &function->entry_block;
@@ -383,41 +380,39 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
     // handle the this parameter if non-static
     if (!method->Attributes.Static) {
         jit_block_local_t local = {
-            .stack = {
-                .type = jit_get_method_this_type(method),
-                .is_this = true,
-            },
+            .flags ={
+                .this_ptr = true
+            }
         };
+
+        // we start with a valid this
+        function->valid_this = true;
 
         // TODO: unscoped support
 
         // if this is a readonly struct, then the ref is readonly as well
         if (method->DeclaringType->IsReadOnly) {
-            local.stack.readonly_ref = true;
-        }
-
-        // this of a ref-struct is only non-local in its ref arguments
-        if (method->DeclaringType->IsByRefStruct) {
-            local.stack.readonly_ref = true;
+            local.flags.ref_read_only = true;
         }
 
         arrpush(entry_block->args, local);
+
+        jit_local_t arg = {
+            .type = jit_get_method_this_type(method),
+        };
+        arrpush(function->args, arg);
     }
 
     // now do the same for the parameters
     for (int i = 0; i < method->Parameters->Length; i++) {
         ParameterInfo parameter = method->Parameters->Elements[i];
         RuntimeTypeInfo type = parameter->ParameterType;
-        jit_block_local_t local = {
-            .stack = {
-                .type = type
-            },
-        };
+        jit_block_local_t local = {};
 
         // if this is a readonly parameter then mark it as such
         if (parameter->IsReadOnly) {
             CHECK(type->IsByRef);
-            local.stack.readonly_ref = true;
+            local.flags.ref_read_only = true;
         }
 
         // TODO: scoped references
@@ -425,16 +420,15 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         // references are non-local since they come from the outside
         // same is true for the ref-structs
         if (type->IsByRef) {
-            local.stack.non_local_ref = true;
-
-            if (type->ElementType->IsByRefStruct) {
-                local.stack.non_local_ref_struct = true;
-            }
-        } else if (type->IsByRefStruct) {
-            local.stack.non_local_ref_struct = true;
+            local.flags.ref_non_local = true;
         }
 
         arrpush(entry_block->args, local);
+
+        jit_local_t arg = {
+            .type = type,
+        };
+        arrpush(function->args, arg);
     }
 
     //
@@ -443,28 +437,16 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
 
     // the entry block context
     if (method->MethodBody->LocalVariables != NULL) {
+        // initialize the local types
+        arrsetlen(function->locals, method->MethodBody->LocalVariables->Length);
+        memset(function->locals, 0, arrlen(function->locals) * sizeof(*function->locals));
+        for (int i = 0; i < method->MethodBody->LocalVariables->Length; i++) {
+            function->locals[i].type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
+        }
+
+        // initialize the entry block types
         arrsetlen(entry_block->locals, method->MethodBody->LocalVariables->Length);
         memset(entry_block->locals, 0, arrlen(entry_block->locals) * sizeof(*entry_block->locals));
-        for (int i = 0; i < arrlen(entry_block->locals); i++) {
-            entry_block->locals[i].stack.type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
-        }
-    }
-
-    //
-    // Set the global context
-    //
-
-    arrsetlen(function->locals, arrlen(entry_block->locals));
-    memset(function->locals, 0, arrlen(function->locals) * sizeof(*function->locals));
-    for (int i = 0; i < arrlen(function->locals); i++) {
-        function->locals[i].type = entry_block->locals[i].stack.type;
-    }
-
-    arrsetlen(function->args, arrlen(entry_block->args));
-    memset(function->args, 0, arrlen(function->args) * sizeof(*function->args));
-    for (int i = 0; i < arrlen(function->args); i++) {
-        function->args[i].type = entry_block->args[i].stack.type;
-        function->args[i].valid_this = entry_block->args[i].stack.is_this;
     }
 
 cleanup:

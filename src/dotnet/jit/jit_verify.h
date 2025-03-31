@@ -11,7 +11,7 @@ typedef tdn_err_t (*verify_instruction_t)(
     jit_function_t* function,
     jit_block_t* block,
     tdn_il_inst_t* inst,
-    jit_stack_item_t* stack
+    jit_stack_value_t* stack
 );
 
 extern verify_instruction_t g_verify_dispatch_table[];

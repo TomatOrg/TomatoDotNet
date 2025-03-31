@@ -10,62 +10,38 @@
 #include "jit_basic_block.h"
 
 
-typedef struct jit_stack_item {
-    // the actual type of the slot
-    RuntimeTypeInfo type;
+typedef enum jit_stack_value_kind : uint8_t {
+    JIT_KIND_UNKNOWN,
+    JIT_KIND_INT32,
+    JIT_KIND_INT64,
+    JIT_KIND_NATIVE_INT,
+    JIT_KIND_FLOAT,
+    JIT_KIND_BY_REF,
+    JIT_KIND_OBJ_REF,
+    JIT_KIND_VALUE_TYPE,
+} jit_stack_value_kind_t;
 
-    // the underlying type when the value is boxed (type == tObject)
-    RuntimeTypeInfo boxed_type;
+typedef struct jit_value_flags {
+    // The reference is read-only
+    bool ref_read_only;
 
-    // the underlying method when the value is a delegate (type.BaseType == tMulticastDelegate)
-    RuntimeMethodBase method;
+    // The reference is non-local
+    bool ref_non_local;
 
-    // the value of the stack item
-    spidir_value_t value;
-
-    union {
-        struct {
-            // is the type an exact match, or could it maybe
-            // be something higher up the chain
-            size_t is_exact_type : 1;
-
-            // do we have a method stored in here, pushed
-            // by either ldftn or ldvftn
-            size_t is_method : 1;
-
-            //
-            // verification related
-            //
-
-            // does this argument refer to the `this`
-            // of the method
-            size_t is_this : 1;
-
-            //
-            // Reference related
-            //
-
-            // is this a read-only reference
-            size_t readonly_ref : 1;
-
-            // the reference is non-local
-            size_t non_local_ref : 1;
-
-            // the ref-struct is non-local, so the references it
-            // contains are non-local as well
-            size_t non_local_ref_struct : 1;
-        };
-
-        size_t flags;
-    };
-} jit_stack_item_t;
+    // Is the instance the `this` of the method
+    bool this_ptr;
+} jit_value_flags_t;
 
 typedef struct jit_block_local {
-    // the stack related attributes
-    jit_stack_item_t stack;
+    // If the type of the local is delegate this
+    // is the method behind it
+    RuntimeMethodBase method;
 
     // the phi of the local
     spidir_phi_t phi;
+
+    // the flags of this value
+    jit_value_flags_t flags;
 
     // was the value initialized, whenever stloc is called it will
     // be set to true, if ldloc/ldloca is called with this being false
@@ -73,10 +49,30 @@ typedef struct jit_block_local {
     bool initialized;
 } jit_block_local_t;
 
+typedef struct jit_stack_value {
+    // The type of this stack value
+    RuntimeTypeInfo type;
+
+    // The method of this stack value,
+    // if the type is delegate, this is
+    // the method that is behind this
+    // delegate
+    RuntimeMethodBase method;
+
+    // The kind of value in this slot
+    jit_stack_value_kind_t kind;
+
+    // the flags of this stack value
+    jit_value_flags_t flags;
+} jit_stack_value_t;
+
+static bool jit_is_null_reference(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type == NULL; }
+
 typedef struct jit_block {
     // the basic block range
-    uint32_t start;
-    uint32_t end;
+    jit_basic_block_t block;
+
+    // the leave targets of this block
     uint32_t* leave_target_stack;
 
     // the spidir block
@@ -89,7 +85,7 @@ typedef struct jit_block {
     jit_block_local_t* locals;
 
     // the stack at the start of the basic block
-    jit_stack_item_t* stack;
+    jit_stack_value_t* stack;
 
     // the phi's of the stack entries
     spidir_phi_t* stack_phis;
@@ -107,6 +103,11 @@ typedef struct jit_block {
     bool initialized_phis;
 } jit_block_t;
 
+typedef struct jit_leave_block_key {
+    jit_block_t* block;
+    uint64_t leave_target;
+} jit_leave_block_key_t;
+
 typedef struct jit_local {
     // the original local's type
     RuntimeTypeInfo type;
@@ -117,15 +118,7 @@ typedef struct jit_local {
     // taken by reference, so we have a stack-slot
     // for this and we must use it no matter what
     bool spilled;
-
-    // is this a valid `this` pointer
-    bool valid_this;
 } jit_local_t;
-
-typedef struct jit_leave_block_key {
-    jit_block_t* block;
-    uint64_t leave_target;
-} jit_leave_block_key_t;
 
 typedef struct jit_function {
     // the method that we are dealing with
@@ -163,11 +156,17 @@ typedef struct jit_function {
     // we are not allowed to)
     bool emitting;
 
-    // the item used when returning from the method
-    jit_stack_item_t return_item;
+    // ensure that the base ctor is
+    // called at some point
+    bool track_ctor_state;
 
-    // was the return item initialized
-    bool return_item_initialized;
+    // did we initialize the this pointer
+    // by calling its base ctor
+    bool this_initialized;
+
+    // do we have a valid this object, we don't if
+    // ldarga/starg is used on the first argument
+    bool valid_this;
 
     //
     // inline information

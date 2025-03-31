@@ -45,7 +45,7 @@ static void sort_basic_blocks(jit_basic_block_t* arr, int low, int high) {
     }
 }
 
-static void jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_block_entry_t** out_basic_blocks, uint32_t pc) {
+static jit_basic_block_t* jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_block_entry_t** out_basic_blocks, uint32_t pc) {
     if (hmgeti(*out_basic_blocks, pc) < 0) {
         jit_basic_block_t block = {
             .start = pc,
@@ -54,6 +54,65 @@ static void jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_bloc
 
         arrpush(*basic_blocks, block);
         hmput(*out_basic_blocks, pc, block);
+    }
+
+    // at this point it should exist so we can get it
+    return &hmgetp(*out_basic_blocks, pc)->value;
+}
+
+static void jit_find_enclosing_exception_regions(RuntimeMethodBody body, jit_basic_block_entry_t* basic_blocks) {
+    RuntimeExceptionHandlingClause_Array exception_regions = body->ExceptionHandlingClauses;
+    if (exception_regions == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < hmlen(basic_blocks); i++) {
+        jit_basic_block_t* block = &basic_blocks[i].value;
+
+        uint32_t offset = block->start;
+        for (int j = 0; j < exception_regions->Length; j++) {
+            RuntimeExceptionHandlingClause r = exception_regions->Elements[j];
+
+            // check if its inside the try region
+            if (r->TryOffset <= offset && offset < r->TryOffset + r->TryLength) {
+                if (block->try_clause == NULL) {
+                    block->try_clause = r;
+                } else {
+                    RuntimeExceptionHandlingClause current = block->try_clause;
+                    if (
+                        current->TryOffset < r->TryOffset &&
+                        current->TryOffset + current->TryLength > r->TryOffset + r->TryLength
+                    ) {
+                        block->try_clause = r;
+                    }
+                }
+            }
+
+            // check if its inside the handler region
+            if (r->HandlerOffset <= offset && offset < r->HandlerOffset + r->HandlerLength) {
+                if (block->handler_clause == NULL) {
+                    block->handler_clause = r;
+                } else {
+                    RuntimeExceptionHandlingClause current = block->handler_clause;
+                    if (
+                        current->HandlerOffset < r->HandlerOffset &&
+                        current->HandlerOffset + current->HandlerLength > r->HandlerOffset + r->HandlerLength
+                    ) {
+                        block->handler_clause = r;
+                    }
+                }
+            }
+
+            // Check if inside the filter region
+            if (
+                r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER &&
+                r->FilterOffset <= offset && offset < r->HandlerOffset
+            ) {
+                if (block->filter_clause == NULL) {
+                    block->filter_clause = r;
+                }
+            }
+        }
     }
 }
 
@@ -71,9 +130,11 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     if (body->ExceptionHandlingClauses != NULL) {
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             RuntimeExceptionHandlingClause clause = body->ExceptionHandlingClauses->Elements[i];
-            jit_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset);
+
+            jit_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset)->try_start = true;
+            jit_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset)->handler_start = true;
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-                jit_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset);
+                jit_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset)->filter_start = true;
             }
         }
     }
@@ -90,6 +151,7 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
         // check for basic blocks created by
         if (inst.control_flow == TDN_IL_CF_BRANCH) {
             jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target);
+
         } else if (inst.control_flow == TDN_IL_CF_COND_BRANCH) {
             // and now add the new blocks, make sure the basic block at the current PC
             // will
@@ -115,6 +177,9 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
         ctx[i].index = i;
         hmput(*out_basic_blocks, ctx[i].start, ctx[i]);
     }
+
+    // find the exception regions already
+    jit_find_enclosing_exception_regions(body, *out_basic_blocks);
 
 cleanup:
     if (IS_ERROR(err)) {

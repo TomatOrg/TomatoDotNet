@@ -5,6 +5,12 @@
 #include <tomatodotnet/types/reflection.h>
 
 typedef struct jit_basic_block {
+    // the clauses that are
+    // directly around the block
+    RuntimeExceptionHandlingClause try_clause;
+    RuntimeExceptionHandlingClause handler_clause;
+    RuntimeExceptionHandlingClause filter_clause;
+
     // the start and end range of this basic block
     uint32_t start;
     uint32_t end;
@@ -12,6 +18,11 @@ typedef struct jit_basic_block {
     // the index of the basic block, easier for when
     // wanting to reference another basic block datastructure
     int index;
+
+    // mark the start of regions
+    bool try_start;
+    bool filter_start;
+    bool handler_start;
 } jit_basic_block_t;
 
 typedef struct jit_basic_blocks {

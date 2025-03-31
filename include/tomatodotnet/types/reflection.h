@@ -5,6 +5,14 @@
 
 typedef struct RuntimeAssembly* RuntimeAssembly;
 
+#define TDN_ACCESS_PRIVATE_SCOPE 0
+#define TDN_ACCESS_PRIVATE 1
+#define TDN_ACCESS_FAMILY_AND_ASSEMBLY 2
+#define TDN_ACCESS_ASSEMBLY 3
+#define TDN_ACCESS_FAMILY 4
+#define TDN_ACCESS_FAMILY_OR_ASSEMBLY 5
+#define TDN_ACCESS_PUBLIC 6
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Module
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -67,13 +75,6 @@ DEFINE_ARRAY(ParameterInfo);
 typedef union FieldAttributes {
     struct {
         uint32_t FieldAccess : 3;
-#define TDN_FIELD_ACCESS_PRIVATE_SCOPE 0
-#define TDN_FIELD_ACCESS_PRIVATE 1
-#define TDN_FIELD_ACCESS_FAMILY_AND_ASSEMBLY 2
-#define TDN_FIELD_ACCESS_ASSEMBLY 3
-#define TDN_FIELD_ACCESS_FAMILY 4
-#define TDN_FIELD_ACCESS_FAMILY_OR_ASSEMBLY 5
-#define TDN_FIELD_ACCESS_PUBLIC 6
         uint32_t : 1;
         uint32_t Static : 1;
         uint32_t InitOnly : 1;
@@ -149,13 +150,6 @@ typedef struct RuntimeMethodBody {
 typedef union MethodAttributes {
     struct {
         uint32_t MemberAccess : 3;
-#define TDN_METHOD_ACCESS_PRIVATE_SCOPE 0
-#define TDN_METHOD_ACCESS_PRIVATE 1
-#define TDN_METHOD_ACCESS_FAMILY_AND_ASSEMBLY 2
-#define TDN_METHOD_ACCESS_ASSEMBLY 3
-#define TDN_METHOD_ACCESS_FAMILY 4
-#define TDN_METHOD_ACCESS_FAMILY_OR_ASSEMBLY 5
-#define TDN_METHOD_ACCESS_PUBLIC 6
         uint32_t UnmanagedExport : 1;
         uint32_t Static : 1;
         uint32_t Final : 1;

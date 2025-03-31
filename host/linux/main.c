@@ -143,13 +143,13 @@ static tdn_err_t dump_type(RuntimeTypeInfo type, const char* method_to_dump) {
     for (int j = 0; j < type->DeclaredFields->Length; j++) {
         RuntimeFieldInfo fieldInfo = type->DeclaredFields->Elements[j];
         static const char* field_visibility_str[] = {
-            [TDN_FIELD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
-            [TDN_FIELD_ACCESS_PRIVATE] = "private",
-            [TDN_FIELD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
-            [TDN_FIELD_ACCESS_ASSEMBLY] = "internal",
-            [TDN_FIELD_ACCESS_FAMILY] = "protected",
-            [TDN_FIELD_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
-            [TDN_FIELD_ACCESS_PUBLIC] = "public",
+            [TDN_ACCESS_PRIVATE_SCOPE] = "<private scope>",
+            [TDN_ACCESS_PRIVATE] = "private",
+            [TDN_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
+            [TDN_ACCESS_ASSEMBLY] = "internal",
+            [TDN_ACCESS_FAMILY] = "protected",
+            [TDN_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
+            [TDN_ACCESS_PUBLIC] = "public",
         };
         printf("[*] \t%s %s",
                field_visibility_str[fieldInfo->Attributes.FieldAccess],
@@ -181,13 +181,13 @@ static tdn_err_t dump_type(RuntimeTypeInfo type, const char* method_to_dump) {
         }
 
         static const char* visibility_str[] = {
-            [TDN_METHOD_ACCESS_PRIVATE_SCOPE] = "<private scope>",
-            [TDN_METHOD_ACCESS_PRIVATE] = "private",
-            [TDN_METHOD_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
-            [TDN_METHOD_ACCESS_ASSEMBLY] = "internal",
-            [TDN_METHOD_ACCESS_FAMILY] = "protected",
-            [TDN_METHOD_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
-            [TDN_METHOD_ACCESS_PUBLIC] = "public",
+            [TDN_ACCESS_PRIVATE_SCOPE] = "<private scope>",
+            [TDN_ACCESS_PRIVATE] = "private",
+            [TDN_ACCESS_FAMILY_AND_ASSEMBLY] = "private protected",
+            [TDN_ACCESS_ASSEMBLY] = "internal",
+            [TDN_ACCESS_FAMILY] = "protected",
+            [TDN_ACCESS_FAMILY_OR_ASSEMBLY] = "protected internal",
+            [TDN_ACCESS_PUBLIC] = "public",
         };
         printf("[*] \t%s %s",
                visibility_str[method->Attributes.MemberAccess],

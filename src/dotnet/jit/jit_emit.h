@@ -9,7 +9,7 @@ typedef tdn_err_t (*emit_instruction_t)(
     spidir_builder_handle_t builder,
     jit_block_t* block,
     tdn_il_inst_t* inst,
-    jit_stack_item_t* stack
+    jit_stack_value_t* stack
 );
 
 extern emit_instruction_t g_emit_dispatch_table[];

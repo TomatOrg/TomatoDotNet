@@ -1646,9 +1646,9 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
         if (is_module) {
             CHECK(fieldInfo->Attributes.Static);
             CHECK(
-                fieldInfo->Attributes.FieldAccess == TDN_FIELD_ACCESS_PRIVATE_SCOPE ||
-                fieldInfo->Attributes.FieldAccess == TDN_FIELD_ACCESS_PRIVATE ||
-                fieldInfo->Attributes.FieldAccess == TDN_FIELD_ACCESS_PUBLIC
+                fieldInfo->Attributes.FieldAccess == TDN_ACCESS_PRIVATE_SCOPE ||
+                fieldInfo->Attributes.FieldAccess == TDN_ACCESS_PRIVATE ||
+                fieldInfo->Attributes.FieldAccess == TDN_ACCESS_PUBLIC
             );
         }
 
@@ -1727,9 +1727,9 @@ static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
             CHECK(!base->Attributes.Abstract);
             CHECK(!base->Attributes.Virtual);
             CHECK(
-                base->Attributes.MemberAccess == TDN_METHOD_ACCESS_PRIVATE_SCOPE ||
-                base->Attributes.MemberAccess == TDN_METHOD_ACCESS_PRIVATE ||
-                base->Attributes.MemberAccess == TDN_METHOD_ACCESS_PUBLIC
+                base->Attributes.MemberAccess == TDN_ACCESS_PRIVATE_SCOPE ||
+                base->Attributes.MemberAccess == TDN_ACCESS_PRIVATE ||
+                base->Attributes.MemberAccess == TDN_ACCESS_PUBLIC
             );
         }
 
