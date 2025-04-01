@@ -25,28 +25,38 @@ static int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface)
 // Type helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static spidir_value_type_t get_spidir_type(RuntimeTypeInfo info) {
-    info = verifier_get_intermediate_type(info);
-    if (info == tInt32) {
+static spidir_value_type_t get_spidir_type(RuntimeTypeInfo type) {
+    jit_stack_value_kind_t kind = jit_get_type_kind(type);
+    if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
-    } else if (info == tInt64 || info == tIntPtr) {
+
+    } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
         return SPIDIR_TYPE_I64;
+
+    } else if (kind == JIT_KIND_FLOAT) {
+        return SPIDIR_TYPE_F64;
+
     } else {
         return SPIDIR_TYPE_PTR;
     }
 }
 
 spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
-    RuntimeTypeInfo type = verifier_get_intermediate_type(method->ReturnParameter->ParameterType);
-    if (type == tInt32) {
+    jit_stack_value_kind_t kind = jit_get_type_kind(method->ReturnParameter->ParameterType);
+    if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
-    } else if (type == tInt64 || type == tIntPtr) {
+
+    } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
         return SPIDIR_TYPE_I64;
-    } else if (jit_is_struct_like(type)) {
+
+    } else if (kind == JIT_KIND_FLOAT) {
+        return SPIDIR_TYPE_F64;
+
+    } else if (kind == JIT_KIND_VALUE_TYPE) {
         // things which act like a struct return by using reference
         return SPIDIR_TYPE_NONE;
+
     } else {
-        ASSERT(tdn_type_is_referencetype(type) || type->IsByRef);
         return SPIDIR_TYPE_PTR;
     }
 }
@@ -332,24 +342,18 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
                     0, NULL, &block->stack_phis[i]);
             }
 
-            // create local phis
             for (int i = 0; i < arrlen(block->locals); i++) {
-                if (function->locals[i].spilled) {
-                    block->locals[i].stack.value = from->locals[i].stack.value;
-                } else {
-                    block->locals[i].stack.value = spidir_builder_build_phi(builder,
-                        get_spidir_type(block->locals[i].stack.type),
+                if (!function->locals[i].spilled) {
+                    block->locals[i].value = spidir_builder_build_phi(builder,
+                        get_spidir_type(function->locals[i].type),
                         0, NULL, &block->locals[i].phi);
                 }
             }
 
-            // create arg phis
             for (int i = 0; i < arrlen(block->args); i++) {
-                if (function->args[i].spilled) {
-                    block->args[i].stack.value = from->args[i].stack.value;
-                } else {
-                    block->args[i].stack.value = spidir_builder_build_phi(builder,
-                        get_spidir_type(block->args[i].stack.type),
+                if (!function->args[i].spilled) {
+                    block->args[i].value = spidir_builder_build_phi(builder,
+                        get_spidir_type(function->args[i].type),
                         0, NULL, &block->args[i].phi);
                 }
             }
@@ -360,7 +364,7 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
             }
         }
 
-        // add the phi inputs
+        // add the phi inputs to the stack entries
         for (int i = 0; i < arrlen(block->stack); i++) {
             spidir_builder_add_phi_input(builder, block->stack_phis[i],
                 jit_convert_value(builder,
@@ -368,31 +372,29 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
                     block->stack[i].type));
         }
 
+        // add locals inputs
         for (int i = 0; i < arrlen(block->locals); i++) {
             if (function->locals[i].spilled) {
-                block->locals[i].stack.value = from->locals[i].stack.value;
+                // for spilled we just move the same value over all the blocks
+                // because the data is not SSAd
+                block->locals[i].value = from->locals[i].value;
 
             } else if (block->locals[i].initialized || function->locals[i].zero_initialize) {
                 // we only need to add the phi input if the value wants to be initialized
                 // in the next block, or if its zero initialized
-                spidir_builder_add_phi_input(builder, block->locals[i].phi,
-                    jit_convert_value(builder,
-                        from->locals[i].stack.type, from->locals[i].stack.value,
-                        block->locals[i].stack.type));
+                spidir_builder_add_phi_input(builder, block->locals[i].phi, from->locals[i].value);
+
             } else {
-                // keep as invalid just in case
-                block->locals[i].stack.value = SPIDIR_VALUE_INVALID;
+                // keep as invalid just in case, so we can catch bugs
+                block->locals[i].value = SPIDIR_VALUE_INVALID;
             }
         }
 
         for (int i = 0; i < arrlen(block->args); i++) {
             if (function->args[i].spilled) {
-                block->args[i].stack.value = from->args[i].stack.value;
+                block->args[i].value = from->args[i].value;
             } else {
-                spidir_builder_add_phi_input(builder, block->args[i].phi,
-                    jit_convert_value(builder,
-                        from->args[i].stack.type, from->args[i].stack.value,
-                        block->args[i].stack.type));
+                spidir_builder_add_phi_input(builder, block->args[i].phi,from->args[i].value);
             }
         }
 
@@ -403,11 +405,11 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
         }
 
         for (int i = 0; i < arrlen(block->locals); i++) {
-            block->locals[i].stack.value = from->locals[i].stack.value;
+            block->locals[i].value = from->locals[i].value;
         }
 
         for (int i = 0; i < arrlen(block->args); i++) {
-            block->args[i].stack.value = from->args[i].stack.value;
+            block->args[i].value = from->args[i].value;
         }
     }
 }
@@ -426,7 +428,7 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
 //----------------------------------------------------------------------------------------------------------------------
 
 // Use as a template for adding new instructions
-static tdn_err_t emit_nop(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_nop(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
 cleanup:
@@ -442,43 +444,44 @@ static tdn_err_t emit_load_local(jit_function_t* function, spidir_builder_handle
 
     jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
     jit_local_t* function_locals = is_arg ? function->args : function->locals;
-
-    // get the local slot
     CHECK(inst->operand.variable < arrlen(block_locals));
-    jit_block_local_t* local = &block_locals[inst->operand.variable];
+    jit_block_local_t* block_local = &block_locals[inst->operand.variable];
+    jit_local_t* func_local = &function_locals[inst->operand.variable];
 
-    // load it, if it was spilled then we need to create a copy, otherwise we can
-    // just perform a normal data-flow load
     spidir_value_t value = SPIDIR_VALUE_INVALID;
-    if (function_locals[inst->operand.variable].spilled) {
-        value = jit_emit_load(builder, local->stack.type, local->stack.value);
+    if (func_local->spilled) {
+        // its spilled, load it as the correct type, we will never have a different value in the
+        // local itself, and rely on devirt + SROA to optimize away interfaces when applicable
+        value = jit_emit_load(builder, func_local->type, block_local->value);
     } else {
-        value = local->stack.value;
+        // use the SSAd value as is
+        value = block_local->value;
     }
 
+    // and store it
     STACK_TOP()->value = value;
 
 cleanup:
     return err;
 }
 
-static tdn_err_t emit_store_local(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack, bool is_arg) {
+static tdn_err_t emit_store_local(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
     jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
     jit_local_t* function_locals = is_arg ? function->args : function->locals;
-
-    // get the local slot
     CHECK(inst->operand.variable < arrlen(block_locals));
-    jit_block_local_t* local = &block_locals[inst->operand.variable];
+    jit_block_local_t* block_local = &block_locals[inst->operand.variable];
+    jit_local_t* func_local = &function_locals[inst->operand.variable];
 
-    if (function_locals[inst->operand.variable].spilled) {
+    if (func_local->spilled) {
+        // need to store into the buffer, from whatever type we had
         jit_emit_store(builder,
             stack[0].type, stack[0].value,
-            local->stack.type, local->stack.value);
+            func_local->type, block_local->value);
     } else {
-        // data flow store, convert into the type that it should be
-        local->stack.value = jit_convert_local(builder, stack[0].type, stack[0].value, local->stack.type);
+        // SSA store, ensure we truncate as required
+        block_local->value = jit_convert_local(builder, stack[0].type, stack[0].value, func_local->type);
     }
 
 cleanup:
@@ -488,44 +491,41 @@ cleanup:
 static tdn_err_t emit_load_local_address(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // get the local slot
     jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
     jit_local_t* function_locals = is_arg ? function->args : function->locals;
-
-    // get the local slot
     CHECK(inst->operand.variable < arrlen(block_locals));
-    jit_block_local_t* local = &block_locals[inst->operand.variable];
-
-    // must be spilled
-    CHECK(function_locals[inst->operand.variable].spilled);
+    jit_block_local_t* block_local = &block_locals[inst->operand.variable];
+    jit_local_t* func_local = &function_locals[inst->operand.variable];
 
     // just give the pointer
-    STACK_TOP()->value = local->stack.value;
+    STACK_TOP()->value = block_local->value;
 
 cleanup:
     return err;
 }
 
-static tdn_err_t emit_ldarg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldarg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     return emit_load_local(function, builder, block, inst, true);
 }
 
-static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_starg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     return emit_store_local(function, builder, block, inst, stack, true);
 }
 
-static tdn_err_t emit_ldarga(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldarga(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     return emit_load_local_address(function, block, inst, true);
 }
 
-static tdn_err_t emit_ldloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     return emit_load_local(function, builder, block, inst, false);
 }
 
-static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_stloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     return emit_store_local(function, builder, block, inst, stack, false);
 }
 
-static tdn_err_t emit_ldloca(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldloca(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     return emit_load_local_address(function, block, inst, false);
 }
 
@@ -549,7 +549,7 @@ static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, Runt
     return spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)field->JitFieldPtr);
 }
 
-static tdn_err_t emit_ldflda(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldflda(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the field offset
@@ -566,12 +566,11 @@ static tdn_err_t emit_ldflda(jit_function_t* function, spidir_builder_handle_t b
     // perform the load
     STACK_TOP()->value = field_ptr;
 
-
 cleanup:
     return err;
 }
 
-static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the field offset
@@ -580,6 +579,11 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
     if (inst->operand.field->Attributes.Static) {
         field_ptr = jit_get_static_field(builder, inst->operand.field);
     } else {
+        // for pointer access convert it to a pointer first
+        if (stack[0].kind == JIT_KIND_NATIVE_INT) {
+            stack[0].value = spidir_builder_build_inttoptr(builder, stack[0].value);
+        }
+
         // add the offset to the field and access it
         field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.field->FieldOffset));
@@ -588,67 +592,33 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
     // perform the load
     STACK_TOP()->value = jit_emit_load(builder, inst->operand.field->FieldType, field_ptr);
 
-
 cleanup:
     return err;
 }
 
-static tdn_err_t emit_stfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_stfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the field offset
     spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
 
+    jit_stack_value_t* value = NULL;
     if (inst->operand.field->Attributes.Static) {
         field_ptr = jit_get_static_field(builder, inst->operand.field);
+        value = &stack[0];
     } else {
         // add the offset to the field and access it
         field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.field->FieldOffset));
+        value = &stack[1];
     }
 
     // perform the store
     jit_emit_store(
         builder,
-        stack[1].type, stack[1].value,
+        value->type, value->value,
         inst->operand.field->FieldType,
         field_ptr
-    );
-
-cleanup:
-    return err;
-}
-
-static tdn_err_t emit_ldsflda(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    STACK_TOP()->value = jit_get_static_field(builder, inst->operand.field);
-
-cleanup:
-    return err;
-}
-
-static tdn_err_t emit_ldsfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    STACK_TOP()->value = jit_emit_load(
-        builder,
-        inst->operand.field->FieldType,
-        jit_get_static_field(builder, inst->operand.field)
-    );
-
-cleanup:
-    return err;
-}
-
-static tdn_err_t emit_stsfld(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    jit_emit_store(
-        builder,
-        stack[0].type, stack[0].value,
-        inst->operand.field->FieldType,
-        jit_get_static_field(builder, inst->operand.field)
     );
 
 cleanup:
@@ -659,7 +629,7 @@ cleanup:
 // Indirect reference access
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     RuntimeTypeInfo dest_type = stack[0].type->ElementType;
@@ -674,7 +644,7 @@ cleanup:
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     RuntimeTypeInfo type = inst->operand.type;
     if (type == NULL) {
         type = stack[0].type->ElementType;
@@ -683,7 +653,7 @@ static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t bu
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // we just need to store into the given item
     jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type->ElementType, stack[0].value);
     return TDN_NO_ERROR;
@@ -693,23 +663,23 @@ static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t bu
 // Stack manipulation
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_ldnull(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldnull(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_ldstr(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldstr(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // TODO: pin the string
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.string);
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst->operand.uint32);
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.uint64);
     return TDN_NO_ERROR;
 }
@@ -759,16 +729,18 @@ static spidir_value_t emit_binary_compare(spidir_builder_handle_t builder, tdn_i
     return spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
 }
 
-static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
 
-    // sign extend as required
-    if (stack[0].type == tInt32 && stack[1].type != tInt32) {
-        stack[0].type = tIntPtr;
-        stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-    } else if (stack[1].type == tInt32 && stack[0].type != tInt32) {
-        stack[1].type = tIntPtr;
-        stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+    // if the kinds are not the same we need to extend both into a full integer
+    if (stack[0].kind != stack[1].kind) {
+        if (stack[0].kind == JIT_KIND_INT32) {
+            stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+        }
+
+        if (stack[1].kind == JIT_KIND_INT32) {
+            stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+        }
     }
 
     STACK_TOP()->value = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
@@ -776,11 +748,11 @@ static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t 
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     spidir_value_t value = stack[0].value;
 
     // truncate the value if too big
-    if (stack[0].type == tInt64 || stack[0].type == tIntPtr) {
+    if (stack[0].kind == JIT_KIND_INT64 || stack[0].kind == JIT_KIND_NATIVE_INT) {
         value = spidir_builder_build_itrunc(builder, value);
     }
 
@@ -804,11 +776,11 @@ static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t 
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     spidir_value_t value = stack[0].value;
 
     // extend it to a 32bit value if too small
-    if (stack[0].type == tInt32) {
+    if (stack[0].kind == JIT_KIND_INT32) {
         value = emit_extend_int(builder, stack[0].value,
             inst->opcode == CEE_CONV_I8 || inst->opcode == CEE_CONV_I);
     }
@@ -818,18 +790,20 @@ static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t 
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     bool is_unsigned = inst->opcode == CEE_DIV_UN || inst->opcode == CEE_REM_UN;
 
-    // sign extend as required
-    if (stack[0].type == tInt32 && stack[1].type != tInt32) {
-        stack[0].type = tIntPtr;
-        stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-    } else if (stack[1].type == tInt32 && stack[0].type != tInt32) {
-        stack[1].type = tIntPtr;
-        stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+    // if the kinds are not the same we need to extend both into a full integer
+    if (stack[0].kind != stack[1].kind) {
+        if (stack[0].kind == JIT_KIND_INT32) {
+            stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+        }
+
+        if (stack[1].kind == JIT_KIND_INT32) {
+            stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+        }
     }
 
     spidir_value_t value = SPIDIR_VALUE_INVALID;
@@ -852,17 +826,17 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_neg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_neg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // emulate neg via `0 - value`
     spidir_value_t zero = spidir_builder_build_iconst(builder, get_spidir_type(stack[0].type), 0);
     STACK_TOP()->value = spidir_builder_build_isub(builder, zero, stack[0].value);
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_not(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_not(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // emulate neg via `value ^ -1`
     spidir_value_t ones;
-    if (stack[0].type == tInt32) {
+    if (stack[0].kind == JIT_KIND_INT32) {
         ones = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0xFFFFFFFF);
     } else {
         ones = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFFFFFFFFFF);
@@ -871,7 +845,7 @@ static tdn_err_t emit_not(jit_function_t* function, spidir_builder_handle_t buil
     return TDN_NO_ERROR;
 }
 
-static tdn_err_t emit_shift(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_shift(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     spidir_value_t value = SPIDIR_VALUE_INVALID;
@@ -891,11 +865,11 @@ cleanup:
 // Array related
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_newarr(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_newarr(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // sign extend an int32 for it to work
-    if (stack[0].type == tInt32) {
+    if (stack[0].kind == JIT_KIND_INT32) {
         stack[0].value = spidir_builder_build_iext(builder, stack[0].value);
         stack[0].value = spidir_builder_build_sfill(builder, 32, stack[0].value);
     }
@@ -922,7 +896,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_ldlen(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldlen(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the length
@@ -968,7 +942,7 @@ static spidir_value_t emit_array_offset(spidir_builder_handle_t builder, Runtime
     return spidir_builder_build_ptroff(builder, array, offset);
 }
 
-static tdn_err_t emit_ldelema(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldelema(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // array is null, fail
@@ -989,7 +963,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_ldelem(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldelem(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // array is null, fail
@@ -1011,7 +985,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_stelem(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_stelem(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // array is null, fail
@@ -1037,7 +1011,7 @@ cleanup:
 // Method related
 //----------------------------------------------------------------------------------------------------------------------
 
-static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase target) {
+static RuntimeMethodBase devirt_method(jit_stack_value_t* item, RuntimeMethodBase target) {
     // not virtual, we know it exactly
     if (!target->Attributes.Virtual) {
         return target;
@@ -1056,9 +1030,7 @@ static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase
 
     // get the real type
     RuntimeTypeInfo cur_type = item->type;
-    if (item->boxed_type != NULL) {
-        cur_type = item->boxed_type;
-    }
+    // TODO: extended type info as required
 
     // find the method that implements this
     if (jit_is_interface(target->DeclaringType)) {
@@ -1074,14 +1046,14 @@ static RuntimeMethodBase devirt_method(jit_stack_item_t* item, RuntimeMethodBase
 
     // if this is a final type/method or we know that this is
     // the exact type we can devirt it
-    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->is_exact_type || item->type->IsArray) {
+    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->type->IsArray) {
         return target;
     }
 
     return NULL;
 }
 
-static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, RuntimeMethodBase callee, jit_stack_item_t* stack) {
+static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, RuntimeMethodBase callee, jit_stack_value_t* stack) {
     spidir_value_t* values = NULL;
 
     // check if we need to skip the this
@@ -1196,7 +1168,7 @@ static bool jit_should_not_inline(jit_function_t* caller, RuntimeMethodBase call
     return false;
 }
 
-static tdn_err_t emit_ldftn(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ldftn(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     RuntimeMethodBase callee = inst->operand.method;
@@ -1216,7 +1188,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t* values = NULL;
     jit_function_t inlinee = {};
@@ -1233,13 +1205,10 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         inlinee.entry_block.spidir_block = spidir_builder_create_block(builder);
         spidir_builder_build_branch(builder, inlinee.entry_block.spidir_block);
 
-        // pass the arguments and known type info
+        // pass the arguments
+        // TODO: pass extended type info for better devirt in the inlined method
         for (int i = 0; i < arrlen(inlinee.entry_block.args); i++) {
-            // copy the relevant information
-            inlinee.entry_block.args[i].stack.value = stack[i].value;
-            inlinee.entry_block.args[i].stack.type = stack[i].type;
-            inlinee.entry_block.args[i].stack.boxed_type = stack[i].boxed_type;
-            inlinee.entry_block.args[i].stack.is_exact_type = stack[i].is_exact_type;
+            inlinee.entry_block.args[i].value = stack[i].value;
         }
 
         // setup the inline information
@@ -1258,13 +1227,10 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         // now let it cook
         CHECK_AND_RETHROW(jit_function(&inlinee, builder));
 
-        // and set the return value, unline a normal call, struct likes are
+        // and set the return value, unlike a normal call, struct likes are
         // returned directly instead of by-reference
         if (callee->ReturnParameter->ParameterType != tVoid) {
-            // propagate the new type info we have about the return
-            // we will not fully propagate it but just enough so we can
-            // have a handful of more optimizations
-            *STACK_TOP() = inlinee.return_item;
+            // TODO: extended type info, for better devirt from the result
             STACK_TOP()->value = return_value;
         }
 
@@ -1300,9 +1266,9 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
-    jit_stack_item_t* args = NULL;
+    jit_stack_value_t* args = NULL;
     RuntimeMethodBase callee = inst->operand.method;
 
     // allocate the item
@@ -1323,9 +1289,9 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
     // build a new stack args, including the `this` that we just created
     arrsetlen(args, arrlen(stack) + 1);
     memcpy(args + 1, stack, arrlen(stack) * sizeof(*stack));
-    args[0].is_exact_type = true;
     args[0].type = jit_get_method_this_type(callee);
     args[0].value = obj;
+    // TODO: mark as a known type
 
     // perform a normal call instead
     CHECK_AND_RETHROW(emit_call(function, builder, block, inst, args));
@@ -1340,9 +1306,14 @@ cleanup:
 }
 
 
-static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t* values = NULL;
+
+    // for a reference type that is constrained we need to deref it first
+    if (inst->constrained != NULL && tdn_type_is_referencetype(inst->constrained)) {
+        stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
+    }
 
     // attempt to de-virtualize the method, if we could then
     // replace the instruction and call the normal emit_call
@@ -1377,6 +1348,14 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
         inst->operand.method = known;
         CHECK_AND_RETHROW(emit_call(function, builder, block, inst, stack));
         goto cleanup;
+
+    }
+
+    // if its constrained but its a valuetype, we need to deref and box it before
+    // passing it to the function (the devirt takes care of the case that the type
+    // does implement the function)
+    if (inst->constrained != NULL && tdn_type_is_valuetype(inst->constrained)) {
+        CHECK_FAIL("TODO: box for constrained");
     }
 
     RuntimeMethodBase callee = inst->operand.method;
@@ -1437,7 +1416,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     ParameterInfo ret = function->method->ReturnParameter;
 
@@ -1587,13 +1566,19 @@ static spidir_value_t jit_emit_type_check(spidir_builder_handle_t builder, spidi
     }
 }
 
-static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type);
+
+static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     if (stack[0].type != NULL) {
-        // if we know at jit time that the type is castable to type
-        // then we are actually doing an upcast an no need to generate any extra code
-        bool is_upcast = verifier_assignable_to(stack[0].type, inst->operand.type);
+        // check if this is an upcast known at compile time,
+        // so we can hard-code the validity of this
+        bool is_upcast = verifier_can_cast_to(stack[0].type, inst->operand.type);
+
+        // check if the cast is even possible, if not mark this as
+        // impossible so we can hard-code invalidity of it
+        bool is_possible_cast = verifier_can_cast_to(inst->operand.type, stack[0].type);
 
         // if null then return null
         spidir_block_t type_check = spidir_builder_create_block(builder);
@@ -1617,12 +1602,19 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0)),
                 cast_null, type_check);
 
-        // emit the type check itself, branch to either valid or invalid based on the failure
-        // of the type check
+        //
+        // the type check itself
+        // we hard-code known upcast/impossible casts for making spidir's life easier
+        //
         spidir_builder_set_block(builder, type_check);
         if (is_upcast) {
-            // just go to the valid path, since its valid
+            // just go to the cast path, since its valid
             spidir_builder_build_branch(builder, cast);
+
+        } else if (!is_possible_cast) {
+            // just go to the invalid (or cast-null) path
+            spidir_builder_build_branch(builder, inst->opcode == CEE_ISINST ? cast_null : invalid);
+
         } else {
             // we need to make a runtime type verification, if this is an isinst
             // then we are going to return a null instead
@@ -1632,64 +1624,83 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
                 inst->opcode == CEE_ISINST ? cast_null : invalid);
         }
 
-        // if was invalid handle it in here
+        //
+        // throw invalid cast
+        // only needed for castclass (isinst returns null instead)
+        //
         if (inst->opcode == CEE_CASTCLASS) {
             spidir_builder_set_block(builder, invalid);
             jit_emit_invalid_cast(builder);
         }
 
+        //
         // cast a non-null value
-        spidir_builder_set_block(builder, cast);
-        spidir_value_t cast_value;
-        if (is_upcast) {
-            // can use the common casting code in convert value
-            cast_value = jit_convert_value(builder, stack[0].type, stack[0].value, inst->operand.type);
-        } else {
-            // we need to perform a runtime lookup
-            if (jit_is_interface(inst->operand.type)) {
-                // downcast to interface
-                cast_value = spidir_builder_build_stackslot(builder,
-                    sizeof(Interface), _Alignof(Interface));
-
-                // store the interface instance
-                ASSERT(offsetof(Interface, Instance) == 0);
-                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, cast_value);
-
-                // perform a runtime call to get the interface offset
-                spidir_value_t vtable = spidir_builder_build_call(builder,
-                    jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_GET_INTERFACE_VTABLE),
-                    2, (spidir_value_t[]){
-                        instance,
-                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.type),
-                    });
-
-                // and store it into the vtable field
-                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable,
-                    spidir_builder_build_ptroff(builder, cast_value,
-                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
-
+        // only needed when the cast is actually possible
+        //
+        spidir_value_t cast_value = SPIDIR_VALUE_INVALID;
+        if (is_possible_cast) {
+            spidir_builder_set_block(builder, cast);
+            if (is_upcast) {
+                // can use the common casting code in convert value
+                cast_value = jit_convert_value(builder, stack[0].type, stack[0].value, inst->operand.type);
             } else {
-                cast_value = instance;
-            }
-        }
-        spidir_builder_build_branch(builder, valid);
+                // we need to perform a runtime lookup
+                if (jit_is_interface(inst->operand.type)) {
+                    // downcast to interface
+                    cast_value = spidir_builder_build_stackslot(builder,
+                        sizeof(Interface), _Alignof(Interface));
 
+                    // store the interface instance
+                    ASSERT(offsetof(Interface, Instance) == 0);
+                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, cast_value);
+
+                    // perform a runtime call to get the interface offset
+                    spidir_value_t vtable = spidir_builder_build_call(builder,
+                        jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_GET_INTERFACE_VTABLE),
+                        2, (spidir_value_t[]){
+                            instance,
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.type),
+                        });
+
+                    // and store it into the vtable field
+                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable,
+                        spidir_builder_build_ptroff(builder, cast_value,
+                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+
+                } else {
+                    cast_value = instance;
+                }
+            }
+            spidir_builder_build_branch(builder, valid);
+        }
+
+        //
         // cast a null value, aka just create a null
+        //
         spidir_builder_set_block(builder, cast_null);
         spidir_value_t null_cast_value = jit_convert_value(builder, NULL,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
             inst->operand.type);
         spidir_builder_build_branch(builder, valid);
 
-        // the cast was valid, take the null and non-null cast outputs and
-        // set them as the output
+        //
+        // The valid path after everything, select the correct value
+        //
         spidir_builder_set_block(builder, valid);
-        STACK_TOP()->value = spidir_builder_build_phi(builder, SPIDIR_TYPE_PTR, 2,
-            (spidir_value_t[]){
-                cast_value,
-                null_cast_value
-            }, NULL);
-
+        if (is_upcast) {
+            // always has a cast value
+            STACK_TOP()->value = cast_value;
+        } else if (!is_possible_cast) {
+            // always has a null-cast value
+            STACK_TOP()->value = null_cast_value;
+        } else {
+            // might have either, choose
+            STACK_TOP()->value = spidir_builder_build_phi(builder, SPIDIR_TYPE_PTR, 2,
+                (spidir_value_t[]){
+                    cast_value,
+                    null_cast_value
+                }, NULL);
+        }
     } else {
         // hardcode a null cast
         STACK_TOP()->value = jit_convert_value(builder, NULL,
@@ -1701,7 +1712,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     if (tdn_type_is_nullable(inst->operand.type)) {
@@ -1740,7 +1751,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_unbox_any(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_unbox_any(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // the operand is a reference type
@@ -1792,7 +1803,7 @@ cleanup:
 // Branching
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_br(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_br(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the target block
@@ -1809,7 +1820,7 @@ cleanup:
     return err;
 }
 
-static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_item_t* item) {
+static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
     if (jit_is_interface(item->type)) {
         STATIC_ASSERT(offsetof(Interface, Instance) == 0);
         item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, item->value);
@@ -1820,13 +1831,13 @@ static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_item_
     }
 }
 
-static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
     CHECK(target != NULL);
-    jit_block_t* next = jit_function_get_block(function, block->end, block->leave_target_stack);
+    jit_block_t* next = jit_function_get_block(function, block->block.end, block->leave_target_stack);
     CHECK(next != NULL);
 
     // merge with both blocks
@@ -1858,7 +1869,7 @@ cleanup:
 
 
 
-static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
 
@@ -1885,7 +1896,7 @@ static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_ha
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
     CHECK(target != NULL);
-    jit_block_t* next = jit_function_get_block(function, block->end, block->leave_target_stack);
+    jit_block_t* next = jit_function_get_block(function, block->block.end, block->leave_target_stack);
     CHECK(next != NULL);
 
     // merge with both blocks
@@ -1908,7 +1919,7 @@ cleanup:
 // already fixes the instruction to have the correct jump target
 //
 
-static tdn_err_t emit_leave(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_leave(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK_AND_RETHROW(emit_br(function, builder, block, inst, stack));
@@ -1917,7 +1928,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_endfinally(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_endfinally(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK_AND_RETHROW(emit_br(function, builder, block, inst, stack));
@@ -1926,7 +1937,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t emit_throw(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_item_t* stack) {
+static tdn_err_t emit_throw(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // call the runtime throw function
@@ -1957,9 +1968,9 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDFLDA] = emit_ldflda,
     [CEE_LDFLD] = emit_ldfld,
     [CEE_STFLD] = emit_stfld,
-    [CEE_LDSFLDA] = emit_ldsflda,
-    [CEE_LDSFLD] = emit_ldsfld,
-    [CEE_STSFLD] = emit_stsfld,
+    [CEE_LDSFLDA] = emit_ldflda,
+    [CEE_LDSFLD] = emit_ldfld,
+    [CEE_STSFLD] = emit_stfld,
 
     [CEE_INITOBJ] = emit_initobj,
 
@@ -2084,6 +2095,7 @@ tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle
     //
     for (int i = 0; i < arrlen(block->args); i++) {
         jit_block_local_t* arg = &block->args[i];
+        jit_local_t* func_arg = &function->args[i];
 
         // get the param for this slot, if we are inlining assume the value
         // is already stored inside
@@ -2091,29 +2103,30 @@ tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle
         if (!function->inline_depth) {
             value = spidir_builder_build_param_ref(builder, i);
         } else {
-            value = block->args[i].stack.value;
+            value = block->args[i].value;
         }
 
         // if we need to spill, spill it now
         if (function->args[i].spilled) {
             spidir_value_t stackslot = spidir_builder_build_stackslot(builder,
-                arg->stack.type->StackSize, arg->stack.type->StackAlignment);
+                func_arg->type->StackSize, func_arg->type->StackAlignment);
 
             jit_emit_store(
                 builder,
-                arg->stack.type, value,
-                arg->stack.type, stackslot
+                func_arg->type, value,
+                func_arg->type, stackslot
             );
             value = stackslot;
         }
 
         // and store it
-        arg->stack.value = value;
+        arg->value = value;
     }
 
     // initialize and spill locals as needed
     for (int i = 0; i < arrlen(block->locals); i++) {
         jit_block_local_t* local = &block->locals[i];
+        jit_local_t* func_local = &function->locals[i];
 
         bool spilled = function->locals[i].spilled;
         bool zero_initialize = function->locals[i].zero_initialize;
@@ -2122,21 +2135,21 @@ tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle
 
         // if we need to spill it, or this is a struct like that needs to be zero initialized
         // then allocate a stackslot
-        if (spilled || (zero_initialize && jit_is_struct_like(local->stack.type))) {
+        if (spilled || (zero_initialize && jit_is_struct_like(func_local->type))) {
             value = spidir_builder_build_stackslot(builder,
-                local->stack.type->StackSize, local->stack.type->StackAlignment);
+                func_local->type->StackSize, func_local->type->StackAlignment);
 
             // we need to zero init it
             if (zero_initialize) {
-                jit_emit_bzero(builder, value, local->stack.type);
+                jit_emit_bzero(builder, value, func_local->type);
             }
         } else if (zero_initialize) {
             // this is a value type, but we need to zero init it
-            value = spidir_builder_build_iconst(builder, get_spidir_type(local->stack.type), 0);
+            value = spidir_builder_build_iconst(builder, get_spidir_type(func_local->type), 0);
         }
 
         // and store it
-        local->stack.value = value;
+        local->value = value;
     }
 
 cleanup:

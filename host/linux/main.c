@@ -452,6 +452,7 @@ int main(int argc, char* argv[]) {
     CHECK_AND_RETHROW(tdn_load_assembly_from_file(corelib_file, &corelib));
 
     // now load the assembly we want to run
+    argv[optind] = "tests/JIT/Methodical/casts/iface/bin/Release/net8.0/iface1.dll";
     CHECK_AND_RETHROW(load_assembly_from_path(argv[optind], &run));
 
     int result = 0;

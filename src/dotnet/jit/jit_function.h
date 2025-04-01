@@ -4,6 +4,7 @@
 #include <spidir/module.h>
 #include <tomatodotnet/disasm.h>
 #include <tomatodotnet/except.h>
+#include <tomatodotnet/types/type.h>
 #include <util/stb_ds.h>
 #include <util/string.h>
 
@@ -30,6 +31,9 @@ typedef struct jit_value_flags {
 
     // Is the instance the `this` of the method
     bool this_ptr;
+
+    // was this pushed via ldftn
+    bool ldftn;
 } jit_value_flags_t;
 
 typedef struct jit_block_local {
@@ -39,6 +43,9 @@ typedef struct jit_block_local {
 
     // the phi of the local
     spidir_phi_t phi;
+
+    // the value of the local
+    spidir_value_t value;
 
     // the flags of this value
     jit_value_flags_t flags;
@@ -59,6 +66,9 @@ typedef struct jit_stack_value {
     // delegate
     RuntimeMethodBase method;
 
+    // the spidir stack value for this
+    spidir_value_t value;
+
     // The kind of value in this slot
     jit_stack_value_kind_t kind;
 
@@ -66,7 +76,18 @@ typedef struct jit_stack_value {
     jit_value_flags_t flags;
 } jit_stack_value_t;
 
+/**
+ * Check if a stack value represents a null-reference
+ */
 static bool jit_is_null_reference(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type == NULL; }
+static bool jit_is_boxed_value_type(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type); }
+
+/**
+ * Initialize a stack-value
+ */
+jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInfo type);
+
+jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type);
 
 typedef struct jit_block {
     // the basic block range
@@ -101,6 +122,10 @@ typedef struct jit_block {
 
     // did we initialize the phis yet
     bool initialized_phis;
+
+    // did we initialize the this pointer
+    // by calling its base ctor
+    bool this_initialized;
 } jit_block_t;
 
 typedef struct jit_leave_block_key {
@@ -159,10 +184,6 @@ typedef struct jit_function {
     // ensure that the base ctor is
     // called at some point
     bool track_ctor_state;
-
-    // did we initialize the this pointer
-    // by calling its base ctor
-    bool this_initialized;
 
     // do we have a valid this object, we don't if
     // ldarga/starg is used on the first argument

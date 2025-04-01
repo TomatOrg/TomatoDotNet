@@ -60,7 +60,7 @@ static bool verifier_can_access_type(RuntimeTypeInfo current_type, RuntimeTypeIn
     if (target_type->DeclaringType == NULL) {
         // a non-nested class can be either all public or accessible only
         // from its own assembly (and friends)
-        if ((target_type->Attributes.Visibility & TDN_ACCESS_PUBLIC) != 0) {
+        if ((target_type->Attributes.Visibility & TDN_TYPE_VISIBILITY_PUBLIC) != 0) {
             return true;
 
         } else {
@@ -554,6 +554,13 @@ static tdn_err_t verifier_merge_blocks(jit_function_t* function, jit_block_t* fr
             }
         }
 
+        // if we are jumping to a block with this initialized, but its
+        // not initialized in our block, then mark it as not initialized
+        if (target->this_initialized && !from->this_initialized) {
+            target->this_initialized = false;
+            modified = true;
+        }
+
         // the metadata of the block was modified, we must
         if (modified) {
             // blocks should not be modified while emitting
@@ -574,6 +581,9 @@ static tdn_err_t verifier_merge_blocks(jit_function_t* function, jit_block_t* fr
 
         arrsetlen(target->locals, arrlen(from->locals));
         memcpy(target->locals, from->locals, arrlen(from->locals) * sizeof(*from->locals));
+
+        // pass over the initialized mark
+        target->this_initialized = from->this_initialized;
 
         verifier_queue_block(function, target);
     }
@@ -608,52 +618,9 @@ cleanup:
 #define CHECK_INIT_THIS(value) \
     do { \
         jit_stack_value_t* __value = value; \
-        CHECK_ERROR(!function->track_ctor_state || !__value->flags.this_ptr || function->this_initialized, \
+        CHECK_ERROR(!function->track_ctor_state || !__value->flags.this_ptr || block->this_initialized, \
             TDN_ERROR_VERIFIER_UNINIT_STACK); \
     } while (0)
-
-static jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInfo type) {
-    if (
-        type == tBoolean ||
-        type == tChar ||
-        type == tSByte ||
-        type == tByte ||
-        type == tInt16 ||
-        type == tUInt16 ||
-        type == tInt32 ||
-        type == tUInt32
-    ) {
-        value->kind = JIT_KIND_INT32;
-        value->type = tInt32;
-
-    } else if (type == tInt64 || type == tUInt64) {
-        value->kind = JIT_KIND_INT64;
-        value->type = tInt64;
-
-    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
-        value->kind = JIT_KIND_NATIVE_INT;
-        value->type = tIntPtr;
-
-    } else if (type->BaseType == tEnum) {
-        jit_stack_value_init(value, type->EnumUnderlyingType);
-
-    } else if (type->IsByRef) {
-        value->kind = JIT_KIND_BY_REF;
-        value->type = type->ElementType;
-
-    } else if (tdn_type_is_valuetype(type)) {
-        value->kind = JIT_KIND_VALUE_TYPE;
-        value->type = type;
-
-    } else {
-        ASSERT(tdn_type_is_referencetype(type));
-        value->kind = JIT_KIND_OBJ_REF;
-        value->type = type;
-
-    }
-
-    return value;
-}
 
 static jit_stack_value_t jit_stack_value_create(RuntimeTypeInfo type) {
     jit_stack_value_t value = {};
@@ -661,17 +628,14 @@ static jit_stack_value_t jit_stack_value_create(RuntimeTypeInfo type) {
     return value;
 }
 
-static bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type);
+bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type);
 
 static bool verifier_can_cast_to_class_or_interface(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
     // TODO: variance support
 
     if (jit_is_interface(other_type)) {
-        for (int i = 0; i < hmlen(this_type->InterfaceImpls); i++) {
-            RuntimeTypeInfo interface_type = this_type->InterfaceImpls[i].key;
-            if (interface_type == other_type) {
-                return true;
-            }
+        if (hmgeti(this_type->InterfaceImpls, other_type) >= 0) {
+            return true;
         }
     } else {
         if (jit_is_interface(this_type) && other_type == tObject) {
@@ -725,7 +689,7 @@ static bool verifier_can_cast_param_to(RuntimeTypeInfo this_type, RuntimeTypeInf
     return verifier_get_integral_element_type(this_underlying) == verifier_get_integral_element_type(param_underlying);
 }
 
-static bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
+bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
     if (this_type == other_type) {
         return true;
     }
@@ -973,7 +937,7 @@ static tdn_err_t verify_store_local(jit_function_t* function, jit_block_t* block
     }
 
     // don't allow to load the this if we are not ready yet
-    if (is_arg && function->track_ctor_state && !function->this_initialized) {
+    if (is_arg && function->track_ctor_state && !block->this_initialized) {
         CHECK_ERROR(inst->operand.variable != 0, TDN_ERROR_VERIFIER_THIS_UNINIT_STORE);
     }
 
@@ -1013,13 +977,16 @@ static tdn_err_t verify_load_local_address(jit_function_t* function, jit_block_t
         block_local->initialized = true;
     }
 
+    // local taken by reference must be spilled
+    func_local->spilled = true;
+
     // taking the address of variable, invalid this
     if (is_arg && inst->operand.variable == 0) {
         function->valid_this = false;
     }
 
     // don't allow to load the this if we are not ready yet
-    if (is_arg && function->track_ctor_state && !function->this_initialized) {
+    if (is_arg && function->track_ctor_state && !block->this_initialized) {
         CHECK_ERROR(inst->operand.variable != 0, TDN_ERROR_VERIFIER_THIS_UNINIT_STORE);
     }
 
@@ -1100,7 +1067,11 @@ static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_
         }
 
         // ensure that the this can be loaded properly
-        CHECK_IS_ASSIGNABLE(stack, &declared_this);
+        if (stack->kind == JIT_KIND_NATIVE_INT) {
+            CHECK(function->method->Module->Assembly->AllowUnsafe);
+        } else {
+            CHECK_IS_ASSIGNABLE(stack, &declared_this);
+        }
 
         // the instance we are loading from
         instance = stack->type;
@@ -1413,9 +1384,6 @@ static tdn_err_t verify_pop(jit_function_t* function, jit_block_t* block, tdn_il
 static tdn_err_t verify_binary_op(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK_INIT_THIS(&stack[0]);
-    CHECK_INIT_THIS(&stack[1]);
-
     // check that we got the expected item
     switch (inst->opcode) {
         case CEE_ADD:
@@ -1436,7 +1404,7 @@ static tdn_err_t verify_binary_op(jit_function_t* function, jit_block_t* block, 
     // Stack value kind is ordered to make this work
     jit_stack_value_t result = (stack[0].kind > stack[1].kind) ? stack[0] : stack[1];
 
-    CHECK_ERROR((stack[0].kind != stack[1].kind) && (result.kind != JIT_KIND_NATIVE_INT),
+    CHECK_ERROR((stack[0].kind == stack[1].kind) || (result.kind == JIT_KIND_NATIVE_INT),
         TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
 
     *STACK_PUSH() = result;
@@ -1447,8 +1415,6 @@ cleanup:
 
 static tdn_err_t verify_unary_op(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
-
-    CHECK_INIT_THIS(stack);
 
     // ensure the input is correct
     if (inst->opcode == CEE_NEG) {
@@ -1473,9 +1439,6 @@ cleanup:
 static tdn_err_t verify_shift(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK_INIT_THIS(&stack[0]);
-    CHECK_INIT_THIS(&stack[1]);
-
     // the shift by should be int32 or native int
     CHECK_ERROR(stack[1].kind == JIT_KIND_INT32 || stack[1].kind == JIT_KIND_NATIVE_INT,
         TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
@@ -1493,8 +1456,6 @@ cleanup:
 
 static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
-
-    CHECK_INIT_THIS(stack);
 
     // validate that both are good
     CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_FLOAT,
@@ -1793,18 +1754,171 @@ static tdn_err_t verify_ldftn(jit_function_t* function, jit_block_t* block, tdn_
     // special case, since its only used to pass it to the newobj, we verify
     // externally that the opcodes are valid
     jit_stack_value_t* value = STACK_PUSH();
-    value->kind = JIT_KIND_UNKNOWN;
+    value->kind = JIT_KIND_NATIVE_INT;
     value->method = method;
+    value->flags.ldftn = inst->opcode == CEE_LDFTN;
 
 cleanup:
     return err;
 }
 
-
 static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK_FAIL();
+    // TODO: tail call support
+
+    RuntimeMethodBase method = inst->operand.method;
+    RuntimeTypeInfo method_type = method->Attributes.Static ? NULL : method->DeclaringType;
+
+    if (inst->opcode == CEE_CALLVIRT) {
+        CHECK_ERROR(method_type != NULL, TDN_ERROR_VERIFIER_CALLVIRT_ON_STATIC);
+        CHECK_ERROR(!tdn_type_is_valuetype(method_type), TDN_ERROR_VERIFIER_CALLVIRT_ON_VALUE_TYPE);
+
+    } else if (inst->opcode == CEE_CALL) {
+        CHECK_ERROR(!method->Attributes.Abstract, TDN_ERROR_VERIFIER_CALL_ABSTRACT);
+    }
+
+    bool might_leak_local_ref = false;
+
+    if (inst->opcode == CEE_NEWOBJ && jit_is_delegate(method_type)) {
+        // creating a delegate, ensure we call the ctor properly
+        CHECK_ERROR(method->Parameters->Length == 2, TDN_ERROR_VERIFIER_DELEGATE_CTOR);
+        jit_stack_value_t declared_obj = jit_stack_value_create(method->Parameters->Elements[0]->ParameterType);
+        jit_stack_value_t declared_ftn = jit_stack_value_create(method->Parameters->Elements[1]->ParameterType);
+
+        CHECK_ERROR(declared_ftn.kind == JIT_KIND_NATIVE_INT,
+            TDN_ERROR_VERIFIER_DELEGATE_CTOR_SIG_I);
+
+        jit_stack_value_t* actual_ftn = &stack[1];
+        jit_stack_value_t* actual_obj = &stack[0];
+        CHECK_INIT_THIS(actual_obj);
+
+        // ensure we have a method in here, and not a normal native int
+        CHECK_ERROR(actual_ftn->kind == JIT_KIND_NATIVE_INT && actual_ftn->method != NULL,
+            TDN_ERROR_VERIFIER_STACK_METHOD);
+
+        CHECK_IS_ASSIGNABLE(actual_obj, &declared_obj);
+        CHECK_ERROR(actual_obj->kind == JIT_KIND_OBJ_REF,
+            TDN_ERROR_VERIFIER_DELEGATE_CTOR_SIG_O);
+
+        // we can only load non-final virtual functions that are from the base and from
+        // the this pointer from ldftn, any other virtual function is not allowed
+        if (actual_ftn->flags.ldftn) {
+            if (actual_ftn->method->Attributes.Virtual && !actual_ftn->method->Attributes.Final && !jit_is_boxed_value_type(actual_obj)) {
+                if (!actual_ftn->method->DeclaringType->Attributes.Sealed) {
+                    CHECK_ERROR(actual_obj->flags.this_ptr,
+                        TDN_ERROR_VERIFIER_LDFTN_NON_FINAL_VIRTUAL);
+                }
+            }
+        }
+
+        // TODO: check delegate assignable
+    } else {
+        // check that the args match, ignore the instance for now
+        int off = method_type ? 1 : 0;
+        for (int i = 0; i < method->Parameters->Length; i++) {
+            jit_stack_value_t* actual = &stack[off + i];
+            jit_stack_value_t declared = jit_stack_value_create(method->Parameters->Elements[i]->ParameterType);
+            CHECK_IS_ASSIGNABLE(actual, &declared);
+
+            // if this is a by-ref, ensure that we won't leak it by accident
+            if (actual->kind == JIT_KIND_BY_REF && !actual->flags.ref_non_local) {
+                // TODO: scoped support
+                might_leak_local_ref = true;
+            }
+        }
+    }
+
+    RuntimeTypeInfo instance = NULL;
+    if (inst->opcode == CEE_NEWOBJ) {
+        // ensure that this is a valid ctor
+        CHECK_ERROR(tdn_compare_string_to_cstr(method->Name, ".ctor"), TDN_ERROR_VERIFIER_CTOR_EXPECTED);
+        CHECK_ERROR(!method->Attributes.Static, TDN_ERROR_VERIFIER_CTOR_SIG);
+        CHECK_ERROR(method_type != NULL, TDN_ERROR_VERIFIER_CTOR_SIG);
+        CHECK_ERROR(!method->Attributes.Abstract, TDN_ERROR_VERIFIER_CTOR_SIG);
+
+        // TODO: array ctor???
+
+        // must not be an abstract class
+        CHECK_ERROR(!method_type->Attributes.Abstract, TDN_ERROR_VERIFIER_NEWOBJ_ABSTRACT_CLASS);
+
+    } else if (method_type != NULL) {
+        jit_stack_value_t* actual_this = &stack[0];
+        instance = actual_this->type;
+        jit_stack_value_t declared_this = {
+            .kind = tdn_type_is_valuetype(method_type) ? JIT_KIND_BY_REF : JIT_KIND_OBJ_REF,
+            .type = method_type
+        };
+
+        // direct calls to ctor are mostly not allowed
+        if (tdn_compare_string_to_cstr(method->Name, ".ctor")) {
+            if (function->track_ctor_state && actual_this->flags.this_ptr && (method_type == method->DeclaringType || method_type == method->DeclaringType->BaseType)) {
+                // we have called the base ctor, so its not initialized properly in this block
+                block->this_initialized = true;
+            } else {
+                // allow direct calls to valuetype ctors
+                CHECK_ERROR(actual_this->kind == JIT_KIND_BY_REF && tdn_type_is_valuetype(actual_this->type),
+                    TDN_ERROR_VERIFIER_CALL_CTOR);
+            }
+        }
+
+        if (inst->constrained != NULL) {
+            // must be a by ref
+            CHECK_ERROR(actual_this->kind == JIT_KIND_BY_REF,
+                TDN_ERROR_VERIFIER_CONSTRAINED_CALL_WITH_NON_BYREF_THIS);
+
+            // ensure the constrained matches the actual this type
+            CHECK_ERROR(actual_this->type == inst->constrained,
+                TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+
+            // turn into am objref
+            actual_this->kind = JIT_KIND_OBJ_REF;
+        }
+
+        // if the method or type is marked as readonly then the
+        // reference is also considered readonly
+        if ((method_type->IsReadOnly || method->IsReadOnly) && declared_this.kind == JIT_KIND_BY_REF) {
+            declared_this.flags.ref_read_only = true;
+        }
+
+        CHECK_IS_ASSIGNABLE(actual_this, &declared_this);
+
+        // TODO: unscoped reference
+
+        if (inst->opcode == CEE_CALL) {
+            // just like the rules for creating delegates with ldftn and virtual functions, but now for
+            // normal calls
+            if (method->Attributes.Virtual && !method->Attributes.Final && !jit_is_boxed_value_type(actual_this)) {
+                if (!method_type->Attributes.Sealed) {
+                    CHECK_ERROR(actual_this->flags.this_ptr,
+                        TDN_ERROR_VERIFIER_THIS_MISMATCH);
+                }
+            }
+        }
+    }
+
+    // Check we can access the method
+    CHECK_ERROR(verifier_can_access_method(method->DeclaringType, method, instance),
+        TDN_ERROR_VERIFIER_METHOD_ACCESS);
+
+    if (inst->opcode == CEE_NEWOBJ) {
+        // push the type
+        jit_stack_value_init(STACK_PUSH(), method_type);
+
+    } else if (method->ReturnParameter->ParameterType != tVoid) {
+        jit_stack_value_t* return_value = STACK_PUSH();
+        jit_stack_value_init(return_value, method->ReturnParameter->ParameterType);
+
+        if (return_value->kind == JIT_KIND_BY_REF) {
+            // if we won't leak a local reference, this result is a non-local reference
+            return_value->flags.ref_non_local = !might_leak_local_ref;
+
+            if (method->ReturnParameter->ReferenceIsReadOnly) {
+                // the reference is readonly
+                return_value->flags.ref_read_only = true;
+            }
+        }
+    }
 
 cleanup:
     return err;
@@ -1812,9 +1926,40 @@ cleanup:
 
 static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
-    ParameterInfo ret = function->method->ReturnParameter;
 
-    CHECK_FAIL();
+    // ensure that we don't return before the base ctor was called
+    if (function->track_ctor_state) {
+        CHECK_ERROR(block->this_initialized || function->method->DeclaringType == tObject,
+            TDN_ERROR_VERIFIER_THIS_UNINIT_RETURN);
+    }
+
+    // Check we don't return from a protected block
+    CHECK_ERROR(block->block.filter_clause == NULL, TDN_ERROR_VERIFIER_RETURN_FROM_FILTER);
+    CHECK_ERROR(block->block.try_clause == NULL, TDN_ERROR_VERIFIER_RETURN_FROM_TRY);
+    CHECK_ERROR(block->block.handler_clause == NULL, TDN_ERROR_VERIFIER_RETURN_FROM_HANDLER);
+
+    RuntimeTypeInfo declared_return_type = function->method->ReturnParameter->ParameterType;
+    if (declared_return_type == tVoid) {
+        CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_RETURN_VOID);
+    } else {
+        CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_RETURN_EMPTY);
+        CHECK_INIT_THIS(stack);
+
+        jit_stack_value_t ret_val = jit_stack_value_create(declared_return_type);
+        CHECK_IS_ASSIGNABLE(stack, &ret_val);
+
+        if (stack->kind == JIT_KIND_BY_REF) {
+            // ensure we don't return a pointer to the stack
+            CHECK_ERROR(stack->flags.ref_non_local,
+                TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
+
+            // ensure we don't return a readonly ref
+            // when the function return is non-readonly
+            if (stack->flags.ref_read_only) {
+                CHECK(function->method->ReturnParameter->ReferenceIsReadOnly);
+            }
+        }
+    }
 
 cleanup:
     return err;
@@ -1830,7 +1975,7 @@ static tdn_err_t verify_castclass(jit_function_t* function, jit_block_t* block, 
     jit_stack_value_t* value = &stack[0];
     CHECK_INIT_THIS(value);
 
-    CHECK(value->kind == JIT_KIND_BY_REF);
+    CHECK(value->kind == JIT_KIND_OBJ_REF);
 
     // ensure we can access that type
     CHECK_ERROR(verifier_can_access_type(function->method->DeclaringType, inst->operand.type),
@@ -2152,6 +2297,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STELEM_REF] = verify_stelem,
 
     [CEE_LDFTN] = verify_ldftn,
+    [CEE_LDVIRTFTN] = verify_ldftn,
 
     [CEE_NEWOBJ] = verify_call,
     [CEE_CALL] = verify_call,

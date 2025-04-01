@@ -572,6 +572,8 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     // the current offset of the vtable
     int vtable_offset = info->BaseType ? (info->BaseType->VTable ? info->BaseType->VTable->Length : 0) : 0;
 
+    // TODO: copy the interfaces implemented by the parent
+
     // ignore anything not of this type
     uint64_t interface_product = 1;
     for (int i = 0; i < metadata->interface_impls_count; i++) {
@@ -2045,7 +2047,7 @@ static tdn_err_t assembly_connect_read_only_attribute(RuntimeAssembly assembly, 
                     if (!parameter) break;
                     CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
                     ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
-                    parent_type->IsReadOnly = true;
+                    parent_type->ReferenceIsReadOnly = true;
                 } break;
 
                 case METADATA_PROPERTY: {

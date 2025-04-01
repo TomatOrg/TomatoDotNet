@@ -48,14 +48,10 @@ typedef enum tdn_il_prefix {
     TDN_IL_PREFIX_VOLATILE = 1 << 0,
     TDN_IL_PREFIX_READONLY = 1 << 1,
     TDN_IL_PREFIX_UNALIGNED = 1 << 2,
+    TDN_IL_PREFIX_CONSTRAINED = 1 << 3,
 } tdn_il_prefix_t;
 
 typedef struct tdn_il_inst {
-    // the opcode we have
-    tdn_il_opcode_t opcode;
-
-    // the operand type
-    tdn_il_operand_t operand_type;
     union {
         uint16_t variable;
         int8_t int8;
@@ -72,19 +68,30 @@ typedef struct tdn_il_inst {
         RuntimeTypeInfo type;
         String string;
     } operand;
-    int operand_token;
+
+    // the constrained prefix of the instruction
+    RuntimeTypeInfo constrained;
 
     // the length of the current instruction
     size_t length;
 
-    // the operand control flow
-    tdn_il_control_flow_t control_flow;
+    // the pc of the opcode
+    uint32_t pc;
 
     // the prefixes for the instruction
     tdn_il_prefix_t prefixes;
 
-    // the pc of the opcode
-    uint32_t pc;
+    // the token of the operand
+    int operand_token;
+
+    // the opcode we have
+    tdn_il_opcode_t opcode;
+
+    // the operand control flow
+    tdn_il_control_flow_t control_flow;
+
+    // the operand type
+    tdn_il_operand_t operand_type;
 } tdn_il_inst_t;
 
 const char* tdn_get_opcode_name(tdn_il_opcode_t opcode);

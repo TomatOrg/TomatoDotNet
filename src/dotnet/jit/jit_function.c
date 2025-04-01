@@ -131,6 +131,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     tdn_il_inst_t last_inst;
     uint32_t pc = block.block.start;
+    RuntimeTypeInfo constrained = NULL;
     while (pc < block.block.end) {
         last_inst = inst;
 
@@ -162,47 +163,42 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         } else if (inst.opcode == CEE_READONLY) {
             prefix |= TDN_IL_PREFIX_READONLY;
             continue;
+        } else if (inst.opcode == CEE_CONSTRAINED) {
+            prefix |= TDN_IL_PREFIX_CONSTRAINED;
+            constrained = inst.operand.type;
+            continue;
+
         } else {
             inst.prefixes = prefix;
             prefix = 0;
 
             // ensure that the prefix matches
-            if (prefix & TDN_IL_PREFIX_VOLATILE) {
+            if (prefix & TDN_IL_PREFIX_VOLATILE || prefix & TDN_IL_PREFIX_UNALIGNED) {
                 switch (inst.opcode) {
-                    case CEE_LDIND_I1:
-                    case CEE_LDIND_U1:
-                    case CEE_LDIND_I2:
-                    case CEE_LDIND_U2:
-                    case CEE_LDIND_I4:
-                    case CEE_LDIND_U4:
-                    case CEE_LDIND_I8:
-                    case CEE_LDIND_I:
-                    case CEE_LDIND_R4:
-                    case CEE_LDIND_R8:
-                    case CEE_LDIND_REF:
-                    case CEE_STIND_REF:
-                    case CEE_STIND_I1:
-                    case CEE_STIND_I2:
-                    case CEE_STIND_I4:
-                    case CEE_STIND_I8:
-                    case CEE_STIND_R4:
-                    case CEE_STIND_R8:
-                    case CEE_LDFLD:
-                    case CEE_STFLD:
-                    case CEE_LDSFLD:
-                    case CEE_STSFLD:
-                    case CEE_LDOBJ:
-                    case CEE_STOBJ:
-                    case CEE_INITBLK:
-                    case CEE_CPBLK:
+                    case CEE_LDIND_I1: case CEE_LDIND_U1: case CEE_LDIND_I2: case CEE_LDIND_U2:
+                    case CEE_LDIND_I4: case CEE_LDIND_U4: case CEE_LDIND_I8: case CEE_LDIND_I:
+                    case CEE_LDIND_R4: case CEE_LDIND_R8: case CEE_LDIND_REF: case CEE_STIND_REF:
+                    case CEE_STIND_I1: case CEE_STIND_I2: case CEE_STIND_I4: case CEE_STIND_I8:
+                    case CEE_STIND_R4: case CEE_STIND_R8: case CEE_LDFLD: case CEE_STFLD:
+                    case CEE_LDOBJ: case CEE_STOBJ:
+                    case CEE_INITBLK: case CEE_CPBLK:
                         break;
                     default:
-                        CHECK_FAIL();
+                        // only volatile prefix is allowed on ldsfld and stsfld
+                        CHECK(prefix & TDN_IL_PREFIX_VOLATILE && (inst.opcode == CEE_LDSFLD || inst.opcode == CEE_STSFLD));
                 }
             }
 
+            // readonly is only allowed on ldelema
             if (prefix & TDN_IL_PREFIX_READONLY) {
                 CHECK(inst.opcode == CEE_LDELEMA);
+            }
+
+            // constrained is only allowed on a callvirt
+            if (prefix & TDN_IL_PREFIX_CONSTRAINED) {
+                CHECK(inst.opcode == CEE_CALLVIRT);
+                inst.constrained = constrained;
+                constrained = NULL;
             }
         }
 
@@ -249,7 +245,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         // happy
         //
         CHECK_ERROR(arrlen(block.stack) >= arrlen(stack_items),
-            inst.opcode == CEE_RET ? TDN_ERROR_VERIFIER_RETURN_MISSING : TDN_ERROR_CHECK_FAILED);
+            inst.opcode == CEE_RET ? TDN_ERROR_VERIFIER_RETURN_MISSING : TDN_ERROR_VERIFIER_STACK_UNDERFLOW);
         for (int i = arrlen(stack_items) - 1; i >= 0; i--) {
             stack_items[i] = arrpop(block.stack);
         }
@@ -257,18 +253,21 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         // if the last opcode is an ldftn or ldvirtftn then
         // this must be a newobj
         if (last_inst.opcode == CEE_LDFTN || last_inst.opcode == CEE_LDVIRTFTN) {
-            CHECK(inst.opcode == CEE_NEWOBJ);
+            CHECK_ERROR(inst.opcode == CEE_NEWOBJ,
+                TDN_ERROR_VERIFIER_DELEGATE_PATTERN);
         }
 
         // before ldvirtftn we must have a dup
         if (inst.opcode == CEE_LDVIRTFTN) {
-            CHECK(last_inst.opcode == CEE_DUP);
+            CHECK_ERROR(last_inst.opcode == CEE_DUP,
+                TDN_ERROR_VERIFIER_DELEGATE_PATTERN);
         }
 
         //
         // Ensure we can push to the stack enough items
         //
-        CHECK(arrlen(block.stack) + stack_behavior.push <= body->MaxStackSize);
+        CHECK_ERROR(arrlen(block.stack) + stack_behavior.push <= body->MaxStackSize,
+            TDN_ERROR_VERIFIER_STACK_OVERFLOW);
         size_t wanted_stack_size = arrlen(block.stack) + stack_behavior.push;
 
         // ensure we have a verifier for this opcode
@@ -410,7 +409,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         jit_block_local_t local = {};
 
         // if this is a readonly parameter then mark it as such
-        if (parameter->IsReadOnly) {
+        if (parameter->ReferenceIsReadOnly) {
             CHECK(type->IsByRef);
             local.flags.ref_read_only = true;
         }
@@ -447,6 +446,16 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         // initialize the entry block types
         arrsetlen(entry_block->locals, method->MethodBody->LocalVariables->Length);
         memset(entry_block->locals, 0, arrlen(entry_block->locals) * sizeof(*entry_block->locals));
+    }
+
+    // if this is a ctor, we need to track the ctor state to ensure that the parent
+    // ctor is called properly
+    if (
+        !function->method->Attributes.Static &&
+        !tdn_type_is_valuetype(function->method->DeclaringType) &&
+        tdn_compare_string_to_cstr(function->method->Name, ".ctor")
+    ) {
+        function->track_ctor_state = true;
     }
 
 cleanup:
@@ -614,3 +623,79 @@ RuntimeExceptionHandlingClause jit_get_enclosing_filter_clause(jit_function_t* f
     return NULL;
 }
 
+jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInfo type) {
+    if (
+        type == tBoolean ||
+        type == tChar ||
+        type == tSByte ||
+        type == tByte ||
+        type == tInt16 ||
+        type == tUInt16 ||
+        type == tInt32 ||
+        type == tUInt32
+    ) {
+        value->kind = JIT_KIND_INT32;
+        value->type = tInt32;
+
+    } else if (type == tInt64 || type == tUInt64) {
+        value->kind = JIT_KIND_INT64;
+        value->type = tInt64;
+
+    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
+        value->kind = JIT_KIND_NATIVE_INT;
+        value->type = tIntPtr;
+
+    } else if (type->BaseType == tEnum) {
+        jit_stack_value_init(value, type->EnumUnderlyingType);
+
+    } else if (type->IsByRef) {
+        value->kind = JIT_KIND_BY_REF;
+        value->type = type->ElementType;
+
+    } else if (tdn_type_is_valuetype(type)) {
+        value->kind = JIT_KIND_VALUE_TYPE;
+        value->type = type;
+
+    } else {
+        ASSERT(tdn_type_is_referencetype(type));
+        value->kind = JIT_KIND_OBJ_REF;
+        value->type = type;
+
+    }
+
+    return value;
+}
+
+jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
+    if (
+        type == tBoolean ||
+        type == tChar ||
+        type == tSByte ||
+        type == tByte ||
+        type == tInt16 ||
+        type == tUInt16 ||
+        type == tInt32 ||
+        type == tUInt32
+    ) {
+        return JIT_KIND_INT32;
+
+    } else if (type == tInt64 || type == tUInt64) {
+        return JIT_KIND_INT64;
+
+    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
+        return JIT_KIND_NATIVE_INT;
+
+    } else if (type->BaseType == tEnum) {
+        return jit_get_type_kind(type->EnumUnderlyingType);
+
+    } else if (type->IsByRef) {
+        return JIT_KIND_BY_REF;
+
+    } else if (tdn_type_is_valuetype(type)) {
+        return JIT_KIND_VALUE_TYPE;
+
+    } else {
+        ASSERT(tdn_type_is_referencetype(type));
+        return JIT_KIND_OBJ_REF;
+    }
+}
