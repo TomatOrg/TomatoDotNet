@@ -548,6 +548,63 @@ static RuntimeMethodInfo find_overriden_method(RuntimeTypeInfo type, RuntimeMeth
     return NULL;
 }
 
+static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info);
+
+static tdn_err_t add_interface_to_type(RuntimeTypeInfo info, RuntimeTypeInfo interface, uint64_t* interface_product, int* vtable_offset) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ignore if we already have the type in our list
+    if (hmgeti(info->InterfaceImpls, interface) >= 0) {
+        goto cleanup;
+    }
+
+    // go over the interfaces that this interface implements and add
+    // them to the list as well, this ensures that we will reuse
+    // everything nicely if possible
+    for (int i = 0; i < hmlen(interface->InterfaceImpls); i++) {
+        RuntimeTypeInfo sub_iface = interface->InterfaceImpls[i].key;
+        CHECK_AND_RETHROW(add_interface_to_type(info, sub_iface, interface_product, vtable_offset));
+    }
+
+    // check if the parent already implemented this interface, if so
+    // use the parent's offset and not our offset
+    int parent_offset = -1;
+    if (info->BaseType != NULL) {
+        int idx = hmgeti(info->BaseType->InterfaceImpls, interface);
+        if (idx >= 0) {
+            parent_offset = info->BaseType->InterfaceImpls[idx].value;
+        }
+    }
+
+    // if no offset was already allocated, allocate a new one
+    if (parent_offset == -1) {
+        CHECK_AND_RETHROW(fill_virtual_methods(interface));
+        parent_offset = *vtable_offset;
+        *vtable_offset += interface->VTable->Length;
+    }
+
+    // insert that the type implements this interface
+    interface_impl_t new_impl = {
+        .key = interface,
+        .value = parent_offset
+    };
+    hmputs(info->InterfaceImpls, new_impl);
+
+    // if a prime was not generated already, add to the list of types that implement this interface
+    // otherwise just multiply our product with the generated prime
+    if (interface->InterfacePrime == 0) {
+        // set the new link to point to us
+        new_impl.next = interface->InterfaceImplementors;
+        interface->InterfaceImplementors = info;
+    } else {
+        // add the current interface already
+        CHECK(!__builtin_mul_overflow(*interface_product, interface->InterfacePrime, interface_product));
+    }
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -570,12 +627,23 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     dotnet_file_t* metadata = assembly->Metadata;
 
     // the current offset of the vtable
-    int vtable_offset = info->BaseType ? (info->BaseType->VTable ? info->BaseType->VTable->Length : 0) : 0;
-
-    // TODO: copy the interfaces implemented by the parent
-
-    // ignore anything not of this type
+    int vtable_offset = 0;
     uint64_t interface_product = 1;
+
+    // copy the interfaces implemented by the parent
+    if (info->BaseType != NULL) {
+        // start from after the parent's vtable
+        vtable_offset = info->BaseType->VTable ? info->BaseType->VTable->Length : 0;
+
+        // and add all the interfaces implemented by the parent to us
+        for (int i = 0; i < hmlen(info->BaseType->InterfaceImpls); i++) {
+            RuntimeTypeInfo interface = info->BaseType->InterfaceImpls[i].key;
+            CHECK_AND_RETHROW(add_interface_to_type(info, interface, &interface_product, &vtable_offset));
+        }
+    }
+
+    // and now add all the interfaces that are
+    // implemented by this type explicitly
     for (int i = 0; i < metadata->interface_impls_count; i++) {
         metadata_interface_impl_t* impl = &metadata->interface_impls[i];
         if (impl->class.token != info->MetadataToken) {
@@ -586,35 +654,8 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         RuntimeTypeInfo interface;
         CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->interface.token, info->GenericArguments, NULL, &interface));
 
-        // check if the parent already implemented this interface
-        int parent_offset = -1;
-        if (info->BaseType != NULL) {
-            int idx = hmgeti(info->BaseType->InterfaceImpls, interface);
-            if (idx >= 0) {
-                parent_offset = info->BaseType->InterfaceImpls[idx].value;
-            }
-        }
-
-        // TODO: maybe also go over all the interfaces that this interface exports and try
-        //       to allocate area for them
-
-        // if no offset was already allocated, allocate a new one
-        if (parent_offset == -1) {
-            CHECK_AND_RETHROW(fill_virtual_methods(interface));
-            parent_offset = vtable_offset;
-            vtable_offset += interface->VTable->Length;
-        }
-
-        // insert that the type implements this interface
-        interface_impl_t new_impl = {
-            .key = interface,
-            .value = parent_offset,
-            .next = interface->InterfaceImplementors
-        };
-        hmputs(info->InterfaceImpls, new_impl);
-
-        // set the new link to point to us
-        interface->InterfaceImplementors = info;
+        // and add it to the type
+        CHECK_AND_RETHROW(add_interface_to_type(info, interface, &interface_product, &vtable_offset));
     }
 
     // go over all the virtual methods and allocate vtable slots to all of them,
@@ -1182,6 +1223,7 @@ tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo interface) {
     // and now go over all of the implementors of this interface
     // and update their product to include this type
     RuntimeTypeInfo implementor = interface->InterfaceImplementors;
+    interface->InterfaceImplementors = NULL;
     while (implementor != NULL) {
         // set the product
         uint64_t* product = &implementor->JitVTable->InterfaceProduct;
@@ -1191,6 +1233,7 @@ tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo interface) {
         interface_impl_t* impl = hmgetp_null(implementor->InterfaceImpls, interface);
         CHECK(impl != NULL);
         implementor = impl->next;
+        impl->next = NULL;
     }
 
 cleanup:

@@ -622,12 +622,6 @@ cleanup:
             TDN_ERROR_VERIFIER_UNINIT_STACK); \
     } while (0)
 
-static jit_stack_value_t jit_stack_value_create(RuntimeTypeInfo type) {
-    jit_stack_value_t value = {};
-    jit_stack_value_init(&value, type);
-    return value;
-}
-
 bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type);
 
 static bool verifier_can_cast_to_class_or_interface(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
@@ -1295,26 +1289,29 @@ cleanup:
 static tdn_err_t verify_stind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK_INIT_THIS(&stack[0]);
-    CHECK_INIT_THIS(&stack[1]);
+    jit_stack_value_t* value = &stack[1];
+    jit_stack_value_t* address = &stack[0];
+
+    CHECK_INIT_THIS(value);
+    CHECK_INIT_THIS(address);
 
     // must be writable to store
-    CHECK_ERROR(!stack[1].flags.ref_read_only,
+    CHECK_ERROR(!address->flags.ref_read_only,
         TDN_ERROR_VERIFIER_READONLY_ILLEGAL_WRITE);
 
     // must be a byref
-    CHECK(stack[1].kind == JIT_KIND_BY_REF);
+    CHECK(address->kind == JIT_KIND_BY_REF);
 
     // resolve the type if stind.ref
     if (inst->operand.type == NULL) {
-        inst->operand.type = stack[1].type;
+        inst->operand.type = address->type;
     }
 
     jit_stack_value_t type_val = jit_stack_value_create(inst->operand.type);
-    jit_stack_value_t address_val = jit_stack_value_create(stack[1].type);
+    jit_stack_value_t address_val = jit_stack_value_create(address->type);
 
     CHECK_IS_ASSIGNABLE(&type_val, &address_val);
-    CHECK_IS_ASSIGNABLE(&stack[0], &type_val);
+    CHECK_IS_ASSIGNABLE(value, &type_val);
 
 cleanup:
     return err;

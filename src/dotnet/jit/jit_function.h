@@ -87,6 +87,12 @@ static bool jit_is_boxed_value_type(jit_stack_value_t* value) { return value->ki
  */
 jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInfo type);
 
+static inline jit_stack_value_t jit_stack_value_create(RuntimeTypeInfo type) {
+    jit_stack_value_t value = {};
+    jit_stack_value_init(&value, type);
+    return value;
+}
+
 jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type);
 
 typedef struct jit_block {

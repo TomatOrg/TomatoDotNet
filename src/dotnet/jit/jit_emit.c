@@ -42,7 +42,12 @@ static spidir_value_type_t get_spidir_type(RuntimeTypeInfo type) {
 }
 
 spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
-    jit_stack_value_kind_t kind = jit_get_type_kind(method->ReturnParameter->ParameterType);
+    RuntimeTypeInfo type = method->ReturnParameter->ParameterType;
+    if (jit_is_struct_like(type)) {
+        return SPIDIR_TYPE_NONE;
+    }
+
+    jit_stack_value_kind_t kind = jit_get_type_kind(type);
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
 
@@ -52,11 +57,8 @@ spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
     } else if (kind == JIT_KIND_FLOAT) {
         return SPIDIR_TYPE_F64;
 
-    } else if (kind == JIT_KIND_VALUE_TYPE) {
-        // things which act like a struct return by using reference
-        return SPIDIR_TYPE_NONE;
-
     } else {
+        ASSERT(kind == JIT_KIND_BY_REF || kind == JIT_KIND_OBJ_REF);
         return SPIDIR_TYPE_PTR;
     }
 }
@@ -303,7 +305,6 @@ static spidir_value_t jit_convert_local(
             from_value = spidir_builder_build_and(builder, from_value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (1 << bit_count) - 1));
         } else {
-            TRACE("%T -> %T", from_type, to_type);
             ASSERT(!"Invalid");
         }
         return from_value;
@@ -632,7 +633,7 @@ cleanup:
 static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    RuntimeTypeInfo dest_type = stack[0].type->ElementType;
+    RuntimeTypeInfo dest_type = stack[0].type;
     if (jit_is_struct_like(dest_type)) {
         jit_emit_bzero(builder, stack[0].value, dest_type);
     } else {
@@ -647,7 +648,7 @@ cleanup:
 static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     RuntimeTypeInfo type = inst->operand.type;
     if (type == NULL) {
-        type = stack[0].type->ElementType;
+        type = stack[0].type;
     }
     STACK_TOP()->value = jit_emit_load(builder, type, stack[0].value);
     return TDN_NO_ERROR;
@@ -655,7 +656,7 @@ static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t bu
 
 static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // we just need to store into the given item
-    jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type->ElementType, stack[0].value);
+    jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type, stack[0].value);
     return TDN_NO_ERROR;
 }
 
@@ -1068,14 +1069,14 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
 
         if (i > convert_offset) {
             // convert other arguments
-            value = jit_convert_value(
+            value = jit_convert_local(
                 builder,
                 stack[i].type, stack[i].value,
                 callee->Parameters->Elements[i - convert_offset]->ParameterType
             );
         } else {
             // convert the this
-            value = jit_convert_value(
+            value = jit_convert_local(
                 builder,
                 stack[i].type, stack[i].value,
                 jit_get_method_this_type(callee)
@@ -1201,15 +1202,19 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         // initialize the function
         CHECK_AND_RETHROW(jit_function_init(&inlinee, callee));
 
+        // pass the arguments, we need to convert them properly
+        // to the correct types before we do so tho
+        // TODO: pass extended type info for better devirt in the inlined method
+        for (int i = 0; i < arrlen(inlinee.entry_block.args); i++) {
+            inlinee.entry_block.args[i].value = jit_convert_local(
+                builder,
+                stack[i].type, stack[i].value,
+                inlinee.args[i].type);
+        }
+
         // create the entry block and jump into it
         inlinee.entry_block.spidir_block = spidir_builder_create_block(builder);
         spidir_builder_build_branch(builder, inlinee.entry_block.spidir_block);
-
-        // pass the arguments
-        // TODO: pass extended type info for better devirt in the inlined method
-        for (int i = 0; i < arrlen(inlinee.entry_block.args); i++) {
-            inlinee.entry_block.args[i].value = stack[i].value;
-        }
 
         // setup the inline information
         inlinee.inline_depth = function->inline_depth + 1;
@@ -1576,9 +1581,14 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
         // so we can hard-code the validity of this
         bool is_upcast = verifier_can_cast_to(stack[0].type, inst->operand.type);
 
-        // check if the cast is even possible, if not mark this as
-        // impossible so we can hard-code invalidity of it
-        bool is_possible_cast = verifier_can_cast_to(inst->operand.type, stack[0].type);
+        // by default assume the cast is possible, since new parts of
+        // the inheritance trees might not be visible to us
+        bool is_possible_cast = true;
+        if (stack[0].type->Attributes.Sealed) {
+            // if the type on the stack is sealed, then we can check if its impossible
+            // to perform the cast
+            is_possible_cast = verifier_can_cast_to(inst->operand.type, stack[0].type);
+        }
 
         // if null then return null
         spidir_block_t type_check = spidir_builder_create_block(builder);
