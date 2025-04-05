@@ -370,18 +370,76 @@ static bool verifier_merge_block_local(jit_block_local_t* previous, jit_block_lo
 }
 
 static bool verifier_is_direct_child_region(jit_function_t* function, jit_basic_block_t* enclosing_block, jit_basic_block_t* enclosed_block) {
+    ERROR("verifier_is_direct_child_region(IL_%04x, IL_%04x)", enclosing_block->start, enclosed_block->start);
     RuntimeExceptionHandlingClause enclosed_region = enclosed_block->try_clause;
-    for (int i = enclosed_region->TryOffset - 1; i > enclosing_block->start; i--) {
+    ERROR("\t%d -> %d", enclosed_region->TryOffset - 1, enclosing_block->start);
+    for (int i = enclosed_region->TryOffset - 1; i > (long)enclosing_block->start; i--) {
+        ERROR("\tIL_%04x", i);
         int idx = hmgeti(function->labels, i);
         if (idx < 0) {
             continue;
         }
-        jit_basic_block_t* block = &function->labels[i].value;
+        jit_basic_block_t* block = &function->labels[idx].value;
+
+        ERROR("\tCHECKING BLOCK AT IL_%04x", block->start);
+        ERROR("\tSTARTS A TRY? %d", block->try_start);
         if (block->try_start && block->try_clause != enclosing_block->try_clause) {
+            ERROR("\t\tSTART A TRY THAT IS NOT THE ENCLOSING ONE");
+
             RuntimeExceptionHandlingClause block_region = block->try_clause;
 
             // block region is actually enclosing enclosed_region
             if (block_region->TryOffset + block_region->TryLength > enclosed_region->TryOffset) {
+                ERROR("-> FALSE");
+                return false;
+            }
+        }
+    }
+
+    ERROR("-> TRUE");
+    return true;
+}
+
+static bool verifier_is_disjoint_try_block(jit_function_t* function, RuntimeExceptionHandlingClause disjoint, RuntimeExceptionHandlingClause source) {
+    if (source->TryOffset <= disjoint->TryOffset && source->TryOffset + source->TryLength >= disjoint->TryOffset + disjoint->TryLength) {
+        // Source is enclosing disjoint
+        return false;
+    }
+
+    for (int i = disjoint->TryOffset - 1; i >= 0; i--) {
+        int idx = hmgeti(function->labels, i);
+        if (idx < 0) {
+            continue;
+        }
+        jit_basic_block_t* block = &function->labels[idx].value;
+
+        if (block->try_start) {
+            RuntimeExceptionHandlingClause block_region = block->try_clause;
+            if (
+                (block_region->TryOffset + block_region->TryLength > disjoint->TryOffset) &&
+                (block_region->TryOffset > source->TryOffset || block_region->TryOffset + block_region->TryLength <= source->TryOffset)
+            ) {
+                return false;
+            }
+        }
+
+        if (block->handler_start) {
+            RuntimeExceptionHandlingClause block_region = block->handler_clause;
+            if (
+                (block_region->HandlerOffset + block_region->HandlerLength > disjoint->TryOffset) &&
+                (block_region->HandlerOffset > source->TryOffset || block_region->HandlerOffset + block_region->HandlerLength <= source->TryOffset)
+            ) {
+                return false;
+            }
+        }
+
+        if (block->filter_start) {
+            RuntimeExceptionHandlingClause block_region = block->filter_clause;
+            uint32_t filter_length = block_region->HandlerOffset - block_region->FilterOffset;
+            if (
+                (block_region->FilterOffset + filter_length > disjoint->TryOffset) &&
+                (block_region->FilterOffset > source->TryOffset || block_region->FilterOffset + filter_length <= source->TryOffset)
+            ) {
                 return false;
             }
         }
@@ -416,7 +474,7 @@ static tdn_err_t verifier_is_valid_branch_target(
         } else {
             // If target is inside source region
             RuntimeExceptionHandlingClause src_region = src->try_clause;
-            RuntimeExceptionHandlingClause target_region = src->try_clause;
+            RuntimeExceptionHandlingClause target_region = target->try_clause;
             if (
                 src_region->TryOffset <= target_region->TryOffset &&
                 target->start < src_region->TryOffset + src_region->TryLength
@@ -1116,6 +1174,7 @@ static tdn_err_t verify_ldflda(jit_function_t* function, jit_block_t* block, tdn
     jit_value_flags_t flags = {};
     if (inst->opcode == CEE_LDSFLDA) {
         CHECK_ERROR(field->Attributes.Static, TDN_ERROR_VERIFIER_EXPECTED_STATIC_FIELD);
+        flags.ref_non_local = true;
 
     } else {
         RuntimeTypeInfo owning_type = field->DeclaringType;
@@ -1142,7 +1201,7 @@ static tdn_err_t verify_ldflda(jit_function_t* function, jit_block_t* block, tdn
 
         // if the reference is non-local or its an object reference then the new
         // reference is also going to be
-        if (declared_this.flags.ref_non_local || declared_this.kind == JIT_KIND_OBJ_REF) {
+        if (stack->flags.ref_non_local || stack->kind == JIT_KIND_OBJ_REF) {
             flags.ref_non_local = true;
         }
 
@@ -2125,6 +2184,8 @@ static tdn_err_t verify_leave(jit_function_t* function, jit_block_t* block, tdn_
 
     // empty the stack
     arrsetlen(block->stack, 0);
+
+    // TODO: is valid leave target
 
     // find the block that is around the target
     RuntimeExceptionHandlingClause target_clause = jit_get_enclosing_try_clause(function, inst->operand.branch_target, COR_ILEXCEPTION_CLAUSE_FINALLY, NULL);

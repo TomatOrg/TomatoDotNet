@@ -45,19 +45,30 @@ static void sort_basic_blocks(jit_basic_block_t* arr, int low, int high) {
     }
 }
 
-static jit_basic_block_t* jit_add_basic_block(jit_basic_block_t** basic_blocks, jit_basic_block_entry_t** out_basic_blocks, uint32_t pc) {
+typedef enum block_flags {
+    BLOCK_TRY_START = 1 << 0,
+    BLOCK_HANDLER_START = 1 << 1,
+    BLOCK_FILTER_START = 1 << 2,
+} block_flags_t;
+
+static void jit_add_basic_block(
+    jit_basic_block_t** basic_blocks,
+    jit_basic_block_entry_t** out_basic_blocks,
+    uint32_t pc,
+    block_flags_t flags
+) {
     if (hmgeti(*out_basic_blocks, pc) < 0) {
         jit_basic_block_t block = {
             .start = pc,
-            .end = -1
+            .end = -1,
+            .try_start = (flags & BLOCK_TRY_START) != 0,
+            .handler_start = (flags & BLOCK_HANDLER_START) != 0,
+            .filter_start = (flags & BLOCK_FILTER_START) != 0,
         };
 
         arrpush(*basic_blocks, block);
         hmput(*out_basic_blocks, pc, block);
     }
-
-    // at this point it should exist so we can get it
-    return &hmgetp(*out_basic_blocks, pc)->value;
 }
 
 static void jit_find_enclosing_exception_regions(RuntimeMethodBody body, jit_basic_block_entry_t* basic_blocks) {
@@ -122,7 +133,7 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     jit_basic_block_t* ctx = {};
 
     // the first block always exists
-    jit_add_basic_block(&ctx, out_basic_blocks, 0);
+    jit_add_basic_block(&ctx, out_basic_blocks, 0, 0);
 
     //
     // add all the finally/filter/fault/catch regions
@@ -131,10 +142,10 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             RuntimeExceptionHandlingClause clause = body->ExceptionHandlingClauses->Elements[i];
 
-            jit_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset)->try_start = true;
-            jit_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset)->handler_start = true;
+            jit_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset, BLOCK_TRY_START);
+            jit_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset, BLOCK_HANDLER_START);
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-                jit_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset)->filter_start = true;
+                jit_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset, BLOCK_FILTER_START);
             }
         }
     }
@@ -150,13 +161,13 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
 
         // check for basic blocks created by
         if (inst.control_flow == TDN_IL_CF_BRANCH) {
-            jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target);
+            jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
 
         } else if (inst.control_flow == TDN_IL_CF_COND_BRANCH) {
             // and now add the new blocks, make sure the basic block at the current PC
             // will
-            jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target);
-            jit_add_basic_block(&ctx, out_basic_blocks, pc);
+            jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
+            jit_add_basic_block(&ctx, out_basic_blocks, pc, 0);
         }
 
         // TODO: support for switch
@@ -165,17 +176,16 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     // sort the basic blocks
     sort_basic_blocks(ctx, 0, arrlen(ctx) - 1);
 
-    // rebuild the labels lookup and fill in the
-    // end of each basic block
-    hmfree(*out_basic_blocks);
+    // now that we have the sorted list of blocks we can set the index
+    // and the end of each of the blocks
     for (int i = 0; i < arrlen(ctx); i++) {
+        jit_basic_block_t* block = &hmgetp_null(*out_basic_blocks, ctx[i].start)->value;
+        block->index = i;
         if (i != arrlen(ctx) - 1) {
-            ctx[i].end = ctx[i + 1].start;
+            block->end = ctx[i + 1].start;
         } else {
-            ctx[i].end = body->ILSize;
+            block->end = body->ILSize;
         }
-        ctx[i].index = i;
-        hmput(*out_basic_blocks, ctx[i].start, ctx[i]);
     }
 
     // find the exception regions already

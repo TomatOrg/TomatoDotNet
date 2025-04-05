@@ -23,7 +23,7 @@ def build_tests():
     assert os.system(f'cd {CURRENT_DIR} && dotnet build --configuration Debug') == 0
 
 
-def gather_tests(dlls_to_include: List[str], il_verify: False):
+def gather_tests(dlls_to_include: List[str]):
     # get all the dlls to run
     debug_dlls = glob.glob('**/bin/Debug/net8.0/*.dll', root_dir=CURRENT_DIR, recursive=True)
     release_dlls = glob.glob('**/bin/Release/net8.0/*.dll', root_dir=CURRENT_DIR, recursive=True)
@@ -33,9 +33,6 @@ def gather_tests(dlls_to_include: List[str], il_verify: False):
     dlls_to_ignore = [
         'System.Private.CoreLib.dll'
     ]
-
-    if not il_verify:
-        dlls_to_ignore.append('ilverify')
 
     # only tests we want to run
     if len(dlls_to_include) == 0:
@@ -193,11 +190,11 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
                 stdout_output = format_output(stdout)
                 stderr_output = format_output(stderr)
 
-                # if stdout_output:
-                #     print(f"STDOUT FOR {case}:", flush=True)
-                #     print(stdout_output, flush=True)
-                # else:
-                #     print(f"NO STDOUT FROM TEST {case}", flush=True)
+                if stdout_output:
+                    print(f"STDOUT FOR {case}:", flush=True)
+                    print(stdout_output, flush=True)
+                else:
+                    print(f"NO STDOUT FROM TEST {case}", flush=True)
 
                 if stderr_output:
                     print(f"STDERR FOR {case}:", flush=True)
@@ -222,9 +219,6 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Run Tomato.NET tests")
-    parser.add_argument('--ilverify', action='store_true',
-                        default=False,
-                        help="Run the ilverify tests")
     parser.add_argument('-p', '--parallelism', type=int,
                         default=os.cpu_count() or 1,
                         help="Number of test runners to run in parallel")
@@ -243,7 +237,7 @@ def main():
         os.chmod(ILASM_PATH, 0o755)
 
     build_tests()
-    run_tests(gather_tests(args.cases, args.ilverify), args.parallelism)
+    run_tests(gather_tests(args.cases), args.parallelism)
 
 
 if __name__ == '__main__':

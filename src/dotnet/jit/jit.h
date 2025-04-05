@@ -19,6 +19,11 @@ RuntimeMethodBase jit_get_method_from_function(spidir_function_t function);
 void jit_queue_type(spidir_module_handle_t module, RuntimeTypeInfo type);
 
 /**
+ * Queue a cctor if required
+ */
+void jit_queue_cctor(spidir_module_handle_t module, RuntimeTypeInfo type);
+
+/**
  * Initialize anything that needs to be initialized
  */
 tdn_err_t tdn_jit_init();

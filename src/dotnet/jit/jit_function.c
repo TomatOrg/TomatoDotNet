@@ -397,8 +397,11 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         arrpush(entry_block->args, local);
 
         jit_local_t arg = {
-            .type = jit_get_method_this_type(method),
+            .type = method->DeclaringType,
         };
+        if (tdn_type_is_valuetype(method->DeclaringType)) {
+            CHECK_AND_RETHROW(tdn_get_byref_type(arg.type, &arg.type));
+        }
         arrpush(function->args, arg);
     }
 
@@ -667,7 +670,9 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
 }
 
 jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
-    if (
+    if (type == NULL) {
+        return JIT_KIND_OBJ_REF;
+    } else if (
         type == tBoolean ||
         type == tChar ||
         type == tSByte ||

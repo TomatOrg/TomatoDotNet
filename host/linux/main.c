@@ -334,17 +334,33 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 continue;
             }
 
+            // there are special cases where we need to choose another method
+            RuntimeMethodBase test_method = method;
+            if (tdn_string_contains(method->Name, "special.")) {
+                if (tdn_string_contains(method->Name, "..ctor")) {
+                    for (int i = 0; i < method->DeclaringType->DeclaredConstructors->Length; i++) {
+                        RuntimeConstructorInfo ctor = method->DeclaringType->DeclaredConstructors->Elements[i];
+                        // TODO: check exact signature or something
+                        if (ctor->Parameters->Length == method->Parameters->Length) {
+                            test_method = (RuntimeMethodBase)ctor;
+                            break;
+                        }
+                    }
+                } else {
+                    CHECK_FAIL("%T::%U", method->DeclaringType, method->Name);
+                }
+            }
 
             if (tdn_string_ends(method->Name, "_Valid")) {
                 ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
-                CHECK_AND_RETHROW(tdn_jit_method(method));
+                CHECK_AND_RETHROW(tdn_jit_method(test_method));
 
             } else if (tdn_string_contains(method->Name, "_Invalid_")) {
                 ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
 
                 // we expect to get an error from this, if we didn't
                 // then we failed the test
-                tdn_err_t jit_err = tdn_jit_method(method);
+                tdn_err_t jit_err = tdn_jit_method(test_method);
                 CHECK(IS_ERROR(jit_err), "Should have failed");
 
                 // check that we got the correct condition
@@ -356,6 +372,7 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 else if (tdn_string_contains(method->Name, "_FallthroughException")) CHECK(jit_err == TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
                 else if (tdn_string_contains(method->Name, "_BadJumpTarget")) CHECK(jit_err == TDN_ERROR_VERIFIER_BAD_JUMP_TARGET);
                 else if (tdn_string_contains(method->Name, "_ThisMismatch")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_MISMATCH);
+                else if (tdn_string_contains(method->Name, "_CtorSig.CtorExpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_EXPECTED || jit_err == TDN_ERROR_VERIFIER_CTOR_SIG);
                 else if (tdn_string_contains(method->Name, "_CtorExpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_EXPECTED);
                 else if (tdn_string_contains(method->Name, "_CtorSig")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_SIG);
                 else if (tdn_string_contains(method->Name, "_ReturnVoid")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_VOID);
@@ -365,6 +382,7 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 else if (tdn_string_contains(method->Name, "_ReturnFromHandler")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_FROM_HANDLER);
                 else if (tdn_string_contains(method->Name, "_ReturnPtrToStack")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
                 else if (tdn_string_contains(method->Name, "_MethodFallthrough")) CHECK(jit_err == TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH);
+                else if (tdn_string_contains(method->Name, "_ThisUninitReturn")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_UNINIT_RETURN);
                 else CHECK_FAIL("Invalid error condition");
 
             } else {

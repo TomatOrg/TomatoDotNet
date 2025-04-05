@@ -32,6 +32,11 @@ static spidir_function_t* m_jit_queue = NULL;
  */
 static RuntimeTypeInfo* m_jit_type_queue = NULL;
 
+/**
+ * Cctors that need to run
+ */
+static RuntimeMethodBase* m_jit_cctor_queue = NULL;
+
 static struct {
     spidir_function_t key;
     RuntimeMethodBase value;
@@ -103,6 +108,28 @@ void jit_queue_type(spidir_module_handle_t module, RuntimeTypeInfo type) {
             }
         }
     }
+}
+
+void jit_queue_cctor(spidir_module_handle_t module, RuntimeTypeInfo type) {
+    if (type->TypeInitializer == NULL) {
+        return;
+    }
+
+    RuntimeMethodBase method = (RuntimeMethodBase)type->TypeInitializer;
+
+    // ensure the finalizer can run async since we don't support
+    // the other kind just yet
+    ASSERT(type->Attributes.BeforeFieldInit);
+
+    // ignore if already added
+    if (hmgeti(m_function_lookup, method) >= 0 || method->MethodPtr != NULL) {
+        return;
+    }
+
+    // queue it for codegen and for running as a cctor
+    spidir_function_t function = jit_get_function(module, method);
+    jit_codegen_queue(method, function, false);
+    arrpush(m_jit_cctor_queue, method);
 }
 
 static void jit_emit_function(spidir_builder_handle_t builder, void* _ctx) {
@@ -182,7 +209,12 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
         }
     }
 
-    // TODO:
+    // run the cctors that can run right now
+    for (int i = 0; i < arrlen(m_jit_cctor_queue); i++) {
+        RuntimeMethodBase method = m_jit_cctor_queue[i];
+        TRACE("Running cctor of %T", method->DeclaringType);
+        ((void(*)())(method->MethodPtr))();
+    }
 
 cleanup:
     // free the codegen resources
@@ -191,6 +223,7 @@ cleanup:
 
     // free all the jit resources
     arrfree(m_jit_type_queue);
+    arrfree(m_jit_cctor_queue);
     arrfree(m_jit_queue);
     hmfree(m_method_lookup);
     hmfree(m_function_lookup);

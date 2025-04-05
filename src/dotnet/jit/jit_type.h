@@ -34,14 +34,6 @@ static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
     return jit_is_interface(type) || jit_is_struct(type) || jit_is_delegate(type);
 }
 
-static inline RuntimeTypeInfo jit_get_method_this_type(RuntimeMethodBase method) {
-    RuntimeTypeInfo type = method->DeclaringType;
-    if (tdn_type_is_valuetype(type)) {
-        ASSERT(!IS_ERROR(tdn_get_byref_type(type, &type)));
-    }
-    return type;
-}
-
 //----------------------------------------------------------------------------------------------------------------------
 // Offset helpers
 //----------------------------------------------------------------------------------------------------------------------

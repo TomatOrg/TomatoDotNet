@@ -310,6 +310,8 @@ static spidir_value_t jit_convert_local(
 static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block) {
     if (block->multiple_predecessors) {
 
+        TRACE("MERGING INTO BLOCK WITH MULTIPLE PREDECESSORS IL_%04x", block->block.start);
+
         //
         // initialize the phis for this block
         //
@@ -361,7 +363,7 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
         for (int i = 0; i < arrlen(block->stack); i++) {
             spidir_builder_add_phi_input(builder, block->stack_phis[i],
                 jit_convert_value(builder,
-                    from->stack,
+                    &from->stack[i],
                     block->stack[i].type));
         }
 
@@ -392,6 +394,8 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
         }
 
     } else {
+        TRACE("MERGING INTO BLOCK WITH SINGLE PREDECESSOR IL_%04x", block->block.start);
+
         // just copy over the values
         for (int i = 0; i < arrlen(block->stack); i++) {
             block->stack[i].value = from->stack[i].value;
@@ -547,6 +551,7 @@ static tdn_err_t emit_ldflda(jit_function_t* function, spidir_builder_handle_t b
     spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
 
     if (inst->operand.field->Attributes.Static) {
+        jit_queue_cctor(spidir_builder_get_module(builder), inst->operand.field->DeclaringType);
         field_ptr = jit_get_static_field(builder, inst->operand.field);
     } else {
         // add the offset to the field and access it
@@ -568,6 +573,7 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
     spidir_value_t field_ptr = SPIDIR_VALUE_INVALID;
 
     if (inst->operand.field->Attributes.Static) {
+        jit_queue_cctor(spidir_builder_get_module(builder), inst->operand.field->DeclaringType);
         field_ptr = jit_get_static_field(builder, inst->operand.field);
     } else {
         // for pointer access convert it to a pointer first
@@ -595,6 +601,7 @@ static tdn_err_t emit_stfld(jit_function_t* function, spidir_builder_handle_t bu
 
     jit_stack_value_t* value = NULL;
     if (inst->operand.field->Attributes.Static) {
+        jit_queue_cctor(spidir_builder_get_module(builder), inst->operand.field->DeclaringType);
         field_ptr = jit_get_static_field(builder, inst->operand.field);
         value = &stack[0];
     } else {
@@ -1010,11 +1017,6 @@ static RuntimeMethodBase devirt_method(jit_stack_value_t* item, RuntimeMethodBas
         return item->method;
     }
 
-    // has builtin emitter, we know what to call directly
-    if (jit_get_builtin_emitter(target) != NULL) {
-        return target;
-    }
-
     // get the real type
     RuntimeTypeInfo cur_type = item->type;
     // TODO: extended type info as required
@@ -1061,10 +1063,14 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
             );
         } else {
             // convert the this
+            RuntimeTypeInfo this_type = callee->DeclaringType;
+            if (tdn_type_is_valuetype(this_type)) {
+                ASSERT(!IS_ERROR(tdn_get_byref_type(this_type, &this_type)));
+            }
             value = jit_convert_local(
                 builder,
                 &stack[i],
-                jit_get_method_this_type(callee)
+                this_type
             );
         }
 
@@ -1162,6 +1168,7 @@ static tdn_err_t emit_ldftn(jit_function_t* function, spidir_builder_handle_t bu
     // get the spidir function
     spidir_function_t func;
     if (callee->Attributes.Static) {
+        jit_queue_cctor(spidir_builder_get_module(builder), callee->DeclaringType);
         func = jit_generate_static_delegate_thunk(spidir_builder_get_module(builder), callee);
     } else {
         func = jit_get_function(spidir_builder_get_module(builder), callee);
@@ -1181,6 +1188,10 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
 
     RuntimeMethodBase callee = inst->operand.method;
     jit_builtin_emitter_t emitter = jit_get_builtin_emitter(callee);
+
+    if (callee->Attributes.Static) {
+        jit_queue_cctor(spidir_builder_get_module(builder), callee->DeclaringType);
+    }
 
     // check if we should inline, special case for builtin emitters since they have a special inline semantic
     if (emitter == NULL && jit_should_inline(function, callee) && !jit_should_not_inline(function, callee)) {
@@ -1261,6 +1272,8 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
     jit_stack_value_t* args = NULL;
     RuntimeMethodBase callee = inst->operand.method;
 
+    jit_queue_cctor(spidir_builder_get_module(builder), callee->DeclaringType);
+
     // allocate the item
     spidir_value_t obj = SPIDIR_VALUE_INVALID;
     if (jit_is_struct_like(callee->DeclaringType)) {
@@ -1279,7 +1292,8 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
     // build a new stack args, including the `this` that we just created
     arrsetlen(args, arrlen(stack) + 1);
     memcpy(args + 1, stack, arrlen(stack) * sizeof(*stack));
-    args[0].type = jit_get_method_this_type(callee);
+    args[0].type = callee->DeclaringType;
+    args[0].kind = tdn_type_is_valuetype(callee->DeclaringType) ? JIT_KIND_BY_REF : JIT_KIND_OBJ_REF;
     args[0].value = obj;
     // TODO: mark as a known type
 
@@ -1305,6 +1319,14 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
         stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
     }
 
+    // check if we have an emitter that handle this virtual method, this is a bit like
+    // performing de-virt but more specific to builtin methods
+    jit_builtin_emitter_t emitter = jit_get_builtin_emitter(inst->operand.method);
+    if (emitter != NULL) {
+        CHECK_AND_RETHROW(emit_call(function, builder, block, inst, stack));
+        goto cleanup;
+    }
+
     // attempt to de-virtualize the method, if we could then
     // replace the instruction and call the normal emit_call
     // method
@@ -1319,7 +1341,8 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
                 stack = &stack[1];
             } else {
                 // load the this from the delegate
-                stack[0].type = jit_get_method_this_type(known);
+                stack[0].kind = JIT_KIND_OBJ_REF;
+                stack[0].type = known->DeclaringType;
                 stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
                             spidir_builder_build_ptroff(builder, stack[0].value,
                                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Instance))));
@@ -1329,6 +1352,8 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
         // the devirt was into a valuetype, move the pointer
         // forward since this will call the non-thunk version
         if (tdn_type_is_valuetype(known->DeclaringType)) {
+            stack[0].kind = JIT_KIND_OBJ_REF;
+            stack[0].type = known->DeclaringType;
             stack[0].value = spidir_builder_build_ptroff(builder, stack[0].value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,
                     jit_get_boxed_value_offset(known->DeclaringType)));
