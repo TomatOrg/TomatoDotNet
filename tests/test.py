@@ -1,4 +1,7 @@
 import argparse
+import shutil
+import urllib.request
+import zipfile
 from multiprocessing import Manager, Pool, Queue
 from tempfile import mktemp
 from typing import List
@@ -9,9 +12,9 @@ import sys
 import os
 
 
-ILASM_PATH = '/home/tomato/Downloads/runtime.linux-x64.microsoft.netcore.ilasm.10.0.0-preview.2.25163.2/runtimes/linux-x64/native/ilasm'
-
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+ILASM_PATH = os.path.join(CURRENT_DIR, 'bin', 'ilasm')
 TDN_BINARY = os.path.join(CURRENT_DIR, '..', 'host', 'linux', 'out', 'bin', 'tdn.elf')
 
 
@@ -190,11 +193,11 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
                 stdout_output = format_output(stdout)
                 stderr_output = format_output(stderr)
 
-                if stdout_output:
-                    print(f"STDOUT FOR {case}:", flush=True)
-                    print(stdout_output, flush=True)
-                else:
-                    print(f"NO STDOUT FROM TEST {case}", flush=True)
+                # if stdout_output:
+                #     print(f"STDOUT FOR {case}:", flush=True)
+                #     print(stdout_output, flush=True)
+                # else:
+                #     print(f"NO STDOUT FROM TEST {case}", flush=True)
 
                 if stderr_output:
                     print(f"STDERR FOR {case}:", flush=True)
@@ -228,6 +231,16 @@ def main():
     parser.add_argument('cases', nargs='*',
                         help='Filter which tests to run')
     args = parser.parse_args()
+
+    # download ILASM if needed
+    if not os.path.exists(ILASM_PATH):
+        os.makedirs(os.path.join(CURRENT_DIR, 'bin'), exist_ok=True)
+        urllib.request.urlretrieve('https://www.nuget.org/api/v2/package/runtime.linux-x64.Microsoft.NETCore.ILAsm/10.0.0-preview.2.25163.2', ILASM_PATH + '.zip')
+        with zipfile.ZipFile(ILASM_PATH + '.zip', 'r') as zip_ref:
+            with zip_ref.open('runtimes/linux-x64/native/ilasm') as source:
+                with open(ILASM_PATH, 'wb') as target:
+                    shutil.copyfileobj(source, target)
+        os.chmod(ILASM_PATH, 0o755)
 
     build_tests()
     run_tests(gather_tests(args.cases, args.ilverify), args.parallelism)

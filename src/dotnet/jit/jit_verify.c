@@ -742,6 +742,14 @@ static bool verifier_is_assignable(jit_stack_value_t* src, jit_stack_value_t* ds
         case JIT_KIND_VALUE_TYPE:
             return false;
 
+        case JIT_KIND_BY_REF: {
+            if (dst->kind == JIT_KIND_BY_REF && dst->flags.ref_read_only) {
+                return src->type == dst->type;
+            }
+
+            return false;
+        } break;
+
         // can either be int64 or native int
         case JIT_KIND_INT32:
             return dst->kind == JIT_KIND_INT64 || dst->kind == JIT_KIND_NATIVE_INT;
@@ -750,7 +758,8 @@ static bool verifier_is_assignable(jit_stack_value_t* src, jit_stack_value_t* ds
         case JIT_KIND_NATIVE_INT:
             return dst->kind == JIT_KIND_INT64;
 
-        default: ASSERT(!"Invalid kind");
+        default:
+            ASSERT(!"Invalid kind", "%d of %T", src->kind, src->type);
     }
 }
 
@@ -1257,7 +1266,9 @@ static tdn_err_t verify_initobj(jit_function_t* function, jit_block_t* block, td
         TDN_ERROR_VERIFIER_STACK_BY_REF);
 
     // and check it matches properly
-    jit_stack_value_t value = jit_stack_value_create(inst->operand.type);
+    jit_stack_value_t value = {};
+    value.type = inst->operand.type;
+    value.kind = JIT_KIND_BY_REF;
     CHECK_IS_ASSIGNABLE(stack, &value);
 
 cleanup:
@@ -1293,7 +1304,6 @@ static tdn_err_t verify_stind(jit_function_t* function, jit_block_t* block, tdn_
     jit_stack_value_t* address = &stack[0];
 
     CHECK_INIT_THIS(value);
-    CHECK_INIT_THIS(address);
 
     // must be writable to store
     CHECK_ERROR(!address->flags.ref_read_only,
@@ -1812,7 +1822,8 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
         // TODO: check delegate assignable
     } else {
         // check that the args match, ignore the instance for now
-        int off = method_type ? 1 : 0;
+        int off = (method_type != NULL && inst->opcode != CEE_NEWOBJ) ? 1 : 0;
+        CHECK(arrlen(stack) == (off + method->Parameters->Length));
         for (int i = 0; i < method->Parameters->Length; i++) {
             jit_stack_value_t* actual = &stack[off + i];
             jit_stack_value_t declared = jit_stack_value_create(method->Parameters->Elements[i]->ParameterType);

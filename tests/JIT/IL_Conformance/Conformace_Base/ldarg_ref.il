@@ -10,7 +10,9 @@
 .class public _ldarg {
 
 .method public		void .ctor() {
-.maxstack	0
+.maxstack	1
+    ldarg.0
+    call instance void [System.Runtime]System.Object::.ctor()
 	ret
 }
 

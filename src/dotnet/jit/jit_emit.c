@@ -130,27 +130,23 @@ static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, 
     );
 }
 
-static void jit_emit_store(
-    spidir_builder_handle_t builder,
-    RuntimeTypeInfo from_type, spidir_value_t from_value,
-    RuntimeTypeInfo to_type, spidir_value_t to_value
-) {
-    if (from_type == NULL && jit_is_struct_like(to_type)) {
+static void jit_emit_store(spidir_builder_handle_t builder, jit_stack_value_t* from, RuntimeTypeInfo to_type, spidir_value_t to_value) {
+    if (jit_is_null_reference(from) && jit_is_struct_like(to_type)) {
         // we need to convert from NULL -> interface
         jit_emit_bzero(builder, to_value, to_type);
 
-    } else if (!jit_is_interface(from_type) && jit_is_interface(to_type)) {
+    } else if (!jit_is_interface(from->type) && jit_is_interface(to_type)) {
         // store the interface instance
         ASSERT(offsetof(Interface, Instance) == 0);
-        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, from_value, to_value);
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, from->value, to_value);
 
         // load the vtable of the object on the stack
         // TODO: if the object is null we need to actually choose a non-null pointer
-        spidir_value_t vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+        spidir_value_t vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from->value);
 
         // calculate the amount needed
-        int iface_offset = jit_get_interface_offset(from_type, to_type);
-        ASSERT(iface_offset >= 0, "Failed to get interface offset %T from %T", to_type, from_type);
+        int iface_offset = jit_get_interface_offset(from->type, to_type);
+        ASSERT(iface_offset >= 0, "Failed to get interface offset %T from %T", to_type, from->type);
         iface_offset = iface_offset * (int)sizeof(void*) + (int)offsetof(ObjectVTable, Functions);
 
         // set the new vtable base
@@ -162,27 +158,27 @@ static void jit_emit_store(
             spidir_builder_build_ptroff(builder, to_value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
 
-    } else if (jit_is_interface(from_type) && !jit_is_interface(to_type)) {
+    } else if (jit_is_interface(from->type) && !jit_is_interface(to_type)) {
         // we need to perform interface -> object
         STATIC_ASSERT(offsetof(Interface, Instance) == 0);
-        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from->value);
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, to_value);
 
-    } else if (jit_is_interface(from_type) && jit_is_interface(to_type) && from_type != to_type) {
+    } else if (jit_is_interface(from->type) && jit_is_interface(to_type) && from->type != to_type) {
         // interface upcast
 
         // move the instance along
         ASSERT(offsetof(Interface, Instance) == 0);
-        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+        spidir_value_t instance = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from->value);
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, to_value);
 
         // load the vtable of the object on the stack
         spidir_value_t vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-            spidir_builder_build_ptroff(builder, from_value,
+            spidir_builder_build_ptroff(builder, from->value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
 
         // calculate the amount needed
-        int iface_offset = jit_get_interface_offset(from_type, to_type);
+        int iface_offset = jit_get_interface_offset(from->type, to_type);
         ASSERT(iface_offset >= 0);
         iface_offset *= (int)sizeof(void*);
 
@@ -195,10 +191,10 @@ static void jit_emit_store(
             spidir_builder_build_ptroff(builder, to_value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
 
-    } else if (jit_is_struct_like(from_type)) {
+    } else if (from->kind == JIT_KIND_VALUE_TYPE || (from->kind == JIT_KIND_OBJ_REF && jit_is_struct_like(from->type))) {
         // only struct types in here and
-        ASSERT(from_type == to_type);
-        jit_emit_memcpy(builder, to_value, from_value, from_type);
+        ASSERT(from->type == to_type);
+        jit_emit_memcpy(builder, to_value, from->value, from->type);
 
     } else {
         // only primitive types in here
@@ -210,7 +206,7 @@ static void jit_emit_store(
             case 8: mem_size = SPIDIR_MEM_SIZE_8; break;
             default: ASSERT(!"Invalid size");
         }
-        spidir_builder_build_store(builder, mem_size, from_value, to_value);
+        spidir_builder_build_store(builder, mem_size, from->value, to_value);
     }
 }
 
@@ -268,51 +264,47 @@ static void jit_emit_invalid_cast(spidir_builder_handle_t builder) {
  * Convert a value, used by merge points and function calls
  * to ensure consistency
  */
-static spidir_value_t jit_convert_value(
-    spidir_builder_handle_t builder,
-    RuntimeTypeInfo from_type, spidir_value_t from_value,
-    RuntimeTypeInfo to_type
-) {
-    if (jit_is_interface(to_type) && from_type != to_type) {
+static spidir_value_t jit_convert_value(spidir_builder_handle_t builder, jit_stack_value_t* from, RuntimeTypeInfo to_type) {
+    if (jit_is_interface(to_type) && from->type != to_type) {
         // if we need to cast to an interface that is not the exact same type then we are going
         // to allocate a new stackslot for the result, even if its an interface input fat pointers
+        ASSERT(from->kind == JIT_KIND_OBJ_REF, "Got kind %d of %T", from->kind, from->type);
         spidir_value_t value = spidir_builder_build_stackslot(builder, sizeof(Interface), _Alignof(Interface));
-        // are immutable to avoid copying them as much
-        jit_emit_store(builder, from_type, from_value, to_type, value);
+        jit_emit_store(builder, from, to_type, value);
         return value;
 
-    } else if (jit_is_interface(from_type) && !jit_is_interface(to_type)) {
+    } else if (jit_is_interface(from->type) && !jit_is_interface(to_type)) {
+        ASSERT(from->kind == JIT_KIND_OBJ_REF, "Got kind %d of %T", from->kind, from->type);
+
         // we need to perform interface -> object
         STATIC_ASSERT(offsetof(Interface, Instance) == 0);
-        return spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from_value);
+        return spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from->value);
 
     } else {
-        return from_value;
+        return from->value;
     }
 }
 
 static spidir_value_t jit_convert_local(
     spidir_builder_handle_t builder,
-    RuntimeTypeInfo from_type, spidir_value_t from_value,
+    jit_stack_value_t* from,
     RuntimeTypeInfo to_type
 ) {
     // special case only needed for locals, truncate/sign extend as required
-    if (from_type == tInt32 && from_type->StackSize != to_type->StackSize) {
+    if (from->kind == JIT_KIND_INT32 && to_type->StackSize < 4) {
         int bit_count = to_type->StackSize * 8;
         if (to_type == tSByte || to_type == tInt16) {
-            from_value = spidir_builder_build_sfill(builder, bit_count, from_value);
+            return spidir_builder_build_sfill(builder, bit_count, from->value);
         } else if (to_type == tByte || to_type == tUInt16 || to_type == tBoolean || to_type == tChar) {
-            from_value = spidir_builder_build_and(builder, from_value,
+            return spidir_builder_build_and(builder, from->value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (1 << bit_count) - 1));
         } else {
             ASSERT(!"Invalid");
         }
-        return from_value;
-
     }
 
     // fallback to the normal convert logic
-    return jit_convert_value(builder, from_type, from_value, to_type);
+    return jit_convert_value(builder, from, to_type);
 }
 
 static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block) {
@@ -369,7 +361,7 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
         for (int i = 0; i < arrlen(block->stack); i++) {
             spidir_builder_add_phi_input(builder, block->stack_phis[i],
                 jit_convert_value(builder,
-                    from->stack[i].type, from->stack[i].value,
+                    from->stack,
                     block->stack[i].type));
         }
 
@@ -477,12 +469,10 @@ static tdn_err_t emit_store_local(jit_function_t* function, spidir_builder_handl
 
     if (func_local->spilled) {
         // need to store into the buffer, from whatever type we had
-        jit_emit_store(builder,
-            stack[0].type, stack[0].value,
-            func_local->type, block_local->value);
+        jit_emit_store(builder, stack, func_local->type, block_local->value);
     } else {
         // SSA store, ensure we truncate as required
-        block_local->value = jit_convert_local(builder, stack[0].type, stack[0].value, func_local->type);
+        block_local->value = jit_convert_local(builder, stack, func_local->type);
     }
 
 cleanup:
@@ -615,12 +605,7 @@ static tdn_err_t emit_stfld(jit_function_t* function, spidir_builder_handle_t bu
     }
 
     // perform the store
-    jit_emit_store(
-        builder,
-        value->type, value->value,
-        inst->operand.field->FieldType,
-        field_ptr
-    );
+    jit_emit_store(builder, value, inst->operand.field->FieldType, field_ptr);
 
 cleanup:
     return err;
@@ -656,7 +641,8 @@ static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t bu
 
 static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // we just need to store into the given item
-    jit_emit_store(builder, stack[1].type, stack[1].value, stack[0].type, stack[0].value);
+    // NOTE: we can use the type directly because this must be a by-ref at this point
+    jit_emit_store(builder, &stack[1], stack[0].type, stack[0].value);
     return TDN_NO_ERROR;
 }
 
@@ -1002,7 +988,7 @@ static tdn_err_t emit_stelem(jit_function_t* function, spidir_builder_handle_t b
 
     // get the value and store into it
     spidir_value_t ptr = emit_array_offset(builder, stack[0].type->ElementType, stack[0].value, stack[1].value);
-    jit_emit_store(builder, stack[2].type, stack[2].value, stack[0].type->ElementType, ptr);
+    jit_emit_store(builder, &stack[2], stack[0].type->ElementType, ptr);
 
 cleanup:
     return err;
@@ -1065,20 +1051,19 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
 
     // gather all arguments
     for (int i = 0; i < arrlen(stack); i++) {
-        spidir_value_t value = stack[i].value;
-
-        if (i > convert_offset) {
+        spidir_value_t value = SPIDIR_VALUE_INVALID;
+        if (i >= convert_offset) {
             // convert other arguments
             value = jit_convert_local(
                 builder,
-                stack[i].type, stack[i].value,
+                &stack[i],
                 callee->Parameters->Elements[i - convert_offset]->ParameterType
             );
         } else {
             // convert the this
             value = jit_convert_local(
                 builder,
-                stack[i].type, stack[i].value,
+                &stack[i],
                 jit_get_method_this_type(callee)
             );
         }
@@ -1208,7 +1193,7 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         for (int i = 0; i < arrlen(inlinee.entry_block.args); i++) {
             inlinee.entry_block.args[i].value = jit_convert_local(
                 builder,
-                stack[i].type, stack[i].value,
+                &stack[i],
                 inlinee.args[i].type);
         }
 
@@ -1440,7 +1425,7 @@ static tdn_err_t emit_ret(jit_function_t* function, spidir_builder_handle_t buil
             if (jit_is_struct_like(ret_type)) {
                 // use a store to ensure we do any conversions correctly
                 spidir_value_t ret_ref = spidir_builder_build_param_ref(builder, arrlen(function->args));
-                jit_emit_store(builder, stack[0].type, stack[0].value, ret_type, ret_ref);
+                jit_emit_store(builder, stack, ret_type, ret_ref);
             } else {
                 value = stack[0].value;
             }
@@ -1652,7 +1637,7 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
             spidir_builder_set_block(builder, cast);
             if (is_upcast) {
                 // can use the common casting code in convert value
-                cast_value = jit_convert_value(builder, stack[0].type, stack[0].value, inst->operand.type);
+                cast_value = jit_convert_value(builder, stack, inst->operand.type);
             } else {
                 // we need to perform a runtime lookup
                 if (jit_is_interface(inst->operand.type)) {
@@ -1688,9 +1673,14 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
         // cast a null value, aka just create a null
         //
         spidir_builder_set_block(builder, cast_null);
-        spidir_value_t null_cast_value = jit_convert_value(builder, NULL,
-            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
-            inst->operand.type);
+        spidir_value_t null_cast_value = SPIDIR_VALUE_INVALID;
+        if (jit_is_struct_like(inst->operand.type)) {
+            // TODO: cache an interface null value and re-use it when possible
+            null_cast_value = spidir_builder_build_stackslot(builder, sizeof(Interface), _Alignof(Interface));
+            jit_emit_bzero(builder, null_cast_value, inst->operand.type);
+        } else {
+            null_cast_value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
+        }
         spidir_builder_build_branch(builder, valid);
 
         //
@@ -1713,9 +1703,15 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
         }
     } else {
         // hardcode a null cast
-        STACK_TOP()->value = jit_convert_value(builder, NULL,
-            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0),
-            inst->operand.type);
+        spidir_value_t value = SPIDIR_VALUE_INVALID;
+        if (jit_is_struct_like(inst->operand.type)) {
+            // TODO: cache an interface null value and re-use it when possible
+            value = spidir_builder_build_stackslot(builder, sizeof(Interface), _Alignof(Interface));
+            jit_emit_bzero(builder, value, inst->operand.type);
+        } else {
+            value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
+        }
+        STACK_TOP()->value = value;
     }
 
 cleanup:
@@ -1748,7 +1744,7 @@ static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t buil
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, jit_get_boxed_value_offset(inst->operand.type)));
 
         // store it
-        jit_emit_store(builder, stack[0].type, stack[0].value, inst->operand.type, value_ptr);
+        jit_emit_store(builder, stack, inst->operand.type, value_ptr);
 
         // point to the instance
         STACK_TOP()->value = obj;
@@ -2121,11 +2117,9 @@ tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle
             spidir_value_t stackslot = spidir_builder_build_stackslot(builder,
                 func_arg->type->StackSize, func_arg->type->StackAlignment);
 
-            jit_emit_store(
-                builder,
-                func_arg->type, value,
-                func_arg->type, stackslot
-            );
+            jit_stack_value_t val = jit_stack_value_create(func_arg->type);
+            val.value = value;
+            jit_emit_store(builder, &val, func_arg->type, stackslot);
             value = stackslot;
         }
 

@@ -13,6 +13,12 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 
+#if 1
+    #define STDERR stderr
+#else
+    #define STDERR stdout
+#endif
+
 void tdn_host_log_trace(const char* format, ...) {
     printf("[*] ");
     va_list va;
@@ -32,13 +38,13 @@ void tdn_host_log_warn(const char* format, ...) {
 }
 
 void tdn_host_log_error(const char* format, ...) {
-    fprintf(stderr, "[-] ");
+    fprintf(STDERR, "[-] ");
     va_list va;
     va_start(va, format);
-    vfprintf(stderr, format, va);
+    vfprintf(STDERR, format, va);
     va_end(va);
-    fprintf(stderr, "\n");
-    fflush(stderr);
+    fprintf(STDERR, "\n");
+    fflush(STDERR);
 }
 
 void tdn_host_printf(const char* format, ...) {
