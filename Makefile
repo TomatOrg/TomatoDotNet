@@ -23,8 +23,14 @@ DEBUG			?= 0
 # Should we compile in debug or not
 SPIDIR_DEBUG	?= $(DEBUG)
 
-# The spidir compilation target (given to cargo)
-SPIDIR_TARGET	?= x86_64-unknown-none
+# Override target passed to cargo invocations
+SPIDIR_CARGO_TARGET			?=
+
+# Additional flags to pass to cargo
+SPIDIR_CARGO_FLAGS 			?=
+
+# Override rust toolchain used to build spidir
+SPIDIR_RUSTUP_TOOLCHAIN		?=
 
 # The cflags
 CFLAGS			?=
@@ -68,9 +74,9 @@ OBJS 		+= $(BUILD_DIR)/spidir.o
 
 # Choose which of the spidirs we want to use
 ifeq ($(SPIDIR_DEBUG),1)
-LIBSPIDIR	:= libs/spidir/target/$(SPIDIR_TARGET)/debug/libspidir.a
+LIBSPIDIR	:= out/cargo-target/$(SPIDIR_CARGO_TARGET)/debug/libspidir.a
 else
-LIBSPIDIR	:= libs/spidir/target/$(SPIDIR_TARGET)/release/libspidir.a
+LIBSPIDIR	:= out/cargo-target/$(SPIDIR_CARGO_TARGET)/release/libspidir.a
 endif
 
 # The default rule
@@ -99,11 +105,27 @@ $(BIN_DIR)/libtdn.a: $(OBJS)
 
 clean:
 	rm -rf out
-	rm -rf libs/spidir/target
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Spidir rules
 #-----------------------------------------------------------------------------------------------------------------------
+
+CARGO_CMD 	:= cargo
+ifneq ($(SPIDIR_RUSTUP_TOOLCHAIN),)
+CARGO_CMD	+= +$(SPIDIR_RUSTUP_TOOLCHAIN)
+endif
+CARGO_CMD	+= build
+CARGO_CMD	+= --manifest-path libs/spidir/c-api/Cargo.toml
+ifneq ($(SPIDIR_DEBUG),1)
+CARGO_CMD	+= --release
+endif
+CARGO_CMD	+= -p c-api
+ifneq ($(SPIDIR_CARGO_TARGET),)
+CARGO_CMD 	+= --target $(SPIDIR_CARGO_TARGET)
+endif
+CARGO_CMD	+= $(SPIDIR_CARGO_FLAGS)
+CARGO_CMD 	+= --target-dir out/cargo-target
+
 
 # We are going to compile the entire libspidir.a into a single object file for easier
 # linking of the tdn library
@@ -112,8 +134,5 @@ $(BUILD_DIR)/spidir.o: $(LIBSPIDIR)
 	@mkdir -p $(@D)
 	@$(LD) -r --whole-archive -o $@ $^
 
-libs/spidir/target/$(SPIDIR_TARGET)/release/libspidir.a: force
-	cd libs/spidir/c-api && cargo build --release -p c-api --target $(SPIDIR_TARGET)
-
-libs/spidir/target/$(SPIDIR_TARGET)/debug/libspidir.a: force
-	cd libs/spidir/c-api && cargo build -p c-api --target $(SPIDIR_TARGET)
+$(LIBSPIDIR): force
+	$(CARGO_CMD)

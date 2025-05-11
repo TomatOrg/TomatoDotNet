@@ -115,7 +115,10 @@ $(TDN_BIN_DIR)/libtdn.a: force
 		AR="$(AR)" \
 		LD="$(LD)" \
 		DEBUG="$(DEBUG)" \
-		CFLAGS="$(COMMON_CFLAGS)"
+		CFLAGS="$(COMMON_CFLAGS)" \
+		SPIDIR_CARGO_TARGET="x86_64-unknown-linux-none" \
+		SPIDIR_CARGO_FLAGS="-Zbuild-std=core,alloc" \
+		SPIDIR_RUSTUP_TOOLCHAIN="nightly-2025-05-07"
 
 clean:
 	rm -rf $(OUT_DIR)
