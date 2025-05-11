@@ -19,6 +19,8 @@
 #include <getopt.h>
 #include <spidir/log.h>
 
+#include "dotnet/types.h"
+
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;
 
@@ -444,6 +446,9 @@ int main(int argc, char* argv[]) {
 
     // Remaining non-option arguments (should be the DLL to run)
     CHECK(optind < argc, "Expected <dll to run> after options");
+
+    // initialize the GC
+    tdn_init_gc(0);
 
     // set the global options
     tdn_config_t* config = tdn_get_config();

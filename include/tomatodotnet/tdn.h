@@ -63,6 +63,12 @@ void tdn_cleanup(void);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Initialize the jit, requires TDN_GC_HEAP_SIZE bytes from the given address, the memory
+ * should be reserved and mapped on demand
+ */
+void tdn_init_gc(uintptr_t base_address);
+
+/**
  * The raw gc allocation function, this will possibly
  * perform a collection
  */
@@ -105,4 +111,3 @@ void* tdn_gc_new(RuntimeTypeInfo type, size_t size);
         ___ptr->Length = ___array_length; \
         ___ptr; \
     })
-

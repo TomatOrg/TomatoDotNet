@@ -45,7 +45,7 @@ typedef struct ObjectVTable {
 
 typedef struct Object {
     ObjectVTable* VTable;
-    uint32_t Flags;
+    uint32_t : 32;
     uint8_t Mutex;
     uint8_t CondVar;
     uint16_t MutexThreadId;

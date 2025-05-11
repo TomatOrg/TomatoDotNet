@@ -2,7 +2,10 @@
 #include "tomatodotnet/except.h"
 #include "tomatodotnet/types/basic.h"
 #include "util/string.h"
+
+#include "dotnet/types.h"
 #include "dotnet/gc/gc.h"
+#include "tomatodotnet/tdn.h"
 #include "util/except.h"
 
 tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {

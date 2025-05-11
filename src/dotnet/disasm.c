@@ -4,10 +4,12 @@
 
 #include <util/string_builder.h>
 
+#include "types.h"
 #include "gc/gc.h"
 #include "metadata/metadata.h"
 #include "metadata/metadata_tables.h"
 #include "metadata/sig.h"
+#include "tomatodotnet/tdn.h"
 #include "tomatodotnet/types/type.h"
 #include "util/except.h"
 #include "util/stb_ds.h"

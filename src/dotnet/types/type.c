@@ -9,6 +9,8 @@
 #include "dotnet/metadata/metadata.h"
 #include <stdatomic.h>
 
+#include "tomatodotnet/tdn.h"
+
 bool tdn_type_is_valuetype(RuntimeTypeInfo type) {
     return type != NULL && (type->BaseType == tValueType || type->BaseType == tEnum);
 }

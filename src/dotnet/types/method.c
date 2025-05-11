@@ -7,7 +7,9 @@
 #include "util/stb_ds.h"
 #include "dotnet/gc/gc.h"
 #include "dotnet/loader.h"
+#include "dotnet/types.h"
 #include "dotnet/metadata/sig.h"
+#include "tomatodotnet/tdn.h"
 
 static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_Array args, RuntimeMethodInfo new_method) {
     tdn_err_t err = TDN_NO_ERROR;

@@ -219,10 +219,16 @@ void* jit_get_helper_ptr(spidir_function_t function) {
 static struct {
     spidir_function_t key;
     RuntimeMethodBase value;
-}* m_thunk_lookup;
+}* m_thunk_method_lookup;
+
+
+static struct {
+    RuntimeMethodBase key;
+    spidir_function_t value;
+}* m_method_thunk_lookup;
 
 RuntimeMethodBase jit_get_thunk_method(spidir_function_t function) {
-    return hmget(m_thunk_lookup, function);
+    return hmget(m_thunk_method_lookup, function);
 }
 
 static void jit_emit_static_delegate_thunk(spidir_builder_handle_t builder, void* _ctx) {
@@ -256,6 +262,16 @@ static void jit_emit_static_delegate_thunk(spidir_builder_handle_t builder, void
 spidir_function_t jit_generate_static_delegate_thunk(spidir_module_handle_t module, RuntimeMethodBase method) {
     spidir_value_type_t* args = NULL;
 
+    // check if we already generated it this round, if so return it
+    int idx = hmgeti(m_method_thunk_lookup, method);
+    if (idx >= 0) {
+        return m_method_thunk_lookup[idx].value;
+    }
+
+    if (method->ThunkPtr != NULL) {
+        ASSERT(!"Don't generate a new thunk, reuse existing one");
+    }
+
     // build the name
     string_builder_t builder = {};
     string_builder_push_method_signature(&builder, method, true);
@@ -285,7 +301,8 @@ spidir_function_t jit_generate_static_delegate_thunk(spidir_module_handle_t modu
         method
     );
 
-    hmput(m_thunk_lookup, thunk, method);
+    hmput(m_thunk_method_lookup, thunk, method);
+    hmput(m_method_thunk_lookup, method, thunk);
 
     return thunk;
 }
@@ -294,5 +311,6 @@ void jit_clean_helpers() {
     for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
         m_jit_helpers[i].created = false;
     }
-    hmfree(m_thunk_lookup);
+    hmfree(m_thunk_method_lookup);
+    hmfree(m_method_thunk_lookup);
 }

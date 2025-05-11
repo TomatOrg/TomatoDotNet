@@ -55,6 +55,7 @@ typedef struct init_type {
     size_t heap_alignment;
     RuntimeTypeInfo* dest;
     bool is_unmanaged;
+    size_t vtable_size;
 } init_type_t;
 
 typedef struct load_type {
@@ -73,10 +74,11 @@ typedef struct load_type {
         sizeof(name), \
         _Alignof(name), \
         &t##name, \
-        is_unmanaged \
+        is_unmanaged, \
+        4 \
     }
 
-#define INIT_HEAP_TYPE(namespace, name) \
+#define INIT_HEAP_TYPE(namespace, name, vtable_size) \
     { \
         #namespace, \
         #name, \
@@ -84,7 +86,9 @@ typedef struct load_type {
         _Alignof(name), \
         sizeof(struct name), \
         _Alignof(struct name), \
-        &t##name \
+        &t##name, \
+        false, \
+        vtable_size \
     }
 
 /**
@@ -107,6 +111,21 @@ static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, UInt64, true),
     INIT_VALUE_TYPE(System, UIntPtr, true),
     INIT_VALUE_TYPE(System, Void, true),
+
+    INIT_HEAP_TYPE(System.Reflection, RuntimeConstructorInfo, 5),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeMethodInfo, 5),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeFieldInfo, 5),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeMethodBody, 4),
+    INIT_HEAP_TYPE(System.Reflection, ParameterInfo, 4),
+    INIT_HEAP_TYPE(System.Reflection, MethodBase, 5),
+    INIT_HEAP_TYPE(System, Object, 4),
+    INIT_HEAP_TYPE(System, Array, 4),
+    INIT_HEAP_TYPE(System, String, 4),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeAssembly, 4),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeModule, 4),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeLocalVariableInfo, 4),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeTypeInfo, 5),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeExceptionHandlingClause, 4),
 };
 static int m_inited_types = 0;
 
@@ -130,20 +149,6 @@ static int m_inited_types = 0;
  * Types to load so the runtime can access them
  */
 static load_type_t m_load_types[] = {
-    LOAD_TYPE(System, Object),
-    LOAD_TYPE(System, Array),
-    LOAD_TYPE(System, String),
-    LOAD_TYPE_VTABLE(System.Reflection, MethodBase, 5),
-    LOAD_TYPE(System.Reflection, RuntimeAssembly),
-    LOAD_TYPE(System.Reflection, RuntimeModule),
-    LOAD_TYPE_VTABLE(System.Reflection, RuntimeFieldInfo, 5),
-    LOAD_TYPE(System.Reflection, RuntimeMethodBody),
-    LOAD_TYPE_VTABLE(System.Reflection, RuntimeMethodInfo, 5),
-    LOAD_TYPE_VTABLE(System.Reflection, RuntimeConstructorInfo, 5),
-    LOAD_TYPE(System.Reflection, RuntimeLocalVariableInfo),
-    LOAD_TYPE_VTABLE(System.Reflection, RuntimeTypeInfo, 5),
-    LOAD_TYPE(System.Reflection, ParameterInfo),
-    LOAD_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
     LOAD_TYPE(System.Runtime.CompilerServices, IsReadOnlyAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsByRefLikeAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
@@ -196,6 +201,9 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
             strcmp(init_type->name, type_def->type_name) == 0
         ) {
             RuntimeTypeInfo type = *init_type->dest ? *init_type->dest : TDN_GC_NEW(RuntimeTypeInfo);
+            if (type->JitVTable == NULL) {
+                CHECK_AND_RETHROW(create_vtable(type, init_type->vtable_size));
+            }
             type->StackSize = init_type->stack_size;
             type->StackAlignment = init_type->stack_alignment;
             type->HeapSize = init_type->heap_size;
@@ -1253,8 +1261,10 @@ static tdn_err_t corelib_bootstrap() {
     tdn_err_t err = TDN_NO_ERROR;
 
     // start by initializing the System.Type type first
-    tRuntimeTypeInfo = tdn_host_gc_alloc(sizeof(struct RuntimeTypeInfo), _Alignof(struct RuntimeTypeInfo));
+    tRuntimeTypeInfo = tdn_host_mallocz(sizeof(struct RuntimeTypeInfo), _Alignof(struct RuntimeTypeInfo));
     CHECK_ERROR(tRuntimeTypeInfo != NULL, TDN_ERROR_OUT_OF_MEMORY);
+    tRuntimeTypeInfo->HeapSize = sizeof(struct RuntimeTypeInfo);
+    tRuntimeTypeInfo->HeapAlignment = _Alignof(struct RuntimeTypeInfo);
 
     // make sure to set its type id properly
     CHECK_AND_RETHROW(create_vtable(tRuntimeTypeInfo, 5));
@@ -1262,9 +1272,21 @@ static tdn_err_t corelib_bootstrap() {
 
     // hard-code types we require for proper bootstrap
     tArray = TDN_GC_NEW(RuntimeTypeInfo); // for creating a Type[]
-    tString = TDN_GC_NEW(RuntimeTypeInfo); // for creating a string
-    tRuntimeAssembly = TDN_GC_NEW(RuntimeTypeInfo); // for creating the main assembly
-    tRuntimeModule = TDN_GC_NEW(RuntimeTypeInfo); // for creating the main module
+
+    // for creating a string
+    tString = TDN_GC_NEW(RuntimeTypeInfo);
+    tString->HeapSize = sizeof(struct String);
+    tString->HeapAlignment = _Alignof(struct String);
+
+    // for creating the main assembly
+    tRuntimeAssembly = TDN_GC_NEW(RuntimeTypeInfo);
+    tRuntimeAssembly->HeapSize = sizeof(struct RuntimeAssembly);
+    tRuntimeAssembly->HeapAlignment = _Alignof(struct RuntimeAssembly);
+
+    // for creating the main module
+    tRuntimeModule = TDN_GC_NEW(RuntimeTypeInfo);
+    tRuntimeModule->HeapSize = sizeof(struct RuntimeModule);
+    tRuntimeModule->HeapAlignment = _Alignof(struct RuntimeModule);
 
     // hard code to the correct amount of entries
     CHECK_AND_RETHROW(create_vtable(tArray, 4));
@@ -1277,6 +1299,16 @@ static tdn_err_t corelib_bootstrap() {
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("System.Reflection", &tRuntimeTypeInfo->Namespace));
 
 cleanup:
+    if (IS_ERROR(err)) {
+        if (tRuntimeTypeInfo != NULL) {
+            tdn_host_free(tRuntimeTypeInfo->JitVTable);
+            tdn_host_free(tRuntimeTypeInfo);
+            tRuntimeTypeInfo = NULL;
+        }
+
+        // TODO: free the rest of the objects that we just allocated
+    }
+
     return err;
 }
 

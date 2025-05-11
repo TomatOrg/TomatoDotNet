@@ -12,6 +12,13 @@
 
 #define CACHE_PADDED __attribute__((aligned(64)))
 
+#define DIV_ROUND_UP(n, a) \
+    ({ \
+        typeof(n) __n = n; \
+        typeof(a) __a = a; \
+        (__n + __a - 1) / __a; \
+    })
+
 #define ALIGN_UP(x, align) ({ \
 __typeof(x) _x = x; \
 __typeof(align) _align = align; \
@@ -46,6 +53,9 @@ _result; \
         typeof(b) __b = b; \
         __a < __b ? __b : __a; \
     })
+
+#define UNLIKELY(expr) __builtin_expect(!!(expr), 0)
+#define LIKELY(expr)   __builtin_expect(!!(expr), 1)
 
 #define UNUSED(x) ((void)x)
 

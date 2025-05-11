@@ -310,8 +310,6 @@ static spidir_value_t jit_convert_local(
 static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block) {
     if (block->multiple_predecessors) {
 
-        TRACE("MERGING INTO BLOCK WITH MULTIPLE PREDECESSORS IL_%04x", block->block.start);
-
         //
         // initialize the phis for this block
         //
@@ -394,8 +392,6 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
         }
 
     } else {
-        TRACE("MERGING INTO BLOCK WITH SINGLE PREDECESSOR IL_%04x", block->block.start);
-
         // just copy over the values
         for (int i = 0; i < arrlen(block->stack); i++) {
             block->stack[i].value = from->stack[i].value;

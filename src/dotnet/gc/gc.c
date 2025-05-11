@@ -10,6 +10,35 @@
 
 #include <sanitizer/asan_interface.h>
 
+#include "size_class.h"
+#include "tomatodotnet/tdn.h"
+
+void tdn_init_gc(uintptr_t base_address) {
+    gc_size_class_init();
+}
+
+__attribute__((noinline))
+static void* gc_slow_alloc_small(size_t size, uint32_t size_class) {
+    return tdn_host_gc_alloc(size, MIN(size, 16));
+}
+
+static inline void* gc_fast_alloc(size_t size, size_t align) {
+    // If the size is too large its not a fast-path anymore.
+    int size_class = gc_get_size_class(size, align);
+    if (UNLIKELY(size_class < 0)) {
+        ASSERT(!"gc_slow_alloc_large");
+    }
+
+    // Fast path for allocating small size memory.
+    // TODO: cpu cache allocation
+    void* ret = NULL;
+    if (UNLIKELY(ret == NULL)) {
+        ret = gc_slow_alloc_small(size, size_class);
+    }
+
+    return ret;
+}
+
 void* tdn_gc_new(RuntimeTypeInfo type, size_t size) {
     if (type == NULL) {
         ASSERT(!"Tried to allocate object with null type?");
@@ -38,8 +67,9 @@ void* tdn_gc_new(RuntimeTypeInfo type, size_t size) {
         }
     }
 
-    Object object = tdn_host_gc_alloc(size, type->HeapAlignment);
-    if (object == NULL) {
+    // allocate the object itself
+    Object object = gc_fast_alloc(size, type->HeapAlignment);
+    if (UNLIKELY(object == NULL)) {
         return NULL;
     }
 

@@ -1,6 +1,9 @@
 #include "sig.h"
+
+#include "dotnet/types.h"
 #include "util/except.h"
 #include "dotnet/gc/gc.h"
+#include "tomatodotnet/tdn.h"
 #include "util/stb_ds.h"
 
 #define FIELD 0x6
