@@ -23,6 +23,9 @@ extern RuntimeTypeInfo tUInt32;
 extern RuntimeTypeInfo tUInt64;
 extern RuntimeTypeInfo tUIntPtr;
 
+extern RuntimeTypeInfo tSingle;
+extern RuntimeTypeInfo tDouble;
+
 extern RuntimeTypeInfo tArray;
 extern RuntimeTypeInfo tString;
 

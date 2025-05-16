@@ -110,6 +110,8 @@ static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, UInt32, true),
     INIT_VALUE_TYPE(System, UInt64, true),
     INIT_VALUE_TYPE(System, UIntPtr, true),
+    INIT_VALUE_TYPE(System, Single, true),
+    INIT_VALUE_TYPE(System, Double, true),
     INIT_VALUE_TYPE(System, Void, true),
 
     INIT_HEAP_TYPE(System.Reflection, RuntimeConstructorInfo, 5),

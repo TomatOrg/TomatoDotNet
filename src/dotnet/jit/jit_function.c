@@ -644,6 +644,10 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
         value->kind = JIT_KIND_INT64;
         value->type = tInt64;
 
+    } else if (type == tDouble || type == tSingle) {
+        value->kind = JIT_KIND_FLOAT;
+        value->type = tDouble;
+
     } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
         value->kind = JIT_KIND_NATIVE_INT;
         value->type = tIntPtr;
@@ -686,6 +690,9 @@ jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
 
     } else if (type == tInt64 || type == tUInt64) {
         return JIT_KIND_INT64;
+
+    } else if (type == tDouble || type == tSingle) {
+        return JIT_KIND_FLOAT;
 
     } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
         return JIT_KIND_NATIVE_INT;

@@ -18,6 +18,9 @@ typedef int32_t Int32;
 typedef int64_t Int64;
 typedef intptr_t IntPtr;
 
+typedef float Single;
+typedef double Double;
+
 typedef bool Boolean;
 typedef uint16_t Char;
 

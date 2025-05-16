@@ -24,6 +24,9 @@ RuntimeTypeInfo tUInt32 = NULL;
 RuntimeTypeInfo tUInt64 = NULL;
 RuntimeTypeInfo tUIntPtr = NULL;
 
+RuntimeTypeInfo tSingle = NULL;
+RuntimeTypeInfo tDouble = NULL;
+
 RuntimeTypeInfo tArray = NULL;
 RuntimeTypeInfo tString = NULL;
 

@@ -674,6 +674,16 @@ static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t b
     return TDN_NO_ERROR;
 }
 
+static tdn_err_t emit_ldc_r4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    STACK_TOP()->value = spidir_builder_build_fconst64(builder, inst->operand.float32);
+    return TDN_NO_ERROR;
+}
+
+static tdn_err_t emit_ldc_r8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    STACK_TOP()->value = spidir_builder_build_fconst64(builder, inst->operand.float64);
+    return TDN_NO_ERROR;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Arith and compare operations
 //----------------------------------------------------------------------------------------------------------------------
@@ -739,11 +749,14 @@ static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t 
 }
 
 static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t value = stack[0].value;
 
     // truncate the value if too big
     if (stack[0].kind == JIT_KIND_INT64 || stack[0].kind == JIT_KIND_NATIVE_INT) {
         value = spidir_builder_build_itrunc(builder, value);
+    } else if (stack[0].kind == JIT_KIND_FLOAT) {
+        CHECK_FAIL("TODO: float -> i4");
     }
 
     // for anything less than i32 we need to sign/zero extend
@@ -763,21 +776,26 @@ static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t 
 
     STACK_TOP()->value = value;
 
-    return TDN_NO_ERROR;
+cleanup:
+    return err;
 }
 
 static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t value = stack[0].value;
 
     // extend it to a 32bit value if too small
     if (stack[0].kind == JIT_KIND_INT32) {
         value = emit_extend_int(builder, stack[0].value,
             inst->opcode == CEE_CONV_I8 || inst->opcode == CEE_CONV_I);
+    } else if (stack[0].kind == JIT_KIND_FLOAT) {
+        CHECK_FAIL("float -> i8");
     }
 
     STACK_TOP()->value = value;
 
-    return TDN_NO_ERROR;
+cleanup:
+    return err;
 }
 
 static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
@@ -797,18 +815,29 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
     }
 
     spidir_value_t value = SPIDIR_VALUE_INVALID;
-    switch (inst->opcode) {
-        case CEE_ADD: value = spidir_builder_build_iadd(builder, stack[0].value, stack[1].value); break;
-        case CEE_SUB: value = spidir_builder_build_isub(builder, stack[0].value, stack[1].value); break;
-        case CEE_MUL: value = spidir_builder_build_imul(builder, stack[0].value, stack[1].value); break;
-        case CEE_DIV: value = spidir_builder_build_sdiv(builder, stack[0].value, stack[1].value); break;
-        case CEE_DIV_UN: value = spidir_builder_build_udiv(builder, stack[0].value, stack[1].value); break;
-        case CEE_REM: value = spidir_builder_build_srem(builder, stack[0].value, stack[1].value); break;
-        case CEE_REM_UN: value = spidir_builder_build_urem(builder, stack[0].value, stack[1].value); break;
-        case CEE_AND: value = spidir_builder_build_and(builder, stack[0].value, stack[1].value); break;
-        case CEE_OR: value = spidir_builder_build_or(builder, stack[0].value, stack[1].value); break;
-        case CEE_XOR: value = spidir_builder_build_xor(builder, stack[0].value, stack[1].value); break;
-        default: CHECK_FAIL();
+    if (stack[1].kind == JIT_KIND_FLOAT) {
+        switch (inst->opcode) {
+            case CEE_ADD: value = spidir_builder_build_fadd(builder, stack[0].value, stack[1].value); break;
+            case CEE_SUB: value = spidir_builder_build_fsub(builder, stack[0].value, stack[1].value); break;
+            case CEE_MUL: value = spidir_builder_build_fmul(builder, stack[0].value, stack[1].value); break;
+            case CEE_DIV: value = spidir_builder_build_fdiv(builder, stack[0].value, stack[1].value); break;
+            case CEE_REM: CHECK_FAIL();
+            default: CHECK_FAIL();
+        }
+    } else {
+        switch (inst->opcode) {
+            case CEE_ADD: value = spidir_builder_build_iadd(builder, stack[0].value, stack[1].value); break;
+            case CEE_SUB: value = spidir_builder_build_isub(builder, stack[0].value, stack[1].value); break;
+            case CEE_MUL: value = spidir_builder_build_imul(builder, stack[0].value, stack[1].value); break;
+            case CEE_DIV: value = spidir_builder_build_sdiv(builder, stack[0].value, stack[1].value); break;
+            case CEE_DIV_UN: value = spidir_builder_build_udiv(builder, stack[0].value, stack[1].value); break;
+            case CEE_REM: value = spidir_builder_build_srem(builder, stack[0].value, stack[1].value); break;
+            case CEE_REM_UN: value = spidir_builder_build_urem(builder, stack[0].value, stack[1].value); break;
+            case CEE_AND: value = spidir_builder_build_and(builder, stack[0].value, stack[1].value); break;
+            case CEE_OR: value = spidir_builder_build_or(builder, stack[0].value, stack[1].value); break;
+            case CEE_XOR: value = spidir_builder_build_xor(builder, stack[0].value, stack[1].value); break;
+            default: CHECK_FAIL();
+        }
     }
     STACK_TOP()->value = value;
 
@@ -818,8 +847,13 @@ cleanup:
 
 static tdn_err_t emit_neg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // emulate neg via `0 - value`
-    spidir_value_t zero = spidir_builder_build_iconst(builder, get_spidir_type(stack[0].type), 0);
-    STACK_TOP()->value = spidir_builder_build_isub(builder, zero, stack[0].value);
+    if (stack[0].kind == JIT_KIND_FLOAT) {
+        spidir_value_t zero = spidir_builder_build_fconst64(builder, 0);
+        STACK_TOP()->value = spidir_builder_build_fsub(builder, zero, stack[0].value);
+    } else {
+        spidir_value_t zero = spidir_builder_build_iconst(builder, get_spidir_type(stack[0].type), 0);
+        STACK_TOP()->value = spidir_builder_build_isub(builder, zero, stack[0].value);
+    }
     return TDN_NO_ERROR;
 }
 
@@ -2024,6 +2058,8 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDSTR] = emit_ldstr,
     [CEE_LDC_I4] = emit_ldc_i4,
     [CEE_LDC_I8] = emit_ldc_i8,
+    [CEE_LDC_R4] = emit_ldc_r4,
+    [CEE_LDC_R8] = emit_ldc_r8,
     [CEE_DUP] = emit_nop,
     [CEE_POP] = emit_nop,
 

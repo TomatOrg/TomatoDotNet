@@ -217,10 +217,10 @@ static tdn_err_t sig_parse_type(
         case ELEMENT_TYPE_U4: *type = tUInt32; break;
         case ELEMENT_TYPE_I8: *type = tInt64; break;
         case ELEMENT_TYPE_U8: *type = tUInt64; break;
-        // TODO: case ELEMENT_TYPE_R4: *type = tSystem_Single; break;
-        // TODO: case ELEMENT_TYPE_R8: *type = tSystem_Double; break;
-         case ELEMENT_TYPE_I: *type = tIntPtr; break;
-         case ELEMENT_TYPE_U: *type = tUIntPtr; break;
+        case ELEMENT_TYPE_R4: *type = tSingle; break;
+        case ELEMENT_TYPE_R8: *type = tDouble; break;
+        case ELEMENT_TYPE_I: *type = tIntPtr; break;
+        case ELEMENT_TYPE_U: *type = tUIntPtr; break;
         // TODO: case ELEMENT_TYPE_ARRAY: break;
 
         case ELEMENT_TYPE_VALUETYPE:

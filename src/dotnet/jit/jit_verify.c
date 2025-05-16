@@ -1428,6 +1428,24 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_ldc_r4(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_value_init(STACK_PUSH(), tSingle);
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t verify_ldc_r8(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_value_init(STACK_PUSH(), tDouble);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_dup(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -2319,6 +2337,8 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDSTR] = verify_ldstr,
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
+    [CEE_LDC_R4] = verify_ldc_r4,
+    [CEE_LDC_R8] = verify_ldc_r8,
     [CEE_DUP] = verify_dup,
     [CEE_POP] = verify_pop,
 

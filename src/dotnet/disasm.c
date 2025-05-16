@@ -295,15 +295,15 @@ void tdn_normalize_inst(tdn_il_inst_t* inst) {
         case CEE_LDELEM_U1: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tByte; break;
         case CEE_LDELEM_U2: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tUInt16; break;
         case CEE_LDELEM_U4: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tUInt32; break;
-        case CEE_LDELEM_R4: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
-        case CEE_LDELEM_R8: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
+        case CEE_LDELEM_R4: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSingle; break;
+        case CEE_LDELEM_R8: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tDouble; break;
         case CEE_LDELEM_I: inst->opcode = CEE_LDELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
         case CEE_STELEM_I1: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSByte; break;
         case CEE_STELEM_I2: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt16; break;
         case CEE_STELEM_I4: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt32; break;
         case CEE_STELEM_I8: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt64; break;
-//        case CEE_STELEM_R4: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
-//        case CEE_STELEM_R8: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = NULL; break;
+        case CEE_STELEM_R4: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSingle; break;
+        case CEE_STELEM_R8: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tDouble; break;
         case CEE_STELEM_I: inst->opcode = CEE_STELEM; inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
 
         case CEE_LDIND_I: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
