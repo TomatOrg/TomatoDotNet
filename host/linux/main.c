@@ -401,6 +401,7 @@ int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
     RuntimeAssembly run = NULL;
+    int result = 0;
 
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
@@ -477,7 +478,6 @@ int main(int argc, char* argv[]) {
     // now load the assembly we want to run
     CHECK_AND_RETHROW(load_assembly_from_path(argv[optind], &run));
 
-    int result = 0;
     if (il_verify_test) {
         CHECK_AND_RETHROW(tdn_run_ilverify_test(run));
     } else {
