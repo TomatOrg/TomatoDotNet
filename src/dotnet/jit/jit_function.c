@@ -644,7 +644,12 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
         value->kind = JIT_KIND_INT64;
         value->type = tInt64;
 
-    } else if (type == tDouble || type == tSingle) {
+    } else if (type == tDouble) {
+        value->kind = JIT_KIND_FLOAT;
+        value->type = tDouble;
+
+    } else if (type == tSingle) {
+        // TODO: properly support f32
         value->kind = JIT_KIND_FLOAT;
         value->type = tDouble;
 

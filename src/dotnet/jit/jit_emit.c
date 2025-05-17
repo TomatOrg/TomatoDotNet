@@ -803,7 +803,11 @@ static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t 
     if (stack[0].kind == JIT_KIND_INT64 || stack[0].kind == JIT_KIND_NATIVE_INT) {
         value = spidir_builder_build_itrunc(builder, value);
     } else if (stack[0].kind == JIT_KIND_FLOAT) {
-        CHECK_FAIL("TODO: float -> i4");
+        if (inst->opcode == CEE_CONV_I1 || inst->opcode == CEE_CONV_I2) {
+            value = spidir_builder_build_floattosint(builder, SPIDIR_TYPE_I32, value);
+        } else {
+            value = spidir_builder_build_floattouint(builder, SPIDIR_TYPE_I32, value);
+        }
     }
 
     // for anything less than i32 we need to sign/zero extend
@@ -836,7 +840,52 @@ static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t 
         value = emit_extend_int(builder, stack[0].value,
             inst->opcode == CEE_CONV_I8 || inst->opcode == CEE_CONV_I);
     } else if (stack[0].kind == JIT_KIND_FLOAT) {
-        CHECK_FAIL("float -> i8");
+        if (inst->opcode == CEE_CONV_I || inst->opcode == CEE_CONV_I8) {
+            value = spidir_builder_build_floattosint(builder, SPIDIR_TYPE_I64, value);
+        } else {
+            value = spidir_builder_build_floattouint(builder, SPIDIR_TYPE_I64, value);
+        }
+    }
+
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_conv_r4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_t value = stack[0].value;
+
+    if (stack[0].kind == JIT_KIND_FLOAT) {
+        if (stack[0].type == tDouble) {
+            CHECK_FAIL("TODO: f64 -> f32");
+        }
+    } else {
+        CHECK_FAIL("TODO: i -> f32");
+    }
+
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
+
+static tdn_err_t emit_conv_r8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_t value = stack[0].value;
+
+    if (stack[0].kind == JIT_KIND_FLOAT) {
+        if (stack[0].type == tSingle) {
+            CHECK_FAIL("f32 -> f64");
+        }
+    } else {
+        if (inst->opcode == CEE_CONV_R_UN) {
+            value = spidir_builder_build_uinttofloat(builder, SPIDIR_TYPE_F64, value);
+        } else {
+            value = spidir_builder_build_sinttofloat(builder, SPIDIR_TYPE_F64, value);
+        }
     }
 
     STACK_TOP()->value = value;
@@ -2166,6 +2215,10 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_CONV_U8] = emit_conv_i8,
     [CEE_CONV_I] = emit_conv_i8,
     [CEE_CONV_U] = emit_conv_i8,
+
+    [CEE_CONV_R4] = emit_conv_r4,
+    [CEE_CONV_R8] = emit_conv_r8,
+    [CEE_CONV_R_UN] = emit_conv_r8,
 
     [CEE_CEQ] = emit_compare,
     [CEE_CGT] = emit_compare,

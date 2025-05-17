@@ -1577,6 +1577,9 @@ static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_i
         case CEE_CONV_OVF_U:
         case CEE_CONV_I:
         case CEE_CONV_U: type = tIntPtr; break;
+        case CEE_CONV_R4: type = tSingle; break;
+        case CEE_CONV_R_UN:
+        case CEE_CONV_R8: type = tDouble; break;
         default: CHECK_FAIL();
     }
 
@@ -2379,6 +2382,9 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_CONV_U8] = verify_conv,
     [CEE_CONV_I] = verify_conv,
     [CEE_CONV_U] = verify_conv,
+    [CEE_CONV_R4] = verify_conv,
+    [CEE_CONV_R8] = verify_conv,
+    [CEE_CONV_R_UN] = verify_conv,
 
     [CEE_CEQ] = verify_compare,
     [CEE_CGT] = verify_compare,
