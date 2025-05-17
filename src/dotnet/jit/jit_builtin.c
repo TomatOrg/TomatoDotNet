@@ -55,6 +55,18 @@ static spidir_value_t emit_delegate_invoke(spidir_builder_handle_t builder, Runt
 // Generic emit code
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * Takes in a reference and outputs a reference, the types might be completely different and we don't
+ * perform any kind of type checking
+ */
+static spidir_value_t emit_unsafe_as(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return args[0];
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Generic emit code
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
     RuntimeTypeInfo type = method->DeclaringType;
 
@@ -65,6 +77,13 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
 
         if (tdn_compare_string_to_cstr(method->Name, "Invoke")) {
             return emit_delegate_invoke;
+        }
+    } else if (type == tUnsafe) {
+        if (
+            tdn_compare_string_to_cstr(method->Name, "As") ||
+            tdn_compare_string_to_cstr(method->Name, "AsRef")
+        ) {
+            return emit_unsafe_as;
         }
     }
 

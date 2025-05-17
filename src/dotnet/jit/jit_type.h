@@ -27,7 +27,8 @@ static inline bool jit_is_struct(RuntimeTypeInfo type) {
             type != tInt32 && type != tUInt32 &&
             type != tInt64 && type != tUInt64 &&
             type != tIntPtr && type != tUIntPtr &&
-            type != tBoolean && type != tChar;
+            type != tBoolean && type != tChar &&
+            type != tSingle && type != tDouble;
 }
 
 static inline bool jit_is_struct_like(RuntimeTypeInfo type) {

@@ -428,11 +428,17 @@ cleanup:
     return err;
 }
 
+// Use as a template for adding new instructions
+static tdn_err_t emit_sizeof(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst->operand.type->StackSize);
+    return TDN_NO_ERROR;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Argument access
 //----------------------------------------------------------------------------------------------------------------------
 
-static tdn_err_t emit_load_local(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
+static tdn_err_t emit_load_local(jit_function_t *function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
     jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
@@ -729,23 +735,64 @@ static spidir_value_t emit_binary_compare(spidir_builder_handle_t builder, tdn_i
     return spidir_builder_build_icmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
 }
 
+static spidir_value_t emit_float_binary_compare(spidir_builder_handle_t builder, tdn_il_opcode_t opcode, spidir_value_t value1, spidir_value_t value2) {
+    spidir_fcmp_kind_t kind;
+    switch (opcode) {
+        case CEE_BEQ:
+        case CEE_CEQ: kind = SPIDIR_FCMP_OEQ; break;
+        case CEE_BNE_UN: kind = SPIDIR_FCMP_UNE; break;
+        case CEE_BGT:
+        case CEE_CGT: kind = SPIDIR_FCMP_OLT; SWAP(value1, value2); break;
+        case CEE_BGE: kind = SPIDIR_FCMP_OLE; SWAP(value1, value2); break;
+        case CEE_BGT_UN:
+        case CEE_CGT_UN: kind = SPIDIR_FCMP_ULT; SWAP(value1, value2); break;
+        case CEE_BGE_UN: kind = SPIDIR_FCMP_ULE; SWAP(value1, value2); break;
+        case CEE_BLT:
+        case CEE_CLT: kind = SPIDIR_FCMP_OLT; break;
+        case CEE_BLE: kind = SPIDIR_FCMP_OLE; break;
+        case CEE_BLT_UN:
+        case CEE_CLT_UN: kind = SPIDIR_FCMP_ULT; break;
+        case CEE_BLE_UN: kind = SPIDIR_FCMP_ULE; break;
+        default: ASSERT(!"Invalid opcode");
+    }
+    return spidir_builder_build_fcmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
+}
+
 static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
 
-    // if the kinds are not the same we need to extend both into a full integer
-    if (stack[0].kind != stack[1].kind) {
-        if (stack[0].kind == JIT_KIND_INT32) {
-            stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+    if (stack[0].kind == JIT_KIND_FLOAT) {
+        // if the kinds are not the same we need to extend both into a full integer
+        if (stack[0].type != stack[1].type) {
+            if (stack[0].type == tSingle) {
+                CHECK_FAIL("TODO: f32 -> f64");
+            }
+
+            if (stack[1].type == tSingle) {
+                CHECK_FAIL("TODO: f32 -> f64");
+            }
         }
 
-        if (stack[1].kind == JIT_KIND_INT32) {
-            stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+        STACK_TOP()->value = emit_float_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
+
+    } else {
+        // if the kinds are not the same we need to extend both into a full integer
+        if (stack[0].kind != stack[1].kind) {
+            if (stack[0].kind == JIT_KIND_INT32) {
+                stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+            }
+
+            if (stack[1].kind == JIT_KIND_INT32) {
+                stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+            }
         }
+
+        STACK_TOP()->value = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
     }
 
-    STACK_TOP()->value = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
-
-    return TDN_NO_ERROR;
+cleanup:
+    return err;
 }
 
 static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
@@ -801,21 +848,18 @@ cleanup:
 static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    bool is_unsigned = inst->opcode == CEE_DIV_UN || inst->opcode == CEE_REM_UN;
-
-    // if the kinds are not the same we need to extend both into a full integer
-    if (stack[0].kind != stack[1].kind) {
-        if (stack[0].kind == JIT_KIND_INT32) {
-            stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-        }
-
-        if (stack[1].kind == JIT_KIND_INT32) {
-            stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
-        }
-    }
-
     spidir_value_t value = SPIDIR_VALUE_INVALID;
     if (stack[1].kind == JIT_KIND_FLOAT) {
+        if (stack[0].type != stack[1].type) {
+            if (stack[0].type == tSingle) {
+                CHECK_FAIL("TODO: f32 -> f64");
+            }
+
+            if (stack[1].type == tSingle) {
+                CHECK_FAIL("TODO: f32 -> f64");
+            }
+        }
+
         switch (inst->opcode) {
             case CEE_ADD: value = spidir_builder_build_fadd(builder, stack[0].value, stack[1].value); break;
             case CEE_SUB: value = spidir_builder_build_fsub(builder, stack[0].value, stack[1].value); break;
@@ -825,6 +869,19 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
             default: CHECK_FAIL();
         }
     } else {
+        bool is_unsigned = inst->opcode == CEE_DIV_UN || inst->opcode == CEE_REM_UN;
+
+        // if the kinds are not the same we need to extend both into a full integer
+        if (stack[0].kind != stack[1].kind) {
+            if (stack[0].kind == JIT_KIND_INT32) {
+                stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+            }
+
+            if (stack[1].kind == JIT_KIND_INT32) {
+                stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+            }
+        }
+
         switch (inst->opcode) {
             case CEE_ADD: value = spidir_builder_build_iadd(builder, stack[0].value, stack[1].value); break;
             case CEE_SUB: value = spidir_builder_build_isub(builder, stack[0].value, stack[1].value); break;
@@ -1934,25 +1991,41 @@ static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_ha
     tdn_err_t err = TDN_NO_ERROR;
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
 
-    // sign extend as required
-    if (stack[0].type == tInt32 && stack[1].type != tInt32) {
-        stack[0].type = tIntPtr;
-        stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-    } else if (stack[1].type == tInt32 && stack[0].type != tInt32) {
-        stack[1].type = tIntPtr;
-        stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
-    }
-
-    // interface and delegate are a fat pointer, we need to
-    // load the instance/function and check against that
-    emit_load_reference(builder, &stack[0]);
-    emit_load_reference(builder, &stack[1]);
-
-    // NOTE: in here we don't need to inttoptr since compare can
-    //       just take in a pointer without a problem
-
     // perform the condition
-    spidir_value_t cond = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
+    spidir_value_t cond;
+    if (stack[0].kind == JIT_KIND_FLOAT) {
+        if (stack[0].type != stack[1].type) {
+            if (stack[0].type == tSingle) {
+                CHECK_FAIL("TODO: f32 -> f64");
+            }
+
+            if (stack[1].type == tSingle) {
+                CHECK_FAIL("TODO: f32 -> f64");
+            }
+        }
+
+        cond = emit_float_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
+
+    } else {
+        // sign extend as required
+        if (stack[0].type == tInt32 && stack[1].type != tInt32) {
+            stack[0].type = tIntPtr;
+            stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
+        } else if (stack[1].type == tInt32 && stack[0].type != tInt32) {
+            stack[1].type = tIntPtr;
+            stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
+        }
+
+        // interface and delegate are a fat pointer, we need to
+        // load the instance/function and check against that
+        emit_load_reference(builder, &stack[0]);
+        emit_load_reference(builder, &stack[1]);
+
+        // NOTE: in here we don't need to inttoptr since compare can
+        //       just take in a pointer without a problem
+
+        cond = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
+    }
 
     // get the target block
     jit_block_t* target = jit_function_get_block(function, inst->operand.branch_target, block->leave_target_stack);
@@ -2017,6 +2090,7 @@ cleanup:
 
 emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_NOP] = emit_nop,
+    [CEE_SIZEOF] = emit_sizeof,
 
     [CEE_LDARG] = emit_ldarg,
     [CEE_STARG] = emit_starg,

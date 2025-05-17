@@ -937,6 +937,15 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_sizeof(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_value_init(STACK_PUSH(), tInt32);
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Local access
 //----------------------------------------------------------------------------------------------------------------------
@@ -2418,6 +2427,8 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LEAVE] = verify_leave,
     [CEE_ENDFINALLY] = verify_endfinally,
     [CEE_THROW] = verify_throw,
+
+    [CEE_SIZEOF] = verify_sizeof,
 };
 size_t g_verify_dispatch_table_size = ARRAY_LENGTH(g_verify_dispatch_table);
 
