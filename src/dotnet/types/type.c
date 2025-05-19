@@ -69,7 +69,7 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     new_type->IsArray = 1;
 
     // TODO: handle the vtable correctly....
-    new_type->JitVTable = tArray->JitVTable;
+    tdn_create_vtable(new_type, 4);
 
     // set the array type, because in the mean time someone could
     // have created the instance already, we are going to just let

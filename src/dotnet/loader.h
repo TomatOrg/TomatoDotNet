@@ -17,3 +17,8 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type);
  * Generate the prime for this interface
  */
 tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo InterfaceType);
+
+/**
+ * Create a vtable for the given type
+ */
+tdn_err_t tdn_create_vtable(RuntimeTypeInfo type, int count);

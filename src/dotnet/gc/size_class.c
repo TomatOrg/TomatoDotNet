@@ -49,7 +49,7 @@ void gc_size_class_init(void) {
     }
 }
 
-static inline size_t class_to_size(size_t size_class) {
+size_t gc_class_to_size(size_t size_class) {
     ASSERT(size_class < GC_NUM_CLASSES);
     return m_class_to_size[size_class];
 }
@@ -67,10 +67,10 @@ int gc_get_size_class(size_t size, size_t align) {
     }
 
     int size_class = m_class_array[index];
-    if (UNLIKELY(class_to_size(size_class) & (align - 1))) {
+    if (UNLIKELY(gc_class_to_size(size_class) & (align - 1))) {
         do {
             ++size_class;
-        } while (UNLIKELY(class_to_size(size_class) & (align - 1)));
+        } while (UNLIKELY(gc_class_to_size(size_class) & (align - 1)));
     }
 
     return size_class;

@@ -109,6 +109,9 @@ typedef struct RuntimeTypeInfo {
     generic_type_instance_t* GenericTypeInstances;
     RuntimeConstructorInfo TypeInitializer;
 
+    // offsets to the managed pointers stored within the object
+    uint32_t* ManagedPointers;
+
     // the interfaces this type implements
     interface_impl_t* InterfaceImpls;
 

@@ -48,7 +48,8 @@ typedef struct ObjectVTable {
 
 typedef struct Object {
     ObjectVTable* VTable;
-    uint32_t : 32;
+    uint32_t GcColor : 2;
+    uint32_t : 30;
     uint8_t Mutex;
     uint8_t CondVar;
     uint16_t MutexThreadId;
@@ -91,6 +92,7 @@ typedef struct Guid {
 DEFINE_ARRAY(Byte);
 DEFINE_ARRAY(Char);
 DEFINE_ARRAY(RuntimeTypeInfo);
+DEFINE_ARRAY(Object);
 
 /**
  * We depend on this in the runtime

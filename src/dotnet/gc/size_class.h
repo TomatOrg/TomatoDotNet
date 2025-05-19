@@ -16,4 +16,12 @@
 
 void gc_size_class_init();
 
+/**
+ * Get the size class for the given size and alignment
+ */
 int gc_get_size_class(size_t size, size_t align);
+
+/**
+ * Get the allocation size of the given class
+ */
+size_t gc_class_to_size(size_t size_class);

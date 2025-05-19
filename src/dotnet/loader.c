@@ -169,7 +169,7 @@ static int m_loaded_types = 0;
  */
 static RuntimeAssembly mCoreAssembly = NULL;
 
-static tdn_err_t create_vtable(RuntimeTypeInfo type, int count) {
+tdn_err_t tdn_create_vtable(RuntimeTypeInfo type, int count) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // create the jit vtable
@@ -204,14 +204,16 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
         ) {
             RuntimeTypeInfo type = *init_type->dest ? *init_type->dest : TDN_GC_NEW(RuntimeTypeInfo);
             if (type->JitVTable == NULL) {
-                CHECK_AND_RETHROW(create_vtable(type, init_type->vtable_size));
+                CHECK_AND_RETHROW(tdn_create_vtable(type, init_type->vtable_size));
             }
             type->StackSize = init_type->stack_size;
             type->StackAlignment = init_type->stack_alignment;
             type->HeapSize = init_type->heap_size;
             type->HeapAlignment = init_type->heap_alignment;
-            type->FillingHeapSize = 1;
-            type->EndFillingHeapSize = 1;
+            if (init_type->is_unmanaged) {
+                type->FillingHeapSize = 1;
+                type->EndFillingHeapSize = 1;
+            }
             type->FillingStackSize = 1;
             type->EndFillingStackSize = 1;
             type->QueuedTypeInit = 1;
@@ -232,7 +234,7 @@ static tdn_err_t corelib_create_type(metadata_type_def_t* type_def, RuntimeTypeI
         ) {
             RuntimeTypeInfo type = *load_type->dest ? *load_type->dest : TDN_GC_NEW(RuntimeTypeInfo);
             if (type->JitVTable == NULL) {
-                CHECK_AND_RETHROW(create_vtable(type, load_type->vtable_size));
+                CHECK_AND_RETHROW(tdn_create_vtable(type, load_type->vtable_size));
             }
 
             type->QueuedTypeInit = 1;
@@ -468,6 +470,14 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
 
             // fill the field
             field->FieldOffset = current_size;
+            if (tdn_type_is_referencetype(field->FieldType)) {
+                // this contains a managed pointer
+                arrpush(type->ManagedPointers, current_size);
+
+            } else if (arrlen(field->FieldType->ManagedPointers) != 0) {
+                // this contains an array that has managed pointers
+                CHECK_FAIL();
+            }
 
             // take the size up
             current_size += field_type->StackSize;
@@ -489,8 +499,12 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
         // and now fill it in, if the heap size is already filled
         // from the class layout then use it right now
         type->HeapAlignment = alignment;
-        if (type->HeapSize != 0) {
-            CHECK(type->HeapSize >= current_size);
+        if (type->HeapSize != 0 && type != tString) {
+            // this check does not work for strings since they
+            // are inherently different sized (because of the
+            // variable length nature)
+            CHECK(type->HeapSize == current_size,
+                "%T Type conflict (%zu == %zu)", type, type->HeapSize, current_size);
         } else {
             type->HeapSize = current_size;
         }
@@ -721,7 +735,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
 
     // allocate the native vtable
     if (info->JitVTable == NULL) {
-        CHECK_AND_RETHROW(create_vtable(info, vtable_offset));
+        CHECK_AND_RETHROW(tdn_create_vtable(info, vtable_offset));
     } else {
         CHECK(vtable_offset == info->VTableSize, "Got invalid VTABLE size %d/%d - %T", vtable_offset, info->VTableSize, info);
     }
@@ -1269,7 +1283,7 @@ static tdn_err_t corelib_bootstrap() {
     tRuntimeTypeInfo->HeapAlignment = _Alignof(struct RuntimeTypeInfo);
 
     // make sure to set its type id properly
-    CHECK_AND_RETHROW(create_vtable(tRuntimeTypeInfo, 5));
+    CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeTypeInfo, 5));
     tRuntimeTypeInfo->Object.VTable = tRuntimeTypeInfo->JitVTable;
 
     // hard-code types we require for proper bootstrap
@@ -1291,10 +1305,10 @@ static tdn_err_t corelib_bootstrap() {
     tRuntimeModule->HeapAlignment = _Alignof(struct RuntimeModule);
 
     // hard code to the correct amount of entries
-    CHECK_AND_RETHROW(create_vtable(tArray, 4));
-    CHECK_AND_RETHROW(create_vtable(tString, 4));
-    CHECK_AND_RETHROW(create_vtable(tRuntimeAssembly, 4));
-    CHECK_AND_RETHROW(create_vtable(tRuntimeModule, 4));
+    CHECK_AND_RETHROW(tdn_create_vtable(tArray, 4));
+    CHECK_AND_RETHROW(tdn_create_vtable(tString, 4));
+    CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeAssembly, 4));
+    CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeModule, 4));
 
     // setup the basic type so TDN_GC_NEW_ARRAY can work
     CHECK_AND_RETHROW(tdn_create_string_from_cstr("RuntimeTypeInfo", &tRuntimeTypeInfo->Name));
@@ -2356,6 +2370,9 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         // jit all the types required
         // for the runtime to work
         CHECK_AND_RETHROW(corelib_jit_types(assembly));
+
+        // register the assembly pointer as a valid root
+        gc_register_root(&mCoreAssembly);
 
         mCoreAssembly = assembly;
     }

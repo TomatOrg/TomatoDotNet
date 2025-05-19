@@ -58,6 +58,12 @@ void tdn_host_jit_patch(void* dst, void* src, size_t size);
  */
 void* tdn_host_gc_alloc(size_t size, size_t alignment);
 
+/**
+ * Called to start a gc cycle, this should stop the world,
+ * and call the scanning functions to start the mark and sweep.
+ */
+void tdn_host_gc_start(void);
+
 //----------------------------------------------------------------------------------------------------------------------
 // Jit spidir dump
 //----------------------------------------------------------------------------------------------------------------------

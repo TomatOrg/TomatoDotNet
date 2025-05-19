@@ -10,6 +10,7 @@
 #include "jit_builtin.h"
 #include "jit_helpers.h"
 #include "jit_type.h"
+#include "dotnet/gc/gc.h"
 
 static int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
     int idx = hmgeti(type->InterfaceImpls, iface);
@@ -541,6 +542,15 @@ static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, Runt
         ASSERT(field->JitFieldPtr != NULL);
 
         // TODO: register gc roots
+        if (tdn_type_is_valuetype(field->FieldType)) {
+            // register the children of the struct
+            for (int i = 0; i < arrlen(field->FieldType->ManagedPointers); i++) {
+                gc_register_root(field->JitFieldPtr + field->FieldType->ManagedPointers[i]);
+            }
+        } else {
+            // a pointer to an object, register it directly
+            gc_register_root(field->JitFieldPtr);
+        }
     }
 
     return spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)field->JitFieldPtr);

@@ -170,4 +170,5 @@ cleanup:
 void pe_free_image(pe_file_t* pe_file) {
     tdn_host_free(pe_file->image);
     pe_file->image = NULL;
+    pe_file->close_handle(pe_file->handle);
 }

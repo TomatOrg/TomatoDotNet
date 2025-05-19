@@ -18,6 +18,7 @@
 #include <util/stb_ds.h>
 #include <getopt.h>
 #include <spidir/log.h>
+#include <sys/mman.h>
 
 #include "dotnet/types.h"
 
@@ -261,8 +262,6 @@ static void console_write_line(String str) {
 
 extern const char* g_assembly_search_path;
 
-void** m_objects = NULL;
-
 static void free_type(RuntimeTypeInfo type) {
     for (int i = 0; i < hmlen(type->GenericTypeInstances); i++) {
         free_type(type->GenericTypeInstances[i].value);
@@ -397,11 +396,25 @@ cleanup:
     return err;
 }
 
+static void* m_bottom_of_stack = NULL;
+
+void tdn_host_gc_start(void) {
+    void* current_stack = __builtin_frame_address(0);
+    size_t stack_size = m_bottom_of_stack - current_stack;
+    tdn_gc_scan_stack(current_stack, stack_size);
+    tdn_gc_scan_roots();
+    if (tdn_gc_sweep()) {
+        tdn_gc_run_finalizers();
+    }
+}
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
     RuntimeAssembly run = NULL;
     int result = 0;
+
+    m_bottom_of_stack = __builtin_frame_address(0);
 
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
@@ -449,7 +462,10 @@ int main(int argc, char* argv[]) {
     CHECK(optind < argc, "Expected <dll to run> after options");
 
     // initialize the GC
-    tdn_init_gc(0);
+    void* heap_base = mmap(NULL, TDN_GC_HEAP_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
+    CHECK(heap_base != MAP_FAILED);
+    CHECK(madvise(heap_base, TDN_GC_HEAP_SIZE, MADV_RANDOM | MADV_DONTNEED | MADV_FREE) == 0);
+    tdn_init_gc(heap_base);
 
     // set the global options
     tdn_config_t* config = tdn_get_config();
@@ -498,24 +514,9 @@ int main(int argc, char* argv[]) {
 cleanup:
     tdn_cleanup();
 
-    for (int i = 0; i < arrlen(m_objects); i++) {
-        Object obj = m_objects[i];
-        if (obj->VTable->Type == tRuntimeFieldInfo) {
-            RuntimeFieldInfo field = (RuntimeFieldInfo)obj;
-            if (field->JitFieldPtr != NULL) {
-                free(field->JitFieldPtr);
-                field->JitFieldPtr = NULL;
-            }
-        }
-    }
-
-    free_assembly(corelib);
-    free_assembly(run);
-
-    for (int i = 0; i < arrlen(m_objects); i++) {
-        free(m_objects[i]);
-    }
-    arrfree(m_objects);
+    // collect everything, we should have
+    // nothing allocated after this
+    tdn_gc_start();
 
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : result;
 }

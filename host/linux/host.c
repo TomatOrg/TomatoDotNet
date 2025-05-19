@@ -13,6 +13,8 @@
 #include <util/except.h>
 #include <util/stb_ds.h>
 
+#include "tomatodotnet/tdn.h"
+
 #if 1
     #define STDERR stderr
 #else
@@ -115,14 +117,8 @@ const char* tdn_host_error_to_string(int error) {
     return strerror(error);
 }
 
-extern void** m_objects;
-
 void* tdn_host_gc_alloc(size_t size, size_t alignment) {
-    void* ptr = calloc(1, size);
-    if (ptr != NULL) {
-        arrpush(m_objects, ptr);
-    }
-    return ptr;
+    return calloc(1, size);
 }
 
 void* tdn_host_jit_alloc(size_t size) {
