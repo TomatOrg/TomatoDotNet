@@ -541,7 +541,7 @@ static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, Runt
         field->JitFieldPtr = tdn_host_mallocz(field->FieldType->StackSize, field->FieldType->StackAlignment);
         ASSERT(field->JitFieldPtr != NULL);
 
-        // TODO: register gc roots
+        // Register gc roots
         if (tdn_type_is_valuetype(field->FieldType)) {
             // register the children of the struct
             for (int i = 0; i < arrlen(field->FieldType->ManagedPointers); i++) {

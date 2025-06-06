@@ -408,6 +408,15 @@ void tdn_host_gc_start(void) {
     }
 }
 
+static void assembly_clear_roots(RuntimeAssembly assembly) {
+    for (int i = 0; i < assembly->Fields->Length; i++) {
+        RuntimeFieldInfo field = assembly->Fields->Elements[i];
+        if (field->JitFieldPtr != NULL) {
+            memset(field->JitFieldPtr, 0, field->FieldType->StackSize);
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
@@ -516,6 +525,8 @@ cleanup:
 
     // collect everything, we should have
     // nothing allocated after this
+    if (corelib != NULL) assembly_clear_roots(corelib);
+    if (run != NULL) assembly_clear_roots(run);
     tdn_gc_start();
 
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : result;

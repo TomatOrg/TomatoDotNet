@@ -152,6 +152,16 @@ void gc_register_root(void* field) {
     arrpush(m_gc_roots, field);
 }
 
+void gc_unregister_root(void* field) {
+    for (int i = 0; i < arrlen(m_gc_roots); i++) {
+        if (m_gc_roots[i] == field) {
+            arrdelswap(m_gc_roots, i);
+            return;
+        }
+    }
+    ASSERT(!"Failed to find root");
+}
+
 static void gc_trace_object(void* _obj) {
     Object obj = _obj;
 
@@ -162,7 +172,7 @@ static void gc_trace_object(void* _obj) {
     int unreached_color = m_gc_color_unreached;
 
     RuntimeTypeInfo type = obj->VTable->Type;
-    TRACE("%p - %T", obj, type);
+    // TRACE("%p - %T", obj, type);
 
     // scan the type instance itself, to ensure we don't delete it before
     // we handle all of the children
@@ -254,6 +264,25 @@ static void gc_free_object(Object obj) {
         hmfree(value->StringTable);
         dotnet_free_file(value->Metadata);
         tdn_host_free(value->Metadata);
+
+    } else if (type == tRuntimeFieldInfo) {
+        RuntimeFieldInfo value = (RuntimeFieldInfo)obj;
+
+        if (value->JitFieldPtr != NULL) {
+            // Unregister gc roots
+            if (tdn_type_is_valuetype(value->FieldType)) {
+                // register the children of the struct
+                for (int i = 0; i < arrlen(value->FieldType->ManagedPointers); i++) {
+                    gc_unregister_root(value->JitFieldPtr + value->FieldType->ManagedPointers[i]);
+                }
+            } else {
+                // a pointer to an object, register it directly
+                gc_unregister_root(value->JitFieldPtr);
+            }
+
+            // free the memory
+            tdn_host_free(value->JitFieldPtr);
+        }
     }
 
 
