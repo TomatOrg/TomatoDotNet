@@ -10,7 +10,6 @@
 #include "jit_builtin.h"
 #include "jit_helpers.h"
 #include "jit_type.h"
-#include "dotnet/gc/gc.h"
 
 static int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
     int idx = hmgeti(type->InterfaceImpls, iface);
@@ -545,11 +544,11 @@ static spidir_value_t jit_get_static_field(spidir_builder_handle_t builder, Runt
         if (tdn_type_is_valuetype(field->FieldType)) {
             // register the children of the struct
             for (int i = 0; i < arrlen(field->FieldType->ManagedPointers); i++) {
-                gc_register_root(field->JitFieldPtr + field->FieldType->ManagedPointers[i]);
+                tdn_host_gc_register_root(field->JitFieldPtr + field->FieldType->ManagedPointers[i]);
             }
         } else {
             // a pointer to an object, register it directly
-            gc_register_root(field->JitFieldPtr);
+            tdn_host_gc_register_root(field->JitFieldPtr);
         }
     }
 
@@ -637,12 +636,34 @@ cleanup:
 static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // type != tByte && type != tSByte &&
+    // type != tInt16 && type != tUInt16 &&
+    // type != tInt32 && type != tUInt32 &&
+    // type != tInt64 && type != tUInt64 &&
+    // type != tIntPtr && type != tUIntPtr &&
+    // type != tBoolean && type != tChar &&
+    // type != tSingle && type != tDouble;
+
     RuntimeTypeInfo dest_type = stack[0].type;
-    if (jit_is_struct_like(dest_type)) {
-        jit_emit_bzero(builder, stack[0].value, dest_type);
-    } else {
-        // TODO: this
+    if (dest_type == tByte || dest_type == tSByte || dest_type == tBoolean) {
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_1,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), stack[0].value);
+    } else if (dest_type == tInt16 || dest_type == tUInt16 || dest_type == tChar) {
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_2,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), stack[0].value);
+    } else if (dest_type == tInt32 || dest_type == tUInt32) {
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), stack[0].value);
+    } else if (dest_type == tInt64 || dest_type == tUInt64 || dest_type == tIntPtr || dest_type == tUIntPtr || tdn_type_is_referencetype(dest_type)) {
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0), stack[0].value);
+    } else if (dest_type == tSingle) {
         CHECK_FAIL();
+    } else if (dest_type == tDouble) {
+        CHECK_FAIL();
+    } else {
+        CHECK(tdn_type_is_valuetype(dest_type));
+        jit_emit_bzero(builder, stack[0].value, dest_type);
     }
 
 cleanup:

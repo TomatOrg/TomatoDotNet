@@ -1,5 +1,4 @@
 #include "tomatodotnet/types/type.h"
-#include "dotnet/gc/gc.h"
 #include "dotnet/loader.h"
 #include "util/except.h"
 #include "dotnet/metadata/metadata_tables.h"

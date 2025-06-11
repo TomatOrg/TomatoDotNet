@@ -10,7 +10,6 @@
 #include "util/except.h"
 #include "util/string.h"
 #include "dotnet/metadata/metadata.h"
-#include "dotnet/gc/gc.h"
 #include "dotnet/metadata/sig.h"
 #include "util/stb_ds.h"
 #include "tomatodotnet/jit/jit.h"
@@ -2372,7 +2371,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         CHECK_AND_RETHROW(corelib_jit_types(assembly));
 
         // register the assembly pointer as a valid root
-        gc_register_root(&mCoreAssembly);
+        tdn_host_gc_register_root(&mCoreAssembly);
 
         mCoreAssembly = assembly;
     }

@@ -117,10 +117,6 @@ const char* tdn_host_error_to_string(int error) {
     return strerror(error);
 }
 
-void* tdn_host_gc_alloc(size_t size, size_t alignment) {
-    return calloc(1, size);
-}
-
 void* tdn_host_jit_alloc(size_t size) {
     void* ptr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
     if (ptr == MAP_FAILED) {

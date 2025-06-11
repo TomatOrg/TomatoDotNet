@@ -6,6 +6,7 @@
 #include <spidir/module.h>
 
 #include "except.h"
+#include "types/basic.h"
 
 // logging helpers
 void tdn_host_log_trace(const char* format, ...);
@@ -53,16 +54,32 @@ void tdn_host_jit_patch(void* dst, void* src, size_t size);
  * Request memory meant for garbage collection
  *
  * Memory must be set to zero before you return
+ * The vtable must be set as the vtable given to the function.
  *
  * It is allowed to return NULL
  */
-void* tdn_host_gc_alloc(size_t size, size_t alignment);
+Object tdn_host_gc_alloc(ObjectVTable* vtable, size_t size, size_t alignment);
+
+/**
+ * Called by the runtime to tell the host about the objects inside of another object
+ */
+void tdn_host_gc_trace_object(Object obj);
 
 /**
  * Called to start a gc cycle, this should stop the world,
  * and call the scanning functions to start the mark and sweep.
  */
 void tdn_host_gc_start(void);
+
+/**
+ * Register a new root for garbage collection
+ */
+void tdn_host_gc_register_root(void* root);
+
+/**
+ * Remove a root for garbage collection
+ */
+void tdn_host_gc_unregister_root(void* root);
 
 //----------------------------------------------------------------------------------------------------------------------
 // Jit spidir dump

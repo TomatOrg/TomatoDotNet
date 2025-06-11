@@ -63,51 +63,22 @@ void tdn_cleanup(void);
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
- * The total size needs to be reserved for the heap
- */
-#define TDN_GC_HEAP_SIZE        ((512ull * 1024ull * 1024ull * 1024ull) * 85ull)
-
-/**
- * Initialize the jit, requires TDN_GC_HEAP_SIZE bytes from the given address, the memory
- * should be reserved and mapped on demand
- */
-void tdn_init_gc(void* base_address);
-
-/**
- * Trigger a garbage collection
- */
-void tdn_gc_start(void);
-
-/**
  * The raw gc allocation function, this will possibly
  * perform a collection
  */
 void* tdn_gc_new(RuntimeTypeInfo type, size_t size);
 
 /**
- * Scan a stack conservatively, this can be called from multiple threads
- * to perform a parallel scan
+ * Free a gc object, should be called by the hosts gc to free the native
+ * memory of an object (if any)
  */
-void tdn_gc_scan_stack(void* start, size_t size);
+void tdn_gc_free(Object ptr);
 
 /**
- * Start the root scanning, this can be called from multiple threads
- * to perform a parallel scan
+ * This will call tdn_host_gc_trace_object on every object that is inside of the given object
+ * this can be used by the host to implement the actual marking of the object
  */
-void tdn_gc_scan_roots(void);
-
-/**
- * Perform the sweep, must be called after
- * all gc_scan_roots calls return.
- *
- * returns true if there are finalizers to run
- */
-bool tdn_gc_sweep(void);
-
-/**
- * Run finalizers, can be called from multiple threads
- */
-void tdn_gc_run_finalizers(void);
+void tdn_gc_trace_children(Object obj);
 
 /**
  * Allocate a new object

@@ -4,7 +4,6 @@
 #include "util/string.h"
 
 #include "dotnet/types.h"
-#include "dotnet/gc/gc.h"
 #include "tomatodotnet/tdn.h"
 #include "util/except.h"
 

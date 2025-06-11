@@ -5,7 +5,6 @@
 #include <util/string_builder.h>
 
 #include "types.h"
-#include "gc/gc.h"
 #include "metadata/metadata.h"
 #include "metadata/metadata_tables.h"
 #include "metadata/sig.h"

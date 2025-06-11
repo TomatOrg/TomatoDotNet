@@ -4,7 +4,6 @@
 #include <errno.h>
 #include "tomatodotnet/except.h"
 #include "util/except.h"
-#include "dotnet/gc/gc.h"
 #include "dotnet/loader.h"
 #include "tomatodotnet/disasm.h"
 #include "tomatodotnet/jit/jit.h"
@@ -21,6 +20,7 @@
 #include <sys/mman.h>
 
 #include "dotnet/types.h"
+#include "gc/mem_tree.h"
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;
@@ -262,32 +262,6 @@ static void console_write_line(String str) {
 
 extern const char* g_assembly_search_path;
 
-static void free_type(RuntimeTypeInfo type) {
-    for (int i = 0; i < hmlen(type->GenericTypeInstances); i++) {
-        free_type(type->GenericTypeInstances[i].value);
-    }
-    // if (type->ArrayType != NULL) free_type(type->ArrayType);
-    // if (type->ByRefType != NULL) free_type(type->ByRefType);
-    // if (type->PointerType != NULL) free_type(type->PointerType);
-    hmfree(type->GenericTypeInstances);
-    hmfree(type->InterfaceImpls);
-    tdn_host_free(type->JitVTable);
-}
-
-static void free_assembly(RuntimeAssembly assembly) {
-    if (assembly != NULL) {
-        assembly->Metadata->file.close_handle(assembly->Metadata->file.handle);
-        dotnet_free_file(assembly->Metadata);
-        tdn_host_free(assembly->Metadata);
-
-        for (int i = 0; i < assembly->TypeDefs->Length; i++) {
-            free_type(assembly->TypeDefs->Elements[i]);
-        }
-
-        hmfree(assembly->StringTable);
-    }
-}
-
 static bool tdn_string_ends(String str, const char* pattern) {
     size_t len = strlen(pattern);
     for (int j = 0; j < len; j++) {
@@ -396,18 +370,6 @@ cleanup:
     return err;
 }
 
-static void* m_bottom_of_stack = NULL;
-
-void tdn_host_gc_start(void) {
-    void* current_stack = __builtin_frame_address(0);
-    size_t stack_size = m_bottom_of_stack - current_stack;
-    tdn_gc_scan_stack(current_stack, stack_size);
-    tdn_gc_scan_roots();
-    if (tdn_gc_sweep()) {
-        tdn_gc_run_finalizers();
-    }
-}
-
 static void assembly_clear_roots(RuntimeAssembly assembly) {
     for (int i = 0; i < assembly->Fields->Length; i++) {
         RuntimeFieldInfo field = assembly->Fields->Elements[i];
@@ -417,13 +379,15 @@ static void assembly_clear_roots(RuntimeAssembly assembly) {
     }
 }
 
+extern void* g_gc_bottom_of_stack;
+
 int main(int argc, char* argv[]) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
     RuntimeAssembly run = NULL;
     int result = 0;
 
-    m_bottom_of_stack = __builtin_frame_address(0);
+    g_gc_bottom_of_stack = __builtin_frame_address(0);
 
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
@@ -469,12 +433,6 @@ int main(int argc, char* argv[]) {
 
     // Remaining non-option arguments (should be the DLL to run)
     CHECK(optind < argc, "Expected <dll to run> after options");
-
-    // initialize the GC
-    void* heap_base = mmap(NULL, TDN_GC_HEAP_SIZE, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
-    CHECK(heap_base != MAP_FAILED);
-    CHECK(madvise(heap_base, TDN_GC_HEAP_SIZE, MADV_RANDOM | MADV_DONTNEED | MADV_FREE) == 0);
-    tdn_init_gc(heap_base);
 
     // set the global options
     tdn_config_t* config = tdn_get_config();
@@ -527,7 +485,11 @@ cleanup:
     // nothing allocated after this
     if (corelib != NULL) assembly_clear_roots(corelib);
     if (run != NULL) assembly_clear_roots(run);
-    tdn_gc_start();
+    tdn_host_gc_start();
+
+    // to ensure that everything gets cleaned properly
+    // we will destroty the tree
+    mem_tree_destroy();
 
     return (err != TDN_NO_ERROR) ? EXIT_FAILURE : result;
 }

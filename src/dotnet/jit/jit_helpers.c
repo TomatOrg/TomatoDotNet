@@ -1,7 +1,6 @@
 #include "jit_helpers.h"
 
 #include <stdbool.h>
-#include <dotnet/gc/gc.h>
 #include <tomatodotnet/types/basic.h>
 #include <util/defs.h>
 #include <util/except.h>

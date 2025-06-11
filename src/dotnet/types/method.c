@@ -5,7 +5,6 @@
 #include "dotnet/metadata/metadata.h"
 #include "util/except.h"
 #include "util/stb_ds.h"
-#include "dotnet/gc/gc.h"
 #include "dotnet/loader.h"
 #include "dotnet/types.h"
 #include "dotnet/metadata/sig.h"
