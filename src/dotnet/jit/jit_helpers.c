@@ -4,7 +4,7 @@
 #include <tomatodotnet/types/basic.h>
 #include <util/defs.h>
 #include <util/except.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 #include <util/string_builder.h>
 
 #include "jit.h"

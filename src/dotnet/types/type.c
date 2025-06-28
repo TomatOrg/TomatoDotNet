@@ -3,7 +3,7 @@
 #include "util/except.h"
 #include "dotnet/metadata/metadata_tables.h"
 #include "dotnet/types.h"
-#include "util/stb_ds.h"
+#include "tomatodotnet/util/stb_ds.h"
 #include "dotnet/metadata/sig.h"
 #include "dotnet/metadata/metadata.h"
 #include <stdatomic.h>

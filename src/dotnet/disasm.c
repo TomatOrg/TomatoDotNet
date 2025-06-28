@@ -11,7 +11,7 @@
 #include "tomatodotnet/tdn.h"
 #include "tomatodotnet/types/type.h"
 #include "util/except.h"
-#include "util/stb_ds.h"
+#include "tomatodotnet/util/stb_ds.h"
 #include "util/string.h"
 
 typedef enum opcode_operand {

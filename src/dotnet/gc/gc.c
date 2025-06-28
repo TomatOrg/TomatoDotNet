@@ -3,7 +3,7 @@
 #include "dotnet/metadata/metadata.h"
 #include "tomatodotnet/types/type.h"
 #include "util/except.h"
-#include "util/stb_ds.h"
+#include "tomatodotnet/util/stb_ds.h"
 
 
 void tdn_gc_trace_children(Object obj) {

@@ -11,7 +11,7 @@
 #include "util/string.h"
 #include "dotnet/metadata/metadata.h"
 #include "dotnet/metadata/sig.h"
-#include "util/stb_ds.h"
+#include "tomatodotnet/util/stb_ds.h"
 #include "tomatodotnet/jit/jit.h"
 #include <tomatodotnet/types/type.h>
 #include <util/alloc.h>

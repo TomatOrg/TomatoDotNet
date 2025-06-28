@@ -6,7 +6,7 @@
 #include "tomatodotnet/host.h"
 #include "util/except.h"
 #include "dotnet/metadata/metadata.h"
-#include "util/stb_ds.h"
+#include "../../../include/tomatodotnet/util/stb_ds.h"
 
 #include <sanitizer/asan_interface.h>
 
@@ -109,15 +109,17 @@ static void gc_free_object(Object obj) {
     tdn_gc_free(obj);
     obj->GcColor = GC_COLOR_UNALLOCATED;
     free(obj);
+    mem_tree_remove(obj);
 }
 
 bool tdn_gc_sweep(void) {
-    int reachable_color = m_gc_color_unreached;
+    int unreachable_color = m_gc_color_unreached;
     RuntimeTypeInfo* delayed_free = NULL;
 
     mem_tree_iter_t iter = {};
-    for (Object obj = mem_tree_iter_first(&iter); obj != NULL; obj = mem_tree_iter_next(&iter)) {
-        if (obj->GcColor == reachable_color) {
+    mem_tree_iter_begin(&iter);
+    for (Object obj; (obj = mem_tree_iter_current(&iter)); mem_tree_iter_next(&iter)) {
+        if (obj->GcColor == unreachable_color) {
             if (obj->VTable->Type == tRuntimeTypeInfo) {
                 // we need to delay the freeing of type info because
                 // the vtable might still be needed at this point

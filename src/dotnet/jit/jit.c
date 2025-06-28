@@ -1,7 +1,7 @@
 #include "jit.h"
 
 #include <util/except.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 
 #include <spidir/log.h>
 #include <spidir/opt.h>

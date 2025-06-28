@@ -3,7 +3,7 @@
 #include <dotnet/types.h>
 #include <tomatodotnet/types/type.h>
 #include <util/except.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 
 #include "jit_emit.h"
 #include "jit_helpers.h"

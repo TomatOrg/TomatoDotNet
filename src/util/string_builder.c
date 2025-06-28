@@ -1,6 +1,6 @@
 #include "string_builder.h"
-#include "stb_ds.h"
 
+#include "tomatodotnet/util/stb_ds.h"
 #include "tomatodotnet/types/type.h"
 #include "except.h"
 

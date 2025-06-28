@@ -1,6 +1,6 @@
 #include "types.h"
 
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 
 #include "util/except.h"
 

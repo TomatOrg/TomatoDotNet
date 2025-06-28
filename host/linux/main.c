@@ -14,7 +14,7 @@
 #include <time.h>
 #include <dotnet/jit/jit.h>
 #include <dotnet/metadata/metadata.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 #include <getopt.h>
 #include <spidir/log.h>
 #include <sys/mman.h>

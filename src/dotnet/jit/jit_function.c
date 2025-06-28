@@ -1,7 +1,7 @@
 #include "jit_function.h"
 
 #include <util/except.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 #include <util/string.h>
 #include <util/string_builder.h>
 

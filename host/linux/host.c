@@ -11,7 +11,7 @@
 #include <sys/mman.h>
 
 #include <util/except.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 
 #include "tomatodotnet/tdn.h"
 

@@ -1,7 +1,7 @@
 #include "jit_codegen.h"
 
 #include <string.h>
-#include <util/stb_ds.h>
+#include "tomatodotnet/util/stb_ds.h"
 #include <spidir/codegen.h>
 #include <spidir/x64.h>
 #include <tomatodotnet/types/type.h>

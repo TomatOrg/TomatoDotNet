@@ -3,7 +3,7 @@
 #include "dotnet/types.h"
 #include "util/except.h"
 #include "tomatodotnet/tdn.h"
-#include "util/stb_ds.h"
+#include "tomatodotnet/util/stb_ds.h"
 
 #define FIELD 0x6
 #define LOCAL_SIG 0x7
