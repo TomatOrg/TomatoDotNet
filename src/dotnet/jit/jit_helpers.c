@@ -110,7 +110,7 @@ static void* jit_get_interface_vtable(Object object, RuntimeTypeInfo to_type) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct jit_helper {
-    spidir_function_t function;
+    spidir_funcref_t function;
     void* func;
     bool created;
 } jit_helper_t;
@@ -131,70 +131,71 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_GET_INTERFACE_VTABLE] = { .func = jit_get_interface_vtable },
 };
 
-spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
+spidir_funcref_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
 
     if (m_jit_helpers[helper].created) {
         return m_jit_helpers[helper].function;
     }
 
+    spidir_extern_function_t func;
     switch (helper) {
         case JIT_HELPER_BZERO:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_bzero", SPIDIR_TYPE_PTR, 2,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
 
         case JIT_HELPER_MEMCPY:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_memcpy", SPIDIR_TYPE_PTR, 3,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
 
         case JIT_HELPER_GC_BZERO:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_gc_bzero", SPIDIR_TYPE_PTR, 2,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
 
         case JIT_HELPER_GC_MEMCPY:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_gc_memcpy", SPIDIR_TYPE_PTR, 3,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
 
         case JIT_HELPER_THROW:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_throw", SPIDIR_TYPE_NONE, 1,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
 
         case JIT_HELPER_THROW_OUT_OF_MEMORY:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_throw_out_of_memory", SPIDIR_TYPE_NONE, 0, NULL); break;
 
         case JIT_HELPER_THROW_NULL_REFERENCE:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_throw_null_reference", SPIDIR_TYPE_NONE, 0, NULL); break;
 
         case JIT_HELPER_THROW_INDEX_OUT_OF_RANGE:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_throw_index_out_of_range", SPIDIR_TYPE_NONE, 0, NULL); break;
 
         case JIT_HELPER_THROW_OVERFLOW:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_throw_overflow", SPIDIR_TYPE_NONE, 0, NULL); break;
 
         case JIT_HELPER_THROW_INVALID_CAST:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_throw_invalid_cast", SPIDIR_TYPE_NONE, 0, NULL); break;
 
         case JIT_HELPER_NEWOBJ:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_newobj", SPIDIR_TYPE_PTR, 1,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
 
         case JIT_HELPER_NEWARR:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_newarr", SPIDIR_TYPE_PTR, 2,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_I64 }); break;
 
         case JIT_HELPER_GET_INTERFACE_VTABLE:
-            m_jit_helpers[helper].function = spidir_module_create_extern_function(module,
+            func = spidir_module_create_extern_function(module,
                 "jit_get_interface_vtable", SPIDIR_TYPE_PTR, 2,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR }); break;
 
@@ -202,11 +203,12 @@ spidir_function_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_
             ASSERT(!"Invalid jit helper");
     }
 
+    m_jit_helpers[helper].function = spidir_funcref_make_external(func);
     m_jit_helpers[helper].created = true;
     return m_jit_helpers[helper].function;
 }
 
-void* jit_get_helper_ptr(spidir_function_t function) {
+void* jit_get_helper_ptr(spidir_funcref_t function) {
     for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
         if (m_jit_helpers[i].created && function.id == m_jit_helpers[i].function.id) {
             return m_jit_helpers[i].func;
@@ -216,23 +218,23 @@ void* jit_get_helper_ptr(spidir_function_t function) {
 }
 
 static struct {
-    spidir_function_t key;
+    spidir_funcref_t key;
     RuntimeMethodBase value;
 }* m_thunk_method_lookup;
 
 
 static struct {
     RuntimeMethodBase key;
-    spidir_function_t value;
+    spidir_funcref_t value;
 }* m_method_thunk_lookup;
 
-RuntimeMethodBase jit_get_thunk_method(spidir_function_t function) {
+RuntimeMethodBase jit_get_thunk_method(spidir_funcref_t function) {
     return hmget(m_thunk_method_lookup, function);
 }
 
 static void jit_emit_static_delegate_thunk(spidir_builder_handle_t builder, void* _ctx) {
     RuntimeMethodBase method = _ctx;
-    spidir_function_t function = jit_get_function(spidir_builder_get_module(builder), method);
+    spidir_funcref_t function = jit_get_function(spidir_builder_get_module(builder), method);
 
     // setup the call
     spidir_block_t entry = spidir_builder_create_block(builder);
@@ -258,7 +260,7 @@ static void jit_emit_static_delegate_thunk(spidir_builder_handle_t builder, void
     arrfree(args);
 }
 
-spidir_function_t jit_generate_static_delegate_thunk(spidir_module_handle_t module, RuntimeMethodBase method) {
+spidir_funcref_t jit_generate_static_delegate_thunk(spidir_module_handle_t module, RuntimeMethodBase method) {
     spidir_value_type_t* args = NULL;
 
     // check if we already generated it this round, if so return it
@@ -300,10 +302,11 @@ spidir_function_t jit_generate_static_delegate_thunk(spidir_module_handle_t modu
         method
     );
 
-    hmput(m_thunk_method_lookup, thunk, method);
-    hmput(m_method_thunk_lookup, method, thunk);
+    spidir_funcref_t funcref = spidir_funcref_make_internal(thunk);
+    hmput(m_thunk_method_lookup, funcref, method);
+    hmput(m_method_thunk_lookup, method, funcref);
 
-    return thunk;
+    return funcref;
 }
 
 void jit_clean_helpers() {

@@ -141,7 +141,8 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         size_t reloc_count = spidir_codegen_blob_get_reloc_count(entry->blob);
         const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(entry->blob);
         for (int i = 0; i < reloc_count; i++) {
-            spidir_function_t callee = relocs[i].target;
+            spidir_funcref_t callee = relocs[i].target;
+
             RuntimeMethodBase callee_method = jit_get_method_from_function(callee);
             bool thunk = false;
             if (callee_method == NULL) {
@@ -151,8 +152,22 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
                 }
             }
 
-            if (callee_method != NULL) {
-                jit_codegen_queue(callee_method, callee, thunk);
+            // if this is internal we need to queue it for more codegen
+            if (spidir_funcref_is_internal(callee)) {
+                jit_codegen_queue(callee_method, spidir_funcref_get_internal(callee), thunk);
+
+            } else if (spidir_funcref_is_external(callee)) {
+                // should already be generated properly, ensure that in here
+                // NOTE: this might be NULL if this is some helper that does
+                //       not actually bind to a managed function
+                if (thunk) {
+                    CHECK(callee_method == NULL || callee_method->ThunkPtr != NULL);
+                } else {
+                    CHECK(callee_method == NULL || callee_method->MethodPtr != NULL);
+                }
+
+            } else {
+                CHECK_FAIL();
             }
         }
     }

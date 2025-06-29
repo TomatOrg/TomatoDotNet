@@ -38,16 +38,16 @@ static RuntimeTypeInfo* m_jit_type_queue = NULL;
 static RuntimeMethodBase* m_jit_cctor_queue = NULL;
 
 static struct {
-    spidir_function_t key;
+    spidir_funcref_t key;
     RuntimeMethodBase value;
 }* m_method_lookup;
 
 static struct {
     RuntimeMethodBase key;
-    spidir_function_t value;
+    spidir_funcref_t value;
 }* m_function_lookup = NULL;
 
-spidir_function_t jit_get_function(spidir_module_handle_t module, RuntimeMethodBase method) {
+spidir_funcref_t jit_get_function(spidir_module_handle_t module, RuntimeMethodBase method) {
     int id = hmgeti(m_function_lookup, method);
     if (id >= 0) {
         return m_function_lookup[id].value;
@@ -65,14 +65,15 @@ spidir_function_t jit_get_function(spidir_module_handle_t module, RuntimeMethodB
     // we need to create the function, if it was already jitted before
     // then create as an extern, otherwise
 
-    spidir_function_t function;
+    spidir_funcref_t function;
     if (method->MethodPtr != NULL) {
-        function = spidir_module_create_extern_function(module, name, ret_type, arrlen(args), args);
+        function = spidir_funcref_make_external(spidir_module_create_extern_function(module, name, ret_type, arrlen(args), args));
     } else {
-        function = spidir_module_create_function(module, name, ret_type, arrlen(args), args);
+        spidir_function_t func = spidir_module_create_function(module, name, ret_type, arrlen(args), args);
+        function = spidir_funcref_make_internal(func);
 
         // we need to jit this method
-        arrpush(m_jit_queue, function);
+        arrpush(m_jit_queue, func);
     }
 
     // free the args
@@ -86,7 +87,7 @@ spidir_function_t jit_get_function(spidir_module_handle_t module, RuntimeMethodB
     return function;
 }
 
-RuntimeMethodBase jit_get_method_from_function(spidir_function_t function) {
+RuntimeMethodBase jit_get_method_from_function(spidir_funcref_t function) {
     int idx = hmgeti(m_method_lookup, function);
     if (idx < 0) {
         return NULL;
@@ -103,8 +104,24 @@ void jit_queue_type(spidir_module_handle_t module, RuntimeTypeInfo type) {
         for (int i = 0; i < type->VTable->Length; i++) {
             RuntimeMethodBase methodInfo = (RuntimeMethodBase)type->VTable->Elements[i];
             if (methodInfo->MethodPtr == NULL) {
-                spidir_function_t function = jit_get_function(module, methodInfo);
-                jit_codegen_queue(methodInfo, function, false);
+                spidir_funcref_t function = jit_get_function(module, methodInfo);
+                if (spidir_funcref_is_internal(function)) {
+                    // internal function, need to jit it
+                    jit_codegen_queue(methodInfo, spidir_funcref_get_internal(function), false);
+
+                } else if (spidir_funcref_is_external(function)) {
+                    // external function, its a helper function,
+                    // we can initialize it right away
+                    methodInfo->MethodPtr = jit_get_helper_ptr(function);
+
+                    // TODO: we need to generate a thunk to move the this pointer
+                    //       into the data area, but for now we don't have a way
+                    //       to do it with helper functions
+                    ASSERT(!tdn_type_is_valuetype(type));
+
+                } else {
+                    ASSERT(!"Unreachable");
+                }
             }
         }
     }
@@ -127,8 +144,10 @@ void jit_queue_cctor(spidir_module_handle_t module, RuntimeTypeInfo type) {
     }
 
     // queue it for codegen and for running as a cctor
-    spidir_function_t function = jit_get_function(module, method);
-    jit_codegen_queue(method, function, false);
+    spidir_funcref_t function = jit_get_function(module, method);
+    if (spidir_funcref_is_internal(function)) {
+        jit_codegen_queue(method, spidir_funcref_get_internal(function), false);
+    }
     arrpush(m_jit_cctor_queue, method);
 }
 
@@ -154,7 +173,7 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
     while (arrlen(m_jit_queue) != 0) {
         // get the spidir and dotnet method to jit
         spidir_function_t spidir_function = arrpop(m_jit_queue);
-        int idx = hmgeti(m_method_lookup, spidir_function);
+        int idx = hmgeti(m_method_lookup, spidir_funcref_make_internal(spidir_function));
         CHECK(idx >= 0);
         RuntimeMethodBase method = m_method_lookup[idx].value;
 
@@ -213,6 +232,7 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
     for (int i = 0; i < arrlen(m_jit_cctor_queue); i++) {
         RuntimeMethodBase method = m_jit_cctor_queue[i];
         TRACE("Running cctor of %T", method->DeclaringType);
+        CHECK(method->MethodPtr != NULL);
         ((void(*)())(method->MethodPtr))();
     }
 
@@ -273,8 +293,10 @@ tdn_err_t tdn_jit_method(RuntimeMethodBase methodInfo) {
     spidir_module_handle_t module = spidir_module_create();
 
     // start from the first function
-    spidir_function_t function = jit_get_function(module, methodInfo);
-    jit_codegen_queue(methodInfo, function, false);
+    spidir_funcref_t function = jit_get_function(module, methodInfo);
+    if (spidir_funcref_is_internal(function)) {
+        jit_codegen_queue(methodInfo, spidir_funcref_get_internal(function), false);
+    }
 
     // and start jitting
     CHECK_AND_RETHROW(jit_module(module));

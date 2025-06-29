@@ -13,7 +13,7 @@ import sys
 import os
 
 FLOAT_CODEGEN_FAILURE = re.compile(
-    r"codegen for `[a-zA-Z0-9. _:()]+` failed: failed to select `[a-zA-Z0-9:% ]+ = (fcmp) [a-zA-Z0-9:% ,]+`",
+    r"codegen for `[a-zA-Z0-9. _:()]+` failed: failed to select `[a-zA-Z0-9:% ]+ = (fconst64) [a-zA-Z0-9:% ,.-]+`",
     re.RegexFlag.MULTILINE
 )
 

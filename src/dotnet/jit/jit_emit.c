@@ -95,7 +95,7 @@ spidir_value_type_t* jit_get_spidir_arg_types(RuntimeMethodBase method) {
 
 static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst, spidir_value_t src, RuntimeTypeInfo type) {
     // choose the best memcpy function for the job
-    spidir_function_t memcpy_func;
+    spidir_funcref_t memcpy_func;
     if (type->IsUnmanaged) {
         memcpy_func = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_MEMCPY);
     } else {
@@ -114,7 +114,7 @@ static void jit_emit_memcpy(spidir_builder_handle_t builder, spidir_value_t dst,
 
 static void jit_emit_bzero(spidir_builder_handle_t builder, spidir_value_t dst, RuntimeTypeInfo type) {
     // choose the best bzero function for the job
-    spidir_function_t memcpy_func;
+    spidir_funcref_t memcpy_func;
     if (type->IsUnmanaged) {
         memcpy_func = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_BZERO);
     } else {
@@ -240,7 +240,7 @@ static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, RuntimeType
 
 static void jit_emit_null_reference(spidir_builder_handle_t builder) {
     // emit a call to null reference exception
-    spidir_function_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_NULL_REFERENCE);
+    spidir_funcref_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_NULL_REFERENCE);
     spidir_builder_build_call(builder, function, 0, NULL);
     spidir_builder_build_unreachable(builder);
 
@@ -251,7 +251,7 @@ static void jit_emit_null_reference(spidir_builder_handle_t builder) {
 
 static void jit_emit_invalid_cast(spidir_builder_handle_t builder) {
     // emit a call to null reference exception
-    spidir_function_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_INVALID_CAST);
+    spidir_funcref_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_INVALID_CAST);
     spidir_builder_build_call(builder, function, 0, NULL);
     spidir_builder_build_unreachable(builder);
 }
@@ -1333,7 +1333,7 @@ static tdn_err_t emit_ldftn(jit_function_t* function, spidir_builder_handle_t bu
     RuntimeMethodBase callee = inst->operand.method;
 
     // get the spidir function
-    spidir_function_t func;
+    spidir_funcref_t func;
     if (callee->Attributes.Static) {
         jit_queue_cctor(spidir_builder_get_module(builder), callee->DeclaringType);
         func = jit_generate_static_delegate_thunk(spidir_builder_get_module(builder), callee);
@@ -1414,7 +1414,7 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
             return_value = emitter(builder, callee, values);
         } else {
             // lastly, get a direct function to it
-            spidir_function_t function = jit_get_function(spidir_builder_get_module(builder), callee);
+            spidir_funcref_t function = jit_get_function(spidir_builder_get_module(builder), callee);
             return_value = spidir_builder_build_call(builder, function, arrlen(values), values);
         }
 
@@ -2155,7 +2155,7 @@ static tdn_err_t emit_throw(jit_function_t* function, spidir_builder_handle_t bu
     tdn_err_t err = TDN_NO_ERROR;
 
     // call the runtime throw function
-    spidir_function_t func = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW);
+    spidir_funcref_t func = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW);
     spidir_builder_build_call(builder, func, 1, (spidir_value_t[]){ stack[0].value });
 
     spidir_builder_build_unreachable(builder);
