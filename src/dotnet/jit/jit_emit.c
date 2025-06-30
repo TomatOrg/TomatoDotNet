@@ -494,6 +494,7 @@ static tdn_err_t emit_load_local_address(jit_function_t* function, jit_block_t* 
     CHECK(inst->operand.variable < arrlen(block_locals));
     jit_block_local_t* block_local = &block_locals[inst->operand.variable];
     jit_local_t* func_local = &function_locals[inst->operand.variable];
+    CHECK(func_local->spilled);
 
     // just give the pointer
     STACK_TOP()->value = block_local->value;

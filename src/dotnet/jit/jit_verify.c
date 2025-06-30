@@ -400,6 +400,8 @@ static bool verifier_is_direct_child_region(jit_function_t* function, jit_basic_
     return true;
 }
 
+// TODO: use this when we verify the leave targets
+__attribute__((unused))
 static bool verifier_is_disjoint_try_block(jit_function_t* function, RuntimeExceptionHandlingClause disjoint, RuntimeExceptionHandlingClause source) {
     if (source->TryOffset <= disjoint->TryOffset && source->TryOffset + source->TryLength >= disjoint->TryOffset + disjoint->TryLength) {
         // Source is enclosing disjoint
@@ -860,21 +862,6 @@ static RuntimeTypeInfo verifier_get_verification_type(RuntimeTypeInfo type) {
         } else {
             return reduced_type;
         }
-    }
-}
-
-static RuntimeTypeInfo verifier_get_intermediate_type(RuntimeTypeInfo type) {
-    type = verifier_get_verification_type(type);
-    if (type == NULL) {
-        return NULL;
-    }
-
-    // TODO: single/double
-
-    if (type == tSByte || type == tInt16 || type == tInt32) {
-        return tInt32;
-    } else {
-        return type;
     }
 }
 

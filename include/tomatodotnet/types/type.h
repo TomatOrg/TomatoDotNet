@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stddef.h>
-#include <util/list.h>
 
 #include "reflection.h"
 #include "tomatodotnet/except.h"

@@ -79,8 +79,8 @@ typedef struct jit_stack_value {
 /**
  * Check if a stack value represents a null-reference
  */
-static bool jit_is_null_reference(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type == NULL; }
-static bool jit_is_boxed_value_type(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type); }
+static inline bool jit_is_null_reference(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type == NULL; }
+static inline bool jit_is_boxed_value_type(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type); }
 
 /**
  * Initialize a stack-value
