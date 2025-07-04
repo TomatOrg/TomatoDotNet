@@ -1519,7 +1519,10 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
 
         // the devirt was into a valuetype, move the pointer
         // forward since this will call the non-thunk version
-        if (tdn_type_is_valuetype(known->DeclaringType)) {
+        // this is only needed when not dealing with a constrained,
+        // if its a constrained call then we should already have it
+        // as the correct reference
+        if (inst->constrained == NULL && tdn_type_is_valuetype(known->DeclaringType)) {
             stack[0].kind = JIT_KIND_OBJ_REF;
             stack[0].type = known->DeclaringType;
             stack[0].value = spidir_builder_build_ptroff(builder, stack[0].value,
@@ -2048,7 +2051,7 @@ static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_han
     emit_load_reference(builder, &stack[0]);
 
     // if this is a reference need to turn into an integer
-    if (tdn_type_is_referencetype(stack[0].type)) {
+    if (stack[0].kind == JIT_KIND_OBJ_REF) {
         stack[0].value = spidir_builder_build_icmp(builder,
             inst->opcode == CEE_BRFALSE ? SPIDIR_ICMP_EQ : SPIDIR_ICMP_NE,
             SPIDIR_TYPE_I32,

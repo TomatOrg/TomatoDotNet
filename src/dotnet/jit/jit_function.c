@@ -170,7 +170,6 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
         } else {
             inst.prefixes = prefix;
-            prefix = 0;
 
             // ensure that the prefix matches
             if (prefix & TDN_IL_PREFIX_VOLATILE || prefix & TDN_IL_PREFIX_UNALIGNED) {
@@ -200,6 +199,8 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
                 inst.constrained = constrained;
                 constrained = NULL;
             }
+
+            prefix = 0;
         }
 
         //

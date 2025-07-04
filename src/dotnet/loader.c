@@ -64,7 +64,7 @@ typedef struct load_type {
     size_t vtable_size;
 } load_type_t;
 
-#define INIT_VALUE_TYPE(namespace, name, is_unmanaged) \
+#define INIT_VALUE_TYPE(namespace, name, is_unmanaged, ...) \
     { \
         #namespace, \
         #name, \
@@ -74,10 +74,10 @@ typedef struct load_type {
         _Alignof(name), \
         &t##name, \
         is_unmanaged, \
-        4 \
+        IF_ELSE(HAS_ARGS(__VA_ARGS__))((__VA_ARGS__), 4) \
     }
 
-#define INIT_HEAP_TYPE(namespace, name, vtable_size) \
+#define INIT_HEAP_TYPE(namespace, name, ...) \
     { \
         #namespace, \
         #name, \
@@ -87,7 +87,7 @@ typedef struct load_type {
         _Alignof(struct name), \
         &t##name, \
         false, \
-        vtable_size \
+        IF_ELSE(HAS_ARGS(__VA_ARGS__))((__VA_ARGS__), 4) \
     }
 
 /**
@@ -101,7 +101,7 @@ static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, Char, true),
     INIT_VALUE_TYPE(System, SByte, true),
     INIT_VALUE_TYPE(System, Int16, true),
-    INIT_VALUE_TYPE(System, Int32, true),
+    INIT_VALUE_TYPE(System, Int32, true, 5),
     INIT_VALUE_TYPE(System, Int64, true),
     INIT_VALUE_TYPE(System, IntPtr, true),
     INIT_VALUE_TYPE(System, Byte, true),
@@ -116,17 +116,17 @@ static init_type_t m_init_types[] = {
     INIT_HEAP_TYPE(System.Reflection, RuntimeConstructorInfo, 5),
     INIT_HEAP_TYPE(System.Reflection, RuntimeMethodInfo, 5),
     INIT_HEAP_TYPE(System.Reflection, RuntimeFieldInfo, 5),
-    INIT_HEAP_TYPE(System.Reflection, RuntimeMethodBody, 4),
-    INIT_HEAP_TYPE(System.Reflection, ParameterInfo, 4),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeMethodBody),
+    INIT_HEAP_TYPE(System.Reflection, ParameterInfo),
     INIT_HEAP_TYPE(System.Reflection, MethodBase, 5),
-    INIT_HEAP_TYPE(System, Object, 4),
-    INIT_HEAP_TYPE(System, Array, 4),
-    INIT_HEAP_TYPE(System, String, 4),
-    INIT_HEAP_TYPE(System.Reflection, RuntimeAssembly, 4),
-    INIT_HEAP_TYPE(System.Reflection, RuntimeModule, 4),
-    INIT_HEAP_TYPE(System.Reflection, RuntimeLocalVariableInfo, 4),
+    INIT_HEAP_TYPE(System, Object),
+    INIT_HEAP_TYPE(System, Array),
+    INIT_HEAP_TYPE(System, String),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeAssembly),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeModule),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeLocalVariableInfo),
     INIT_HEAP_TYPE(System.Reflection, RuntimeTypeInfo, 5),
-    INIT_HEAP_TYPE(System.Reflection, RuntimeExceptionHandlingClause, 4),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
 };
 static int m_inited_types = 0;
 
@@ -699,6 +699,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         if (method->VTableOffset >= 0) {
             continue;
         }
+        CHECK(method->VTableOffset == VTABLE_INVALID);
 
         // default to allocating a new slot
         if (!method->Attributes.VtableNewSlot) {
@@ -713,7 +714,20 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
             CHECK(parent->VTableOffset >= 0);
             method->VTableOffset = parent->VTableOffset;
         } else {
-            method->VTableOffset = VTABLE_ALLOCATE_SLOT;
+            // check if we have an interface implementing the method, if yes
+            // we can use the offset instead of allocating another one, this is
+            // essentially an optimization on the vtable size
+            int32_t vtable_slot = VTABLE_ALLOCATE_SLOT;
+            for (int j = 0; j < hmlen(info->InterfaceImpls); j++) {
+                interface_impl_t* interface = &info->InterfaceImpls[j];
+                RuntimeMethodInfo parent = find_overriden_method(interface->key, method);
+                if (parent != NULL) {
+                    vtable_slot = interface->value + parent->VTableOffset;
+                    break;
+                }
+            }
+
+            method->VTableOffset = vtable_slot;
         }
     }
 
@@ -1181,26 +1195,6 @@ cleanup:
     return err;
 }
 
-tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    if (type->TypeInitStarted) {
-        goto cleanup;
-    }
-
-    if (arrlen(m_type_queues) == 0) {
-        CHECK_AND_RETHROW(fill_type(type));
-    } else {
-        arrpush(arrlast(m_type_queues).types, type);
-    }
-
-    // it is considered
-    type->TypeInitStarted = true;
-
-cleanup:
-    return err;
-}
-
 static tdn_err_t drain_type_queue() {
     tdn_err_t err = TDN_NO_ERROR;
     type_queue_t queue = {0};
@@ -1221,6 +1215,28 @@ cleanup:
         arrfree(m_type_queues);
     }
 
+    return err;
+}
+
+tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (type->TypeInitStarted) {
+        goto cleanup;
+    }
+
+    if (arrlen(m_type_queues) == 0) {
+        push_type_queue();
+        CHECK_AND_RETHROW(fill_type(type));
+        drain_type_queue();
+    } else {
+        arrpush(arrlast(m_type_queues).types, type);
+    }
+
+    // it is considered
+    type->TypeInitStarted = true;
+
+cleanup:
     return err;
 }
 

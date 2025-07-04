@@ -370,33 +370,24 @@ static bool verifier_merge_block_local(jit_block_local_t* previous, jit_block_lo
 }
 
 static bool verifier_is_direct_child_region(jit_function_t* function, jit_basic_block_t* enclosing_block, jit_basic_block_t* enclosed_block) {
-    ERROR("verifier_is_direct_child_region(IL_%04x, IL_%04x)", enclosing_block->start, enclosed_block->start);
     RuntimeExceptionHandlingClause enclosed_region = enclosed_block->try_clause;
-    ERROR("\t%d -> %d", enclosed_region->TryOffset - 1, enclosing_block->start);
     for (int i = enclosed_region->TryOffset - 1; i > (long)enclosing_block->start; i--) {
-        ERROR("\tIL_%04x", i);
         int idx = hmgeti(function->labels, i);
         if (idx < 0) {
             continue;
         }
         jit_basic_block_t* block = &function->labels[idx].value;
 
-        ERROR("\tCHECKING BLOCK AT IL_%04x", block->start);
-        ERROR("\tSTARTS A TRY? %d", block->try_start);
         if (block->try_start && block->try_clause != enclosing_block->try_clause) {
-            ERROR("\t\tSTART A TRY THAT IS NOT THE ENCLOSING ONE");
-
             RuntimeExceptionHandlingClause block_region = block->try_clause;
 
             // block region is actually enclosing enclosed_region
             if (block_region->TryOffset + block_region->TryLength > enclosed_region->TryOffset) {
-                ERROR("-> FALSE");
                 return false;
             }
         }
     }
 
-    ERROR("-> TRUE");
     return true;
 }
 
