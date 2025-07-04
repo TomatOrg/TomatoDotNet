@@ -116,8 +116,8 @@ $(TDN_BIN_DIR)/libtdn.a: force
 		LD="$(LD)" \
 		DEBUG="$(DEBUG)" \
 		CFLAGS="$(COMMON_CFLAGS)" \
-		SPIDIR_CARGO_TARGET="x86_64-unknown-linux-none" \
-		SPIDIR_CARGO_FLAGS="-Zbuild-std=core,alloc" \
+		SPIDIR_CARGO_TARGET_NAME="x86_64-unknown-linux-none" \
+		SPIDIR_CARGO_FLAGS="--target x86_64-unknown-linux-none -Zbuild-std=core,alloc" \
 		SPIDIR_RUSTUP_TOOLCHAIN="nightly-2025-05-07"
 
 clean:

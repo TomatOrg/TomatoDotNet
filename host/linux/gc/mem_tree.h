@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "tomatodotnet/util/c-rbtree.h"
+#include "c-rbtree.h"
 
 typedef struct mem_tree_iter {
     CRBNode* iter;

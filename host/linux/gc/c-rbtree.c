@@ -27,9 +27,9 @@
 #include <assert.h>
 #include <stdalign.h>
 #include <stddef.h>
-#include "tomatodotnet/util/c-rbtree.h"
+#include "c-rbtree.h"
 #include "c-rbtree-private.h"
-#include "except.h"
+#include "util/except.h"
 
 /*
  * We use the lower 2 bits of CRBNode pointers to store flags. Make sure

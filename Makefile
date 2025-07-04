@@ -23,6 +23,10 @@ DEBUG			?= 0
 # Should we compile in debug or not
 SPIDIR_DEBUG	?= $(DEBUG)
 
+# The name of the target, this will not actually put it
+# as the target, you need to do it yourself with flags
+SPIDIR_CARGO_TARGET_NAME	?=
+
 # Additional flags to pass to cargo
 SPIDIR_CARGO_FLAGS 			?=
 
@@ -74,9 +78,9 @@ OBJS 		+= $(BUILD_DIR)/spidir.o
 
 # Choose which of the spidirs we want to use
 ifeq ($(SPIDIR_DEBUG),1)
-LIBSPIDIR	:= out/cargo-target/target/debug/libspidir.a
+LIBSPIDIR	:= out/cargo-target/$(SPIDIR_CARGO_TARGET_NAME)/debug/libspidir.a
 else
-LIBSPIDIR	:= out/cargo-target/target/release/libspidir.a
+LIBSPIDIR	:= out/cargo-target/$(SPIDIR_CARGO_TARGET_NAME)/release/libspidir.a
 endif
 
 # The default rule

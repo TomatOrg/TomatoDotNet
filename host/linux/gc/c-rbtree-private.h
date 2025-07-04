@@ -7,7 +7,7 @@
  */
 
 #include <stddef.h>
-#include "tomatodotnet/util/c-rbtree.h"
+#include "c-rbtree.h"
 
 /*
  * Nodes

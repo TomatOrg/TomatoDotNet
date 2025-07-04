@@ -1,7 +1,7 @@
 #include "mem_tree.h"
 
 #include <stdlib.h>
-#include <tomatodotnet/util/c-rbtree.h>
+#include "c-rbtree.h"
 
 typedef struct mem_tree_node {
     CRBNode node;
