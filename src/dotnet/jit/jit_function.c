@@ -399,6 +399,12 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
             local.flags.ref_read_only = true;
         }
 
+        // unlike the this not being a non-local ref, its contents as a ref-struct
+        // are considered non-local
+        if (method->DeclaringType->IsByRefStruct) {
+            local.flags.ref_struct_non_local = true;
+        }
+
         arrpush(entry_block->args, local);
 
         jit_local_t arg = {
@@ -428,6 +434,12 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         // same is true for the ref-structs
         if (type->IsByRef) {
             local.flags.ref_non_local = true;
+        }
+
+        // ref-struct that is incoming will only contain non-local references
+        // so mark it as such
+        if (type->IsByRefStruct) {
+            local.flags.ref_struct_non_local = true;
         }
 
         arrpush(entry_block->args, local);

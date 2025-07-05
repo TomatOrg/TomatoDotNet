@@ -1124,18 +1124,21 @@ static tdn_err_t verify_ldfld(jit_function_t* function, jit_block_t* block, tdn_
             CHECK_IS_ASSIGNABLE(stack, &declared_this);
         }
 
+        // if we are loading a ref field, and the ref-struct only contains non-local
+        // references, then we are going to mark the reference as non-local
+        if (field->FieldType->IsByRef && stack->flags.ref_struct_non_local) {
+            flags.ref_non_local = true;
+        }
+
         // the instance we are loading from
         instance = stack->type;
     }
 
     // if we are loading a readonly reference field
     // then mark it as such
-    if (field->ReferenceIsReadOnly) {
+    if (field->FieldType->IsByRef && field->ReferenceIsReadOnly) {
         flags.ref_read_only = true;
     }
-
-    // TODO: loading reference from
-    //       non-local ref-struct
 
     // check that we can access it
     CHECK_ERROR(verifier_can_access_field(function->method->DeclaringType, field, instance),
@@ -1847,6 +1850,15 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
     RuntimeMethodBase method = inst->operand.method;
     RuntimeTypeInfo method_type = method->Attributes.Static ? NULL : method->DeclaringType;
 
+    // check for methods that are considered unsafe to call unless the assembly
+    // is allowed unsafe
+    if (
+        method->DeclaringType == tUnsafe
+    ) {
+        CHECK(function->method->Module->Assembly->AllowUnsafe,
+            "Assembly is not allowed to call %T::%U", method->DeclaringType, method->Name);
+    }
+
     if (inst->opcode == CEE_CALLVIRT) {
         CHECK_ERROR(method_type != NULL, TDN_ERROR_VERIFIER_CALLVIRT_ON_STATIC);
         CHECK_ERROR(!tdn_type_is_valuetype(method_type), TDN_ERROR_VERIFIER_CALLVIRT_ON_VALUE_TYPE);
@@ -1902,6 +1914,12 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
             // if this is a by-ref, ensure that we won't leak it by accident
             if (actual->kind == JIT_KIND_BY_REF && !actual->flags.ref_non_local) {
                 // TODO: scoped support
+                might_leak_local_ref = true;
+            }
+
+            // if this is a ref-struct, and it contains local fields, ensure
+            // we don't leak don't leak them accidently
+            if (actual->type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
                 might_leak_local_ref = true;
             }
         }
@@ -1980,8 +1998,17 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
         TDN_ERROR_VERIFIER_METHOD_ACCESS);
 
     if (inst->opcode == CEE_NEWOBJ) {
+        jit_stack_value_t* value = STACK_PUSH();
+
         // push the type
-        jit_stack_value_init(STACK_PUSH(), method_type);
+        jit_stack_value_init(value, method_type);
+
+        // if we constructed the ref-struct only from non-local
+        // references, then we can mark the struct itself also
+        // as containing non-local references
+        if (method_type->IsByRefStruct) {
+            value->flags.ref_struct_non_local = !might_leak_local_ref;
+        }
 
     } else if (method->ReturnParameter->ParameterType != tVoid) {
         jit_stack_value_t* return_value = STACK_PUSH();
@@ -2036,6 +2063,13 @@ static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il
             if (stack->flags.ref_read_only) {
                 CHECK(function->method->ReturnParameter->ReferenceIsReadOnly);
             }
+        }
+
+        // if we are returning a ref-struct, then it must
+        // have non-local references, otherwise we might
+        // leak it
+        if (stack->type->IsByRefStruct) {
+            CHECK(stack->flags.ref_struct_non_local);
         }
     }
 

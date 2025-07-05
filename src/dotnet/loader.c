@@ -159,6 +159,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, Delegate),
     LOAD_TYPE(System, MulticastDelegate),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
+    LOAD_TYPE(System, MemoryMarshal),
     { "System", "Nullable`1", &tNullable, 4 },
 };
 static int m_loaded_types = 0;

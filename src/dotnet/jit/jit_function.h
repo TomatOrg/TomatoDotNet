@@ -29,6 +29,9 @@ typedef struct jit_value_flags {
     // The reference is non-local
     bool ref_non_local;
 
+    // The ref-struct contains only non-local references
+    bool ref_struct_non_local;
+
     // Is the instance the `this` of the method
     bool this_ptr;
 

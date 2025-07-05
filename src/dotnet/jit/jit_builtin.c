@@ -7,7 +7,12 @@
 
 #include "jit_emit.h"
 #include "jit_helpers.h"
+#include "jit_type.h"
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Delegate methods
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static spidir_value_t emit_delegate_ctor(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
     // store the instance
@@ -52,7 +57,7 @@ static spidir_value_t emit_delegate_invoke(spidir_builder_handle_t builder, Runt
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Generic emit code
+// Unsafe methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
@@ -61,6 +66,24 @@ static spidir_value_t emit_delegate_invoke(spidir_builder_handle_t builder, Runt
  */
 static spidir_value_t emit_unsafe_as(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
     return args[0];
+}
+
+/**
+ * Takes in a reference and outputs a reference, the types might be completely different and we don't
+ * perform any kind of type checking
+ */
+static spidir_value_t emit_unsafe_add_byte_offset(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return spidir_builder_build_ptroff(builder, args[0], args[1]);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Memory marshal methods
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static spidir_value_t emit_memory_marshal_get_array_data_reference(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    size_t data_offset = jit_get_array_elements_offset(method->GenericArguments->Elements[0]);
+    return spidir_builder_build_ptroff(builder, args[0],
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, data_offset));
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -84,6 +107,12 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
             tdn_compare_string_to_cstr(method->Name, "AsRef")
         ) {
             return emit_unsafe_as;
+        } else if (tdn_compare_string_to_cstr(method->Name, "AddByteOffset")) {
+            return emit_unsafe_add_byte_offset;
+        }
+    } else if (type == tMemoryMarshal) {
+        if (tdn_compare_string_to_cstr(method->Name, "GetArrayDataReference")) {
+            return emit_memory_marshal_get_array_data_reference;
         }
     }
 
