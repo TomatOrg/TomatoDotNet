@@ -525,6 +525,109 @@ cleanup:
     return err;
 }
 
+static bool parameter_match(ParameterInfo a, ParameterInfo b) {
+    if (a->ParameterType != b->ParameterType) return false;
+    if (a->Attributes.Attributes != b->Attributes.Attributes) return false;
+    if (a->ReferenceIsReadOnly != b->ReferenceIsReadOnly) return false;
+    return true;
+}
+
+static bool method_signature_match(RuntimeMethodInfo a, RuntimeMethodInfo b) {
+    // check the return type
+    if (!parameter_match(a->ReturnParameter, b->ReturnParameter)) return false;
+
+    // Check parameter count matches
+    if (a->Parameters->Length != b->Parameters->Length)
+        return false;
+
+    // check the parameters
+    for (int j = 0; j < a->Parameters->Length; j++) {
+        ParameterInfo paramA = a->Parameters->Elements[j];
+        ParameterInfo paramB = b->Parameters->Elements[j];
+        if (!parameter_match(paramA, paramB)) return false;
+    }
+
+    return true;
+}
+
+static tdn_err_t find_interface_declaration(RuntimeAssembly assembly, RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_decl) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    *out_decl = NULL;
+
+    dotnet_file_t* metadata = assembly->Metadata;
+    for (int i = 0; i < metadata->method_impls_count; i++) {
+        metadata_method_impl_t* impl = &metadata->method_impls[i];
+
+        // check the class is the same token
+        if (impl->class.token != type->MetadataToken) {
+            continue;
+        }
+
+        // check the method body is the same
+        if (method->MetadataToken != impl->method_body.token) {
+            continue;
+        }
+
+        // found the body! return the declaration
+        RuntimeMethodBase decl;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, impl->method_declaration.token, type->GenericArguments, method->GenericArguments, &decl));
+        *out_decl = (RuntimeMethodInfo)decl;
+        break;
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t find_explicit_implementation(RuntimeAssembly assembly, RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_body) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    *out_body = NULL;
+
+    dotnet_file_t* metadata = assembly->Metadata;
+    for (int i = 0; i < metadata->method_impls_count; i++) {
+        metadata_method_impl_t* impl = &metadata->method_impls[i];
+
+        // check the class is the same token
+        if (impl->class.token != type->MetadataToken) {
+            continue;
+        }
+
+        // check the method is the same token
+        RuntimeMethodBase decl;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_method(assembly, impl->method_declaration.token, type->GenericArguments, method->GenericArguments, &decl));
+        if (decl->MetadataToken != method->MetadataToken) {
+            continue;
+        }
+
+        // search for a method with the same token in the declared methods array
+        RuntimeMethodInfo body = NULL;
+        for (int j = 0; j < type->DeclaredMethods->Length; j++) {
+            RuntimeMethodInfo cand = type->DeclaredMethods->Elements[j];
+            if (cand->MetadataToken == impl->method_body.token) {
+                body = type->DeclaredMethods->Elements[j];
+                break;
+            }
+        }
+
+        if (body != NULL) {
+            // ensure its a virtual method
+            CHECK(body->Attributes.Virtual);
+
+            // match the signature
+            CHECK(method_signature_match(method, body));
+
+            // we found one!
+            *out_body = body;
+            break;
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 static RuntimeMethodInfo find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
     while (type != NULL) {
         // Use normal inheritance (I.8.10.4)
@@ -539,25 +642,8 @@ static RuntimeMethodInfo find_overriden_method(RuntimeTypeInfo type, RuntimeMeth
             if (!tdn_compare_string(info->Name, method->Name))
                 continue;
 
-            // check the return type
-            if (info->ReturnParameter->ParameterType != method->ReturnParameter->ParameterType)
-                continue;
-
-            // Check parameter count matches
-            if (info->Parameters->Length != method->Parameters->Length)
-                continue;
-
-            // check the parameters
-            bool signatureMatch = true;
-            for (int j = 0; j < info->Parameters->Length; j++) {
-                ParameterInfo paramA = info->Parameters->Elements[j];
-                ParameterInfo paramB = method->Parameters->Elements[j];
-                if (paramA->ParameterType != paramB->ParameterType) {
-                    signatureMatch = false;
-                    break;
-                }
-            }
-            if (!signatureMatch)
+            // ensure the signatures match
+            if (!method_signature_match(info, method))
                 continue;
 
             // set the offset
@@ -581,16 +667,11 @@ static tdn_err_t add_interface_to_type(RuntimeTypeInfo info, RuntimeTypeInfo int
         goto cleanup;
     }
 
-    // go over the interfaces that this interface implements and add
-    // them to the list as well, this ensures that we will reuse
-    // everything nicely if possible
-    for (int i = 0; i < hmlen(interface->InterfaceImpls); i++) {
-        RuntimeTypeInfo sub_iface = interface->InterfaceImpls[i].key;
-        CHECK_AND_RETHROW(add_interface_to_type(info, sub_iface, interface_product, vtable_offset));
-    }
+    // ensure hte interface is initialized
+    CHECK_AND_RETHROW(fill_virtual_methods(interface));
 
-    // check if the parent already implemented this interface, if so
-    // use the parent's offset and not our offset
+    // check if our parent already has this interface, if so re-use their offset
+    // this is required to ensure consistency acros objects
     int parent_offset = -1;
     if (info->BaseType != NULL) {
         int idx = hmgeti(info->BaseType->InterfaceImpls, interface);
@@ -599,14 +680,28 @@ static tdn_err_t add_interface_to_type(RuntimeTypeInfo info, RuntimeTypeInfo int
         }
     }
 
-    // if no offset was already allocated, allocate a new one
+    // check if any of the interfaces we already implement this interface, if so
+    // re-use their internal offset, this is basically an attempt to compact the
+    // vtable
+    for (int i = 0; i < hmlen(info->InterfaceImpls); i++) {
+        interface_impl_t* impl = &info->InterfaceImpls[i];
+        int idx = hmgeti(impl->key->InterfaceImpls, interface);
+        if (idx >= 0) {
+            // we need to take the offset of the interface inside of the
+            // offset of the current interface
+            parent_offset = impl->value + impl->key->InterfaceImpls[idx].value;
+        }
+    }
+
+    // if no offset was found then we have a brand new struct, allocate
+    // new vtable space for it
     if (parent_offset == -1) {
         CHECK_AND_RETHROW(fill_virtual_methods(interface));
         parent_offset = *vtable_offset;
         *vtable_offset += interface->VTable->Length;
     }
 
-    // insert that the type implements this interface
+    // insert the interface properly
     interface_impl_t new_impl = {
         .key = interface,
         .value = parent_offset
@@ -622,6 +717,13 @@ static tdn_err_t add_interface_to_type(RuntimeTypeInfo info, RuntimeTypeInfo int
     } else {
         // add the current interface already
         CHECK(!__builtin_mul_overflow(*interface_product, interface->InterfacePrime, interface_product));
+    }
+
+    // go over the interfaces that this interface implements and add them, to have a flat
+    // interface table for this type
+    for (int i = 0; i < hmlen(interface->InterfaceImpls); i++) {
+        RuntimeTypeInfo sub_iface = interface->InterfaceImpls[i].key;
+        CHECK_AND_RETHROW(add_interface_to_type(info, sub_iface, interface_product, vtable_offset));
     }
 
 cleanup:
@@ -645,9 +747,14 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));
     }
 
-    // allocate all interface offsets for the type
     RuntimeAssembly assembly = info->Module->Assembly;
     dotnet_file_t* metadata = assembly->Metadata;
+
+    //
+    // Start by inheriting the vtable from the base type
+    //
+    // This includes also importing all of the interfaces implemented by it
+    //
 
     // the current offset of the vtable
     int vtable_offset = 0;
@@ -703,7 +810,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
 
         // default to allocating a new slot
         if (!method->Attributes.VtableNewSlot) {
-            // might override something else
+            // this should be overriding something new
             RuntimeMethodInfo parent = find_overriden_method(info->BaseType, method);
             CHECK(parent != NULL);
 
@@ -714,16 +821,28 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
             CHECK(parent->VTableOffset >= 0);
             method->VTableOffset = parent->VTableOffset;
         } else {
-            // check if we have an interface implementing the method, if yes
-            // we can use the offset instead of allocating another one, this is
-            // essentially an optimization on the vtable size
+            // find explicit declaration for this method
+            RuntimeMethodInfo decl;
+            CHECK_AND_RETHROW(find_interface_declaration(assembly, info, method, &decl));
+
             int32_t vtable_slot = VTABLE_ALLOCATE_SLOT;
-            for (int j = 0; j < hmlen(info->InterfaceImpls); j++) {
-                interface_impl_t* interface = &info->InterfaceImpls[j];
-                RuntimeMethodInfo parent = find_overriden_method(interface->key, method);
-                if (parent != NULL) {
-                    vtable_slot = interface->value + parent->VTableOffset;
-                    break;
+            if (decl != NULL) {
+                // we found an explicit interface implementation where this method is used,
+                // find the offset of it in the vtable and reuse that
+                int idx = hmgeti(info->InterfaceImpls, decl->DeclaringType);
+                CHECK(idx >= 0);
+                vtable_slot =  info->InterfaceImpls[idx].value + decl->VTableOffset;
+
+            } else {
+                // search for a normal interface implementation of this method, if we can
+                // find one then reuse that slot
+                for (int j = 0; j < hmlen(info->InterfaceImpls); j++) {
+                    interface_impl_t* interface = &info->InterfaceImpls[j];
+                    RuntimeMethodInfo parent = find_overriden_method(interface->key, method);
+                    if (parent != NULL) {
+                        vtable_slot = interface->value + parent->VTableOffset;
+                        break;
+                    }
                 }
             }
 
@@ -778,10 +897,13 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
                 impl = base;
 
             } else {
-                // TODO: check for explicit implementations
+                // search for an explicit implementation of this interface
+                CHECK_AND_RETHROW(find_explicit_implementation(assembly, info, base, &impl));
 
                 // fallback to normal override rules
-                impl = find_overriden_method(info, base);
+                if (impl == NULL) {
+                    impl = find_overriden_method(info, base);
+                }
 
                 // if the class is abstract and there is no implementation
                 // then just
@@ -792,7 +914,13 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
             CHECK(impl != NULL,
                 "Failed to find impl for %T::%U on %T", base->DeclaringType, base->Name, info);
 
-            info->VTable->Elements[interface->value + base->VTableOffset] = impl;
+            // we expect the vtable either to already be filled with the same implementation
+            // or to be empty
+            size_t vtable_slot = interface->value + vi;
+            if (info->VTable->Elements[vtable_slot] != NULL) {
+                CHECK(info->VTable->Elements[vtable_slot] == impl);
+            }
+            info->VTable->Elements[vtable_slot] = impl;
         }
     }
 
@@ -1184,7 +1312,6 @@ cleanup:
 static tdn_err_t fill_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK_AND_RETHROW(check_generic_constraints(type));
     CHECK_AND_RETHROW(fill_stack_size(type));
     CHECK_AND_RETHROW(fill_heap_size(type));
     CHECK_AND_RETHROW(fill_interface_type_id(type));
@@ -1203,9 +1330,14 @@ static tdn_err_t drain_type_queue() {
     queue = arrpop(m_type_queues);
 
     // and init them all
-    while (arrlen(queue.types) != 0) {
-        RuntimeTypeInfo type = arrpop(queue.types);
-        fill_type(type);
+    for (int i = 0; i < arrlen(queue.types); i++) {
+        RuntimeTypeInfo type = queue.types[i];
+        CHECK_AND_RETHROW(fill_type(type));
+    }
+
+    for (int i = 0; i < arrlen(queue.types); i++) {
+        RuntimeTypeInfo type = queue.types[i];
+        CHECK_AND_RETHROW(check_generic_constraints(type));
     }
 
 cleanup:
@@ -1226,9 +1358,7 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     }
 
     if (arrlen(m_type_queues) == 0) {
-        push_type_queue();
         CHECK_AND_RETHROW(fill_type(type));
-        drain_type_queue();
     } else {
         arrpush(arrlast(m_type_queues).types, type);
     }
@@ -2444,6 +2574,9 @@ tdn_err_t tdn_load_assembly_from_memory(const void* buffer, size_t buffer_size, 
     dotnet->file.handle = handle;
     dotnet->file.read_file = memory_file_read;
     dotnet->file.close_handle = memory_file_close;
+
+    tmp_buffer = NULL;
+    handle = NULL;
 
     // call common code
     CHECK_AND_RETHROW(load_assembly(dotnet, out_assembly));
