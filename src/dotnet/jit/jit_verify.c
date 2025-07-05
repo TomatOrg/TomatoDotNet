@@ -997,6 +997,9 @@ static tdn_err_t verify_store_local(jit_function_t* function, jit_block_t* block
     jit_stack_value_init(&local_value, func_local->type);
     CHECK_IS_ASSIGNABLE(stack, &local_value);
 
+    // remember the flags of the local
+    block_local->flags = stack->flags;
+
 cleanup:
     return err;
 }

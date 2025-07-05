@@ -355,6 +355,10 @@ cleanup:
 tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // ctor bypass readonly structs and fields
+    bool is_ctor = tdn_compare_string_to_cstr(method->Name, ".ctor") ||
+                    tdn_compare_string_to_cstr(method->Name, ".cctor");
+
     // ensure this method has a body
     CHECK(method->MethodBody != NULL);
     function->method = method;
@@ -391,7 +395,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         // TODO: unscoped support
 
         // if this is a readonly struct, then the ref is readonly as well
-        if (method->DeclaringType->IsReadOnly) {
+        if (method->DeclaringType->IsReadOnly && !is_ctor) {
             local.flags.ref_read_only = true;
         }
 
@@ -413,7 +417,7 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
         jit_block_local_t local = {};
 
         // if this is a readonly parameter then mark it as such
-        if (parameter->ReferenceIsReadOnly) {
+        if (parameter->ReferenceIsReadOnly && !is_ctor) {
             CHECK(type->IsByRef);
             local.flags.ref_read_only = true;
         }
