@@ -135,11 +135,16 @@ void tdn_host_jit_patch(void* dst, void* src, size_t size) {
     ASSERT(mprotect(dst, size, PROT_READ | PROT_EXEC) == 0);
 }
 
-static int m_debug_counter = 0;
+static int m_dump_spidir_count = 0;
+static int m_dump_elf_count = 0;
 
-void* tdn_host_jit_start_dump(void) {
+void* tdn_host_jit_start_dump(tdn_jit_dump_type_t type) {
     char name[256];
-    snprintf(name, sizeof(name), "test.%d.spidir", m_debug_counter++);
+    if (type == TDN_JIT_DUMP_SPIDIR) {
+        snprintf(name, sizeof(name), "test.%d.spidir", m_dump_spidir_count++);
+    } else {
+        snprintf(name, sizeof(name), "test.%d.elf", m_dump_elf_count++);
+    }
     return fopen(name, "w");
 }
 

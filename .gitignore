@@ -12,6 +12,7 @@ fuzz.sh
 findings
 out
 *.spidir
+*.elf
 *.asm
 *.dot
 *.svg

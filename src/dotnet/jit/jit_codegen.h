@@ -3,6 +3,16 @@
 #include <tomatodotnet/except.h>
 #include <tomatodotnet/types/reflection.h>
 
+#include "spidir/codegen.h"
+
+
+typedef struct jit_codegen_entry {
+    spidir_function_t key;
+    spidir_codegen_blob_handle_t blob;
+    RuntimeMethodBase method;
+    bool thunk;
+} jit_codegen_entry_t;
+
 /**
  * Initialize the basic codegen
  */

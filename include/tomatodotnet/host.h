@@ -85,9 +85,14 @@ void tdn_host_gc_unregister_root(void* root);
 // Jit spidir dump
 //----------------------------------------------------------------------------------------------------------------------
 
+typedef enum tdn_jit_dump_type {
+    TDN_JIT_DUMP_SPIDIR,
+    TDN_JIT_DUMP_SYMBOLS_ELF,
+} tdn_jit_dump_type_t;
+
 // used for debugging the jit, will dump spidir modules
 // using these functions
-void* tdn_host_jit_start_dump(void);
+void* tdn_host_jit_start_dump(tdn_jit_dump_type_t type);
 void tdn_host_jit_end_dump(void* ctx);
 spidir_dump_status_t tdn_host_jit_dump_callback(const char* data, size_t size, void* ctx);
 

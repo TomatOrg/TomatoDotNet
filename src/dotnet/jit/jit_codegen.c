@@ -8,6 +8,7 @@
 #include <util/except.h>
 
 #include "jit.h"
+#include "jit_gdb.h"
 #include "jit_helpers.h"
 #include "jit_type.h"
 
@@ -16,13 +17,6 @@ static spidir_codegen_machine_handle_t m_codegen_machine = NULL;
 void jit_codegen_init(void) {
     m_codegen_machine = spidir_codegen_create_x64_machine();
 }
-
-typedef struct jit_codegen_entry {
-    spidir_function_t key;
-    spidir_codegen_blob_handle_t blob;
-    RuntimeMethodBase method;
-    bool thunk;
-} jit_codegen_entry_t;
 
 static spidir_function_t* m_functions_to_jit = NULL;
 static jit_codegen_entry_t* m_function_blobs = NULL;
@@ -57,6 +51,16 @@ void jit_codegen_queue(RuntimeMethodBase method, spidir_function_t function, boo
     hmputs(m_function_blobs, entry);
 }
 
+static spidir_funcref_t get_reloc_target(const spidir_codegen_reloc_t* reloc) {
+    if (reloc->target_kind == SPIDIR_RELOC_TARGET_INTERNAL_FUNCTION) {
+        return spidir_funcref_make_internal(reloc->target.internal);
+    } else if (reloc->target_kind == SPIDIR_RELOC_TARGET_EXTERNAL_FUNCTION) {
+        return spidir_funcref_make_external(reloc->target.external);
+    } else {
+        ASSERT(!"Invalid relocation target kind");
+    }
+}
+
 /**
  * Perform the actual relocation on the given blob
  */
@@ -64,6 +68,11 @@ static tdn_err_t jit_relocate_function(RuntimeMethodBase method, bool thunk, spi
     tdn_err_t err = TDN_NO_ERROR;
 
     void* code = thunk ? method->ThunkPtr : method->MethodPtr;
+    size_t code_size = thunk ? method->ThunkSize : method->MethodSize;
+
+    // calculate the offset
+    size_t constpool_offset = ALIGN_UP(code_size, spidir_codegen_blob_get_constpool_align(blob));
+    void* constpool_ptr = code + constpool_offset;
 
     size_t reloc_count = spidir_codegen_blob_get_reloc_count(blob);
     const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(blob);
@@ -74,30 +83,46 @@ static tdn_err_t jit_relocate_function(RuntimeMethodBase method, bool thunk, spi
         // resolve the target, will either be a builtin or a
         // method pointer we jitted
         uint64_t F;
-        RuntimeMethodBase target = jit_get_method_from_function(relocs[j].target);
-        bool thunk = false;
-        if (target == NULL) {
-            target = jit_get_thunk_method(relocs[j].target);
-            if (target != NULL) {
-                thunk = true;
-            }
+        switch (relocs[j].target_kind) {
+            case SPIDIR_RELOC_TARGET_EXTERNAL_FUNCTION:
+            case SPIDIR_RELOC_TARGET_INTERNAL_FUNCTION: {
+                // get the generic funcref
+                // TODO: can we make this look a bit better? maybe more optimized?
+                spidir_funcref_t target_func = get_reloc_target(&relocs[j]);
+
+                RuntimeMethodBase target = jit_get_method_from_function(target_func);
+                bool thunk = false;
+                if (target == NULL) {
+                    target = jit_get_thunk_method(target_func);
+                    if (target != NULL) {
+                        thunk = true;
+                    }
+                }
+
+                if (target == NULL) {
+                    void* ptr = jit_get_helper_ptr(target_func);
+                    CHECK(ptr != NULL, "Failed to get function reference to %d while relocating %T::%U",
+                        relocs[j].target, method->DeclaringType, method->Name);
+                    F = (uint64_t)ptr;
+                } else {
+                    if (thunk) {
+                        CHECK(target->ThunkPtr != NULL);
+                        F = (uint64_t)target->ThunkPtr;
+                    } else {
+                        CHECK(target->MethodPtr != NULL);
+                        F = (uint64_t)target->MethodPtr;
+                    }
+                }
+            } break;
+
+            case SPIDIR_RELOC_TARGET_CONSTPOOL: {
+                F = (uint64_t)constpool_ptr;
+            } break;
+
+            default: CHECK_FAIL();
         }
 
-        if (target == NULL) {
-            void* ptr = jit_get_helper_ptr(relocs[j].target);
-            CHECK(ptr != NULL, "Failed to get function reference to %d while relocating %T::%U",
-                relocs[j].target, method->DeclaringType, method->Name);
-            F = (uint64_t)ptr;
-        } else {
-            if (thunk) {
-                CHECK(target->ThunkPtr != NULL);
-                F = (uint64_t)target->ThunkPtr;
-            } else {
-                CHECK(target->MethodPtr != NULL);
-                F = (uint64_t)target->MethodPtr;
-            }
-        }
-
+        // and now actually apply the relocation
         switch (relocs[j].kind) {
             case SPIDIR_RELOC_X64_PC32: {
                 int64_t value = F + A - P;
@@ -141,8 +166,13 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         size_t reloc_count = spidir_codegen_blob_get_reloc_count(entry->blob);
         const spidir_codegen_reloc_t* relocs = spidir_codegen_blob_get_relocs(entry->blob);
         for (int i = 0; i < reloc_count; i++) {
-            spidir_funcref_t callee = relocs[i].target;
+            // ignore anything that is not a function call
+            // to an internal function
+            if (relocs[i].target_kind != SPIDIR_RELOC_TARGET_INTERNAL_FUNCTION) {
+                continue;
+            }
 
+            spidir_funcref_t callee = spidir_funcref_make_internal(relocs[i].target.internal);
             RuntimeMethodBase callee_method = jit_get_method_from_function(callee);
             bool thunk = false;
             if (callee_method == NULL) {
@@ -152,23 +182,8 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
                 }
             }
 
-            // if this is internal we need to queue it for more codegen
-            if (spidir_funcref_is_internal(callee)) {
-                jit_codegen_queue(callee_method, spidir_funcref_get_internal(callee), thunk);
-
-            } else if (spidir_funcref_is_external(callee)) {
-                // should already be generated properly, ensure that in here
-                // NOTE: this might be NULL if this is some helper that does
-                //       not actually bind to a managed function
-                if (thunk) {
-                    CHECK(callee_method == NULL || callee_method->ThunkPtr != NULL);
-                } else {
-                    CHECK(callee_method == NULL || callee_method->MethodPtr != NULL);
-                }
-
-            } else {
-                CHECK_FAIL();
-            }
+            // queue it
+            jit_codegen_queue(callee_method, spidir_funcref_get_internal(callee), thunk);
         }
     }
 
@@ -183,6 +198,13 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         total_size += 16;
         total_size = ALIGN_UP(total_size, 16);
         total_size += spidir_codegen_blob_get_code_size(entry->blob);
+
+        // if we have a constant pool, allocate space for it as well
+        size_t constpool_size = spidir_codegen_blob_get_constpool_size(entry->blob);
+        if (constpool_size != 0) {
+            total_size = ALIGN_UP(total_size, spidir_codegen_blob_get_constpool_align(entry->blob));
+            total_size += constpool_size;
+        }
     }
 
     if (total_size == 0) {
@@ -232,6 +254,14 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
         }
 
         offset += code_size;
+
+        // if we have a constant pool, initialize it
+        size_t constpool_size = spidir_codegen_blob_get_constpool_size(entry->blob);
+        if (constpool_size != 0) {
+            offset = ALIGN_UP(offset, spidir_codegen_blob_get_constpool_align(entry->blob));
+            memcpy(jit_area + offset, spidir_codegen_blob_get_constpool(entry->blob), constpool_size);
+            offset += constpool_size;
+        }
     }
 
     // ensure we got to the same value
@@ -245,6 +275,9 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
 
     // turn the area into executable memory
     tdn_host_jit_set_exec(jit_area, total_size);
+
+    // register for the debugger to see
+    jit_gdb_register(m_function_blobs, jit_area, total_size);
 
 cleanup:
     return err;

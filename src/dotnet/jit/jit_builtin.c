@@ -65,7 +65,13 @@ static spidir_value_t emit_delegate_invoke(spidir_builder_handle_t builder, Runt
  * perform any kind of type checking
  */
 static spidir_value_t emit_unsafe_as(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
-    return args[0];
+    RuntimeTypeInfo typ = method->Parameters->Elements[0]->ParameterType;
+    if (typ->IsPointer) {
+        // from a pointer, aka passed as int, turn it into a pointer type
+        return spidir_builder_build_inttoptr(builder, args[0]);
+    } else {
+        return args[0];
+    }
 }
 
 /**

@@ -12,11 +12,6 @@ import time
 import sys
 import os
 
-FLOAT_CODEGEN_FAILURE = re.compile(
-    r"codegen for `[a-zA-Z0-9. _:()]+` failed: failed to select `[a-zA-Z0-9:% ]+ = (fconst64) [a-zA-Z0-9:% ,.-]+`",
-    re.RegexFlag.MULTILINE
-)
-
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ILASM_PATH = os.path.join(CURRENT_DIR, 'bin', 'ilasm')
@@ -110,13 +105,8 @@ def run_single_test(dll: str, results: Queue) -> bool:
             results.put((True, dll, elapsed_time))
             return True
         else:
-            # Check if this is a whitelisted error (for floating point tests)
-            if FLOAT_CODEGEN_FAILURE.findall(stderr.decode('utf-8')):
-                results.put((True, dll, elapsed_time))
-                return True
-            else:
-                results.put((False, dll, elapsed_time, stdout, stderr, timeout))
-                return False
+            results.put((False, dll, elapsed_time, stdout, stderr, timeout))
+            return False
 
     except Exception as e:
         if DEBUG:

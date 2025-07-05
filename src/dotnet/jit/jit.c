@@ -203,7 +203,7 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
 
     // dump it for debugging
     if (tdn_get_config()->jit_spidir_dump) {
-        void* ctx = tdn_host_jit_start_dump();
+        void* ctx = tdn_host_jit_start_dump(TDN_JIT_DUMP_SPIDIR);
         spidir_module_dump(module, tdn_host_jit_dump_callback, ctx);
         tdn_host_jit_end_dump(ctx);
     }

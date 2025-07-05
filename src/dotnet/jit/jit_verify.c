@@ -1919,7 +1919,7 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
 
             // if this is a ref-struct, and it contains local fields, ensure
             // we don't leak don't leak them accidently
-            if (actual->type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
+            if (actual->type != NULL && actual->type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
                 might_leak_local_ref = true;
             }
         }
@@ -2068,7 +2068,7 @@ static tdn_err_t verify_ret(jit_function_t* function, jit_block_t* block, tdn_il
         // if we are returning a ref-struct, then it must
         // have non-local references, otherwise we might
         // leak it
-        if (stack->type->IsByRefStruct) {
+        if (stack->type != NULL && stack->type->IsByRefStruct) {
             CHECK(stack->flags.ref_struct_non_local);
         }
     }
