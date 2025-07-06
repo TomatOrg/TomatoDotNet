@@ -16,6 +16,7 @@
 #include "jit_codegen.h"
 #include "jit_emit.h"
 #include "jit_helpers.h"
+#include "jit_native.h"
 #include "jit_verify.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -64,6 +65,13 @@ spidir_funcref_t jit_get_function(spidir_module_handle_t module, RuntimeMethodBa
 
     // we need to create the function, if it was already jitted before
     // then create as an extern, otherwise
+
+    // attempt to search for a native method that implements
+    // this method first, if it doesn't find one it stays as
+    // null, otherwise it can export this properly
+    if (method->MethodPtr == NULL) {
+        method->MethodPtr = jit_get_native_method((RuntimeMethodInfo)method);
+    }
 
     spidir_funcref_t function;
     if (method->MethodPtr != NULL) {

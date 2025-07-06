@@ -5,6 +5,11 @@
 #include "tomatodotnet/types/reflection.h"
 #include "dotnet/metadata/metadata_tables.h"
 
+/**
+ * The corelib assembly
+ */
+extern RuntimeAssembly gCoreAssembly;
+
 tdn_err_t tdn_parser_method_body(
     RuntimeAssembly assembly,
     metadata_method_def_t* method_def,

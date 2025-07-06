@@ -167,7 +167,7 @@ static int m_loaded_types = 0;
 /**
  * Contains the Core assembly, where the most basic types are stored
  */
-static RuntimeAssembly mCoreAssembly = NULL;
+static RuntimeAssembly gCoreAssembly = NULL;
 
 tdn_err_t tdn_create_vtable(RuntimeTypeInfo type, int count) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -2403,7 +2403,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
 
     // if we are loading the main assembly then bootstrap now
-    if (mCoreAssembly == NULL) {
+    if (gCoreAssembly == NULL) {
         CHECK_AND_RETHROW(corelib_bootstrap());
     }
 
@@ -2413,7 +2413,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     assembly->Metadata = file;
 
     // special case for core assembly
-    if (mCoreAssembly == NULL) {
+    if (gCoreAssembly == NULL) {
         assembly->AllowUnsafe = 1;
         assembly->AllowExternalExports = 1;
     }
@@ -2427,7 +2427,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     CHECK(file->modules_count == 1);
 
     // start
-    if (mCoreAssembly == NULL) {
+    if (gCoreAssembly == NULL) {
         CHECK_AND_RETHROW(corelib_bootstrap_types(assembly));
     } else {
         // this is the normal initialization path
@@ -2441,7 +2441,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         metadata_type_def_t* type_def = &assembly->Metadata->type_defs[i];
         RuntimeTypeInfo type = NULL;
         if (assembly->TypeDefs->Elements[i] != NULL) {
-            CHECK(mCoreAssembly == NULL);
+            CHECK(gCoreAssembly == NULL);
             type = assembly->TypeDefs->Elements[i];
         } else {
             type = TDN_GC_NEW(RuntimeTypeInfo);
@@ -2512,15 +2512,15 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     CHECK_AND_RETHROW(assembly_connect_nested(assembly));
 
     // finish up with bootstrapping if this is the corelib
-    if (mCoreAssembly == NULL) {
+    if (gCoreAssembly == NULL) {
         // jit all the types required
         // for the runtime to work
         CHECK_AND_RETHROW(corelib_jit_types(assembly));
 
         // register the assembly pointer as a valid root
-        tdn_host_gc_register_root(&mCoreAssembly);
+        tdn_host_gc_register_root(&gCoreAssembly);
 
-        mCoreAssembly = assembly;
+        gCoreAssembly = assembly;
     }
 
     // resolve the entry point
@@ -2621,6 +2621,6 @@ cleanup:
 }
 
 void tdn_cleanup(void) {
-    mCoreAssembly = NULL;
+    gCoreAssembly = NULL;
     shfree(m_loaded_assemblies);
 }
