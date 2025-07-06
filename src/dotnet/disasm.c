@@ -313,12 +313,16 @@ void tdn_normalize_inst(tdn_il_inst_t* inst) {
         case CEE_LDIND_U1: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tByte; break;
         case CEE_LDIND_U2: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tUInt16; break;
         case CEE_LDIND_U4: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tUInt32; break;
+        case CEE_LDIND_R4: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSingle; break;
+        case CEE_LDIND_R8: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tDouble; break;
 
         case CEE_STIND_I: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tIntPtr; break;
         case CEE_STIND_I1: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSByte; break;
         case CEE_STIND_I2: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt16; break;
         case CEE_STIND_I4: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt32; break;
         case CEE_STIND_I8: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tInt64; break;
+        case CEE_STIND_R4: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tSingle; break;
+        case CEE_STIND_R8: inst->operand_type = TDN_IL_TYPE; inst->operand.type = tDouble; break;
 
         case CEE_LEAVE_S: inst->opcode = CEE_LEAVE; break;
         default: break;

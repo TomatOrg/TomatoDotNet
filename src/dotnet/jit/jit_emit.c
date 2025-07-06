@@ -702,6 +702,18 @@ static tdn_err_t emit_ldstr(jit_function_t* function, spidir_builder_handle_t bu
     return TDN_NO_ERROR;
 }
 
+static tdn_err_t emit_ldtoken(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    // TODO: pin the type
+    // allocate the struct and fill it with the type pointer
+    spidir_value_t value = spidir_builder_build_stackslot(builder,
+        tRuntimeTypeHandle->StackSize, tRuntimeTypeHandle->StackAlignment);
+    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst->operand.type),
+        value);
+    STACK_TOP()->value = value;
+    return TDN_NO_ERROR;
+}
+
 static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     STACK_TOP()->value = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, inst->operand.uint32);
     return TDN_NO_ERROR;
@@ -2202,6 +2214,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDIND_I8] = emit_ldind,
     [CEE_LDIND_I] = emit_ldind,
     [CEE_LDIND_REF] = emit_ldind,
+    [CEE_LDIND_R8] = emit_ldind,
     [CEE_LDOBJ] = emit_ldind,
 
     [CEE_STIND_I] = emit_stind,
@@ -2210,10 +2223,12 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STIND_I4] = emit_stind,
     [CEE_STIND_I8] = emit_stind,
     [CEE_STIND_REF] = emit_stind,
+    [CEE_STIND_R8] = emit_stind,
     [CEE_STOBJ] = emit_stind,
 
     [CEE_LDNULL] = emit_ldnull,
     [CEE_LDSTR] = emit_ldstr,
+    [CEE_LDTOKEN] = emit_ldtoken,
     [CEE_LDC_I4] = emit_ldc_i4,
     [CEE_LDC_I8] = emit_ldc_i8,
     [CEE_LDC_R4] = emit_ldc_r4,

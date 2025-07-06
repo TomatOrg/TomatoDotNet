@@ -1403,6 +1403,15 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_ldtoken(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    jit_stack_value_init(STACK_PUSH(), tRuntimeTypeHandle);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_ldc_i4(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -2350,6 +2359,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDIND_I8] = verify_ldind,
     [CEE_LDIND_I] = verify_ldind,
     [CEE_LDIND_REF] = verify_ldind,
+    [CEE_LDIND_R8] = verify_ldind,
     [CEE_LDOBJ] = verify_ldind,
 
     [CEE_STIND_I] = verify_stind,
@@ -2358,10 +2368,12 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STIND_I4] = verify_stind,
     [CEE_STIND_I8] = verify_stind,
     [CEE_STIND_REF] = verify_stind,
+    [CEE_STIND_R8] = verify_stind,
     [CEE_STOBJ] = verify_stind,
 
     [CEE_LDNULL] = verify_ldnull,
     [CEE_LDSTR] = verify_ldstr,
+    [CEE_LDTOKEN] = verify_ldtoken,
     [CEE_LDC_I4] = verify_ldc_i4,
     [CEE_LDC_I8] = verify_ldc_i8,
     [CEE_LDC_R4] = verify_ldc_r4,
