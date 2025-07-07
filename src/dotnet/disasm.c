@@ -188,12 +188,39 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
             CHECK_FAIL("TODO: InlineSwitch");
 
         case InlineTok: {
-            inst->operand_type = TDN_IL_TYPE;
             inst->operand_token = FETCH(int32_t);
-            CHECK_AND_RETHROW(tdn_assembly_lookup_type(
-                    assembly, inst->operand_token,
-                    method->DeclaringType->GenericArguments, method->GenericArguments,
-                    &inst->operand.type));
+            token_t token = { .token = inst->operand_token };
+            switch (token.table) {
+                case METADATA_TYPE_DEF:
+                case METADATA_TYPE_REF:
+                case METADATA_TYPE_SPEC: {
+                    inst->operand_type = TDN_IL_TYPE;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_type(
+                            assembly, inst->operand_token,
+                            method->DeclaringType->GenericArguments, method->GenericArguments,
+                            &inst->operand.type));
+                } break;
+
+                case METADATA_METHOD_DEF:
+                case METADATA_METHOD_SPEC: {
+                    inst->operand_type = TDN_IL_METHOD;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_method(
+                            assembly, inst->operand_token,
+                            method->DeclaringType->GenericArguments, method->GenericArguments,
+                            &inst->operand.method));
+                } break;
+
+                case METADATA_FIELD: {
+                    inst->operand_type = TDN_IL_FIELD;
+                    CHECK_AND_RETHROW(tdn_assembly_lookup_field(
+                            assembly, inst->operand_token,
+                            method->DeclaringType->GenericArguments, method->GenericArguments,
+                            &inst->operand.field));
+                } break;
+
+                default:
+                    CHECK_FAIL();
+            }
         } break;
 
         case InlineType: {

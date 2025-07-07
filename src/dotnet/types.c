@@ -41,6 +41,8 @@ RuntimeTypeInfo tRuntimeLocalVariableInfo = NULL;
 RuntimeTypeInfo tRuntimeTypeInfo = NULL;
 RuntimeTypeInfo tParameterInfo = NULL;
 RuntimeTypeInfo tRuntimeExceptionHandlingClause = NULL;
+RuntimeTypeInfo tRuntimeFieldHandle = NULL;
+RuntimeTypeInfo tRuntimeMethodHandle = NULL;
 RuntimeTypeInfo tRuntimeTypeHandle = NULL;
 
 RuntimeTypeInfo tNullable = NULL;

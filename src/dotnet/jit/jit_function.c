@@ -195,7 +195,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
             // constrained is only allowed on a callvirt
             if (prefix & TDN_IL_PREFIX_CONSTRAINED) {
-                CHECK(inst.opcode == CEE_CALLVIRT);
+                CHECK(inst.opcode == CEE_CALLVIRT || inst.opcode == CEE_CALL);
                 inst.constrained = constrained;
                 constrained = NULL;
             }

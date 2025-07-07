@@ -114,7 +114,9 @@ void tdn_gc_free(Object obj) {
             }
 
             // free the memory
-            tdn_host_free(value->JitFieldPtr);
+            if (!value->HasRVA) {
+                tdn_host_free(value->JitFieldPtr);
+            }
         }
     }
 }

@@ -97,20 +97,20 @@ typedef struct load_type {
 static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, ValueType, true),
     INIT_VALUE_TYPE(System, Enum, true),
-    INIT_VALUE_TYPE(System, Boolean, true),
-    INIT_VALUE_TYPE(System, Char, true),
-    INIT_VALUE_TYPE(System, SByte, true),
-    INIT_VALUE_TYPE(System, Int16, true),
-    INIT_VALUE_TYPE(System, Int32, true, 5),
-    INIT_VALUE_TYPE(System, Int64, true),
-    INIT_VALUE_TYPE(System, IntPtr, true),
-    INIT_VALUE_TYPE(System, Byte, true),
-    INIT_VALUE_TYPE(System, UInt16, true),
-    INIT_VALUE_TYPE(System, UInt32, true),
-    INIT_VALUE_TYPE(System, UInt64, true),
-    INIT_VALUE_TYPE(System, UIntPtr, true),
+    INIT_VALUE_TYPE(System, Boolean, true, 7),
+    INIT_VALUE_TYPE(System, Char, true, 34),
+    INIT_VALUE_TYPE(System, SByte, true, 21),
+    INIT_VALUE_TYPE(System, Int16, true, 21),
+    INIT_VALUE_TYPE(System, Int32, true, 21),
+    INIT_VALUE_TYPE(System, Int64, true, 21),
+    INIT_VALUE_TYPE(System, IntPtr, true, 21),
+    INIT_VALUE_TYPE(System, Byte, true, 34),
+    INIT_VALUE_TYPE(System, UInt16, true, 21),
+    INIT_VALUE_TYPE(System, UInt32, true, 21),
+    INIT_VALUE_TYPE(System, UInt64, true, 21),
+    INIT_VALUE_TYPE(System, UIntPtr, true, 21),
     INIT_VALUE_TYPE(System, Single, true),
-    INIT_VALUE_TYPE(System, Double, true),
+    INIT_VALUE_TYPE(System, Double, true, 41),
     INIT_VALUE_TYPE(System, Void, true),
 
     INIT_HEAP_TYPE(System.Reflection, RuntimeConstructorInfo, 5),
@@ -125,7 +125,7 @@ static init_type_t m_init_types[] = {
     INIT_HEAP_TYPE(System.Reflection, RuntimeAssembly),
     INIT_HEAP_TYPE(System.Reflection, RuntimeModule),
     INIT_HEAP_TYPE(System.Reflection, RuntimeLocalVariableInfo),
-    INIT_HEAP_TYPE(System.Reflection, RuntimeTypeInfo, 5),
+    INIT_HEAP_TYPE(System.Reflection, RuntimeTypeInfo, 8),
     INIT_HEAP_TYPE(System.Reflection, RuntimeExceptionHandlingClause),
 };
 static int m_inited_types = 0;
@@ -155,6 +155,8 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
     LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
+    LOAD_TYPE(System, RuntimeFieldHandle),
+    LOAD_TYPE(System, RuntimeMethodHandle),
     LOAD_TYPE(System, RuntimeTypeHandle),
     LOAD_TYPE(System, Delegate),
     LOAD_TYPE(System, MulticastDelegate),
@@ -387,8 +389,20 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
 
     // based on the layout setup the fields
     if (type->Attributes.Layout == TDN_TYPE_LAYOUT_EXPLICIT) {
-        CHECK_FAIL();
-        // TODO: add support for explicit layout
+        // Very basic support for explicit interface, we will
+        // have something more complete
+        CHECK(tdn_type_is_valuetype(type));
+        CHECK(fields->Length == 0);
+
+        // set the alignment as the packing
+        type->HeapAlignment = type->Packing;
+        if (type->HeapAlignment == 0) {
+            type->HeapAlignment = 1;
+        }
+
+        // its always unmanaged, since there are no fields
+        type->IsUnmanaged = true;
+
     } else {
         // start by calculating the BaseType
         size_t current_size = 0;
@@ -487,6 +501,12 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
         // have the alignment that we want it to have
         current_size = ALIGN_UP(current_size, alignment);
 
+        // ensure we don't actually have zero sized stuff
+        // TODO: do we want this?
+        if (current_size == 0) {
+            current_size = 1;
+        }
+
         // there are size limits, valuetype must be less
         // than 1mb (per spec) and other types must be
         // less than 2GB (GC limit)
@@ -528,24 +548,30 @@ cleanup:
 
 static bool parameter_match(ParameterInfo a, ParameterInfo b) {
     if (a->ParameterType != b->ParameterType) return false;
-    if (a->Attributes.Attributes != b->Attributes.Attributes) return false;
+    // TODO: I had cases where this did not work, why?
+    // if (a->Attributes.Attributes != b->Attributes.Attributes) return false;
     if (a->ReferenceIsReadOnly != b->ReferenceIsReadOnly) return false;
     return true;
 }
 
 static bool method_signature_match(RuntimeMethodInfo a, RuntimeMethodInfo b) {
     // check the return type
-    if (!parameter_match(a->ReturnParameter, b->ReturnParameter)) return false;
+    if (!parameter_match(a->ReturnParameter, b->ReturnParameter)) {
+        return false;
+    }
 
     // Check parameter count matches
-    if (a->Parameters->Length != b->Parameters->Length)
+    if (a->Parameters->Length != b->Parameters->Length) {
         return false;
+    }
 
     // check the parameters
     for (int j = 0; j < a->Parameters->Length; j++) {
         ParameterInfo paramA = a->Parameters->Elements[j];
         ParameterInfo paramB = b->Parameters->Elements[j];
-        if (!parameter_match(paramA, paramB)) return false;
+        if (!parameter_match(paramA, paramB)) {
+            return false;
+        }
     }
 
     return true;
@@ -581,11 +607,12 @@ cleanup:
     return err;
 }
 
-static tdn_err_t find_explicit_implementation(RuntimeAssembly assembly, RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_body) {
+tdn_err_t tdn_find_explicit_implementation(RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_body) {
     tdn_err_t err = TDN_NO_ERROR;
 
     *out_body = NULL;
 
+    RuntimeAssembly assembly = type->Module->Assembly;
     dotnet_file_t* metadata = assembly->Metadata;
     for (int i = 0; i < metadata->method_impls_count; i++) {
         metadata_method_impl_t* impl = &metadata->method_impls[i];
@@ -613,8 +640,14 @@ static tdn_err_t find_explicit_implementation(RuntimeAssembly assembly, RuntimeT
         }
 
         if (body != NULL) {
-            // ensure its a virtual method
-            CHECK(body->Attributes.Virtual);
+            if (method->Attributes.Static) {
+                // virtual interface function
+                CHECK(body->Attributes.Static);
+            } else {
+                // static interface function
+                CHECK(method->Attributes.Virtual);
+                CHECK(body->Attributes.Virtual);
+            }
 
             // match the signature
             CHECK(method_signature_match(method, body));
@@ -629,7 +662,7 @@ cleanup:
     return err;
 }
 
-static RuntimeMethodInfo find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
+RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
     while (type != NULL) {
         // Use normal inheritance (I.8.10.4)
         for (int i = 0; i < type->DeclaredMethods->Length; i++) {
@@ -812,7 +845,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         // default to allocating a new slot
         if (!method->Attributes.VtableNewSlot) {
             // this should be overriding something new
-            RuntimeMethodInfo parent = find_overriden_method(info->BaseType, method);
+            RuntimeMethodInfo parent = tdn_find_overriden_method(info->BaseType, method);
             CHECK(parent != NULL);
 
             CHECK(!parent->Attributes.Final);
@@ -839,7 +872,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
                 // find one then reuse that slot
                 for (int j = 0; j < hmlen(info->InterfaceImpls); j++) {
                     interface_impl_t* interface = &info->InterfaceImpls[j];
-                    RuntimeMethodInfo parent = find_overriden_method(interface->key, method);
+                    RuntimeMethodInfo parent = tdn_find_overriden_method(interface->key, method);
                     if (parent != NULL) {
                         vtable_slot = interface->value + parent->VTableOffset;
                         break;
@@ -899,16 +932,16 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
 
             } else {
                 // search for an explicit implementation of this interface
-                CHECK_AND_RETHROW(find_explicit_implementation(assembly, info, base, &impl));
+                CHECK_AND_RETHROW(tdn_find_explicit_implementation(info, base, &impl));
 
                 // fallback to normal override rules
                 if (impl == NULL) {
-                    impl = find_overriden_method(info, base);
+                    impl = tdn_find_overriden_method(info, base);
                 }
 
-                // if the class is abstract and there is no implementation
-                // then just
-                if (info->Attributes.Abstract && impl == NULL) {
+                // if the base has an implementation, use it, this properly handles
+                // default interface implementations
+                if (impl == NULL && base->MethodBody != NULL) {
                     impl = base;
                 }
             }
@@ -1429,7 +1462,7 @@ static tdn_err_t corelib_bootstrap() {
     tRuntimeTypeInfo->HeapAlignment = _Alignof(struct RuntimeTypeInfo);
 
     // make sure to set its type id properly
-    CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeTypeInfo, 5));
+    CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeTypeInfo, 8));
     tRuntimeTypeInfo->Object.VTable = tRuntimeTypeInfo->JitVTable;
 
     // hard-code types we require for proper bootstrap
@@ -2330,7 +2363,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_connect_nested(RuntimeAssembly assembly) {
+static tdn_err_t assembly_connect_nested_and_class_layout(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect nested classes
@@ -2356,24 +2389,54 @@ static tdn_err_t assembly_connect_nested(RuntimeAssembly assembly) {
         CHECK(!type->Attributes.Interface);
         CHECK(type->Attributes.Layout == TDN_TYPE_LAYOUT_EXPLICIT || type->Attributes.Layout == TDN_TYPE_LAYOUT_SEQUENTIAL);
         if (type->BaseType == tValueType || type->BaseType == tEnum) CHECK(layout->class_size <= SIZE_1MB);
-        if (type->Attributes.Layout == TDN_TYPE_LAYOUT_EXPLICIT) CHECK(layout->packing_size == 0);
-        else {
-            CHECK(
-                layout->packing_size == 0 ||
-                layout->packing_size == 1 ||
-                layout->packing_size == 2 ||
-                layout->packing_size == 4 ||
-                layout->packing_size == 8 ||
-                layout->packing_size == 16 ||
-                layout->packing_size == 32 ||
-                layout->packing_size == 64 ||
-                layout->packing_size == 128
-            );
-        }
+        CHECK(
+            layout->packing_size == 0 ||
+            layout->packing_size == 1 ||
+            layout->packing_size == 2 ||
+            layout->packing_size == 4 ||
+            layout->packing_size == 8 ||
+            layout->packing_size == 16 ||
+            layout->packing_size == 32 ||
+            layout->packing_size == 64 ||
+            layout->packing_size == 128
+        );
 
         // save it for later
         type->Packing = layout->packing_size;
         type->HeapSize = layout->class_size;
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t assembly_connect_field_rva(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // load all of the field RVAs, this handles any static data and already
+    // checks that the struct is not managed (so no pointers can be set)
+    for (int i = 0; i < assembly->Metadata->field_rvas_count; i++) {
+        metadata_field_rva_t* field_rva = &assembly->Metadata->field_rvas[i];
+        RuntimeFieldInfo field;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_field(assembly, field_rva->field.token, NULL, NULL, &field));
+
+        // ensure no managed types
+        CHECK(field->FieldType->IsUnmanaged);
+
+        // must be readonly, otherwise its unsafe
+        CHECK(field->Attributes.InitOnly);
+
+        // get the data
+        uint8_t* start = pe_image_address(&assembly->Metadata->file, field_rva->rva);
+        uint8_t* end = pe_image_address(&assembly->Metadata->file, field_rva->rva + field->FieldType->StackSize);
+        CHECK(start != NULL && end != NULL);
+
+        // ensure the alignment
+        CHECK((uintptr_t)start % field->FieldType->StackAlignment == 0);
+
+        // we can just set it directly
+        field->HasRVA = true;
+        field->JitFieldPtr = start;
     }
 
 cleanup:
@@ -2466,7 +2529,6 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
 
     // load all the generics type information
     CHECK_AND_RETHROW(assembly_load_generics(assembly));
-    CHECK_AND_RETHROW(assembly_load_generic_constraints(assembly));
 
     assembly->Params = TDN_GC_NEW_ARRAY(ParameterInfo, assembly->Metadata->params_count);
 
@@ -2486,6 +2548,8 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     push_type_queue();
     pushed_type_queue = true;
 
+    CHECK_AND_RETHROW(assembly_load_generic_constraints(assembly));
+
     // and now connect the types with the members
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
@@ -2497,8 +2561,8 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // initialized
     CHECK_AND_RETHROW(assembly_connect_read_only_attribute(assembly, true));
 
-    pushed_type_queue = false;
-    CHECK_AND_RETHROW(drain_type_queue());
+    // connect all the misc classes
+    CHECK_AND_RETHROW(assembly_connect_nested_and_class_layout(assembly));
 
     // calculate the size of all the basic types
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
@@ -2508,8 +2572,11 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         }
     }
 
-    // connect all the misc classes
-    CHECK_AND_RETHROW(assembly_connect_nested(assembly));
+    pushed_type_queue = false;
+    CHECK_AND_RETHROW(drain_type_queue());
+
+    // initialize all of the static fields
+    CHECK_AND_RETHROW(assembly_connect_field_rva(assembly));
 
     // finish up with bootstrapping if this is the corelib
     if (gCoreAssembly == NULL) {

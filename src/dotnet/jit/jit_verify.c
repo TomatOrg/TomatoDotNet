@@ -354,6 +354,13 @@ static merge_status_t verifier_merge_stack_values(jit_stack_value_t* previous, j
 static bool verifier_merge_block_local(jit_block_local_t* previous, jit_block_local_t* new) {
     bool modified = false;
 
+    // an uninitialized entry has entered an initialized one, we are going
+    // to mark as not initialized
+    if (previous->initialized && !new->initialized) {
+        previous->initialized = false;
+        return true;
+    }
+
     // merge the flags
     if (verifier_merge_flags(&previous->flags, new->flags)) {
         modified = true;
@@ -856,14 +863,44 @@ static RuntimeTypeInfo verifier_get_verification_type(RuntimeTypeInfo type) {
     }
 }
 
+static const char* jit_kind_str(jit_stack_value_kind_t kind) {
+    switch (kind) {
+        case JIT_KIND_INT32: return "int32";
+        case JIT_KIND_INT64: return "int64";
+        case JIT_KIND_NATIVE_INT: return "native int";
+        case JIT_KIND_FLOAT: return "float";
+        case JIT_KIND_BY_REF: return "by-ref";
+        case JIT_KIND_OBJ_REF: return "obj-ref";
+        case JIT_KIND_VALUE_TYPE: return "value";
+        default: return "?";
+    }
+}
+
 #define CHECK_IS_ASSIGNABLE(a, b) \
     do { \
         jit_stack_value_t* __a = a; \
         jit_stack_value_t* __b = b; \
-        CHECK_ERROR(verifier_is_assignable(__a, __b), \
-            TDN_ERROR_VERIFIER_STACK_UNEXPECTED, \
-            "%T is-assignable-to %T", __a->type, __b->type); \
+        if (!verifier_is_unsafe_assignable(function, __a, __b)) { \
+            CHECK_ERROR(verifier_is_assignable(__a, __b), \
+                TDN_ERROR_VERIFIER_STACK_UNEXPECTED, \
+                "%T [%s] is-assignable-to %T [%s]", __a->type, jit_kind_str(__a->kind), __b->type, jit_kind_str(__b->kind)); \
+        } \
     } while (0)
+
+static bool verifier_is_unsafe_assignable(jit_function_t* function, jit_stack_value_t* a, jit_stack_value_t* b) {
+    if (!function->method->Module->Assembly->AllowUnsafe) {
+        return false;
+    }
+
+    // convert by-ref and native int as much as they want
+    if (a->kind == JIT_KIND_BY_REF && b->kind == JIT_KIND_NATIVE_INT) {
+        return true;
+    } else if (a->kind == JIT_KIND_NATIVE_INT && b->kind == JIT_KIND_BY_REF) {
+        return true;
+    }
+
+    return false;
+}
 
 static bool verifier_is_same_reduced_type(RuntimeTypeInfo src, RuntimeTypeInfo dst) {
     return verifier_get_reduced_type(src) == verifier_get_reduced_type(dst);
@@ -944,6 +981,12 @@ static tdn_err_t verify_load_local(jit_function_t* function, jit_block_t* block,
     if (!block_local->initialized) {
         func_local->zero_initialize = true;
         block_local->initialized = true;
+
+        // a zero initialized ref-struct only contains null-refs
+        // which are considered to be non-local
+        if (func_local->type->IsByRefStruct) {
+            block_local->flags.ref_struct_non_local = true;
+        }
     }
 
     // we don't have a valid this, enforce an invalid this
@@ -1026,6 +1069,12 @@ static tdn_err_t verify_load_local_address(jit_function_t* function, jit_block_t
     if (!block_local->initialized) {
         func_local->zero_initialize = true;
         block_local->initialized = true;
+
+        // a zero initialized ref-struct only contains null-refs
+        // which are considered to be non-local
+        if (func_local->type->IsByRefStruct) {
+            block_local->flags.ref_struct_non_local = true;
+        }
     }
 
     // local taken by reference must be spilled
@@ -1406,7 +1455,14 @@ cleanup:
 static tdn_err_t verify_ldtoken(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    jit_stack_value_init(STACK_PUSH(), tRuntimeTypeHandle);
+    RuntimeTypeInfo type = NULL;
+    switch (inst->operand_type) {
+        case TDN_IL_TYPE: type = tRuntimeTypeHandle; break;
+        case TDN_IL_FIELD: type = tRuntimeFieldHandle; break;
+        case TDN_IL_METHOD: type = tRuntimeMethodHandle; break;
+        default: CHECK_FAIL();
+    }
+    jit_stack_value_init(STACK_PUSH(), type);
 
 cleanup:
     return err;
@@ -1873,7 +1929,12 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
         CHECK_ERROR(!tdn_type_is_valuetype(method_type), TDN_ERROR_VERIFIER_CALLVIRT_ON_VALUE_TYPE);
 
     } else if (inst->opcode == CEE_CALL) {
-        CHECK_ERROR(!method->Attributes.Abstract, TDN_ERROR_VERIFIER_CALL_ABSTRACT);
+        // this is most likely a static interface function, resolve it
+        if (inst->constrained != NULL) {
+            CHECK(method->Attributes.Static);
+        } else {
+            CHECK_ERROR(!method->Attributes.Abstract, TDN_ERROR_VERIFIER_CALL_ABSTRACT);
+        }
     }
 
     bool might_leak_local_ref = false;

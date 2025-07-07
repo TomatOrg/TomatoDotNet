@@ -27,3 +27,6 @@ tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo InterfaceType);
  * Create a vtable for the given type
  */
 tdn_err_t tdn_create_vtable(RuntimeTypeInfo type, int count);
+
+tdn_err_t tdn_find_explicit_implementation(RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_body);
+RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method);

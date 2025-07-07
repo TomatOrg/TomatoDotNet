@@ -100,7 +100,8 @@ typedef struct RuntimeFieldInfo {
     int FieldOffset;
     uint32_t IsVolatile : 1;
     uint32_t ReferenceIsReadOnly : 1;
-    uint32_t : 30;
+    uint32_t : 29;
+    uint32_t HasRVA : 1;
 }* RuntimeFieldInfo;
 DEFINE_ARRAY(RuntimeFieldInfo);
 

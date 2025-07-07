@@ -200,7 +200,7 @@ tdn_err_t tdn_assembly_lookup_field(
         *field = assembly->Fields->Elements[token.index - 1];
 
     } else if (token.table == METADATA_MEMBER_REF) {
-        CHECK(token.index != 0 && token.index <= assembly->Fields->Length);
+        CHECK(token.index != 0 && token.index <= assembly->Metadata->member_refs_count);
         metadata_member_ref_t* ref = &assembly->Metadata->member_refs[token.index - 1];
 
         // get the owner type

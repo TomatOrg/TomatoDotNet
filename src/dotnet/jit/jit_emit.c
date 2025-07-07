@@ -301,6 +301,12 @@ static spidir_value_t jit_convert_local(
         } else {
             ASSERT(!"Invalid");
         }
+
+    } else if (from->kind == JIT_KIND_BY_REF && (to_type->IsPointer || to_type == tIntPtr)) {
+        return spidir_builder_build_ptrtoint(builder, from->value);
+
+    } else if (from->kind == JIT_KIND_NATIVE_INT && (to_type->IsByRef)) {
+        return spidir_builder_build_inttoptr(builder, from->value);
     }
 
     // fallback to the normal convert logic
@@ -703,15 +709,30 @@ static tdn_err_t emit_ldstr(jit_function_t* function, spidir_builder_handle_t bu
 }
 
 static tdn_err_t emit_ldtoken(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
-    // TODO: pin the type
+    tdn_err_t err = TDN_NO_ERROR;
+
     // allocate the struct and fill it with the type pointer
     spidir_value_t value = spidir_builder_build_stackslot(builder,
-        tRuntimeTypeHandle->StackSize, tRuntimeTypeHandle->StackAlignment);
+        STACK_TOP()->type->StackSize, STACK_TOP()->type->StackAlignment);
+
+    // choose the correct ptr
+    // TODO: pin the type
+    uint64_t ptr;
+    switch (inst->operand_type) {
+        case TDN_IL_TYPE: ptr = (uint64_t)inst->operand.type; break;
+        case TDN_IL_METHOD: ptr = (uint64_t)inst->operand.method; break;
+        case TDN_IL_FIELD: ptr = (uint64_t)inst->operand.field; break;
+        default: CHECK_FAIL();
+    }
+
+    // and just store it
     spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
-        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uint64_t)inst->operand.type),
+        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, ptr),
         value);
     STACK_TOP()->value = value;
-    return TDN_NO_ERROR;
+
+cleanup:
+    return err;
 }
 
 static tdn_err_t emit_ldc_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
@@ -1371,6 +1392,16 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
 
     if (callee->Attributes.Static) {
         jit_queue_cctor(spidir_builder_get_module(builder), callee->DeclaringType);
+
+        // we have a static interface function, "devirtualize" it, aka, get the actual implementation for it
+        // use the same methods we use for the normal virtual stuff
+        if (inst->constrained != NULL) {
+            RuntimeMethodInfo base = (RuntimeMethodInfo)callee;
+            CHECK_AND_RETHROW(tdn_find_explicit_implementation(inst->constrained,
+                base, (RuntimeMethodInfo*)&callee));
+            CHECK(callee != NULL,
+                "%T::%U not found for %T", base->DeclaringType, base->Name, inst->constrained);
+        }
     }
 
     // check if we should inline, special case for builtin emitters since they have a special inline semantic

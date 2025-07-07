@@ -40,6 +40,8 @@ extern RuntimeTypeInfo tRuntimeLocalVariableInfo;
 extern RuntimeTypeInfo tRuntimeTypeInfo;
 extern RuntimeTypeInfo tParameterInfo;
 extern RuntimeTypeInfo tRuntimeExceptionHandlingClause;
+extern RuntimeTypeInfo tRuntimeFieldHandle;
+extern RuntimeTypeInfo tRuntimeMethodHandle;
 extern RuntimeTypeInfo tRuntimeTypeHandle;
 
 extern RuntimeTypeInfo tNullable;
