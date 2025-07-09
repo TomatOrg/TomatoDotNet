@@ -33,13 +33,24 @@ static void buffer_bulk_move_with_write_barrier(void* _dest, void* _src, size_t 
     ASSERT((len % 4) == 0);
     uint64_t* dest = (uint64_t*)_dest;
     uint64_t* src = (uint64_t*)_src;
-    for (int i = 0; i < len / 4; i++) {
+    for (size_t i = 0; i < len / 4; i++) {
         dest[i] = src[i];
     }
 }
 
 static void buffer_memmove(void* dest, void* src, size_t len) {
     __builtin_memmove(dest, src, len);
+}
+
+static void span_helpers_clear_without_references(void* b, size_t byteLength) {
+    __builtin_memset(b, 0, byteLength);
+}
+
+static void span_helpers_clear_with_references(void* b, size_t pointerSizeLength) {
+    uint64_t* dest = (uint64_t*)b;
+    for (size_t i = 0; i < pointerSizeLength; i++) {
+        dest[i] = 0;
+    }
 }
 
 static void debug_provider_fail_core(String stackTrace, String message, String detailMessage, String errorSource) {
@@ -102,6 +113,16 @@ static native_function_t m_native_functions[] = {
         "System", "Buffer", "Memmove",
         buffer_memmove,
         SIG(BY_REF, BY_REF, NATIVE_INT)
+    },
+    {
+        "System", "SpanHelpers", "ClearWithoutReferences",
+        span_helpers_clear_without_references,
+        SIG(BY_REF, NATIVE_INT)
+    },
+    {
+        "System", "SpanHelpers", "ClearWithReferences",
+        span_helpers_clear_with_references,
+        SIG(BY_REF, NATIVE_INT)
     },
     {
         "System.Diagnostics", "DebugProvider", "WriteCore",

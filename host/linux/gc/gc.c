@@ -75,7 +75,7 @@ void tdn_host_gc_unregister_root(void* field) {
     ASSERT(!"Failed to find root");
 }
 
-void tdn_host_gc_trace_object(Object obj) {
+void tdn_host_gc_trace_object(Object parent, Object obj) {
     // mark the object as black
     if (obj->GcColor == m_gc_color_reached) return;
     obj->GcColor = m_gc_color_reached;
@@ -90,7 +90,7 @@ static void gc_scan_stack(void* start, size_t size) {
     for (size_t i = 0; i < size; i+= sizeof(void*)) {
         Object obj = gc_get_object(start + i);
         if (obj != NULL) {
-            tdn_host_gc_trace_object(obj);
+            tdn_host_gc_trace_object(NULL, obj);
         }
     }
 }
@@ -99,7 +99,7 @@ static void gc_scan_roots(void) {
     for (int i = 0; i < arrlen(m_gc_roots); i++) {
         Object obj = *(Object*)m_gc_roots[i];
         if (obj != NULL) {
-            tdn_host_gc_trace_object(obj);
+            tdn_host_gc_trace_object(NULL, obj);
         }
     }
 }

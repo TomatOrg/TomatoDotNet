@@ -35,7 +35,7 @@ static uint32_t verifier_nested_to_method_access_attribute(uint32_t visiblity) {
         case TDN_TYPE_VISIBILITY_NESTED_FAMILY_OR_ASSEMBLY: return TDN_ACCESS_FAMILY_OR_ASSEMBLY;
         case TDN_TYPE_VISIBILITY_NESTED_PRIVATE: return TDN_ACCESS_PRIVATE;
         case TDN_TYPE_VISIBILITY_NESTED_PUBLIC: return TDN_ACCESS_PUBLIC;
-        default: ASSERT(!"Invalid visiblity");
+        default: ASSERT(false, "Invalid visibility: %d", visiblity);
     }
 }
 
@@ -52,6 +52,10 @@ static bool verifier_can_access_instantiation(RuntimeTypeInfo current_type, Runt
 }
 
 static bool verifier_can_access_type(RuntimeTypeInfo current_type, RuntimeTypeInfo target_type) {
+    if (target_type->IsGenericParameter) {
+        return true;
+    }
+
     // ensure we can access the generic parameters of the type
     if (target_type->GenericArguments != NULL && !verifier_can_access_instantiation(current_type, target_type->GenericArguments)) {
         return false;
@@ -74,7 +78,13 @@ static bool verifier_can_access_type(RuntimeTypeInfo current_type, RuntimeTypeIn
     return verifier_can_access_member(current_type, target_type->DeclaringType, visiblity, NULL);
 }
 
+bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type);
+
 static bool verifier_can_access_family(RuntimeTypeInfo current_type, RuntimeTypeInfo target_type, RuntimeTypeInfo instance) {
+    if (instance->IsGenericParameter) {
+        return verifier_can_cast_to(instance, target_type);
+    }
+
     // Iterate through all containing types of instance
     while (instance != NULL) {
         RuntimeTypeInfo cur_inst_type_def = instance;
@@ -91,7 +101,7 @@ static bool verifier_can_access_family(RuntimeTypeInfo current_type, RuntimeType
                     if (current_type_def == target_type) {
                         return true;
                     }
-                    current_type_def = current_type_def->DeclaringType;
+                    current_type_def = current_type_def->BaseType;
                 }
             }
 
@@ -690,8 +700,6 @@ cleanup:
         CHECK_ERROR(!function->track_ctor_state || !__value->flags.this_ptr || block->this_initialized, \
             TDN_ERROR_VERIFIER_UNINIT_STACK); \
     } while (0)
-
-bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type);
 
 static bool verifier_can_cast_to_class_or_interface(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
     // TODO: variance support
@@ -2017,7 +2025,6 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
             // if this is a ref-struct, and it contains local fields, ensure
             // we don't leak don't leak them accidently
             if (actual->type != NULL && actual->type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
-                TRACE("REF STRUCT CONTAINS LOCAL REFS");
                 might_leak_local_ref = true;
             }
         }

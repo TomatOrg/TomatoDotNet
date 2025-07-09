@@ -370,12 +370,22 @@ cleanup:
     return err;
 }
 
-static void assembly_clear_roots(RuntimeAssembly assembly) {
-    for (int i = 0; i < assembly->Fields->Length; i++) {
-        RuntimeFieldInfo field = assembly->Fields->Elements[i];
-        if (field->JitFieldPtr != NULL) {
+static void type_clear_fields(RuntimeTypeInfo type) {
+    for (int i = 0; i < type->DeclaredFields->Length; i++) {
+        RuntimeFieldInfo field = type->DeclaredFields->Elements[i];
+        if (field->JitFieldPtr != NULL && !field->HasRVA) {
             memset(field->JitFieldPtr, 0, field->FieldType->StackSize);
         }
+    }
+
+    for (int i = 0; i < hmlen(type->GenericTypeInstances); i++) {
+        type_clear_fields(type->GenericTypeInstances[i].value);
+    }
+}
+
+static void assembly_clear_roots(RuntimeAssembly assembly) {
+    for (int i = 0; i < assembly->TypeDefs->Length; i++) {
+        type_clear_fields(assembly->TypeDefs->Elements[i]);
     }
 }
 

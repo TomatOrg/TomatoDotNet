@@ -11,7 +11,7 @@ void tdn_gc_trace_children(Object obj) {
 
     // scan the type instance itself, to ensure we don't delete it before
     // we handle all of the children
-    tdn_host_gc_trace_object((Object)type);
+    tdn_host_gc_trace_object(obj, (Object)type);
 
     //
     // some runtime objects have native structures that we need to properly scan
@@ -19,25 +19,27 @@ void tdn_gc_trace_children(Object obj) {
     //
     if (type == tRuntimeAssembly) {
         RuntimeAssembly assembly = (RuntimeAssembly)obj;
-        for (int i = 0; i < arrlen(assembly->StringTable); i++) {
-            tdn_host_gc_trace_object((Object)assembly->StringTable[i].value);
+        for (int i = 0; i < hmlen(assembly->StringTable); i++) {
+            tdn_host_gc_trace_object(obj, (Object)assembly->StringTable[i].value);
         }
 
     } else if (type == tRuntimeMethodInfo) {
         RuntimeMethodInfo method = (RuntimeMethodInfo)obj;
         for (int i = 0; i < hmlen(method->GenericMethodInstances); i++) {
-            tdn_host_gc_trace_object((Object)method->GenericMethodInstances[i].value);
+            tdn_host_gc_trace_object(obj, (Object)method->GenericMethodInstances[i].value);
         }
 
     } else if (type == tRuntimeTypeInfo) {
         RuntimeTypeInfo typ = (RuntimeTypeInfo)obj;
         for (int i = 0; i < hmlen(typ->GenericTypeInstances); i++) {
-            tdn_host_gc_trace_object((Object)typ->GenericTypeInstances[i].value);
+            tdn_host_gc_trace_object(obj, (Object)typ->GenericTypeInstances[i].value);
         }
 
         for (int i = 0; i < hmlen(typ->InterfaceImpls); i++) {
-            tdn_host_gc_trace_object((Object)typ->InterfaceImpls[i].key);
-            tdn_host_gc_trace_object((Object)typ->InterfaceImpls[i].next);
+            tdn_host_gc_trace_object(obj, (Object)typ->InterfaceImpls[i].key);
+            if ((Object)typ->InterfaceImpls[i].next != NULL) {
+                tdn_host_gc_trace_object(obj, (Object)typ->InterfaceImpls[i].next);
+            }
         }
     }
 
@@ -46,15 +48,17 @@ void tdn_gc_trace_children(Object obj) {
     //
     if (type->IsArray) {
         type = type->ElementType;
-        if (tdn_type_is_valuetype(type) && arrlen(type->ManagedPointers) != 0) {
-            ASSERT(!"TODO: array with managed structs");
+        if (tdn_type_is_valuetype(type)) {
+            if (arrlen(type->ManagedPointers) != 0) {
+                ASSERT(!"TODO: array with managed structs");
+            }
         } else {
             // array with objects
             Object_Array arr = (Object_Array)obj;
             for (int i = 0; i < arr->Length; i++) {
                 Object child = arr->Elements[i];
                 if (child != NULL) {
-                    tdn_host_gc_trace_object(child);
+                    tdn_host_gc_trace_object(obj, child);
                 }
             }
         }
@@ -72,7 +76,7 @@ void tdn_gc_trace_children(Object obj) {
             // get the child object
             Object child = *(Object*)(obj_ptr + type->ManagedPointers[i]);
             if (child != NULL) {
-                tdn_host_gc_trace_object(child);
+                tdn_host_gc_trace_object(obj, child);
             }
         }
     }

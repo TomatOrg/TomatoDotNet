@@ -40,6 +40,11 @@ void string_builder_free(string_builder_t* builder) {
 }
 
 void string_builder_push_type_signature(string_builder_t* builder, RuntimeTypeInfo type) {
+    if (type->IsGenericParameter) {
+        string_builder_push_string(builder, type->Name);
+        return;
+    }
+
     // push the declaring type if any
     if (type->DeclaringType != NULL) {
         string_builder_push_type_signature(builder, type->DeclaringType);

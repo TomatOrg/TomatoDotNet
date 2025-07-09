@@ -62,8 +62,9 @@ Object tdn_host_gc_alloc(ObjectVTable* vtable, size_t size, size_t alignment);
 
 /**
  * Called by the runtime to tell the host about the objects inside of another object
+ * The parent is optional and is the object that contains the new object
  */
-void tdn_host_gc_trace_object(Object obj);
+void tdn_host_gc_trace_object(Object parent, Object obj);
 
 /**
  * Called to start a gc cycle, this should stop the world,
