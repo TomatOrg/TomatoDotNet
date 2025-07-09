@@ -154,7 +154,7 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     uint32_t pc = 0;
     while (pc < body->ILSize) {
         // get the instruction and normalize it for easier processing
-        tdn_il_inst_t inst;
+        tdn_il_inst_t inst = {};
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
         tdn_normalize_inst(&inst);
         pc += inst.length;
@@ -164,13 +164,25 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
             jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
 
         } else if (inst.control_flow == TDN_IL_CF_COND_BRANCH) {
-            // and now add the new blocks, make sure the basic block at the current PC
-            // will
-            jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
-            jit_add_basic_block(&ctx, out_basic_blocks, pc, 0);
+            if (inst.operand_type == TDN_IL_SWITCH) {
+                // the default case
+                jit_add_basic_block(&ctx, out_basic_blocks, pc, 0);
+
+                // the rest of the cases
+                for (int i = 0; i < arrlen(inst.operand.switch_targets); i++) {
+                    jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.switch_targets[i], 0);
+                }
+
+            } else {
+                // and now add the new blocks, make sure the basic block at the current PC
+                // will
+                jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
+                jit_add_basic_block(&ctx, out_basic_blocks, pc, 0);
+            }
         }
 
         // TODO: support for switch
+        tdn_free_inst(&inst);
     }
 
     // sort the basic blocks

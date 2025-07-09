@@ -7,6 +7,7 @@
 
 #include "jit_type.h"
 #include "jit_verify.h"
+#include "spidir/log.h"
 
 #define VarPop  (-1)
 #define Pop0    0
@@ -85,6 +86,7 @@ jit_block_t* jit_function_get_block(jit_function_t* function, uint32_t target_pc
 static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
     out->block = in->block;
     out->spidir_block = in->spidir_block;
+    out->this_initialized = in->this_initialized;
 
     // steal the leave target stack, its not needed anymore
     out->leave_target_stack = jit_copy_leave_targets(in->leave_target_stack);
@@ -112,6 +114,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     RuntimeMethodBase method = function->method;
     RuntimeMethodBody body = method->MethodBody;
     jit_stack_value_t* stack_items = NULL;
+    tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
 
     // clone the block into the current frame, so we can modify it
@@ -128,7 +131,6 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
-    tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
     tdn_il_inst_t last_inst;
     uint32_t pc = block.block.start;
     RuntimeTypeInfo constrained = NULL;
@@ -289,6 +291,8 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         if (trace) {
             indent = tdn_disasm_print_end(body, pc, indent);
         }
+
+        tdn_free_inst(&inst);
     }
 
     // if we have a fallthrough, then we need to merge to the next block
@@ -311,6 +315,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 cleanup:
     // free the block data
     jit_destroy_block(&block);
+    tdn_free_inst(&inst);
 
     arrfree(stack_items);
 
@@ -485,8 +490,12 @@ cleanup:
 tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     bool trace = tdn_get_config()->jit_emit_trace || tdn_get_config()->jit_verify_trace;
+    spidir_log_level_t orig_level = spidir_log_get_max_level();
 
     if (trace) {
+        // set to trace so we can see the generated nodes
+        spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+
         TRACE("========================================");
         string_builder_t str_builder = {};
         string_builder_push_method_signature(&str_builder, function->method, true);
@@ -525,6 +534,8 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
     CHECK_AND_RETHROW(jit_visit_blocks(function, builder));
 
 cleanup:
+    spidir_log_set_max_level(orig_level);
+
     return err;
 }
 

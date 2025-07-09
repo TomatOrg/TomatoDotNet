@@ -442,7 +442,6 @@ int main(int argc, char* argv[]) {
     if (jit_verify_verbose) config->jit_verify_trace = true;
     if (jit_emit_verbose) {
         config->jit_emit_trace = true;
-        config->jit_spidir_log_level = SPIDIR_LOG_LEVEL_TRACE;
     }
 
     // auto-resolve the search path from the file to run

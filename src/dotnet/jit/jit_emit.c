@@ -682,11 +682,20 @@ static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t bu
     if (type == NULL) {
         type = stack[0].type;
     }
+
+    if (stack[0].kind == JIT_KIND_NATIVE_INT) {
+        stack[0].value = spidir_builder_build_inttoptr(builder, stack[0].value);
+    }
+
     STACK_TOP()->value = jit_emit_load(builder, type, stack[0].value);
     return TDN_NO_ERROR;
 }
 
 static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    if (stack[0].kind == JIT_KIND_NATIVE_INT) {
+        stack[0].value = spidir_builder_build_inttoptr(builder, stack[0].value);
+    }
+
     // we just need to store into the given item
     // NOTE: we can use the type directly because this must be a by-ref at this point
     jit_emit_store(builder, &stack[1], stack[0].type, stack[0].value);
@@ -910,6 +919,8 @@ static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t 
         } else {
             value = spidir_builder_build_floattouint(builder, SPIDIR_TYPE_I64, value);
         }
+    } else if (stack[0].kind == JIT_KIND_BY_REF) {
+        value = spidir_builder_build_ptrtoint(builder, value);
     }
 
     STACK_TOP()->value = value;
@@ -1491,6 +1502,57 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
         obj = spidir_builder_build_stackslot(builder,
             callee->DeclaringType->StackSize, callee->DeclaringType->StackAlignment);
         jit_emit_bzero(builder, obj, callee->DeclaringType);
+
+    } else if (callee->DeclaringType == tString) {
+        // we initialize the type, ensure we have the full vtable available
+        jit_queue_type(spidir_builder_get_module(builder), callee->DeclaringType);
+
+        // figure the amount of chars we need in the new string
+        spidir_value_t char_count = SPIDIR_VALUE_INVALID;
+        ParameterInfo_Array params = callee->Parameters;
+        if (params->Length == 1) {
+            RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
+            if (param0->IsArray && param0->ElementType == tChar) {
+                // get the length of the array
+                char_count = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64,
+                    spidir_builder_build_ptroff(builder, stack[0].value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length))));
+            } else {
+                // TODO: support for string constructor taking in a span
+                CHECK_FAIL("Unknown string ctor (%T)", param0);
+            }
+        } else if (params->Length == 2) {
+            RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
+            RuntimeTypeInfo param1 = params->Elements[1]->ParameterType;
+            if (param0 == tChar && param1 == tInt32) {
+                char_count = stack[1].value;
+            } else {
+                CHECK_FAIL("Unknown string ctor (%T, %T)", param0, param1);
+            }
+        } else if (params->Length == 3) {
+            RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
+            RuntimeTypeInfo param1 = params->Elements[1]->ParameterType;
+            RuntimeTypeInfo param2 = params->Elements[2]->ParameterType;
+            if (param0->IsArray && param0->ElementType == tChar && param1 == tInt32 && param2 == tInt32) {
+                char_count = stack[2].value;
+            } else {
+                CHECK_FAIL("Unknown string ctor (%T, %T, %T)", param0, param1, param2);
+            }
+        } else {
+            CHECK_FAIL();
+        }
+
+        // actually call the newstr
+        obj = spidir_builder_build_call(builder,
+            jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWSTR), 1,
+            (spidir_value_t[]){ char_count });
+
+        // set the string length inline, so the jit can see it
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4, char_count,
+        spidir_builder_build_ptroff(builder, obj,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,
+                offsetof(struct String, Length))));
+
     } else {
         // we initialize the type, ensure we have the full vtable available
         jit_queue_type(spidir_builder_get_module(builder), callee->DeclaringType);
@@ -1605,13 +1667,17 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
 
     // now figure the offset of the function in the interface
     size_t base_offset = sizeof(void*) * callee->VTableOffset;
-    if (jit_is_interface(callee_this) && !jit_is_interface(stack[0].type)) {
-        // calling an interface method on an object, adjust the base offset to
-        // represent the offset to the iface inside of the object's vtable
-        int iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
-        ASSERT(iface_offset >= 0);
-        base_offset += iface_offset * sizeof(void*);
+    if (!jit_is_interface(stack[0].type)) {
+        // calling on an object, take the vtable header into account
         base_offset += offsetof(ObjectVTable, Functions);
+
+        if (jit_is_interface(callee_this)) {
+            // calling an interface method on an object, adjust the base offset to
+            // represent the offset to the iface inside of the object's vtable
+            int iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
+            ASSERT(iface_offset >= 0);
+            base_offset += iface_offset * sizeof(void*);
+        }
     }
 
     // and now load the function pointer
@@ -2171,6 +2237,51 @@ cleanup:
     return err;
 }
 
+static tdn_err_t emit_switch(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    // TODO: once spidir has support for jump tables use that
+
+    spidir_block_t try_next_case = spidir_builder_create_block(builder);
+
+    // get the default case
+    jit_block_t* next = jit_function_get_block(function, block->block.end, block->leave_target_stack);
+    CHECK(next != NULL);
+    emitter_merge_block(function, builder, block, next);
+
+    // start with the simplest check, if its less than the case count start checking cases, otherwise
+    // go directly to the default case
+    spidir_builder_build_brcond(builder,
+        spidir_builder_build_icmp(builder, SPIDIR_ICMP_ULT, SPIDIR_TYPE_I32, stack->value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, arrlen(inst->operand.switch_targets))),
+            try_next_case, next->spidir_block);
+
+    for (int i = 0; i < arrlen(inst->operand.switch_targets); i++) {
+        // we are the next case
+        spidir_builder_set_block(builder, try_next_case);
+
+        jit_block_t* target = jit_function_get_block(function, inst->operand.switch_targets[i], block->leave_target_stack);
+        CHECK(target != NULL);
+        emitter_merge_block(function, builder, block, target);
+
+        if (i == arrlen(inst->operand.switch_targets) - 1) {
+            // we are the last case, we can just jump into the real target
+            spidir_builder_build_branch(builder, target->spidir_block);
+        } else {
+            // create the block for the next case
+            try_next_case = spidir_builder_create_block(builder);
+
+            // and emit the check with the current value
+            spidir_builder_build_brcond(builder,
+            spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, stack->value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, i)),
+                target->spidir_block, try_next_case);
+        }
+    }
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Exceptions
 //----------------------------------------------------------------------------------------------------------------------
@@ -2339,6 +2450,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_BGT_UN] = emit_br_binary_cond,
     [CEE_BLE_UN] = emit_br_binary_cond,
     [CEE_BLT_UN] = emit_br_binary_cond,
+    [CEE_SWITCH] = emit_switch,
 
     [CEE_LEAVE] = emit_leave,
     [CEE_ENDFINALLY] = emit_endfinally,

@@ -184,8 +184,23 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
             inst->operand.string = string;
         } break;
 
-        case InlineSwitch:
-            CHECK_FAIL("TODO: InlineSwitch");
+        case InlineSwitch: {
+            uint32_t jump_targets = FETCH(uint32_t);
+            inst->operand.switch_targets = NULL;
+            inst->operand_type = TDN_IL_SWITCH;
+
+            // get all of the offsets
+            arrsetlen(inst->operand.switch_targets, jump_targets);
+            for (int i = 0; i < jump_targets; i++) {
+                inst->operand.switch_targets[i] = FETCH(int32_t);
+            }
+
+            // fixup the offsets to the absolute values
+            for (int i = 0; i < jump_targets; i++) {
+                inst->operand.switch_targets[i] += pc;
+                CHECK(inst->operand.switch_targets[i] < body->ILSize);
+            }
+        } break;
 
         case InlineTok: {
             inst->operand_token = FETCH(int32_t);
@@ -267,7 +282,18 @@ tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* 
     inst->length = pc - start_pc;
 
 cleanup:
+    if (IS_ERROR(err)) {
+        tdn_free_inst(inst);
+    }
+
     return err;
+}
+
+void tdn_free_inst(tdn_il_inst_t* inst) {
+    if (inst->operand_type == TDN_IL_SWITCH) {
+        arrfree(inst->operand.switch_targets);
+        inst->operand_type = TDN_IL_NO_OPERAND;
+    }
 }
 
 void tdn_normalize_inst(tdn_il_inst_t* inst) {
@@ -393,6 +419,18 @@ int tdn_disasm_print_start(RuntimeMethodBody body, uint32_t pc, tdn_il_inst_t in
         case TDN_IL_FLOAT32: tdn_host_printf(" %f", inst.operand.float32); break;
         case TDN_IL_FLOAT64: tdn_host_printf(" %f", inst.operand.float64); break;
 
+        case TDN_IL_SWITCH: {
+            tdn_host_printf(" (");
+            for (int i = 0; i < arrlen(inst.operand.switch_targets); i++) {
+                if (i != 0) {
+                    tdn_host_printf(", ");
+                }
+                tdn_host_printf("IL_%04x", inst.operand.switch_targets[i]);
+            }
+
+            tdn_host_printf(")");
+        } break;
+
         case TDN_IL_METHOD: {
             string_builder_t tmp_builder = {};
             string_builder_push_method_signature(&tmp_builder, inst.operand.method, true);
@@ -415,7 +453,6 @@ int tdn_disasm_print_start(RuntimeMethodBody body, uint32_t pc, tdn_il_inst_t in
         } break;
 
         case TDN_IL_STRING: tdn_host_printf(" %U", inst.operand.string); break;
-        case TDN_IL_SWITCH: ASSERT(!"TODO: switch");
     }
     tdn_host_printf("\n");
 

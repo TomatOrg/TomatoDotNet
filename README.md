@@ -7,6 +7,40 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
                          to be memory safe, this is to ensure that loading an untrusted binary would not result in
                          memory safety and unsafe related issues.
 
+## Implemented
+
+- Mostly complete basic MSIL support
+  - Verifies all operations are memory and type safe
+  - Classes and Structs
+  - Generics
+  - Interfaces
+    - Virtual static methods
+    - Default implementations
+  - Delegates
+  - Finally clauses
+- Full support for references
+  - Ensures references don't escape
+  - Readonly reference tracking
+  - Ref-structs
+- Corelib
+  - All integer methods (missing ToString/Parse)
+  - All double methods (missing ToString/Parse)
+  - Most string methods (missing any culture other than Ordinal and also Ordinal stuff)
+  - All span methods and extensions
+  - All the debug class
+
+### To be implemented
+
+These are planned and are being worked on
+- Explicit scoped and unscoped reference support
+- Exceptions (missing jit support)
+- Safe stackalloc (The kind that constructs a Span)
+- Virtual generic methods (Need a good design)
+- Boxing a delegate into either a Delegate/MulticastDelegate/object (changes allocation semantics greatly)
+- Reflection (Need a good design)
+- Assembly unload (No idea how to even approach)
+- Much more of the standard library
+
 ## Compiling
 
 ### Library
@@ -49,33 +83,6 @@ make -C host/linux
 ```
 
 And then under `out/bin/tdn.elf` you can run the binary
-
-## Implemented
-
-- Mostly complete basic MSIL support 
-  - Verifies all operations are memory and type safe
-  - Classes and Structs
-  - Generics
-  - Interfaces
-    - Virtual static methods
-    - Default implementations
-  - Delegates
-  - Finally clauses
-- Full support for references
-  - Ensures references don't escape
-  - Readonly reference tracking
-  - Ref-structs
-
-### To be implemented
-These are planned and are being worked on
-- Explicit scoped and unscoped reference support
-- Exceptions (missing jit support)
-- Safe stackalloc (The kind that constructs a Span)
-- Virtual generic methods (Need a good design)
-- Boxing a delegate into either a Delegate/MulticastDelegate/object (changes allocation semantics greatly)
-- Reflection (Need a good design)
-- Assembly unload (No idea how to even approach)
-- Much more of the standard library
 
 ## Implementation details
 

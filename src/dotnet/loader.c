@@ -121,7 +121,7 @@ static init_type_t m_init_types[] = {
     INIT_HEAP_TYPE(System.Reflection, MethodBase, 5),
     INIT_HEAP_TYPE(System, Object),
     INIT_HEAP_TYPE(System, Array),
-    INIT_HEAP_TYPE(System, String),
+    INIT_HEAP_TYPE(System, String, 11),
     INIT_HEAP_TYPE(System.Reflection, RuntimeAssembly),
     INIT_HEAP_TYPE(System.Reflection, RuntimeModule),
     INIT_HEAP_TYPE(System.Reflection, RuntimeLocalVariableInfo),
@@ -162,6 +162,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, MulticastDelegate),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System, MemoryMarshal),
+    LOAD_TYPE(System.Runtime.CompilerServices, RuntimeHelpers),
     { "System", "Nullable`1", &tNullable, 4 },
 };
 static int m_loaded_types = 0;
@@ -1485,7 +1486,7 @@ static tdn_err_t corelib_bootstrap() {
 
     // hard code to the correct amount of entries
     CHECK_AND_RETHROW(tdn_create_vtable(tArray, 4));
-    CHECK_AND_RETHROW(tdn_create_vtable(tString, 4));
+    CHECK_AND_RETHROW(tdn_create_vtable(tString, 11));
     CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeAssembly, 4));
     CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeModule, 4));
 

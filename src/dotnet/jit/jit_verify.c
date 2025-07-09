@@ -1381,15 +1381,19 @@ static tdn_err_t verify_ldind(jit_function_t* function, jit_block_t* block, tdn_
 
     CHECK_INIT_THIS(stack);
 
-    CHECK(stack->kind == JIT_KIND_BY_REF);
-
-    if (inst->operand.type == NULL) {
-        CHECK(tdn_type_is_referencetype(stack->type));
-        inst->operand.type = stack->type;
+    if (function->method->Module->Assembly->AllowUnsafe) {
+        CHECK(stack->kind == JIT_KIND_BY_REF || stack->kind == JIT_KIND_NATIVE_INT);
     } else {
-        CHECK_IS_ASSIGNABLE_TYPE(
-            verifier_get_verification_type(stack->type),
-            verifier_get_verification_type(inst->operand.type));
+        CHECK(stack->kind == JIT_KIND_BY_REF);
+
+        if (inst->operand.type == NULL) {
+            CHECK(tdn_type_is_referencetype(stack->type));
+            inst->operand.type = stack->type;
+        } else {
+            CHECK_IS_ASSIGNABLE_TYPE(
+                verifier_get_verification_type(stack->type),
+                verifier_get_verification_type(inst->operand.type));
+        }
     }
 
     jit_stack_value_init(STACK_PUSH(), inst->operand.type);
@@ -1411,7 +1415,11 @@ static tdn_err_t verify_stind(jit_function_t* function, jit_block_t* block, tdn_
         TDN_ERROR_VERIFIER_READONLY_ILLEGAL_WRITE);
 
     // must be a byref
-    CHECK(address->kind == JIT_KIND_BY_REF);
+    if (function->method->Module->Assembly->AllowUnsafe) {
+        CHECK(stack->kind == JIT_KIND_BY_REF || stack->kind == JIT_KIND_NATIVE_INT);
+    } else {
+        CHECK(stack->kind == JIT_KIND_BY_REF);
+    }
 
     // resolve the type if stind.ref
     if (inst->operand.type == NULL) {
@@ -1599,9 +1607,15 @@ cleanup:
 static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // validate that both are good
-    CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_FLOAT,
-        TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+    // validate that both are good, specifically for unsafe code allow to perform
+    // the operation also on by-refs
+    if (function->method->Module->Assembly->AllowUnsafe) {
+        CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_BY_REF,
+            TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+    } else {
+        CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_FLOAT,
+            TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+    }
 
     // always pushes as an int32
     RuntimeTypeInfo type = NULL;
@@ -2290,6 +2304,29 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_switch(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we have an int32 on the stack
+    // TODO: can we have anything else?
+    CHECK(stack->kind == JIT_KIND_INT32);
+
+    // verify the default case
+    jit_block_t* next = jit_function_get_block(function, block->block.end, block->leave_target_stack);
+    CHECK(next != NULL);
+    CHECK_AND_RETHROW(verifier_propagate_control_flow(function, block, next, true));
+
+    // verify the rest of the blocks
+    for (int i = 0; i < arrlen(inst->operand.switch_targets); i++) {
+        jit_block_t* target = jit_function_get_block(function, inst->operand.switch_targets[i], block->leave_target_stack);
+        CHECK(target != NULL);
+        CHECK_AND_RETHROW(verifier_propagate_control_flow(function, block, target, false));
+    }
+
+cleanup:
+    return err;
+}
+
 //----------------------------------------------------------------------------------------------------------------------
 // Exceptions
 //----------------------------------------------------------------------------------------------------------------------
@@ -2517,6 +2554,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_BGT_UN] = verify_br_binary_cond,
     [CEE_BLE_UN] = verify_br_binary_cond,
     [CEE_BLT_UN] = verify_br_binary_cond,
+    [CEE_SWITCH] = verify_switch,
 
     [CEE_LEAVE] = verify_leave,
     [CEE_ENDFINALLY] = verify_endfinally,

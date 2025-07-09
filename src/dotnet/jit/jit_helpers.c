@@ -79,6 +79,14 @@ static Object jit_newobj(RuntimeTypeInfo type) {
     return ptr;
 }
 
+static Object jit_newstr(size_t char_count) {
+    void* ptr = tdn_gc_new(tString, sizeof(struct String) + char_count * 2);
+    if (ptr == NULL) {
+        jit_throw_out_of_memory();
+    }
+    return ptr;
+}
+
 static Object jit_newarr(RuntimeTypeInfo arrType, int64_t num_elements) {
     RuntimeTypeInfo element_type = arrType->ElementType;
 
@@ -127,6 +135,7 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_THROW_OVERFLOW] = { .func = jit_throw_overflow },
     [JIT_HELPER_THROW_INVALID_CAST] = { .func = jit_throw_invalid_cast },
     [JIT_HELPER_NEWOBJ] = { .func = jit_newobj },
+    [JIT_HELPER_NEWSTR] = { .func = jit_newstr },
     [JIT_HELPER_NEWARR] = { .func = jit_newarr },
     [JIT_HELPER_GET_INTERFACE_VTABLE] = { .func = jit_get_interface_vtable },
 };
@@ -188,6 +197,11 @@ spidir_funcref_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t
             func = spidir_module_create_extern_function(module,
                 "jit_newobj", SPIDIR_TYPE_PTR, 1,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR }); break;
+
+        case JIT_HELPER_NEWSTR:
+            func = spidir_module_create_extern_function(module,
+                "jit_newstr", SPIDIR_TYPE_PTR, 1,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_I32 }); break;
 
         case JIT_HELPER_NEWARR:
             func = spidir_module_create_extern_function(module,

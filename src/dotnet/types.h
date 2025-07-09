@@ -48,6 +48,7 @@ extern RuntimeTypeInfo tNullable;
 
 extern RuntimeTypeInfo tUnsafe;
 extern RuntimeTypeInfo tMemoryMarshal;
+extern RuntimeTypeInfo tRuntimeHelpers;
 
 extern RuntimeTypeInfo tInAttribute;
 extern RuntimeTypeInfo tIsReadOnlyAttribute;

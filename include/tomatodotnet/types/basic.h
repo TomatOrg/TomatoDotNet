@@ -69,7 +69,7 @@ typedef struct Delegate {
 typedef struct String {
     struct Object;
     int Length;
-    int HashCode;
+    int _padding;
     Char Chars[];
 }* String;
 

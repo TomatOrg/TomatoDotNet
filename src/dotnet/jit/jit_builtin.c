@@ -82,6 +82,10 @@ static spidir_value_t emit_unsafe_add_byte_offset(spidir_builder_handle_t builde
     return spidir_builder_build_ptroff(builder, args[0], args[1]);
 }
 
+static spidir_value_t emit_unsafe_are_same(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, args[0], args[1]);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Memory marshal methods
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -90,6 +94,41 @@ static spidir_value_t emit_memory_marshal_get_array_data_reference(spidir_builde
     size_t data_offset = jit_get_array_elements_offset(method->GenericArguments->Elements[0]);
     return spidir_builder_build_ptroff(builder, args[0],
         spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, data_offset));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Runtime Helpers methods
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static spidir_value_t emit_runtime_helpers_is_reference_or_contains_references(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, !method->GenericArguments->Elements[0]->IsUnmanaged);
+}
+
+static spidir_value_t emit_runtime_helpers_is_bitwise_equatable(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    RuntimeTypeInfo element_type = method->GenericArguments->Elements[0];
+    // This logic matches the coreclr logic, just so we will be consistent with them
+    if (
+        element_type == tBoolean ||
+        element_type == tByte ||
+        element_type == tSByte ||
+        element_type == tChar ||
+        element_type == tInt16 ||
+        element_type == tUInt16 ||
+        element_type == tInt32 ||
+        element_type == tUInt32 ||
+        element_type == tInt64 ||
+        element_type == tUInt64 ||
+        element_type == tIntPtr ||
+        element_type == tUIntPtr ||
+        element_type->BaseType == tEnum
+        // TODO: also allow for value types that do not implement the IEquatable or override Equals
+        // TODO: can't we also do this on objects that don't override it? since it will just need to
+        // TODO: check for the pointers?
+    ) {
+        return spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 1);
+    } else {
+        return spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -115,10 +154,18 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
             return emit_unsafe_as;
         } else if (tdn_compare_string_to_cstr(method->Name, "AddByteOffset")) {
             return emit_unsafe_add_byte_offset;
+        } else if (tdn_compare_string_to_cstr(method->Name, "AreSame")) {
+            return emit_unsafe_are_same;
         }
     } else if (type == tMemoryMarshal) {
         if (tdn_compare_string_to_cstr(method->Name, "GetArrayDataReference")) {
             return emit_memory_marshal_get_array_data_reference;
+        }
+    } else if (type == tRuntimeHelpers) {
+        if (tdn_compare_string_to_cstr(method->Name, "IsReferenceOrContainsReferences")) {
+            return emit_runtime_helpers_is_reference_or_contains_references;
+        } else if (tdn_compare_string_to_cstr(method->Name, "IsBitwiseEquatable")) {
+            return emit_runtime_helpers_is_bitwise_equatable;
         }
     }
 

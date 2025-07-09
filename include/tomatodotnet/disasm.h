@@ -67,6 +67,7 @@ typedef struct tdn_il_inst {
         RuntimeFieldInfo field;
         RuntimeTypeInfo type;
         String string;
+        uint32_t* switch_targets;
     } operand;
 
     // the constrained prefix of the instruction
@@ -97,6 +98,7 @@ typedef struct tdn_il_inst {
 const char* tdn_get_opcode_name(tdn_il_opcode_t opcode);
 
 tdn_err_t tdn_disasm_inst(RuntimeMethodBase method, uint32_t pc, tdn_il_inst_t* inst);
+void tdn_free_inst(tdn_il_inst_t* inst);
 
 /**
  * Convert to a more generic version for easier processing

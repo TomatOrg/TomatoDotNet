@@ -1,5 +1,7 @@
 #include "jit_native.h"
 
+#include <stdatomic.h>
+
 #include "jit_function.h"
 #include "jit_type.h"
 #include "dotnet/loader.h"
@@ -17,6 +19,43 @@ typedef struct native_function {
 
 static double math_sqrt_double(double value) {
     return __builtin_sqrt(value);
+}
+
+static String string_allocate(int len) {
+    String new_str = tdn_gc_new(tString, sizeof(struct String) + len * 2);
+    ASSERT(new_str != NULL);
+    new_str->Length = len;
+    return new_str;
+}
+
+static void buffer_bulk_move_with_write_barrier(void* _dest, void* _src, size_t len) {
+    // TODO: something faster, this is done to ensure that there can't be data races
+    ASSERT((len % 4) == 0);
+    uint64_t* dest = (uint64_t*)_dest;
+    uint64_t* src = (uint64_t*)_src;
+    for (int i = 0; i < len / 4; i++) {
+        dest[i] = src[i];
+    }
+}
+
+static void buffer_memmove(void* dest, void* src, size_t len) {
+    __builtin_memmove(dest, src, len);
+}
+
+static void debug_provider_fail_core(String stackTrace, String message, String detailMessage, String errorSource) {
+    // TODO: this
+    ERROR(
+        "---- DEBUG ASSERTION FAILED ----\n"
+        "---- Assert Short Message ----\n"
+        "%U"
+        "---- Assert Long Message ----\n"
+        "%U\n"
+        "%U", message, detailMessage, stackTrace
+    );
+}
+
+static void debug_provider_write_core(String message) {
+    tdn_host_printf("%U", message);
 }
 
 static uint32_t bit_operations_leading_zero_count_i32(uint32_t value) {
@@ -50,6 +89,31 @@ static native_function_t m_native_functions[] = {
         SIG(FLOAT)
     },
     {
+        "System", "String", "FastAllocateString",
+        string_allocate,
+        SIG(INT32)
+    },
+    {
+        "System", "Buffer", "BulkMoveWithWriteBarrier",
+        buffer_bulk_move_with_write_barrier,
+        SIG(BY_REF, BY_REF, NATIVE_INT)
+    },
+    {
+        "System", "Buffer", "Memmove",
+        buffer_memmove,
+        SIG(BY_REF, BY_REF, NATIVE_INT)
+    },
+    {
+        "System.Diagnostics", "DebugProvider", "WriteCore",
+        debug_provider_write_core,
+        SIG(OBJ_REF)
+    },
+    {
+        "System.Diagnostics", "DebugProvider", "FailCore",
+        debug_provider_fail_core,
+        SIG(OBJ_REF, OBJ_REF, OBJ_REF, OBJ_REF)
+    },
+    {
         "System.Numerics", "BitOperations", "LeadingZeroCount",
         bit_operations_leading_zero_count_i32,
         SIG(INT32)
@@ -67,8 +131,8 @@ void* jit_get_native_method(RuntimeMethodInfo info) {
         return NULL;
     }
 
-    // only if its the corelib
-    if (info->Module->Assembly != gCoreAssembly) {
+    // only if its the corelib, or we are before the corelib was initialized
+    if (gCoreAssembly != NULL && info->Module->Assembly != gCoreAssembly) {
         return NULL;
     }
 
