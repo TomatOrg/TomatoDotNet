@@ -79,6 +79,11 @@ typedef struct Array {
     int SubLength;
 }* Array;
 
+typedef struct Span {
+    void* Reference;
+    int Length;
+} Span;
+
 #define DEFINE_ARRAY(Type) \
     typedef struct Type##_Array { \
         struct Array; \

@@ -79,8 +79,8 @@ static Object jit_newobj(RuntimeTypeInfo type) {
     return ptr;
 }
 
-static Object jit_newstr(size_t char_count) {
-    void* ptr = tdn_gc_new(tString, sizeof(struct String) + char_count * 2);
+static Object jit_newstr(uint32_t char_count) {
+    void* ptr = tdn_gc_new(tString, sizeof(struct String) + (int64_t)char_count * 2);
     if (ptr == NULL) {
         jit_throw_out_of_memory();
     }

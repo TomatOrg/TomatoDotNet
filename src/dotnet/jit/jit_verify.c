@@ -298,6 +298,12 @@ static bool verifier_merge_flags(jit_value_flags_t* previous, jit_value_flags_t 
         modified = true;
     }
 
+    // turned into a local ref, need to verify again
+    if (!new.ref_struct_non_local && previous->ref_struct_non_local) {
+        previous->ref_struct_non_local = false;
+        modified = true;
+    }
+
     return modified;
 }
 
@@ -359,6 +365,11 @@ static bool verifier_merge_block_local(jit_block_local_t* previous, jit_block_lo
     if (previous->initialized && !new->initialized) {
         previous->initialized = false;
         return true;
+    }
+
+    // ignore the local if its not initialized
+    if (!previous->initialized) {
+        return false;
     }
 
     // merge the flags
@@ -1995,15 +2006,18 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
             jit_stack_value_t declared = jit_stack_value_create(method->Parameters->Elements[i]->ParameterType);
             CHECK_IS_ASSIGNABLE(actual, &declared);
 
-            // if this is a by-ref, ensure that we won't leak it by accident
-            if (actual->kind == JIT_KIND_BY_REF && !actual->flags.ref_non_local) {
-                // TODO: scoped support
-                might_leak_local_ref = true;
+            // if this is a ref-struct, and its has local refs, then it might
+            // leak a local ref from that
+            if (actual->type != NULL && actual->type->IsByRefStruct) {
+                might_leak_local_ref = !actual->flags.ref_struct_non_local;
             }
+
+            // TODO: unscoped this support
 
             // if this is a ref-struct, and it contains local fields, ensure
             // we don't leak don't leak them accidently
             if (actual->type != NULL && actual->type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
+                TRACE("REF STRUCT CONTAINS LOCAL REFS");
                 might_leak_local_ref = true;
             }
         }
@@ -2106,6 +2120,13 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
                 // the reference is readonly
                 return_value->flags.ref_read_only = true;
             }
+
+        }
+
+        if (return_value->type->IsByRefStruct) {
+            // returned a ref-struct, can't contain local references as long as the input
+            // can't contain them
+            return_value->flags.ref_struct_non_local = !might_leak_local_ref;
         }
     }
 

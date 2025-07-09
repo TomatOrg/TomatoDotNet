@@ -313,6 +313,19 @@ static spidir_value_t jit_convert_local(
     return jit_convert_value(builder, from, to_type);
 }
 
+static spidir_value_type_t get_spidir_stack_phi_type(jit_stack_value_t* value) {
+    switch (value->kind) {
+        case JIT_KIND_INT32: return SPIDIR_TYPE_I32;
+        case JIT_KIND_INT64: return SPIDIR_TYPE_I64;
+        case JIT_KIND_NATIVE_INT: return SPIDIR_TYPE_I64;
+        case JIT_KIND_FLOAT: return SPIDIR_TYPE_F64;
+        case JIT_KIND_BY_REF: return SPIDIR_TYPE_PTR;
+        case JIT_KIND_OBJ_REF: return SPIDIR_TYPE_PTR;
+        case JIT_KIND_VALUE_TYPE: return SPIDIR_TYPE_PTR;
+        default: ASSERT(!"Invalid value");
+    }
+}
+
 static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* from, jit_block_t* block) {
     if (block->multiple_predecessors) {
 
@@ -337,7 +350,7 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
             // create stack phis
             for (int i = 0; i < arrlen(block->stack); i++) {
                 block->stack[i].value = spidir_builder_build_phi(builder,
-                    get_spidir_type(block->stack[i].type),
+                    get_spidir_stack_phi_type(&block->stack[i]),
                     0, NULL, &block->stack_phis[i]);
             }
 
@@ -832,9 +845,24 @@ static spidir_value_t emit_float_binary_compare(spidir_builder_handle_t builder,
     return spidir_builder_build_fcmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
 }
 
+static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
+    if (jit_is_interface(item->type)) {
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, item->value);
+    } else if (jit_is_delegate(item->type)) {
+        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+            spidir_builder_build_ptroff(builder, item->value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
+    }
+}
+
 static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
+
+    // ensure we have hte actual references and not interfaces
+    emit_load_reference(builder, &stack[0]);
+    emit_load_reference(builder, &stack[1]);
 
     if (stack[0].kind == JIT_KIND_FLOAT) {
         // if the kinds are not the same we need to extend both into a full integer
@@ -1514,12 +1542,14 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
             RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
             if (param0->IsArray && param0->ElementType == tChar) {
                 // get the length of the array
-                char_count = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I64,
+                char_count = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32,
                     spidir_builder_build_ptroff(builder, stack[0].value,
                         spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length))));
             } else {
-                // TODO: support for string constructor taking in a span
-                CHECK_FAIL("Unknown string ctor (%T)", param0);
+                // TODO: enforce that this is a ReadOnlySpan
+                char_count = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32,
+                    spidir_builder_build_ptroff(builder, stack[0].value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Span, Length))));
             }
         } else if (params->Length == 2) {
             RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
@@ -1624,10 +1654,7 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
 
         // the devirt was into a valuetype, move the pointer
         // forward since this will call the non-thunk version
-        // this is only needed when not dealing with a constrained,
-        // if its a constrained call then we should already have it
-        // as the correct reference
-        if (inst->constrained == NULL && tdn_type_is_valuetype(known->DeclaringType)) {
+        if (tdn_type_is_valuetype(known->DeclaringType)) {
             stack[0].kind = JIT_KIND_OBJ_REF;
             stack[0].type = known->DeclaringType;
             stack[0].value = spidir_builder_build_ptroff(builder, stack[0].value,
@@ -2129,17 +2156,6 @@ static tdn_err_t emit_br(jit_function_t* function, spidir_builder_handle_t build
 
 cleanup:
     return err;
-}
-
-static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
-    if (jit_is_interface(item->type)) {
-        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
-        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, item->value);
-    } else if (jit_is_delegate(item->type)) {
-        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-            spidir_builder_build_ptroff(builder, item->value,
-                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
-    }
 }
 
 static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {

@@ -5,9 +5,15 @@
 
 #include "cpp_magic.h"
 
-#define TRACE(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
-#define WARN(fmt, ...) tdn_host_log_warn(fmt, ## __VA_ARGS__)
-#define ERROR(fmt, ...) tdn_host_log_error(fmt, ## __VA_ARGS__)
+#if 1
+    #define TRACE(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
+    #define WARN(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
+    #define ERROR(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
+#else
+    #define TRACE(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
+    #define WARN(fmt, ...) tdn_host_log_warn(fmt, ## __VA_ARGS__)
+    #define ERROR(fmt, ...) tdn_host_log_error(fmt, ## __VA_ARGS__)
+#endif
 
 #define IS_ERROR(x) ((x) != TDN_NO_ERROR)
 

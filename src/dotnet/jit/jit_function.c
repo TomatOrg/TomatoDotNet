@@ -494,7 +494,9 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
 
     if (trace) {
         // set to trace so we can see the generated nodes
-        spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+        if (tdn_get_config()->jit_emit_trace) {
+            spidir_log_set_max_level(SPIDIR_LOG_LEVEL_TRACE);
+        }
 
         TRACE("========================================");
         string_builder_t str_builder = {};
