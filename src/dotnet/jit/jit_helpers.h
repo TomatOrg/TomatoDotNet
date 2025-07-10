@@ -35,6 +35,11 @@ spidir_funcref_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t
 void* jit_get_helper_ptr(spidir_funcref_t function);
 
 /**
+ * Get the helper pointer (assuming its an helper) or NULL if not found
+ */
+const char* jit_get_helper_name(spidir_funcref_t function);
+
+/**
  * Get the method that the thunk belongs to
  */
 RuntimeMethodBase jit_get_thunk_method(spidir_funcref_t function);

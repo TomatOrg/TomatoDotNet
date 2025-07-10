@@ -9,6 +9,7 @@
 
 #include "jit.h"
 #include "jit_gdb.h"
+#include "jit_elf.h"
 #include "jit_helpers.h"
 #include "jit_type.h"
 
@@ -186,6 +187,13 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
             jit_codegen_queue(callee_method, spidir_funcref_get_internal(callee), thunk);
         }
     }
+
+    // dump the entire elf
+    jit_elf_start_emit();
+    for (int i = 0; i < hmlen(m_function_blobs); i++) {
+        jit_elf_add_entry(&m_function_blobs[i]);
+    }
+    jit_elf_emit();
 
     // now that we are done, calculate the total size we need
     // for all of the functions

@@ -88,7 +88,7 @@ void tdn_host_gc_unregister_root(void* root);
 
 typedef enum tdn_jit_dump_type {
     TDN_JIT_DUMP_SPIDIR,
-    TDN_JIT_DUMP_SYMBOLS_ELF,
+    TDN_JIT_DUMP_ELF,
 } tdn_jit_dump_type_t;
 
 // used for debugging the jit, will dump spidir modules

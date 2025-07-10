@@ -1402,6 +1402,11 @@ static tdn_err_t verify_ldind(jit_function_t* function, jit_block_t* block, tdn_
 
     if (function->method->Module->Assembly->AllowUnsafe) {
         CHECK(stack->kind == JIT_KIND_BY_REF || stack->kind == JIT_KIND_NATIVE_INT);
+
+        if (inst->operand.type == NULL) {
+            CHECK(tdn_type_is_referencetype(stack->type));
+            inst->operand.type = stack->type;
+        }
     } else {
         CHECK(stack->kind == JIT_KIND_BY_REF);
 

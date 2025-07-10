@@ -54,15 +54,7 @@ static void span_helpers_clear_with_references(void* b, size_t pointerSizeLength
 }
 
 static void debug_provider_fail_core(String stackTrace, String message, String detailMessage, String errorSource) {
-    // TODO: this
-    ERROR(
-        "---- DEBUG ASSERTION FAILED ----\n"
-        "---- Assert Short Message ----\n"
-        "%U"
-        "---- Assert Long Message ----\n"
-        "%U\n"
-        "%U", message, detailMessage, stackTrace
-    );
+    ASSERT(!"Debug Assertion Failed", "%U - %U - %U", message, detailMessage, errorSource);
 }
 
 static void debug_provider_write_core(String message) {

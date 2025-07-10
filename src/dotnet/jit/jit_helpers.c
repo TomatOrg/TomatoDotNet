@@ -119,25 +119,29 @@ static void* jit_get_interface_vtable(Object object, RuntimeTypeInfo to_type) {
 
 typedef struct jit_helper {
     spidir_funcref_t function;
+    const char* name;
     void* func;
     bool created;
 } jit_helper_t;
 
+#define JIT_HELPER(_func) \
+    { .func = _func, .name = #_func }
+
 static jit_helper_t m_jit_helpers[] = {
-    [JIT_HELPER_BZERO] = { .func = bzero },
-    [JIT_HELPER_MEMCPY] = { .func = memcpy },
-    [JIT_HELPER_GC_BZERO] = { .func = gc_bzero },
-    [JIT_HELPER_GC_MEMCPY] = { .func = gc_memcpy },
-    [JIT_HELPER_THROW] = { .func = jit_throw },
-    [JIT_HELPER_THROW_OUT_OF_MEMORY] = { .func = jit_throw_out_of_memory },
-    [JIT_HELPER_THROW_NULL_REFERENCE] = { .func = jit_throw_null_reference },
-    [JIT_HELPER_THROW_INDEX_OUT_OF_RANGE] = { .func = jit_throw_index_out_of_range },
-    [JIT_HELPER_THROW_OVERFLOW] = { .func = jit_throw_overflow },
-    [JIT_HELPER_THROW_INVALID_CAST] = { .func = jit_throw_invalid_cast },
-    [JIT_HELPER_NEWOBJ] = { .func = jit_newobj },
-    [JIT_HELPER_NEWSTR] = { .func = jit_newstr },
-    [JIT_HELPER_NEWARR] = { .func = jit_newarr },
-    [JIT_HELPER_GET_INTERFACE_VTABLE] = { .func = jit_get_interface_vtable },
+    [JIT_HELPER_BZERO] = JIT_HELPER(bzero),
+    [JIT_HELPER_MEMCPY] = JIT_HELPER(memcpy),
+    [JIT_HELPER_GC_BZERO] = JIT_HELPER(gc_bzero),
+    [JIT_HELPER_GC_MEMCPY] = JIT_HELPER(gc_memcpy),
+    [JIT_HELPER_THROW] = JIT_HELPER(jit_throw),
+    [JIT_HELPER_THROW_OUT_OF_MEMORY] = JIT_HELPER(jit_throw_out_of_memory),
+    [JIT_HELPER_THROW_NULL_REFERENCE] = JIT_HELPER(jit_throw_null_reference),
+    [JIT_HELPER_THROW_INDEX_OUT_OF_RANGE] = JIT_HELPER(jit_throw_index_out_of_range),
+    [JIT_HELPER_THROW_OVERFLOW] = JIT_HELPER(jit_throw_overflow),
+    [JIT_HELPER_THROW_INVALID_CAST] = JIT_HELPER(jit_throw_invalid_cast),
+    [JIT_HELPER_NEWOBJ] = JIT_HELPER(jit_newobj),
+    [JIT_HELPER_NEWSTR] = JIT_HELPER(jit_newstr),
+    [JIT_HELPER_NEWARR] = JIT_HELPER(jit_newarr),
+    [JIT_HELPER_GET_INTERFACE_VTABLE] = JIT_HELPER(jit_get_interface_vtable),
 };
 
 spidir_funcref_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
@@ -226,6 +230,15 @@ void* jit_get_helper_ptr(spidir_funcref_t function) {
     for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
         if (m_jit_helpers[i].created && function.id == m_jit_helpers[i].function.id) {
             return m_jit_helpers[i].func;
+        }
+    }
+    return NULL;
+}
+
+const char* jit_get_helper_name(spidir_funcref_t function) {
+    for (int i = 0; i < ARRAY_LENGTH(m_jit_helpers); i++) {
+        if (m_jit_helpers[i].created && function.id == m_jit_helpers[i].function.id) {
+            return m_jit_helpers[i].name;
         }
     }
     return NULL;

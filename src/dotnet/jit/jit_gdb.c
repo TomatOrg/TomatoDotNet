@@ -2,6 +2,9 @@
 
 #include <stdalign.h>
 
+#include "jit_helpers.h"
+#include "dotnet/types.h"
+#include "tomatodotnet/types/type.h"
 #include "tomatodotnet/util/stb_ds.h"
 #include "util/defs.h"
 #include "util/except.h"
@@ -62,10 +65,6 @@ typedef enum object_section {
 static void jit_gdb_register_elf(void *elf_data, size_t elf_size) {
     struct jit_code_entry* entry = tdn_host_mallocz(sizeof(*entry), 16);
     ASSERT(entry != NULL);
-
-    void* ctx = tdn_host_jit_start_dump(TDN_JIT_DUMP_SYMBOLS_ELF);
-    tdn_host_jit_dump_callback(elf_data, elf_size, ctx);
-    tdn_host_jit_end_dump(ctx);
 
     entry->symfile_addr = elf_data;
     entry->symfile_size = elf_size;

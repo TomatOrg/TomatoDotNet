@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
+
 #include "jit_codegen.h"
 
 void jit_gdb_register(

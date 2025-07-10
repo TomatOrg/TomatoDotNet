@@ -663,7 +663,7 @@ cleanup:
     return err;
 }
 
-RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
+static RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
     while (type != NULL) {
         // Use normal inheritance (I.8.10.4)
         for (int i = 0; i < type->DeclaredMethods->Length; i++) {
@@ -869,16 +869,19 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
                 vtable_slot =  info->InterfaceImpls[idx].value + decl->VTableOffset;
 
             } else {
-                // search for a normal interface implementation of this method, if we can
-                // find one then reuse that slot
-                for (int j = 0; j < hmlen(info->InterfaceImpls); j++) {
-                    interface_impl_t* interface = &info->InterfaceImpls[j];
-                    RuntimeMethodInfo parent = tdn_find_overriden_method(interface->key, method);
-                    if (parent != NULL) {
-                        vtable_slot = interface->value + parent->VTableOffset;
-                        break;
-                    }
-                }
+                // TODO: this is broken right now if we have an `new` method that overrides
+                //       an old one with the same signature, since it would cause both
+                //       to get the same vtable offset..
+                // // search for a normal interface implementation of this method, if we can
+                // // find one then reuse that slot
+                // for (int j = 0; j < hmlen(info->InterfaceImpls); j++) {
+                //     interface_impl_t* interface = &info->InterfaceImpls[j];
+                //     RuntimeMethodInfo parent = tdn_find_overriden_method(interface->key, method);
+                //     if (parent != NULL) {
+                //         vtable_slot = interface->value + parent->VTableOffset;
+                //         break;
+                //     }
+                // }
             }
 
             method->VTableOffset = vtable_slot;
