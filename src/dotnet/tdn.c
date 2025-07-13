@@ -5,6 +5,7 @@
 static tdn_config_t m_tdn_config = {
     .jit_verify_trace = false,
     .jit_emit_trace = false,
+    .jit_elf_dump = false,
     .jit_spidir_dump = false,
     .jit_spidir_log_level = SPIDIR_LOG_LEVEL_WARN,
     .jit_inline = true,

@@ -269,19 +269,19 @@ static void dwarf_write_uleb(void** data, uint64_t val) {
     } while (val != 0);
 }
 
-static void dwarf_write_sleb(void** data, int64_t val) {
-    bool more = true;
-    while (more) {
-        uint8_t b = val & 0x7F;
-        val >>= 7;
-        if ((val == 0 && (b & 0x40) == 0) || (val == -1 && (b & 0x40))) {
-            more = false;
-        } else {
-            b |= 0x80;
-        }
-        dwarf_write_u8(data, b);
-    }
-}
+// static void dwarf_write_sleb(void** data, int64_t val) {
+//     bool more = true;
+//     while (more) {
+//         uint8_t b = val & 0x7F;
+//         val >>= 7;
+//         if ((val == 0 && (b & 0x40) == 0) || (val == -1 && (b & 0x40))) {
+//             more = false;
+//         } else {
+//             b |= 0x80;
+//         }
+//         dwarf_write_u8(data, b);
+//     }
+// }
 
 static void dwarf_write_str(void** data, const char* str) {
     void* str_ptr = arraddnptr(*data, strlen(str) + 1);
@@ -520,15 +520,15 @@ static char* string_to_cstr(String str) {
     return s;
 }
 
-static char* rstrchr(char* str, char sep) {
-    int len = strlen(str);
-    for (int i = len - 1; i >= 0; i--) {
-        if (str[i] == sep) {
-            return &str[i];
-        }
-    }
-    return NULL;
-}
+// static char* rstrchr(char* str, char sep) {
+//     int len = strlen(str);
+//     for (int i = len - 1; i >= 0; i--) {
+//         if (str[i] == sep) {
+//             return &str[i];
+//         }
+//     }
+//     return NULL;
+// }
 
 static int dwarf_push_namespace_internal(jit_elf_t* elf, char* nm) {
     // we will push ourselves
@@ -920,6 +920,13 @@ static void dwarf_add_type(jit_elf_t* elf, RuntimeTypeInfo type) {
 // Elf emitting API
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+typedef enum predefined_symbols {
+    SYMBOL_NULL,
+    SYMBOL_DEBUG_ABBREV_SECTION,
+    SYMBOL_TEXT_SECTION,
+    SYMBOL_COUNT,
+} predefined_symbols_t;
+
 void jit_elf_start_emit() {
     // NULL symbol
     {
@@ -943,6 +950,17 @@ void jit_elf_start_emit() {
         sym->st_other = STV_DEFAULT;
         sym->st_shndx = SECTION_DEBUG_ABBREV;
         strcpy(m_elf.strtab + sym->st_name, ".debug_abbrev");
+    }
+
+    // .text symbol, for relocations
+    {
+        Elf64_Sym* sym = arraddnptr(m_elf.symtab, sizeof(*sym));
+        memset(sym, 0, sizeof(*sym));
+        sym->st_name = arraddnindex(m_elf.strtab, strlen(".text")+1);
+        sym->st_info = ELF64_ST_INFO(STB_LOCAL, STT_SECTION);
+        sym->st_other = STV_DEFAULT;
+        sym->st_shndx = SECTION_TEXT;
+        strcpy(m_elf.strtab + sym->st_name, ".text");
     }
 
     // setup the debug info and abbrev sections
@@ -986,7 +1004,7 @@ static int create_or_update_symbol(spidir_funcref_t func) {
 
         sym->st_name = name_offset;
 
-        symbol_index = hmlen(m_elf.symbols) + 2;
+        symbol_index = hmlen(m_elf.symbols) + SYMBOL_COUNT;
         hmput(m_elf.symbols, func, symbol_index);
 
         // initialize as an external symbol for now
@@ -1056,8 +1074,7 @@ void jit_elf_add_entry(jit_codegen_entry_t* entry) {
             } break;
 
             case SPIDIR_RELOC_TARGET_CONSTPOOL: {
-                // TODO: how do we do this correctly?
-                ASSERT(0);
+                sym = SYMBOL_TEXT_SECTION;
             } break;
         }
 
@@ -1181,7 +1198,7 @@ void jit_elf_emit() {
     Elf64_Rela* rela_debug_info = elf_data + rela_debug_info_offset;
     rela_debug_info[0].r_offset = 0x8;
     rela_debug_info[0].r_addend = 0;
-    rela_debug_info[0].r_info = ELF64_R_INFO((Elf64_Xword)1, R_X86_64_32);
+    rela_debug_info[0].r_info = ELF64_R_INFO((Elf64_Xword)SYMBOL_DEBUG_ABBREV_SECTION, R_X86_64_32);
 
     memcpy(elf_data + debug_abbrev_offset, m_elf.debug_abbrev, arrlen(m_elf.debug_abbrev));
     size_t debug_abbrev_size = arrlen(m_elf.debug_abbrev);

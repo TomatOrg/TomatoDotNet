@@ -18,12 +18,18 @@ typedef struct tdn_config {
     bool jit_emit_trace;
 
     /**
+     * Dump a debug ELF with the spidir output
+     * after each jit run
+     */
+    bool jit_elf_dump;
+
+    /**
      * The spidir log level to use
      */
     int jit_spidir_log_level;
 
     /**
-     * Dump the spidir after finishing
+     * Dump the spidir after each jit run
      */
     bool jit_spidir_dump;
 

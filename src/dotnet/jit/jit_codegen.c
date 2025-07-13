@@ -189,11 +189,13 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
     }
 
     // dump the entire elf
-    jit_elf_start_emit();
-    for (int i = 0; i < hmlen(m_function_blobs); i++) {
-        jit_elf_add_entry(&m_function_blobs[i]);
+    if (tdn_get_config()->jit_elf_dump) {
+        jit_elf_start_emit();
+        for (int i = 0; i < hmlen(m_function_blobs); i++) {
+            jit_elf_add_entry(&m_function_blobs[i]);
+        }
+        jit_elf_emit();
     }
-    jit_elf_emit();
 
     // now that we are done, calculate the total size we need
     // for all of the functions

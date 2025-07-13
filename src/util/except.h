@@ -5,7 +5,7 @@
 
 #include "cpp_magic.h"
 
-#if 1
+#if 0
     #define TRACE(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
     #define WARN(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
     #define ERROR(fmt, ...) tdn_host_log_trace(fmt, ## __VA_ARGS__)
