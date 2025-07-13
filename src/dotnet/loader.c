@@ -489,9 +489,11 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
                 // this contains a managed pointer
                 arrpush(type->ManagedPointers, current_size);
 
-            } else if (arrlen(field->FieldType->ManagedPointers) != 0) {
-                // this contains an array that has managed pointers
-                CHECK_FAIL();
+            } else {
+                // this is a struct, copy its managed pointers, if any
+                for (int i = 0; i < arrlen(field->FieldType->ManagedPointers); i++) {
+                    arrpush(type->ManagedPointers, current_size + field->FieldType->ManagedPointers[i]);
+                }
             }
 
             // take the size up
