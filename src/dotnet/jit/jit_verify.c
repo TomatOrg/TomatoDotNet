@@ -2049,8 +2049,8 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
         CHECK_ERROR(!method_type->Attributes.Abstract, TDN_ERROR_VERIFIER_NEWOBJ_ABSTRACT_CLASS);
 
     } else if (method_type != NULL) {
-        jit_stack_value_t* actual_this = &stack[0];
-        instance = actual_this->type;
+        jit_stack_value_t actual_this = stack[0];
+        instance = actual_this.type;
         jit_stack_value_t declared_this = {
             .kind = tdn_type_is_valuetype(method_type) ? JIT_KIND_BY_REF : JIT_KIND_OBJ_REF,
             .type = method_type
@@ -2058,27 +2058,27 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
 
         // direct calls to ctor are mostly not allowed
         if (tdn_compare_string_to_cstr(method->Name, ".ctor")) {
-            if (function->track_ctor_state && actual_this->flags.this_ptr && (method_type == method->DeclaringType || method_type == method->DeclaringType->BaseType)) {
+            if (function->track_ctor_state && actual_this.flags.this_ptr && (method_type == method->DeclaringType || method_type == method->DeclaringType->BaseType)) {
                 // we have called the base ctor, so its not initialized properly in this block
                 block->this_initialized = true;
             } else {
                 // allow direct calls to valuetype ctors
-                CHECK_ERROR(actual_this->kind == JIT_KIND_BY_REF && tdn_type_is_valuetype(actual_this->type),
+                CHECK_ERROR(actual_this.kind == JIT_KIND_BY_REF && tdn_type_is_valuetype(actual_this.type),
                     TDN_ERROR_VERIFIER_CALL_CTOR);
             }
         }
 
         if (inst->constrained != NULL) {
             // must be a by ref
-            CHECK_ERROR(actual_this->kind == JIT_KIND_BY_REF,
+            CHECK_ERROR(actual_this.kind == JIT_KIND_BY_REF,
                 TDN_ERROR_VERIFIER_CONSTRAINED_CALL_WITH_NON_BYREF_THIS);
 
             // ensure the constrained matches the actual this type
-            CHECK_ERROR(actual_this->type == inst->constrained,
+            CHECK_ERROR(actual_this.type == inst->constrained,
                 TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
 
             // turn into am objref
-            actual_this->kind = JIT_KIND_OBJ_REF;
+            actual_this.kind = JIT_KIND_OBJ_REF;
         }
 
         // if the method or type is marked as readonly then the
@@ -2087,16 +2087,16 @@ static tdn_err_t verify_call(jit_function_t* function, jit_block_t* block, tdn_i
             declared_this.flags.ref_read_only = true;
         }
 
-        CHECK_IS_ASSIGNABLE(actual_this, &declared_this);
+        CHECK_IS_ASSIGNABLE(&actual_this, &declared_this);
 
         // TODO: unscoped reference
 
         if (inst->opcode == CEE_CALL) {
             // just like the rules for creating delegates with ldftn and virtual functions, but now for
             // normal calls
-            if (method->Attributes.Virtual && !method->Attributes.Final && !jit_is_boxed_value_type(actual_this)) {
+            if (method->Attributes.Virtual && !method->Attributes.Final && !jit_is_boxed_value_type(&actual_this)) {
                 if (!method_type->Attributes.Sealed) {
-                    CHECK_ERROR(actual_this->flags.this_ptr,
+                    CHECK_ERROR(actual_this.flags.this_ptr,
                         TDN_ERROR_VERIFIER_THIS_MISMATCH);
                 }
             }

@@ -99,6 +99,12 @@ DEFINE_ARRAY(Char);
 DEFINE_ARRAY(RuntimeTypeInfo);
 DEFINE_ARRAY(Object);
 
+typedef struct Exception {
+    struct Object;
+    String Message;
+    struct Exception* InnerException;
+}* Exception;
+
 /**
  * We depend on this in the runtime
  */

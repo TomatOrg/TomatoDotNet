@@ -1654,8 +1654,8 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
 
         // the devirt was into a valuetype, move the pointer
         // forward since this will call the non-thunk version
-        if (tdn_type_is_valuetype(known->DeclaringType)) {
-            stack[0].kind = JIT_KIND_OBJ_REF;
+        if (tdn_type_is_valuetype(known->DeclaringType) && stack[0].kind == JIT_KIND_OBJ_REF) {
+            stack[0].kind = JIT_KIND_BY_REF;
             stack[0].type = known->DeclaringType;
             stack[0].value = spidir_builder_build_ptroff(builder, stack[0].value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,

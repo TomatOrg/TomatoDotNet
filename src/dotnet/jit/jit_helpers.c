@@ -38,13 +38,12 @@ static void* gc_memcpy(void* dest, const void* src, size_t n) {
     return dest;
 }
 
-static void jit_throw(Object exception) {
+static void jit_throw(Exception exception) {
     if (exception == NULL) {
-        TRACE("jit_throw: <null exception>");
+        ASSERT(!"jit_throw: <null exception>");
     } else {
-        TRACE("jit_throw: %T", exception->VTable->Type);
+        ASSERT(!"jit_throw", "%U", exception->Message);
     }
-    ASSERT(!"jit_throw");
 }
 
 static void jit_throw_out_of_memory(void) {

@@ -21,6 +21,7 @@
 
 #include "dotnet/types.h"
 #include "gc/mem_tree.h"
+#include "util/string_builder.h"
 
 static int string_output(FILE* stream, const struct printf_info* info, const void* const args[]) {
     int len = 0;

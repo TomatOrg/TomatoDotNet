@@ -97,20 +97,20 @@ typedef struct load_type {
 static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, ValueType, true),
     INIT_VALUE_TYPE(System, Enum, true),
-    INIT_VALUE_TYPE(System, Boolean, true, 7),
-    INIT_VALUE_TYPE(System, Char, true, 34),
-    INIT_VALUE_TYPE(System, SByte, true, 21),
-    INIT_VALUE_TYPE(System, Int16, true, 21),
-    INIT_VALUE_TYPE(System, Int32, true, 21),
-    INIT_VALUE_TYPE(System, Int64, true, 21),
-    INIT_VALUE_TYPE(System, IntPtr, true, 21),
-    INIT_VALUE_TYPE(System, Byte, true, 34),
-    INIT_VALUE_TYPE(System, UInt16, true, 21),
-    INIT_VALUE_TYPE(System, UInt32, true, 21),
-    INIT_VALUE_TYPE(System, UInt64, true, 21),
-    INIT_VALUE_TYPE(System, UIntPtr, true, 21),
+    INIT_VALUE_TYPE(System, Boolean, true, 10),
+    INIT_VALUE_TYPE(System, Char, true, 37),
+    INIT_VALUE_TYPE(System, SByte, true, 24),
+    INIT_VALUE_TYPE(System, Int16, true, 24),
+    INIT_VALUE_TYPE(System, Int32, true, 24),
+    INIT_VALUE_TYPE(System, Int64, true, 24),
+    INIT_VALUE_TYPE(System, IntPtr, true, 24),
+    INIT_VALUE_TYPE(System, Byte, true, 37),
+    INIT_VALUE_TYPE(System, UInt16, true, 24),
+    INIT_VALUE_TYPE(System, UInt32, true, 24),
+    INIT_VALUE_TYPE(System, UInt64, true, 24),
+    INIT_VALUE_TYPE(System, UIntPtr, true, 24),
     INIT_VALUE_TYPE(System, Single, true),
-    INIT_VALUE_TYPE(System, Double, true, 41),
+    INIT_VALUE_TYPE(System, Double, true, 44),
     INIT_VALUE_TYPE(System, Void, true),
 
     INIT_HEAP_TYPE(System.Reflection, RuntimeConstructorInfo, 5),
@@ -121,7 +121,7 @@ static init_type_t m_init_types[] = {
     INIT_HEAP_TYPE(System.Reflection, MethodBase, 5),
     INIT_HEAP_TYPE(System, Object),
     INIT_HEAP_TYPE(System, Array),
-    INIT_HEAP_TYPE(System, String, 11),
+    INIT_HEAP_TYPE(System, String, 15),
     INIT_HEAP_TYPE(System.Reflection, RuntimeAssembly),
     INIT_HEAP_TYPE(System.Reflection, RuntimeModule),
     INIT_HEAP_TYPE(System.Reflection, RuntimeLocalVariableInfo),
@@ -1489,7 +1489,7 @@ static tdn_err_t corelib_bootstrap() {
 
     // hard code to the correct amount of entries
     CHECK_AND_RETHROW(tdn_create_vtable(tArray, 4));
-    CHECK_AND_RETHROW(tdn_create_vtable(tString, 11));
+    CHECK_AND_RETHROW(tdn_create_vtable(tString, 15));
     CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeAssembly, 4));
     CHECK_AND_RETHROW(tdn_create_vtable(tRuntimeModule, 4));
 
