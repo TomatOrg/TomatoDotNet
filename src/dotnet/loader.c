@@ -109,7 +109,7 @@ static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, UInt32, true, 24),
     INIT_VALUE_TYPE(System, UInt64, true, 24),
     INIT_VALUE_TYPE(System, UIntPtr, true, 24),
-    INIT_VALUE_TYPE(System, Single, true),
+    INIT_VALUE_TYPE(System, Single, true, 44),
     INIT_VALUE_TYPE(System, Double, true, 44),
     INIT_VALUE_TYPE(System, Void, true),
 
