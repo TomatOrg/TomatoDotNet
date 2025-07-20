@@ -61,9 +61,8 @@ static void debug_provider_write_core(String message) {
     tdn_host_printf("%U", message);
 }
 
-static uint32_t bit_operations_leading_zero_count_i32(uint32_t value) {
-    return __builtin_clz(value | 1);
-}
+static uint32_t bit_operations_leading_zero_count_i32(uint32_t value) { return __builtin_clz(value | 1); }
+static uint32_t bit_operations_leading_zero_count_i64(uint64_t value) { return __builtin_clzll(value | 1); }
 
 // TODO: throw exceptions or something
 static void runtime_helpers_initialize_array(Array array, RuntimeFieldInfo* field_handle) {
@@ -132,6 +131,11 @@ static native_function_t m_native_functions[] = {
         SIG(INT32)
     },
     {
+        "System.Numerics", "BitOperations", "LeadingZeroCount",
+        bit_operations_leading_zero_count_i64,
+        SIG(INT64)
+    },
+    {
         "System.Runtime.CompilerServices", "RuntimeHelpers", "InitializeArray",
         runtime_helpers_initialize_array,
         SIG(OBJ_REF, VALUE_TYPE)
@@ -167,7 +171,6 @@ void* jit_get_native_method(RuntimeMethodInfo info) {
             // compare the kind
             jit_stack_value_kind_t kind = jit_get_type_kind(info->Parameters->Elements[arg_count]->ParameterType);
             if (kind != func->args[arg_count]) {
-                TRACE("FAILED AT %d", arg_count);
                 break;
             }
         }

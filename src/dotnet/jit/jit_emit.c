@@ -12,6 +12,13 @@
 #include "jit_type.h"
 
 static int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
+    // the type is the interface, just return zero since that
+    // is technically the base
+    if (type == iface) {
+        return 0;
+    }
+
+    // search in the implementations
     int idx = hmgeti(type->InterfaceImpls, iface);
     if (idx < 0) {
         return -1;
@@ -30,8 +37,15 @@ static spidir_value_type_t get_spidir_type(RuntimeTypeInfo type) {
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
 
-    } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
+    } else if (kind == JIT_KIND_INT64) {
         return SPIDIR_TYPE_I64;
+
+    } else if (kind == JIT_KIND_NATIVE_INT) {
+        if (type->IsPointer) {
+            return SPIDIR_TYPE_PTR;
+        } else {
+            return SPIDIR_TYPE_I64;
+        }
 
     } else if (kind == JIT_KIND_FLOAT) {
         return SPIDIR_TYPE_F64;
@@ -51,8 +65,15 @@ spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
 
-    } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
+    } else if (kind == JIT_KIND_INT64) {
         return SPIDIR_TYPE_I64;
+
+    } else if (kind == JIT_KIND_NATIVE_INT) {
+        if (type->IsPointer) {
+            return SPIDIR_TYPE_PTR;
+        } else {
+            return SPIDIR_TYPE_I64;
+        }
 
     } else if (kind == JIT_KIND_FLOAT) {
         return SPIDIR_TYPE_F64;
@@ -234,6 +255,30 @@ static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, RuntimeType
     return value;
 }
 
+static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
+    if (jit_is_interface(item->type)) {
+        // load the instance from an interface
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, item->value);
+
+    } else if (jit_is_delegate(item->type)) {
+        // load the instance from a delegate
+        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+            spidir_builder_build_ptroff(builder, item->value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
+
+    }
+}
+
+static void emit_convert_to_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
+    if (item->kind == JIT_KIND_NATIVE_INT && item->type == tIntPtr) {
+        // convert a native-int to a pointer
+        item->value = spidir_builder_build_inttoptr(builder, item->value);
+    } else {
+        emit_load_reference(builder, item);
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Exception helpers
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -252,6 +297,13 @@ static void jit_emit_null_reference(spidir_builder_handle_t builder) {
 static void jit_emit_invalid_cast(spidir_builder_handle_t builder) {
     // emit a call to null reference exception
     spidir_funcref_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_INVALID_CAST);
+    spidir_builder_build_call(builder, function, 0, NULL);
+    spidir_builder_build_unreachable(builder);
+}
+
+static void jit_emit_overflow(spidir_builder_handle_t builder) {
+    // emit a call to null reference exception
+    spidir_funcref_t function = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_THROW_OVERFLOW);
     spidir_builder_build_call(builder, function, 0, NULL);
     spidir_builder_build_unreachable(builder);
 }
@@ -280,6 +332,23 @@ static spidir_value_t jit_convert_value(spidir_builder_handle_t builder, jit_sta
         STATIC_ASSERT(offsetof(Interface, Instance) == 0);
         return spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from->value);
 
+    } else if (
+        (
+            (from->kind == JIT_KIND_BY_REF) ||
+            (from->kind == JIT_KIND_OBJ_REF) ||
+            (from->kind == JIT_KIND_NATIVE_INT && from->type->IsPointer)
+        ) && (to_type == tIntPtr || to_type == tUIntPtr)
+    ) {
+        // by-ref/pointer -> native-int
+        return spidir_builder_build_ptrtoint(builder, from->value);
+
+    } else if (
+        (from->kind == JIT_KIND_NATIVE_INT && from->type == tIntPtr) &&
+        (to_type->IsByRef || to_type->IsPointer)
+    ) {
+        // pointer native-int -> by-ref/pointer
+        return spidir_builder_build_inttoptr(builder, from->value);
+
     } else {
         return from->value;
     }
@@ -290,6 +359,11 @@ static spidir_value_t jit_convert_local(
     jit_stack_value_t* from,
     RuntimeTypeInfo to_type
 ) {
+    // get the enum type when converting
+    if (to_type->BaseType == tEnum) {
+        to_type = to_type->EnumUnderlyingType;
+    }
+
     // special case only needed for locals, truncate/sign extend as required
     if (from->kind == JIT_KIND_INT32 && to_type->StackSize < 4) {
         int bit_count = to_type->StackSize * 8;
@@ -299,14 +373,9 @@ static spidir_value_t jit_convert_local(
             return spidir_builder_build_and(builder, from->value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, (1 << bit_count) - 1));
         } else {
-            ASSERT(!"Invalid");
+            ASSERT(!"Invalid", "%T -> %T", from->type, to_type);
         }
 
-    } else if (from->kind == JIT_KIND_BY_REF && (to_type->IsPointer || to_type == tIntPtr)) {
-        return spidir_builder_build_ptrtoint(builder, from->value);
-
-    } else if (from->kind == JIT_KIND_NATIVE_INT && (to_type->IsByRef)) {
-        return spidir_builder_build_inttoptr(builder, from->value);
     }
 
     // fallback to the normal convert logic
@@ -317,7 +386,7 @@ static spidir_value_type_t get_spidir_stack_phi_type(jit_stack_value_t* value) {
     switch (value->kind) {
         case JIT_KIND_INT32: return SPIDIR_TYPE_I32;
         case JIT_KIND_INT64: return SPIDIR_TYPE_I64;
-        case JIT_KIND_NATIVE_INT: return SPIDIR_TYPE_I64;
+        case JIT_KIND_NATIVE_INT: return value->type->IsPointer ? SPIDIR_TYPE_PTR : SPIDIR_TYPE_I64;
         case JIT_KIND_FLOAT: return SPIDIR_TYPE_F64;
         case JIT_KIND_BY_REF: return SPIDIR_TYPE_PTR;
         case JIT_KIND_OBJ_REF: return SPIDIR_TYPE_PTR;
@@ -406,7 +475,7 @@ static void emitter_merge_block(jit_function_t* function, spidir_builder_handle_
             if (function->args[i].spilled) {
                 block->args[i].value = from->args[i].value;
             } else {
-                spidir_builder_add_phi_input(builder, block->args[i].phi,from->args[i].value);
+                spidir_builder_add_phi_input(builder, block->args[i].phi, from->args[i].value);
             }
         }
 
@@ -608,9 +677,7 @@ static tdn_err_t emit_ldfld(jit_function_t* function, spidir_builder_handle_t bu
         field_ptr = jit_get_static_field(builder, inst->operand.field);
     } else {
         // for pointer access convert it to a pointer first
-        if (stack[0].kind == JIT_KIND_NATIVE_INT) {
-            stack[0].value = spidir_builder_build_inttoptr(builder, stack[0].value);
-        }
+        emit_convert_to_reference(builder, &stack[0]);
 
         // add the offset to the field and access it
         field_ptr = spidir_builder_build_ptroff(builder, stack[0].value,
@@ -687,7 +754,43 @@ static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t 
     }
 
 cleanup:
-    return TDN_NO_ERROR;
+    return err;
+}
+
+static tdn_err_t emit_localloc(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // For now we only support constant localloc
+    CHECK(inst->operand_type == TDN_IL_INT32);
+
+    // TODO: verify we are not in a loop or something because we
+    //       don't have support for real alloca
+
+    // calculate some make sense alignment, but default to 16 for anything too large
+    // because we can't know what would be stored in here
+    size_t align = 16;
+    if (inst->operand.int32 <= 1) align = 1;
+    if (inst->operand.int32 <= 2) align = 2;
+    if (inst->operand.int32 <= 4) align = 4;
+    if (inst->operand.int32 <= 8) align = 8;
+
+    // create the stackslot
+    spidir_value_t value = spidir_builder_build_stackslot(builder, inst->operand.int32, align);
+
+    // zero it
+    spidir_funcref_t bzero_func = jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_BZERO);
+    spidir_builder_build_call(builder,
+        bzero_func, 2,
+        (spidir_value_t[]) {
+            value, spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, inst->operand.int32)
+        }
+    );
+
+    // and remember the pointer
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
 }
 
 static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
@@ -696,22 +799,23 @@ static tdn_err_t emit_ldind(jit_function_t* function, spidir_builder_handle_t bu
         type = stack[0].type;
     }
 
-    if (stack[0].kind == JIT_KIND_NATIVE_INT) {
-        stack[0].value = spidir_builder_build_inttoptr(builder, stack[0].value);
-    }
+    emit_convert_to_reference(builder, &stack[0]);
 
     STACK_TOP()->value = jit_emit_load(builder, type, stack[0].value);
     return TDN_NO_ERROR;
 }
 
 static tdn_err_t emit_stind(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
-    if (stack[0].kind == JIT_KIND_NATIVE_INT) {
-        stack[0].value = spidir_builder_build_inttoptr(builder, stack[0].value);
+    emit_convert_to_reference(builder, &stack[0]);
+
+    RuntimeTypeInfo typ = inst->operand.type;
+    if (typ == NULL) {
+        typ = tObject;
     }
 
     // we just need to store into the given item
     // NOTE: we can use the type directly because this must be a by-ref at this point
-    jit_emit_store(builder, &stack[1], stack[0].type, stack[0].value);
+    jit_emit_store(builder, &stack[1], typ, stack[0].value);
     return TDN_NO_ERROR;
 }
 
@@ -845,14 +949,31 @@ static spidir_value_t emit_float_binary_compare(spidir_builder_handle_t builder,
     return spidir_builder_build_fcmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
 }
 
-static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
-    if (jit_is_interface(item->type)) {
-        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
-        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, item->value);
-    } else if (jit_is_delegate(item->type)) {
-        item->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-            spidir_builder_build_ptroff(builder, item->value,
-                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Delegate, Function))));
+static void emit_convert_for_op_one(spidir_builder_handle_t builder, jit_stack_value_t* value, bool is_unsigned) {
+    if (value->kind == JIT_KIND_INT32) {
+        // comparing int32 with non-int32, extend it
+        value->value = emit_extend_int(builder, value->value, !is_unsigned);
+
+    } else if (
+        value->kind == JIT_KIND_BY_REF ||
+        value->kind == JIT_KIND_OBJ_REF ||
+        (value->kind == JIT_KIND_NATIVE_INT && value->type->IsPointer)
+    ) {
+        // comparing pointer/by-ref/obj-ref with int, convert to int
+        value->value = spidir_builder_build_ptrtoint(builder, value->value);
+    }
+}
+
+static void emit_convert_for_op(spidir_builder_handle_t builder, jit_stack_value_t* a, jit_stack_value_t* b, bool is_unsigned) {
+    if (
+        (a->kind != b->kind) ||
+        (
+            a->kind == JIT_KIND_NATIVE_INT &&
+            a->type->IsPointer != b->type->IsPointer
+        )
+    ) {
+        emit_convert_for_op_one(builder, a, is_unsigned);
+        emit_convert_for_op_one(builder, b, is_unsigned);
     }
 }
 
@@ -880,18 +1001,131 @@ static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t 
 
     } else {
         // if the kinds are not the same we need to extend both into a full integer
-        if (stack[0].kind != stack[1].kind) {
-            if (stack[0].kind == JIT_KIND_INT32) {
-                stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-            }
-
-            if (stack[1].kind == JIT_KIND_INT32) {
-                stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
-            }
-        }
-
+        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned);
         STACK_TOP()->value = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
     }
+
+cleanup:
+    return err;
+}
+
+//
+// OVERFLOW CHECKING TABLE
+//
+// | to / from | uint32            | uint64                | int32                    | int64                    |
+// |-----------|-------------------|-----------------------|--------------------------|--------------------------|
+// | uint8     | value ult 0x100   | value ult 0x100       | value ult 0x100          | value ult 0x100          |
+// | uint16    | value ult 0x10000 | value ult 0x10000     | value ult 0x10000        | value ult 0x10000        |
+// | uint32    | nop               | value ult 0x100000000 | -1 slt value             | value ult 0x100000000    |
+// | uint64    | nop               | nop                   | -1 slt value             | -1 slt value             |
+// | int8      | value ult 0x80    | value ult 0x80        | sfill 8 and eq original  | sfill 8 and eq original  |
+// | int16     | value ult 0x8000  | value ult 0x8000      | sfill 16 and eq original | sfill 16 and eq original |
+// | int32     | -1 slt value      | -1 slt value          | nop                      | sfill 32 and eq original |
+// | int64     | nop               | -1 slt value          | nop                      | nop                      |
+//
+
+
+static tdn_err_t emit_conv_ovf_i4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_t value = stack[0].value;
+    tdn_il_opcode_t opcode = inst->opcode;
+
+    // nop case,
+    spidir_value_type_t type;
+    uint64_t minus_one;
+    if (stack->kind == JIT_KIND_INT32) {
+        if (opcode == CEE_CONV_OVF_U4 || opcode == CEE_CONV_OVF_U4_UN) {
+            // special case of nop:
+            //      uint32 -> uint32
+            //      int32 -> int32
+            goto skip_check;
+        }
+
+        type = SPIDIR_TYPE_I32;
+        minus_one = (uint32_t)-1;
+    } else if (stack->kind == JIT_KIND_INT64 || stack->kind == JIT_KIND_NATIVE_INT) {
+        type = SPIDIR_TYPE_I64;
+        minus_one = (uint64_t)-1;
+    } else {
+        // TODO: floats
+        CHECK_FAIL();
+    }
+
+    spidir_value_t cond = SPIDIR_VALUE_INVALID;
+    if (
+        (stack->kind == JIT_KIND_INT32 && opcode == CEE_CONV_OVF_U4) ||
+        (opcode == CEE_CONV_OVF_I4_UN)
+    ) {
+        // int32 -> uint32
+        // uint32/uint64 -> int32
+        cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I32,
+            spidir_builder_build_iconst(builder, type, minus_one), value);
+    } else if (
+        opcode == CEE_CONV_OVF_I1 ||
+        opcode == CEE_CONV_OVF_I2 ||
+        opcode == CEE_CONV_OVF_I4
+    ) {
+        // int32/int64 -> int8
+        // int32/int64 -> int16
+        // int64 -> int32
+
+        // get the correct bit count
+        size_t bit_width;
+        if (opcode == CEE_CONV_OVF_I1) {
+            bit_width = 8;
+        } else if (opcode == CEE_CONV_OVF_I2) {
+            bit_width = 16;
+        } else if (opcode == CEE_CONV_OVF_I4) {
+            bit_width = 32;
+        } else {
+            CHECK_FAIL();
+        }
+
+        // sign extend and check they are still the same
+        spidir_value_t signed_value = spidir_builder_build_sfill(builder, bit_width, value);
+        cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, value, signed_value);
+    } else {
+        // get the correct max value
+        uint64_t max_value;
+        if (opcode == CEE_CONV_OVF_U1 || opcode == CEE_CONV_OVF_U1_UN) {
+            max_value = 0x100;
+        } else if (opcode == CEE_CONV_OVF_U2 || opcode == CEE_CONV_OVF_U2_UN) {
+            max_value = 0x10000;
+        } else if (opcode == CEE_CONV_OVF_I1_UN) {
+            max_value = 0x80;
+        } else if (opcode == CEE_CONV_OVF_I2_UN) {
+            max_value = 0x8000;
+        } else {
+            CHECK_FAIL();
+        }
+
+        // perform an unsigned less than check, this is fine for both the signed and unsigned
+        // input because we are using twos complement
+        cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_ULT, SPIDIR_TYPE_I32, value,
+            spidir_builder_build_iconst(builder, type, max_value));
+    }
+
+    // perform the branch
+    spidir_block_t valid = spidir_builder_create_block(builder);
+    spidir_block_t invalid = spidir_builder_create_block(builder);
+    spidir_builder_build_brcond(builder, cond, valid, invalid);
+
+    // invalid path, throw
+    spidir_builder_set_block(builder, invalid);
+    jit_emit_overflow(builder);
+
+    // valid path, push the new value
+    spidir_builder_set_block(builder, valid);
+
+skip_check:
+
+    // truncate if came from
+    // a bigger value
+    if (stack->kind != JIT_KIND_INT32) {
+        value = spidir_builder_build_itrunc(builder, value);
+    }
+
+    STACK_TOP()->value = value;
 
 cleanup:
     return err;
@@ -933,6 +1167,65 @@ cleanup:
     return err;
 }
 
+static tdn_err_t emit_conv_ovf_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+    spidir_value_t value = stack[0].value;
+
+    // nop case,
+    spidir_value_type_t type;
+    uint64_t minus_one;
+    if (stack->kind == JIT_KIND_INT32) {
+        if (inst->opcode == CEE_CONV_OVF_I8_UN || inst->opcode == CEE_CONV_OVF_I_UN) {
+            // special case, uint32 -> int64 is always valid
+            goto skip_check;
+        }
+
+        type = SPIDIR_TYPE_I32;
+        minus_one = (uint32_t)-1;
+    } else if (stack->kind == JIT_KIND_INT64 || stack->kind == JIT_KIND_NATIVE_INT) {
+        if (stack->type->IsPointer) {
+            stack->value = spidir_builder_build_ptrtoint(builder, stack->value);
+        }
+
+        type = SPIDIR_TYPE_I64;
+        minus_one = (uint64_t)-1;
+    } else {
+        // TODO: floats
+        CHECK_FAIL();
+    }
+
+    // make sure is positive by doing a sign check
+    spidir_value_t cond = spidir_builder_build_icmp(builder, SPIDIR_ICMP_SLT, SPIDIR_TYPE_I32,
+        spidir_builder_build_iconst(builder, type, minus_one), value);
+
+    // perform the branch
+    spidir_block_t valid = spidir_builder_create_block(builder);
+    spidir_block_t invalid = spidir_builder_create_block(builder);
+    spidir_builder_build_brcond(builder, cond, valid, invalid);
+
+    // invalid path, throw
+    spidir_builder_set_block(builder, invalid);
+    jit_emit_overflow(builder);
+
+    // valid path, push the new value
+    spidir_builder_set_block(builder, valid);
+
+skip_check:
+    // if the input was 32bit,
+    // in this case we only either have unsigned -> signed or signed -> unsigned in both
+    // cases we make sure that the value is positive so we can just do a normal zero extension
+    if (stack->kind == JIT_KIND_INT32) {
+        value = spidir_builder_build_iext(builder, value);
+        value = spidir_builder_build_and(builder, value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0xFFFFFFFF));
+    }
+
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t value = stack[0].value;
@@ -947,7 +1240,11 @@ static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t 
         } else {
             value = spidir_builder_build_floattouint(builder, SPIDIR_TYPE_I64, value);
         }
-    } else if (stack[0].kind == JIT_KIND_BY_REF) {
+    } else if (
+        (stack[0].kind == JIT_KIND_BY_REF) ||
+        (stack[0].kind == JIT_KIND_OBJ_REF) ||
+        (stack[0].kind == JIT_KIND_NATIVE_INT && stack[0].type->IsPointer)
+    ) {
         value = spidir_builder_build_ptrtoint(builder, value);
     }
 
@@ -1023,18 +1320,9 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
         }
     } else {
         bool is_unsigned = inst->opcode == CEE_DIV_UN || inst->opcode == CEE_REM_UN;
+        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned);
 
         // if the kinds are not the same we need to extend both into a full integer
-        if (stack[0].kind != stack[1].kind) {
-            if (stack[0].kind == JIT_KIND_INT32) {
-                stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-            }
-
-            if (stack[1].kind == JIT_KIND_INT32) {
-                stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
-            }
-        }
-
         switch (inst->opcode) {
             case CEE_ADD: value = spidir_builder_build_iadd(builder, stack[0].value, stack[1].value); break;
             case CEE_SUB: value = spidir_builder_build_isub(builder, stack[0].value, stack[1].value); break;
@@ -1048,6 +1336,30 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
             case CEE_XOR: value = spidir_builder_build_xor(builder, stack[0].value, stack[1].value); break;
             default: CHECK_FAIL();
         }
+    }
+    STACK_TOP()->value = value;
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t emit_binary_op_ovf(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    bool is_unsigned = inst->opcode == CEE_ADD_OVF_UN || inst->opcode == CEE_SUB_OVF_UN || inst->opcode == CEE_MUL_OVF_UN;
+
+    // if the kinds are not the same we need to extend both into a full integer
+    emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned);
+
+    spidir_value_t value = SPIDIR_VALUE_INVALID;
+    switch (inst->opcode) {
+        case CEE_ADD_OVF: value = spidir_builder_build_iadd(builder, stack[0].value, stack[1].value); break;
+        case CEE_ADD_OVF_UN: value = spidir_builder_build_iadd(builder, stack[0].value, stack[1].value); break;
+        case CEE_SUB_OVF: value = spidir_builder_build_isub(builder, stack[0].value, stack[1].value); break;
+        case CEE_SUB_OVF_UN: value = spidir_builder_build_isub(builder, stack[0].value, stack[1].value); break;
+        case CEE_MUL_OVF: value = spidir_builder_build_imul(builder, stack[0].value, stack[1].value); break;
+        case CEE_MUL_OVF_UN: value = spidir_builder_build_imul(builder, stack[0].value, stack[1].value); break;
+        default: CHECK_FAIL();
     }
     STACK_TOP()->value = value;
 
@@ -1688,23 +2000,28 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
         vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
             spidir_builder_build_ptroff(builder, stack[0].value,
                 spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+
+        // adjust the `this` pointer to point to the interface instance
+        // and not to the interface on the stack
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        values[0] = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
     } else {
         vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
     }
 
     // now figure the offset of the function in the interface
     size_t base_offset = sizeof(void*) * callee->VTableOffset;
-    if (!jit_is_interface(stack[0].type)) {
-        // calling on an object, take the vtable header into account
-        base_offset += offsetof(ObjectVTable, Functions);
 
-        if (jit_is_interface(callee_this)) {
-            // calling an interface method on an object, adjust the base offset to
-            // represent the offset to the iface inside of the object's vtable
-            int iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
-            ASSERT(iface_offset >= 0);
-            base_offset += iface_offset * sizeof(void*);
-        }
+    // calling on an object, take the vtable header into account
+    if (!jit_is_interface(stack[0].type)) {
+        base_offset += offsetof(ObjectVTable, Functions);
+    }
+
+    // adjust the interface offset to be of the correct interface based on the type
+    if (jit_is_interface(callee_this)) {
+        int iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
+        ASSERT(iface_offset >= 0);
+        base_offset += iface_offset * sizeof(void*);
     }
 
     // and now load the function pointer
@@ -1898,13 +2215,22 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
         // so we can hard-code the validity of this
         bool is_upcast = verifier_can_cast_to(stack[0].type, inst->operand.type);
 
-        // by default assume the cast is possible, since new parts of
-        // the inheritance trees might not be visible to us
-        bool is_possible_cast = true;
-        if (stack[0].type->Attributes.Sealed) {
-            // if the type on the stack is sealed, then we can check if its impossible
-            // to perform the cast
-            is_possible_cast = verifier_can_cast_to(inst->operand.type, stack[0].type);
+        // is the downcast impossible, this can only be true when is_upcast is false
+        bool is_impossible_downcast = false;
+        if (!is_upcast) {
+            if (jit_is_interface(inst->operand.type)) {
+                if (stack[0].type->Attributes.Sealed) {
+                    // if we are casting sealed object to an interface then it
+                    // must be an upcast, or its impossible
+                    is_impossible_downcast = true;
+                }
+
+            } else if (!verifier_can_cast_to(inst->operand.type, stack[0].type)) {
+                // if we are casting an object to another object, and that other object doesn't
+                // have the first type in its inheritance tree, then its impossible to get
+                // to the second type
+                is_impossible_downcast = true;
+            }
         }
 
         // if null then return null
@@ -1938,7 +2264,7 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
             // just go to the cast path, since its valid
             spidir_builder_build_branch(builder, cast);
 
-        } else if (!is_possible_cast) {
+        } else if (is_impossible_downcast) {
             // just go to the invalid (or cast-null) path
             spidir_builder_build_branch(builder, inst->opcode == CEE_ISINST ? cast_null : invalid);
 
@@ -1962,41 +2288,42 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
 
         //
         // cast a non-null value
-        // only needed when the cast is actually possible
         //
         spidir_value_t cast_value = SPIDIR_VALUE_INVALID;
-        if (is_possible_cast) {
+        if (is_upcast) {
+            // upcast is simple
             spidir_builder_set_block(builder, cast);
-            if (is_upcast) {
-                // can use the common casting code in convert value
-                cast_value = jit_convert_value(builder, stack, inst->operand.type);
+            cast_value = jit_convert_value(builder, stack, inst->operand.type);
+            spidir_builder_build_branch(builder, valid);
+        } else if (!is_impossible_downcast) {
+            // downcast we may need to perform a bit more stuff
+            spidir_builder_set_block(builder, cast);
+
+            // we need to perform a runtime lookup
+            if (jit_is_interface(inst->operand.type)) {
+                // downcast to interface
+                cast_value = spidir_builder_build_stackslot(builder,
+                    sizeof(Interface), _Alignof(Interface));
+
+                // store the interface instance
+                ASSERT(offsetof(Interface, Instance) == 0);
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, cast_value);
+
+                // perform a runtime call to get the interface offset
+                spidir_value_t vtable = spidir_builder_build_call(builder,
+                    jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_GET_INTERFACE_VTABLE),
+                    2, (spidir_value_t[]){
+                        instance,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.type),
+                    });
+
+                // and store it into the vtable field
+                spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable,
+                    spidir_builder_build_ptroff(builder, cast_value,
+                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+
             } else {
-                // we need to perform a runtime lookup
-                if (jit_is_interface(inst->operand.type)) {
-                    // downcast to interface
-                    cast_value = spidir_builder_build_stackslot(builder,
-                        sizeof(Interface), _Alignof(Interface));
-
-                    // store the interface instance
-                    ASSERT(offsetof(Interface, Instance) == 0);
-                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, instance, cast_value);
-
-                    // perform a runtime call to get the interface offset
-                    spidir_value_t vtable = spidir_builder_build_call(builder,
-                        jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_GET_INTERFACE_VTABLE),
-                        2, (spidir_value_t[]){
-                            instance,
-                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)inst->operand.type),
-                        });
-
-                    // and store it into the vtable field
-                    spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8, vtable,
-                        spidir_builder_build_ptroff(builder, cast_value,
-                            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
-
-                } else {
-                    cast_value = instance;
-                }
+                cast_value = instance;
             }
             spidir_builder_build_branch(builder, valid);
         }
@@ -2020,11 +2347,12 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
         //
         spidir_builder_set_block(builder, valid);
         if (is_upcast) {
-            // always has a cast value
             STACK_TOP()->value = cast_value;
-        } else if (!is_possible_cast) {
+
+        } else if (is_impossible_downcast) {
             // always has a null-cast value
             STACK_TOP()->value = null_cast_value;
+
         } else {
             // might have either, choose
             STACK_TOP()->value = spidir_builder_build_phi(builder, SPIDIR_TYPE_PTR, 2,
@@ -2176,13 +2504,12 @@ static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_han
     emit_load_reference(builder, &stack[0]);
 
     // if this is a reference need to turn into an integer
-    if (stack[0].kind == JIT_KIND_OBJ_REF) {
+    if (stack[0].kind == JIT_KIND_OBJ_REF || (stack[0].kind == JIT_KIND_NATIVE_INT && stack[0].type->IsPointer)) {
         stack[0].value = spidir_builder_build_icmp(builder,
             inst->opcode == CEE_BRFALSE ? SPIDIR_ICMP_EQ : SPIDIR_ICMP_NE,
             SPIDIR_TYPE_I32,
             stack[0].value,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0));
-
     } else if (inst->opcode == CEE_BRFALSE) {
         SWAP(target, next);
     }
@@ -2362,6 +2689,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STSFLD] = emit_stfld,
 
     [CEE_INITOBJ] = emit_initobj,
+    [CEE_LOCALLOC] = emit_localloc,
 
     [CEE_LDIND_I1] = emit_ldind,
     [CEE_LDIND_U1] = emit_ldind,
@@ -2404,6 +2732,12 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_AND] = emit_binary_op,
     [CEE_OR] = emit_binary_op,
     [CEE_XOR] = emit_binary_op,
+    [CEE_ADD_OVF] = emit_binary_op_ovf,
+    [CEE_ADD_OVF_UN] = emit_binary_op_ovf,
+    [CEE_SUB_OVF] = emit_binary_op_ovf,
+    [CEE_SUB_OVF_UN] = emit_binary_op_ovf,
+    [CEE_MUL_OVF] = emit_binary_op_ovf,
+    [CEE_MUL_OVF_UN] = emit_binary_op_ovf,
 
     [CEE_NEG] = emit_neg,
     [CEE_NOT] = emit_not,
@@ -2412,6 +2746,19 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_SHR] = emit_shift,
     [CEE_SHR_UN] = emit_shift,
 
+    [CEE_CONV_OVF_U1] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_I1] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_U1_UN] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_I1_UN] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_U2] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_I2] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_U2_UN] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_I2_UN] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_U4] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_I4] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_U4_UN] = emit_conv_ovf_i4,
+    [CEE_CONV_OVF_I4_UN] = emit_conv_ovf_i4,
+
     [CEE_CONV_I1] = emit_conv_i4,
     [CEE_CONV_I2] = emit_conv_i4,
     [CEE_CONV_I4] = emit_conv_i4,
@@ -2419,6 +2766,18 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_CONV_U2] = emit_conv_i4,
     [CEE_CONV_U4] = emit_conv_i4,
 
+    [CEE_CONV_OVF_I8_UN] = emit_conv_ovf_i8,
+    [CEE_CONV_OVF_I_UN] = emit_conv_ovf_i8,
+    [CEE_CONV_OVF_U8] = emit_conv_ovf_i8,
+    [CEE_CONV_OVF_U] = emit_conv_ovf_i8,
+
+    // all of these cases are nops no matter
+    // the input and they behave the exact same
+    // as the normal converts
+    [CEE_CONV_OVF_I8] = emit_conv_i8,
+    [CEE_CONV_OVF_I] = emit_conv_i8,
+    [CEE_CONV_OVF_U8_UN] = emit_conv_i8,
+    [CEE_CONV_OVF_U_UN] = emit_conv_i8,
     [CEE_CONV_I8] = emit_conv_i8,
     [CEE_CONV_U8] = emit_conv_i8,
     [CEE_CONV_I] = emit_conv_i8,

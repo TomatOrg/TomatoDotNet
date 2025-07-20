@@ -200,6 +200,16 @@ static void mangle_method_name(string_builder_t* builder, RuntimeMethodBase meth
         string_builder_push_cstr(builder, "C1E");
     } else {
         mangle_push_name(builder, method->Name, thunk);
+
+        // method generic arguments
+        if (method->GenericArguments != NULL) {
+            string_builder_push_char(builder, 'I');
+            for (int i = 0; i < method->GenericArguments->Length; i++) {
+                mangle_push_type(builder, method->GenericArguments->Elements[i]);
+            }
+            string_builder_push_char(builder, 'E');
+        }
+
         string_builder_push_char(builder, 'E');
     }
 
@@ -244,6 +254,45 @@ void string_builder_push_cpp_type_name(string_builder_t* builder, RuntimeTypeInf
             // the type name
             string_builder_push_cpp_type_name(builder, param);
             if (i != type->GenericArguments->Length - 1) {
+                string_builder_push_cstr(builder, ", ");
+            }
+        }
+        string_builder_push_char(builder, '>');
+    }
+}
+
+
+void string_builder_push_cpp_method_name(string_builder_t* builder, RuntimeMethodBase method) {
+    // cut after the `
+    for (int i = 0; i < method->Name->Length; i++) {
+        if (method->Name->Chars[i] == '`') {
+            break;
+        } else {
+            string_builder_push_char(builder, method->Name->Chars[i]);
+        }
+    }
+
+    // push the generic signature if any
+    if (method->GenericArguments != NULL) {
+        string_builder_push_char(builder, '<');
+        for (int i = 0; i < method->GenericArguments->Length; i++) {
+            RuntimeTypeInfo param = method->GenericArguments->Elements[i];
+
+            // the namespce
+            if (param->Namespace != NULL) {
+                for (int j = 0; j < param->Namespace->Length; j++) {
+                    if (param->Namespace->Chars[j] == '.') {
+                        string_builder_push_cstr(builder, "::");
+                    } else {
+                        string_builder_push_char(builder, param->Namespace->Chars[j]);
+                    }
+                }
+                string_builder_push_cstr(builder, "::");
+            }
+
+            // the type name
+            string_builder_push_cpp_type_name(builder, param);
+            if (i != method->GenericArguments->Length - 1) {
                 string_builder_push_cstr(builder, ", ");
             }
         }
@@ -338,7 +387,20 @@ static void dwarf_write_member_type(jit_elf_t* elf, RuntimeTypeInfo type) {
 }
 
 static void dwarf_write_param_type(jit_elf_t* elf, RuntimeTypeInfo type) {
-    dwarf_write_type_ref(elf, type, true);
+    if (
+        type == tBoolean || type == tChar ||
+        type == tSByte || type == tByte ||
+        type == tInt16 || type == tUInt16 ||
+        type == tInt32 || type == tUInt32 ||
+        type == tInt64 || type == tUInt64 ||
+        type == tIntPtr || type == tUIntPtr ||
+        type == tDouble || type == tSingle ||
+        type->BaseType == tEnum
+    ) {
+        dwarf_write_type_ref(elf, type, false);
+    } else {
+        dwarf_write_type_ref(elf, type, true);
+    }
 }
 
 static void dwarf_write_base_type(jit_elf_t* elf, RuntimeTypeInfo type) {
@@ -734,10 +796,12 @@ static void dwarf_write_method(jit_elf_t* elf, RuntimeMethodBase method) {
     dwarf_write_uleb(&elf->debug_info, tag);
 
     // the name
-    dwarf_write_string(&elf->debug_info, method->Name);
+    string_builder_t builder = {};
+    string_builder_push_cpp_method_name(&builder, method);
+    dwarf_write_str(&elf->debug_info, string_builder_build(&builder));
+    string_builder_free(&builder);
 
     // the linkage name
-    string_builder_t builder = {};
     mangle_method_name(&builder, (RuntimeMethodBase)method, false);
     dwarf_write_str(&elf->debug_info, string_builder_build(&builder));
     string_builder_free(&builder);

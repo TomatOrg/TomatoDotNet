@@ -65,13 +65,7 @@ static spidir_value_t emit_delegate_invoke(spidir_builder_handle_t builder, Runt
  * perform any kind of type checking
  */
 static spidir_value_t emit_unsafe_as(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
-    RuntimeTypeInfo typ = method->Parameters->Elements[0]->ParameterType;
-    if (typ->IsPointer) {
-        // from a pointer, aka passed as int, turn it into a pointer type
-        return spidir_builder_build_inttoptr(builder, args[0]);
-    } else {
-        return args[0];
-    }
+    return args[0];
 }
 
 /**
@@ -131,6 +125,10 @@ static spidir_value_t emit_runtime_helpers_is_bitwise_equatable(spidir_builder_h
     }
 }
 
+static spidir_value_t emit_runtime_helpers_get_offset_to_string_data(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, offsetof(struct String, Chars));
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Generic emit code
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -149,7 +147,8 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
     } else if (type == tUnsafe) {
         if (
             tdn_compare_string_to_cstr(method->Name, "As") ||
-            tdn_compare_string_to_cstr(method->Name, "AsRef")
+            tdn_compare_string_to_cstr(method->Name, "AsRef") ||
+            tdn_compare_string_to_cstr(method->Name, "AsPointer")
         ) {
             return emit_unsafe_as;
         } else if (tdn_compare_string_to_cstr(method->Name, "AddByteOffset")) {
@@ -166,6 +165,8 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
             return emit_runtime_helpers_is_reference_or_contains_references;
         } else if (tdn_compare_string_to_cstr(method->Name, "IsBitwiseEquatable")) {
             return emit_runtime_helpers_is_bitwise_equatable;
+        } else if (tdn_compare_string_to_cstr(method->Name, "get_OffsetToStringData")) {
+            return emit_runtime_helpers_get_offset_to_string_data;
         }
     }
 

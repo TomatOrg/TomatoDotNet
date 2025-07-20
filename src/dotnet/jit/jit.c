@@ -230,7 +230,7 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
             // we use that)
             void* ptr = method->MethodPtr;
             if (method->ThunkPtr != NULL) {
-                ptr = method->MethodPtr;
+                ptr = method->ThunkPtr;
             }
             type->JitVTable->Functions[j] = ptr;
         }

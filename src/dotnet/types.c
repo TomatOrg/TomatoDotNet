@@ -46,6 +46,7 @@ RuntimeTypeInfo tRuntimeMethodHandle = NULL;
 RuntimeTypeInfo tRuntimeTypeHandle = NULL;
 
 RuntimeTypeInfo tNullable = NULL;
+RuntimeTypeInfo tSpan = NULL;
 
 RuntimeTypeInfo tUnsafe = NULL;
 RuntimeTypeInfo tMemoryMarshal = NULL;

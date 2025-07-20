@@ -45,6 +45,7 @@ extern RuntimeTypeInfo tRuntimeMethodHandle;
 extern RuntimeTypeInfo tRuntimeTypeHandle;
 
 extern RuntimeTypeInfo tNullable;
+extern RuntimeTypeInfo tSpan;
 
 extern RuntimeTypeInfo tUnsafe;
 extern RuntimeTypeInfo tMemoryMarshal;

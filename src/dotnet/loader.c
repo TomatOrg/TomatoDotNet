@@ -98,19 +98,19 @@ static init_type_t m_init_types[] = {
     INIT_VALUE_TYPE(System, ValueType, true),
     INIT_VALUE_TYPE(System, Enum, true),
     INIT_VALUE_TYPE(System, Boolean, true, 10),
-    INIT_VALUE_TYPE(System, Char, true, 37),
-    INIT_VALUE_TYPE(System, SByte, true, 24),
-    INIT_VALUE_TYPE(System, Int16, true, 24),
-    INIT_VALUE_TYPE(System, Int32, true, 24),
-    INIT_VALUE_TYPE(System, Int64, true, 24),
-    INIT_VALUE_TYPE(System, IntPtr, true, 24),
-    INIT_VALUE_TYPE(System, Byte, true, 37),
-    INIT_VALUE_TYPE(System, UInt16, true, 24),
-    INIT_VALUE_TYPE(System, UInt32, true, 24),
-    INIT_VALUE_TYPE(System, UInt64, true, 24),
-    INIT_VALUE_TYPE(System, UIntPtr, true, 24),
-    INIT_VALUE_TYPE(System, Single, true, 44),
-    INIT_VALUE_TYPE(System, Double, true, 44),
+    INIT_VALUE_TYPE(System, Char, true, 64),
+    INIT_VALUE_TYPE(System, SByte, true, 51),
+    INIT_VALUE_TYPE(System, Int16, true, 51),
+    INIT_VALUE_TYPE(System, Int32, true, 51),
+    INIT_VALUE_TYPE(System, Int64, true, 51),
+    INIT_VALUE_TYPE(System, IntPtr, true, 35),
+    INIT_VALUE_TYPE(System, Byte, true, 67),
+    INIT_VALUE_TYPE(System, UInt16, true, 51),
+    INIT_VALUE_TYPE(System, UInt32, true, 51),
+    INIT_VALUE_TYPE(System, UInt64, true, 51),
+    INIT_VALUE_TYPE(System, UIntPtr, true, 35),
+    INIT_VALUE_TYPE(System, Single, true, 143),
+    INIT_VALUE_TYPE(System, Double, true, 143),
     INIT_VALUE_TYPE(System, Void, true),
 
     INIT_HEAP_TYPE(System.Reflection, RuntimeConstructorInfo, 5),
@@ -164,6 +164,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Runtime.CompilerServices, RuntimeHelpers),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
     { "System", "Nullable`1", &tNullable, 4 },
+    { "System", "Span`1", &tSpan, 4 },
 };
 static int m_loaded_types = 0;
 
@@ -526,8 +527,10 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
             // this check does not work for strings since they
             // are inherently different sized (because of the
             // variable length nature)
-            CHECK(type->HeapSize == current_size,
-                "%T Type conflict (%zu == %zu)", type, type->HeapSize, current_size);
+            // NOTE: we allow the type to be larger than the allocations for the
+            //       fields, mainly for the use of fixed buffers
+            CHECK(type->HeapSize >= current_size,
+                "%T Type conflict (%zu >= %zu)", type, type->HeapSize, current_size);
         } else {
             type->HeapSize = current_size;
         }
@@ -743,18 +746,22 @@ static tdn_err_t add_interface_to_type(RuntimeTypeInfo info, RuntimeTypeInfo int
         .key = interface,
         .value = parent_offset
     };
-    hmputs(info->InterfaceImpls, new_impl);
 
     // if a prime was not generated already, add to the list of types that implement this interface
     // otherwise just multiply our product with the generated prime
-    if (interface->InterfacePrime == 0) {
-        // set the new link to point to us
-        new_impl.next = interface->InterfaceImplementors;
-        interface->InterfaceImplementors = info;
-    } else {
-        // add the current interface already
-        CHECK(!__builtin_mul_overflow(*interface_product, interface->InterfacePrime, interface_product));
+    if (!info->Attributes.Interface) {
+        if (interface->InterfacePrime == 0) {
+            // set the new link to point to us
+            new_impl.next = interface->InterfaceImplementors;
+            interface->InterfaceImplementors = info;
+        } else {
+            // add the current interface already
+            CHECK(!__builtin_mul_overflow(*interface_product, interface->InterfacePrime, interface_product));
+        }
     }
+
+    // now add it to the interface impls
+    hmputs(info->InterfaceImpls, new_impl);
 
     // go over the interfaces that this interface implements and add them, to have a flat
     // interface table for this type

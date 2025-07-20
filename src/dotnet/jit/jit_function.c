@@ -109,6 +109,30 @@ static void jit_destroy_block(jit_block_t* block) {
     arrfree(block->leave_target_stack);
 }
 
+static bool is_unsafe_span_ctor(RuntimeMethodBase method) {
+    // not span type, ignore
+    if (method->DeclaringType == NULL) return false;
+    if (method->DeclaringType->GenericTypeDefinition != tSpan) return false;
+
+    // check the arguments
+    if (method->Parameters->Length != 2) return false;
+    if (!method->Parameters->Elements[0]->ParameterType->IsPointer) return false;
+    if (method->Parameters->Elements[1]->ParameterType != tInt32) return false;
+
+    // verified!
+    return true;
+}
+
+typedef enum localloc_state_machine {
+    LOCALLOC_PATTERN__NONE,
+    LOCALLOC_PATTERN__FOUND_LDC_I4,
+    LOCALLOC_PATTERN__FOUND_CONV_U,
+    LOCALLOC_PATTERN__FOUND_SIZEOF,
+    LOCALLOC_PATTERN__FOUND_MUL_OVF_UN,
+    LOCALLOC_PATTERN__FOUND_LOCALLOC,
+    LOCALLOC_PATTERN__FOUND_LDC_I4_LEN,
+} localloc_state_machine_t;
+
 static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in_block, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = function->method;
@@ -128,14 +152,19 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     }
 
     int indent = 0;
+    bool allow_unsafe = method->Module->Assembly->AllowUnsafe;
+
+    // the localloc verification
+    localloc_state_machine_t localloc_state = LOCALLOC_PATTERN__NONE;
+    int localloc_size = 0;
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
-    tdn_il_inst_t last_inst;
+    tdn_il_opcode_t last_opcode;
     uint32_t pc = block.block.start;
     RuntimeTypeInfo constrained = NULL;
     while (pc < block.block.end) {
-        last_inst = inst;
+        last_opcode = inst.opcode;
 
         // can only parse more instructions if we had no block
         // terminating instruction
@@ -255,15 +284,139 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
         // if the last opcode is an ldftn or ldvirtftn then
         // this must be a newobj
-        if (last_inst.opcode == CEE_LDFTN || last_inst.opcode == CEE_LDVIRTFTN) {
+        if (last_opcode == CEE_LDFTN || last_opcode == CEE_LDVIRTFTN) {
             CHECK_ERROR(inst.opcode == CEE_NEWOBJ,
                 TDN_ERROR_VERIFIER_DELEGATE_PATTERN);
         }
 
         // before ldvirtftn we must have a dup
         if (inst.opcode == CEE_LDVIRTFTN) {
-            CHECK_ERROR(last_inst.opcode == CEE_DUP,
+            CHECK_ERROR(last_opcode == CEE_DUP,
                 TDN_ERROR_VERIFIER_DELEGATE_PATTERN);
+        }
+
+        // check the localloc state machine, the patterns we are matching are:
+        //
+        //  ldc.i4 <total size>
+        //  conv.u
+        //  localloc
+        //
+        // or (when there are generics)
+        //  ldc.i4 <len>
+        //  conv.u
+        //  sizeof !!T
+        //  mul.ovf.un
+        //  localloc
+        //
+        // in both cases we will set a constant value for localloc
+        // in the case of safe assemblies we will also verify that
+        // it continues with:
+        //  ldc.i4 <len>
+        //  newobj Span<T>(void*,int)
+        //
+        // we will explicitly check that the len * sizeof(T) matches
+        // the allocated size
+        //
+        bool call_verified = allow_unsafe;
+        switch (localloc_state) {
+            case LOCALLOC_PATTERN__NONE: {
+                if (inst.opcode == CEE_LDC_I4) {
+                    localloc_state = LOCALLOC_PATTERN__FOUND_LDC_I4;
+                    localloc_size = inst.operand.int32;
+                } else {
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+                }
+            } break;
+
+            case LOCALLOC_PATTERN__FOUND_LDC_I4: {
+                if (inst.opcode == CEE_CONV_U) {
+                    localloc_state = LOCALLOC_PATTERN__FOUND_CONV_U;
+                } else {
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+                }
+            } break;
+
+            case LOCALLOC_PATTERN__FOUND_CONV_U: {
+                if (inst.opcode == CEE_LOCALLOC) {
+                    inst.operand_type = TDN_IL_INT32;
+                    inst.operand.int32 = localloc_size;
+                    localloc_state = LOCALLOC_PATTERN__FOUND_LOCALLOC;
+
+                } else if (inst.opcode == CEE_SIZEOF) {
+                    // TODO: overflow checking or something
+                    localloc_size *= inst.operand.type->StackSize;
+                    localloc_state = LOCALLOC_PATTERN__FOUND_SIZEOF;
+
+                } else {
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+                }
+            } break;
+
+            case LOCALLOC_PATTERN__FOUND_SIZEOF: {
+                if (inst.opcode == CEE_MUL_OVF_UN) {
+                    localloc_state = LOCALLOC_PATTERN__FOUND_MUL_OVF_UN;
+                } else {
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+                }
+            } break;
+
+            case LOCALLOC_PATTERN__FOUND_MUL_OVF_UN: {
+                if (inst.opcode == CEE_LOCALLOC) {
+                    inst.operand_type = TDN_IL_INT32;
+                    inst.operand.int32 = localloc_size;
+                    localloc_state = LOCALLOC_PATTERN__FOUND_LOCALLOC;
+
+                } else {
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+                }
+            } break;
+
+            case LOCALLOC_PATTERN__FOUND_LOCALLOC: {
+                if (!allow_unsafe) {
+                    // we must have the opcode to load the length now
+                    CHECK(inst.opcode == CEE_LDC_I4);
+
+                    // at this point we already allocated, so we need to verify
+                    // that we are invoking the Span ctor correctly, to do so verify
+                    // in here that the size divides perfectly, and remember the per
+                    // element size that we expect to have
+                    CHECK((localloc_size % inst.operand.int32) == 0);
+                    localloc_size /= inst.operand.int32;
+
+                    // next we need to find ctor
+                    localloc_state = LOCALLOC_PATTERN__FOUND_LDC_I4_LEN;
+                } else {
+                    // we don't care whatever happens next
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+                }
+            } break;
+
+            case LOCALLOC_PATTERN__FOUND_LDC_I4_LEN: {
+                // we can only reach here if we don't allow unsafe
+                if (inst.opcode == CEE_NEWOBJ) {
+                    // ensure we are calling the unsafe span ctor
+                    CHECK(is_unsafe_span_ctor(inst.operand.method));
+
+                    // ensure the element size matches
+                    RuntimeTypeInfo span_type = inst.operand.method->DeclaringType->GenericArguments->Elements[0];
+                    CHECK(span_type->StackSize == localloc_size);
+
+                    // we verified the call, we can continue with
+                    // the normal pattern now
+                    call_verified = true;
+                    localloc_state = LOCALLOC_PATTERN__NONE;
+
+                } else {
+                    // we must have seen
+                    CHECK_FAIL();
+                }
+            } break;
+        }
+
+        // if we have not verified the call, then ensure that we don't call
+        // the unsafe span ctor
+        if (!call_verified && inst.operand_type == TDN_IL_METHOD) {
+            CHECK(!is_unsafe_span_ctor(inst.operand.method));
         }
 
         //
@@ -683,9 +836,13 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
         value->kind = JIT_KIND_FLOAT;
         value->type = tDouble;
 
-    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
+    } else if (type == tIntPtr || type == tUIntPtr) {
         value->kind = JIT_KIND_NATIVE_INT;
         value->type = tIntPtr;
+
+    } else if (type->IsPointer) {
+        value->kind = JIT_KIND_NATIVE_INT;
+        value->type = type;
 
     } else if (type->BaseType == tEnum) {
         jit_stack_value_init(value, type->EnumUnderlyingType);

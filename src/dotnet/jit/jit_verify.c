@@ -833,7 +833,7 @@ static bool verifier_is_assignable(jit_stack_value_t* src, jit_stack_value_t* ds
 
         // can also be int64
         case JIT_KIND_NATIVE_INT:
-            return dst->kind == JIT_KIND_INT64;
+            return dst->kind == JIT_KIND_INT64 || dst->kind == JIT_KIND_NATIVE_INT;
 
         default:
             ASSERT(!"Invalid kind", "%d of %T", src->kind, src->type);
@@ -1395,6 +1395,33 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_localloc(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // both int32 and native int are allowed, we are going to let this pass verification
+    // because the pointer is not something we care too much about
+    CHECK(
+        stack->kind == JIT_KIND_INT32 ||
+        stack->kind == JIT_KIND_NATIVE_INT
+    );
+
+    // if the assembly requires unsafe then only allow
+    // a constant in this, this is only valid because our
+    // iterator fixes it up
+    if (!function->method->Module->Assembly->AllowUnsafe) {
+        CHECK(inst->operand_type == TDN_IL_INT32);
+    }
+
+    RuntimeTypeInfo ptr = NULL;
+    CHECK_AND_RETHROW(tdn_get_pointer_type(tVoid, &ptr));
+
+    // its just a pointer
+    jit_stack_value_init(STACK_PUSH(), ptr);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_ldind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1578,6 +1605,12 @@ static tdn_err_t verify_binary_op(jit_function_t* function, jit_block_t* block, 
     // Stack value kind is ordered to make this work
     jit_stack_value_t result = (stack[0].kind > stack[1].kind) ? stack[0] : stack[1];
 
+    // ensure that whatever the native int was its degraded into
+    // an integer and not stay as a pointer
+    if (result.kind == JIT_KIND_NATIVE_INT) {
+        result.type = tIntPtr;
+    }
+
     CHECK_ERROR((stack[0].kind == stack[1].kind) || (result.kind == JIT_KIND_NATIVE_INT),
         TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
 
@@ -1634,7 +1667,7 @@ static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_i
     // validate that both are good, specifically for unsafe code allow to perform
     // the operation also on by-refs
     if (function->method->Module->Assembly->AllowUnsafe) {
-        CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_BY_REF,
+        CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_OBJ_REF,
             TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
     } else {
         CHECK_ERROR(JIT_KIND_INT32 <= stack->kind && stack->kind <= JIT_KIND_FLOAT,
@@ -1650,6 +1683,12 @@ static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_i
         case CEE_CONV_OVF_U1:
         case CEE_CONV_OVF_U2:
         case CEE_CONV_OVF_U4:
+        case CEE_CONV_OVF_I1_UN:
+        case CEE_CONV_OVF_I2_UN:
+        case CEE_CONV_OVF_I4_UN:
+        case CEE_CONV_OVF_U1_UN:
+        case CEE_CONV_OVF_U2_UN:
+        case CEE_CONV_OVF_U4_UN:
         case CEE_CONV_I1:
         case CEE_CONV_I2:
         case CEE_CONV_I4:
@@ -1658,10 +1697,14 @@ static tdn_err_t verify_conv(jit_function_t* function, jit_block_t* block, tdn_i
         case CEE_CONV_U4: type = tInt32; break;
         case CEE_CONV_OVF_I8:
         case CEE_CONV_OVF_U8:
+        case CEE_CONV_OVF_I8_UN:
+        case CEE_CONV_OVF_U8_UN:
         case CEE_CONV_I8:
         case CEE_CONV_U8: type = tInt64; break;
         case CEE_CONV_OVF_I:
         case CEE_CONV_OVF_U:
+        case CEE_CONV_OVF_I_UN:
+        case CEE_CONV_OVF_U_UN:
         case CEE_CONV_I:
         case CEE_CONV_U: type = tIntPtr; break;
         case CEE_CONV_R4: type = tSingle; break;
@@ -2480,6 +2523,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STSFLD] = verify_stfld,
 
     [CEE_INITOBJ] = verify_initobj,
+    [CEE_LOCALLOC] = verify_localloc,
 
     [CEE_LDIND_I1] = verify_ldind,
     [CEE_LDIND_U1] = verify_ldind,
@@ -2522,6 +2566,12 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_AND] = verify_binary_op,
     [CEE_OR] = verify_binary_op,
     [CEE_XOR] = verify_binary_op,
+    [CEE_ADD_OVF] = verify_binary_op,
+    [CEE_ADD_OVF_UN] = verify_binary_op,
+    [CEE_SUB_OVF] = verify_binary_op,
+    [CEE_SUB_OVF_UN] = verify_binary_op,
+    [CEE_MUL_OVF] = verify_binary_op,
+    [CEE_MUL_OVF_UN] = verify_binary_op,
 
     [CEE_NEG] = verify_unary_op,
     [CEE_NOT] = verify_unary_op,
@@ -2530,6 +2580,26 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_SHL] = verify_shift,
     [CEE_SHR_UN] = verify_shift,
 
+    [CEE_CONV_OVF_I1] = verify_conv,
+    [CEE_CONV_OVF_I2] = verify_conv,
+    [CEE_CONV_OVF_I4] = verify_conv,
+    [CEE_CONV_OVF_U1] = verify_conv,
+    [CEE_CONV_OVF_U2] = verify_conv,
+    [CEE_CONV_OVF_U4] = verify_conv,
+    [CEE_CONV_OVF_I1_UN] = verify_conv,
+    [CEE_CONV_OVF_I2_UN] = verify_conv,
+    [CEE_CONV_OVF_I4_UN] = verify_conv,
+    [CEE_CONV_OVF_U1_UN] = verify_conv,
+    [CEE_CONV_OVF_U2_UN] = verify_conv,
+    [CEE_CONV_OVF_U4_UN] = verify_conv,
+    [CEE_CONV_OVF_I8] = verify_conv,
+    [CEE_CONV_OVF_U8] = verify_conv,
+    [CEE_CONV_OVF_I8_UN] = verify_conv,
+    [CEE_CONV_OVF_U8_UN] = verify_conv,
+    [CEE_CONV_OVF_I] = verify_conv,
+    [CEE_CONV_OVF_U] = verify_conv,
+    [CEE_CONV_OVF_I_UN] = verify_conv,
+    [CEE_CONV_OVF_U_UN] = verify_conv,
     [CEE_CONV_I1] = verify_conv,
     [CEE_CONV_I2] = verify_conv,
     [CEE_CONV_I4] = verify_conv,

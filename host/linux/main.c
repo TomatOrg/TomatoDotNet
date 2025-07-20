@@ -406,6 +406,7 @@ int main(int argc, char* argv[]) {
     int jit_emit_verbose = 0;
     int jit_verify_verbose = 0;
     int jit_dump = 0;
+    int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
     int il_verify_test = 0;
@@ -414,6 +415,7 @@ int main(int argc, char* argv[]) {
         {"jit-emit-verbose", no_argument, &jit_emit_verbose, 1},
         {"jit-verify-verbose", no_argument, &jit_verify_verbose, 1},
         {"jit-dump", no_argument, &jit_dump, 1},
+        {"jit-dump-elf", no_argument, &jit_dump_elf, 1},
         {"jit-dont-optimize", no_argument, &jit_dont_optimize, 1},
         {"jit-dont-inline", no_argument, &jit_dont_inline, 1},
         {"ilverify-test", no_argument, &il_verify_test, 1},
@@ -451,6 +453,7 @@ int main(int argc, char* argv[]) {
     if (jit_dont_optimize) config->jit_optimize = false;
     if (jit_dump) config->jit_spidir_dump = true;
     if (jit_verify_verbose) config->jit_verify_trace = true;
+    if (jit_dump_elf) config->jit_elf_dump = true;
     if (jit_emit_verbose) {
         config->jit_emit_trace = true;
     }
