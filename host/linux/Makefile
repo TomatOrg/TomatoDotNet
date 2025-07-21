@@ -67,6 +67,7 @@ CFLAGS					+= -fms-extensions -Wno-microsoft-anon-tag
 CFLAGS					+= -I../../src
 CFLAGS					+= -I../../include
 CFLAGS					+= -I../../libs/spidir/c-api/include
+CFLAGS					+= -I../../libs/icu4x/ffi/capi/bindings/c
 
 
 LDFLAGS					:= $(COMMON_CFLAGS)
@@ -116,9 +117,9 @@ $(TDN_BIN_DIR)/libtdn.a: force
 		LD="$(LD)" \
 		DEBUG="$(DEBUG)" \
 		CFLAGS="$(COMMON_CFLAGS)" \
-		SPIDIR_CARGO_TARGET_NAME="x86_64-unknown-linux-none" \
-		SPIDIR_CARGO_FLAGS="--target x86_64-unknown-linux-none -Zbuild-std=core,alloc" \
-		SPIDIR_RUSTUP_TOOLCHAIN="nightly-2025-05-07"
+		CARGO_TARGET_NAME="x86_64-unknown-linux-none" \
+		CARGO_FLAGS="--target x86_64-unknown-linux-none -Zbuild-std=core,alloc" \
+		RUSTUP_TOOLCHAIN="nightly-2025-05-07"
 
 clean:
 	rm -rf $(OUT_DIR)

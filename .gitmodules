@@ -7,3 +7,6 @@
 [submodule "TdnCoreLib"]
 	path = TdnCoreLib
 	url = git@github.com:TomatOrg/TdnCoreLib.git
+[submodule "libs/icu4x"]
+	path = libs/icu4x
+	url = git@github.com:unicode-org/icu4x.git

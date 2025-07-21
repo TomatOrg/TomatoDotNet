@@ -1,0 +1,13 @@
+[package]
+name = "tdn-icu4x"
+edition = "2024"
+rust-version = "1.85"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies.icu_capi]
+path = "../icu4x/ffi/capi"
+default-features = false
+features = ["casemap"]
+

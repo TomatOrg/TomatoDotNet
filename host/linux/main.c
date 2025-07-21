@@ -392,7 +392,13 @@ static void assembly_clear_roots(RuntimeAssembly assembly) {
 
 extern void* g_gc_bottom_of_stack;
 
+#include "CaseMapper.h"
+
 int main(int argc, char* argv[]) {
+    {
+        TRACE("%c", icu4x_CaseMapper_simple_lowercase_mv1(NULL, 'A'));
+    }
+    return 0;
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
     RuntimeAssembly run = NULL;
