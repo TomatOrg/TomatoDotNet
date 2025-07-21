@@ -395,11 +395,12 @@ extern void* g_gc_bottom_of_stack;
 #include "CaseMapper.h"
 
 int main(int argc, char* argv[]) {
-    {
+    // {
         CaseMapper* mapper = icu4x_CaseMapper_create_mv1();
-        UNUSED(mapper);
-    }
-    return 0;
+        TRACE("%c", icu4x_CaseMapper_simple_uppercase_mv1(mapper, 'i'));
+        // UNUSED(mapper);
+    // }
+    // return 0;
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeAssembly corelib = NULL;
     RuntimeAssembly run = NULL;

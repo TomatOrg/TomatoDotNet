@@ -2,5 +2,4 @@
 
 extern crate alloc;
 extern crate icu_capi;
-
-mod platform;
+extern crate spidir;

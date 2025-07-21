@@ -12,7 +12,7 @@ path = "../spidir/c-api"
 [dependencies.icu_capi]
 path = "../icu4x/ffi/capi"
 default-features = false
-features = ["casemap"]
+features = ["casemap", "compiled_data"]
 
 [patch.crates-io]
 # The latest published version of `hexfloat2` doesn't yet include its `no_std` support; grab a
