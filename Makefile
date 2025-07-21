@@ -86,7 +86,7 @@ else
 LIBSPIDIR	:= out/cargo-target/$(CARGO_TARGET_NAME)/release/libspidir.a
 endif
 
-LIBICU4X	:= out/cargo-target/$(CARGO_TARGET_NAME)/release/libicu_capi.rlib
+LIBICU4X	:= out/cargo-target/$(CARGO_TARGET_NAME)/release/libtdn_icu4x.a
 
 # The default rule
 .PHONY: default
@@ -156,7 +156,6 @@ endif
 ICU4X_CARGO_CMD	+= rustc
 ICU4X_CARGO_CMD	+= --manifest-path libs/tdn-icu4x/Cargo.toml
 ICU4X_CARGO_CMD	+= --release
-ICU4X_CARGO_CMD	+= -p icu_capi
 ICU4X_CARGO_CMD	+= $(CARGO_FLAGS)
 ICU4X_CARGO_CMD += --target-dir out/cargo-target
 ICU4X_CARGO_CMD += --crate-type=staticlib

@@ -1,7 +1,3 @@
-#![no_std]
-
-extern crate alloc;
-
 use core::{
     alloc::{GlobalAlloc, Layout},
     ffi::c_char,
