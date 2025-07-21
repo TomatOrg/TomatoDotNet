@@ -9,5 +9,5 @@ crate-type = ["staticlib"]
 [dependencies.icu_capi]
 path = "../icu4x/ffi/capi"
 default-features = false
-features = ["casemap"]
+features = ["default_components"]
 
