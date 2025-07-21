@@ -396,7 +396,8 @@ extern void* g_gc_bottom_of_stack;
 
 int main(int argc, char* argv[]) {
     {
-        TRACE("%c", icu4x_CaseMapper_simple_lowercase_mv1(NULL, 'A'));
+        CaseMapper* mapper = icu4x_CaseMapper_create_mv1();
+        UNUSED(mapper);
     }
     return 0;
     tdn_err_t err = TDN_NO_ERROR;
