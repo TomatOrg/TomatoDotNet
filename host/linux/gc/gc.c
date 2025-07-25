@@ -11,7 +11,7 @@
 #include <sanitizer/asan_interface.h>
 
 #include "mem_tree.h"
-#include "dotnet/jit/jit_type.h"
+#include "dotnet/types.h"
 #include "tomatodotnet/tdn.h"
 
 /**

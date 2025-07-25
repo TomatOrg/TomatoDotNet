@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tomatodotnet/types/type.h"
+#include "util/defs.h"
 
 // base types that can be used
 extern RuntimeTypeInfo tObject;
@@ -59,6 +60,51 @@ extern RuntimeTypeInfo tUnmanagedType;
 
 extern RuntimeTypeInfo tDelegate;
 extern RuntimeTypeInfo tMulticastDelegate;
+
+static inline bool tdn_is_interface(RuntimeTypeInfo type) {
+    return type != NULL && type->Attributes.Interface;
+}
+
+static inline bool tdn_is_delegate(RuntimeTypeInfo type) {
+    return type != NULL && type->BaseType == tMulticastDelegate;
+}
+
+static inline bool tdn_is_struct(RuntimeTypeInfo type) {
+    // Anything which is not a value type but not a
+    // native type is a struct
+    return tdn_type_is_valuetype(type) && !type->IsByRef &&
+            type != tByte && type != tSByte &&
+            type != tInt16 && type != tUInt16 &&
+            type != tInt32 && type != tUInt32 &&
+            type != tInt64 && type != tUInt64 &&
+            type != tIntPtr && type != tUIntPtr &&
+            type != tBoolean && type != tChar &&
+            type != tSingle && type != tDouble &&
+            type->BaseType != tEnum;
+}
+
+/**
+ * ABI wise, does this type behave like a struct, includes value types
+ * and fat pointers like interfaces and delegates
+ */
+static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
+    return tdn_is_interface(type) || tdn_is_struct(type) || tdn_is_delegate(type);
+}
+
+/**
+ * Get the offset into the boxed value for the given type
+ * assumes its a value type
+ */
+static inline size_t tdn_get_boxed_value_offset(RuntimeTypeInfo type) {
+    return ALIGN_UP(sizeof(struct Object), type->StackAlignment);
+}
+
+/**
+ * Get the offset into the data of an array of the given element type
+ */
+static inline size_t tdn_get_array_elements_offset(RuntimeTypeInfo element_type) {
+    return ALIGN_UP(sizeof(struct Array), element_type->StackAlignment);
+}
 
 /**
  * Check the argument constraint against the actual generic type

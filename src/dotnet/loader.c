@@ -17,8 +17,8 @@
 #include <util/alloc.h>
 #include <util/prime.h>
 
+#include "types.h"
 #include "jit/jit.h"
-#include "jit/jit_type.h"
 
 typedef struct memory_file_handle {
      void* buffer;

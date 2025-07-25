@@ -1,5 +1,4 @@
 #include "dotnet/types.h"
-#include "dotnet/jit/jit_type.h"
 #include "dotnet/metadata/metadata.h"
 #include "tomatodotnet/types/type.h"
 #include "util/except.h"
@@ -67,7 +66,7 @@ void tdn_gc_trace_children(Object obj) {
         // need to ignore the fields
         void* obj_ptr = obj;
         if (tdn_type_is_valuetype(type)) {
-            obj_ptr += jit_get_boxed_value_offset(type);
+            obj_ptr += tdn_get_boxed_value_offset(type);
         }
 
         // go over all the managed pointers
