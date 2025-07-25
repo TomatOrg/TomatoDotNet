@@ -1,4 +1,4 @@
-
+#include "disasm.h"
 
 #include "tomatodotnet/disasm.h"
 
@@ -473,3 +473,16 @@ int tdn_disasm_print_end(RuntimeMethodBody body, uint32_t pc, int indent) {
 
     return indent;
 }
+
+/**
+ * Metadata for all the opcodes, used for decoding, this is turned
+ * into another struct which is a bit more useful
+ */
+const il_stack_behavior_t g_il_stack_behavior[] = {
+#define OPDEF_REAL_OPCODES_ONLY
+#define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) [c] = { pop, push },
+#include "tomatodotnet/opcode.def"
+#undef OPDEF
+#undef OPDEF_REAL_OPCODES_ONLY
+};
+const size_t g_il_stack_behavior_count = ARRAY_LENGTH(g_il_stack_behavior);

@@ -12,7 +12,6 @@
 #include <printf.h>
 #include <string.h>
 #include <time.h>
-#include <dotnet/jit/jit.h>
 #include <dotnet/metadata/metadata.h>
 #include "tomatodotnet/util/stb_ds.h"
 #include <getopt.h>
@@ -20,6 +19,7 @@
 #include <sys/mman.h>
 
 #include "dotnet/types.h"
+#include "dotnet/verifier/verifier.h"
 #include "gc/mem_tree.h"
 #include "util/string_builder.h"
 
@@ -336,7 +336,7 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
 
                 // we expect to get an error from this, if we didn't
                 // then we failed the test
-                tdn_err_t jit_err = tdn_jit_method(test_method);
+                tdn_err_t jit_err = verifier_verify_method(test_method);
                 CHECK(IS_ERROR(jit_err), "Should have failed");
 
                 // check that we got the correct condition
@@ -404,7 +404,7 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('T', type_output, type_arginf_sz);
 
     int jit_emit_verbose = 0;
-    int jit_verify_verbose = 0;
+    int jit_verify_verbose = 1;
     int jit_dump = 0;
     int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
