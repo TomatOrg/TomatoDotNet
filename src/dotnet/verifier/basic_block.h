@@ -4,7 +4,7 @@
 #include <tomatodotnet/except.h>
 #include <tomatodotnet/types/reflection.h>
 
-typedef struct jit_basic_block {
+typedef struct basic_block {
     // the clauses that are
     // directly around the block
     RuntimeExceptionHandlingClause try_clause;
@@ -23,15 +23,15 @@ typedef struct jit_basic_block {
     bool try_start;
     bool filter_start;
     bool handler_start;
-} jit_basic_block_t;
+} basic_block_t;
 
-typedef struct jit_basic_blocks {
+typedef struct basic_blocks {
     // the pc of the basic block
     uint32_t key;
 
     // the basic block range
-    jit_basic_block_t value;
-} jit_basic_block_entry_t;
+    basic_block_t value;
+} basic_block_entry_t;
 
 /**
  * Parse the code to get a hashmap of pc -> basic block
@@ -39,4 +39,4 @@ typedef struct jit_basic_blocks {
  * @param method                [IN] The method to find the basic blocks of
  * @param out_basic_blocks      [OUT] Hashmap of basic blocks
  */
-tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_t** out_basic_blocks);
+tdn_err_t verifier_find_basic_blocks(RuntimeMethodBase method, basic_block_entry_t** out_basic_blocks, bool* modified_this_type);

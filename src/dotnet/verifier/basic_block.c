@@ -1,4 +1,4 @@
-#include "jit_basic_block.h"
+#include "basic_block.h"
 
 #include <tomatodotnet/disasm.h>
 #include <util/alloc.h>
@@ -10,13 +10,13 @@
 // Block parser
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static void swap_basic_blocks(jit_basic_block_t* a, jit_basic_block_t* b) {
-    jit_basic_block_t temp = *a;
+static void swap_basic_blocks(basic_block_t* a, basic_block_t* b) {
+    basic_block_t temp = *a;
     *a = *b;
     *b = temp;
 }
 
-static int partition_basic_blocks(jit_basic_block_t* arr, int low, int high) {
+static int partition_basic_blocks(basic_block_t* arr, int low, int high) {
     uint32_t p = arr[low].start;
     int i = low;
     int j = high;
@@ -37,7 +37,7 @@ static int partition_basic_blocks(jit_basic_block_t* arr, int low, int high) {
     return j;
 }
 
-static void sort_basic_blocks(jit_basic_block_t* arr, int low, int high) {
+static void sort_basic_blocks(basic_block_t* arr, int low, int high) {
     if (low < high) {
         int pi = partition_basic_blocks(arr, low, high);
         sort_basic_blocks(arr, low, pi - 1);
@@ -45,40 +45,32 @@ static void sort_basic_blocks(jit_basic_block_t* arr, int low, int high) {
     }
 }
 
-typedef enum block_flags {
-    BLOCK_TRY_START = 1 << 0,
-    BLOCK_HANDLER_START = 1 << 1,
-    BLOCK_FILTER_START = 1 << 2,
-} block_flags_t;
-
-static void jit_add_basic_block(
-    jit_basic_block_t** basic_blocks,
-    jit_basic_block_entry_t** out_basic_blocks,
-    uint32_t pc,
-    block_flags_t flags
+static basic_block_t* verifier_add_basic_block(
+    basic_block_t** basic_blocks,
+    basic_block_entry_t** out_basic_blocks,
+    uint32_t pc
 ) {
     if (hmgeti(*out_basic_blocks, pc) < 0) {
-        jit_basic_block_t block = {
+        basic_block_t block = {
             .start = pc,
             .end = -1,
-            .try_start = (flags & BLOCK_TRY_START) != 0,
-            .handler_start = (flags & BLOCK_HANDLER_START) != 0,
-            .filter_start = (flags & BLOCK_FILTER_START) != 0,
         };
 
         arrpush(*basic_blocks, block);
         hmput(*out_basic_blocks, pc, block);
     }
+
+    return &hmgetp_null(*out_basic_blocks, pc)->value;
 }
 
-static void jit_find_enclosing_exception_regions(RuntimeMethodBody body, jit_basic_block_entry_t* basic_blocks) {
+static void verifier_find_enclosing_exception_regions(RuntimeMethodBody body, basic_block_entry_t* basic_blocks) {
     RuntimeExceptionHandlingClause_Array exception_regions = body->ExceptionHandlingClauses;
     if (exception_regions == NULL) {
         return;
     }
 
     for (int i = 0; i < hmlen(basic_blocks); i++) {
-        jit_basic_block_t* block = &basic_blocks[i].value;
+        basic_block_t* block = &basic_blocks[i].value;
 
         uint32_t offset = block->start;
         for (int j = 0; j < exception_regions->Length; j++) {
@@ -127,13 +119,16 @@ static void jit_find_enclosing_exception_regions(RuntimeMethodBody body, jit_bas
     }
 }
 
-tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_t** out_basic_blocks) {
+tdn_err_t verifier_find_basic_blocks(RuntimeMethodBase method, basic_block_entry_t** out_basic_blocks, bool* modified_this_type) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBody body = method->MethodBody;
-    jit_basic_block_t* ctx = {};
+    basic_block_t* ctx = {};
+
+    // start assuming nothing modified the `this`
+    *modified_this_type = false;
 
     // the first block always exists
-    jit_add_basic_block(&ctx, out_basic_blocks, 0, 0);
+    verifier_add_basic_block(&ctx, out_basic_blocks, 0);
 
     //
     // add all the finally/filter/fault/catch regions
@@ -142,10 +137,10 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             RuntimeExceptionHandlingClause clause = body->ExceptionHandlingClauses->Elements[i];
 
-            jit_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset, BLOCK_TRY_START);
-            jit_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset, BLOCK_HANDLER_START);
+            verifier_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset)->try_start = true;
+            verifier_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset)->handler_start = true;
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-                jit_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset, BLOCK_FILTER_START);
+                verifier_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset)->filter_start = true;
             }
         }
     }
@@ -159,25 +154,34 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
         tdn_normalize_inst(&inst);
         pc += inst.length;
 
+        // check if this invalidates the `this` because it takes it by-ref, in theory
+        // something can be made which is much smarter, but we will do the dumb thing
+        // because that is also what C# does
+        if (inst.opcode == CEE_LDARGA || inst.opcode == CEE_STARG) {
+            if (inst.operand.variable == 0) {
+                *modified_this_type = true;
+            }
+        }
+
         // check for basic blocks created by
         if (inst.control_flow == TDN_IL_CF_BRANCH) {
-            jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
+            verifier_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target);
 
         } else if (inst.control_flow == TDN_IL_CF_COND_BRANCH) {
             if (inst.operand_type == TDN_IL_SWITCH) {
                 // the default case
-                jit_add_basic_block(&ctx, out_basic_blocks, pc, 0);
+                verifier_add_basic_block(&ctx, out_basic_blocks, pc);
 
                 // the rest of the cases
                 for (int i = 0; i < arrlen(inst.operand.switch_targets); i++) {
-                    jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.switch_targets[i], 0);
+                    verifier_add_basic_block(&ctx, out_basic_blocks, inst.operand.switch_targets[i]);
                 }
 
             } else {
                 // and now add the new blocks, make sure the basic block at the current PC
                 // will
-                jit_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target, 0);
-                jit_add_basic_block(&ctx, out_basic_blocks, pc, 0);
+                verifier_add_basic_block(&ctx, out_basic_blocks, inst.operand.branch_target);
+                verifier_add_basic_block(&ctx, out_basic_blocks, pc);
             }
         }
 
@@ -191,7 +195,7 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     // now that we have the sorted list of blocks we can set the index
     // and the end of each of the blocks
     for (int i = 0; i < arrlen(ctx); i++) {
-        jit_basic_block_t* block = &hmgetp_null(*out_basic_blocks, ctx[i].start)->value;
+        basic_block_t* block = &hmgetp_null(*out_basic_blocks, ctx[i].start)->value;
         block->index = i;
         if (i != arrlen(ctx) - 1) {
             block->end = ctx[i + 1].start;
@@ -201,7 +205,7 @@ tdn_err_t jit_find_basic_blocks(RuntimeMethodBase method, jit_basic_block_entry_
     }
 
     // find the exception regions already
-    jit_find_enclosing_exception_regions(body, *out_basic_blocks);
+    verifier_find_enclosing_exception_regions(body, *out_basic_blocks);
 
 cleanup:
     if (IS_ERROR(err)) {
