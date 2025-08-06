@@ -10,6 +10,11 @@ typedef struct tdn_config {
     /**
      * Trace the opcodes while verifying the IL
      */
+    bool jit_type_prop_trace;
+
+    /**
+     * Trace the opcodes while verifying the IL
+     */
     bool jit_verify_trace;
 
     /**
