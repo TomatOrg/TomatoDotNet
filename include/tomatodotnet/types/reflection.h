@@ -233,7 +233,8 @@ typedef struct RuntimeMethodBase {
     int32_t VTableOffset;
 
     uint32_t IsReadOnly : 1;
-    uint32_t : 31;
+    uint32_t IsVerified : 1;
+    uint32_t : 30;
 }* RuntimeMethodBase;
 DEFINE_ARRAY(RuntimeMethodBase);
 

@@ -89,6 +89,10 @@ static bool match_generic_signature(RuntimeMethodInfo a, RuntimeMethodInfo b) {
 }
 
 RuntimeMethodBase verifier_get_typical_method_definition(RuntimeMethodBase method) {
+    if (method->GenericMethodDefinition != NULL) {
+        method = (RuntimeMethodBase)method->GenericMethodDefinition;
+    }
+
     RuntimeTypeInfo owning_type_definition = verifier_get_type_definition(method->DeclaringType);
 
     // If method is on a type that is its own type definition, this it is the type method
@@ -178,43 +182,4 @@ stack_value_t* stack_value_init(stack_value_t* value, RuntimeTypeInfo type) {
     }
 
     return value;
-}
-
-stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
-    if (type == NULL) {
-        return KIND_OBJ_REF;
-    } else if (
-        type == tBoolean ||
-        type == tChar ||
-        type == tSByte ||
-        type == tByte ||
-        type == tInt16 ||
-        type == tUInt16 ||
-        type == tInt32 ||
-        type == tUInt32
-    ) {
-        return KIND_INT32;
-
-    } else if (type == tInt64 || type == tUInt64) {
-        return KIND_INT64;
-
-    } else if (type == tDouble || type == tSingle) {
-        return KIND_FLOAT;
-
-    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
-        return KIND_NATIVE_INT;
-
-    } else if (type->BaseType == tEnum) {
-        return jit_get_type_kind(type->EnumUnderlyingType);
-
-    } else if (type->IsByRef) {
-        return KIND_BY_REF;
-
-    } else if (tdn_type_is_valuetype(type)) {
-        return KIND_VALUE_TYPE;
-
-    } else {
-        ASSERT(tdn_type_is_referencetype(type));
-        return KIND_OBJ_REF;
-    }
 }
