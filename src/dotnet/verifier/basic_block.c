@@ -125,7 +125,9 @@ tdn_err_t verifier_find_basic_blocks(RuntimeMethodBase method, basic_block_entry
     basic_block_t* ctx = {};
 
     // start assuming nothing modified the `this`
-    *modified_this_type = false;
+    if (modified_this_type != NULL) {
+        *modified_this_type = false;
+    }
 
     // the first block always exists
     verifier_add_basic_block(&ctx, out_basic_blocks, 0);
@@ -159,7 +161,9 @@ tdn_err_t verifier_find_basic_blocks(RuntimeMethodBase method, basic_block_entry
         // because that is also what C# does
         if (inst.opcode == CEE_LDARGA || inst.opcode == CEE_STARG) {
             if (inst.operand.variable == 0) {
-                *modified_this_type = true;
+                if (modified_this_type != NULL) {
+                    *modified_this_type = true;
+                }
             }
         }
 

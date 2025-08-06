@@ -60,6 +60,9 @@ typedef struct block {
     // the stack at the start of the basic block
     stack_value_t* stack;
 
+    // the phis of the each of the stack entries
+    spidir_phi_t* stack_phis;
+
     // does this block have multiple predecessors
     uint32_t multiple_predecessors : 1;
 
@@ -85,6 +88,9 @@ typedef struct local {
     // taken by reference, so we have a stack-slot
     // for this and we must use it no matter what
     bool spilled;
+
+    // the type of the local
+    RuntimeTypeInfo type;
 } local_t;
 
 typedef struct function {
@@ -113,7 +119,7 @@ typedef struct function {
     // the block that is used to enter the function, this is initialized with
     // all of the initial type information, and for inline functions should
     // include the inline values
-    block_t* entry_block;
+    block_t entry_block;
 
     // the queue of blocks to jit
     block_t** queue;
@@ -148,5 +154,8 @@ static inline uint32_t* jit_copy_leave_targets(uint32_t* targets) {
     return new;
 }
 
+block_t* jit_function_get_block(function_t* function, uint32_t target_pc, uint32_t* leave_target_stack);
 
-
+tdn_err_t jit_function_init(function_t* function, RuntimeMethodBase method);
+tdn_err_t jit_function(function_t* function, spidir_builder_handle_t builder);
+void jit_function_destroy(function_t* function);

@@ -87,7 +87,7 @@ static RuntimeTypeInfo verifier_merge_class_with_interface(RuntimeTypeInfo class
     return tObject;
 }
 
-static RuntimeTypeInfo verifier_merge_object_references(RuntimeTypeInfo class_a, RuntimeTypeInfo class_b) {
+RuntimeTypeInfo verifier_merge_object_references(RuntimeTypeInfo class_a, RuntimeTypeInfo class_b) {
     if (class_a == class_b) {
         return class_a;
     }
