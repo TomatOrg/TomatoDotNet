@@ -86,8 +86,6 @@ static inline stack_value_t stack_value_create(RuntimeTypeInfo type) {
     return value;
 }
 
-stack_value_kind_t get_type_kind(RuntimeTypeInfo type);
-
 typedef struct block {
     // the basic block range
     basic_block_t block;

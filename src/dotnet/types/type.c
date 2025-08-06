@@ -318,6 +318,12 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
             base->GenericArguments = original_method->GenericArguments;
         }
 
+        // if the original method is verified, this new method
+        // is also verified
+        if (original_method->IsVerified) {
+            base->IsVerified = true;
+        }
+
         // if it has a body copy it over
         if (method_def->rva != 0) {
             CHECK_AND_RETHROW(tdn_parser_method_body(assembly, method_def, base));
