@@ -34,6 +34,12 @@ static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_A
         CHECK_AND_RETHROW(tdn_parser_method_body(assembly, method_def, (RuntimeMethodBase)new_method));
     }
 
+    // if the base method is verified, this method
+    // is also verified
+    if (base->IsVerified) {
+        new_method->IsVerified = true;
+    }
+
     // and finally get the signature
     method_signature_t signature = {};
     CHECK_AND_RETHROW(sig_parse_method_def(

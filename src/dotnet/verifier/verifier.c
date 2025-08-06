@@ -615,17 +615,26 @@ tdn_err_t verifier_verify_method(RuntimeMethodBase method) {
     bool trace = tdn_get_config()->jit_verify_trace;
     function_t function = {};
 
+    // if already verified we can ignore it
+    if (method->IsVerified) {
+        goto cleanup;
+    }
+
     // we need to always verify the generic version of the method
     // and not the expanded one, this ensures that generic parameters
     // are always accessible but are checked against the generic of it
     // and that you don't perform any weird non-generic access on the type
     // (as the verifier would fail on such a thing)
-    method = verifier_get_typical_method_definition(method);
+    RuntimeMethodBase method_def = verifier_get_typical_method_definition(method);
+    if (method_def->IsVerified) {
+        method->IsVerified = true;
+        goto cleanup;
+    }
 
     if (trace) {
         TRACE("========================================");
         string_builder_t str_builder = {};
-        string_builder_push_method_signature(&str_builder, method, true);
+        string_builder_push_method_signature(&str_builder, method_def, true);
         const char* name = string_builder_build(&str_builder);
         TRACE("%s", name);
         string_builder_free(&str_builder);
@@ -633,7 +642,7 @@ tdn_err_t verifier_verify_method(RuntimeMethodBase method) {
     }
 
     // initialize our context
-    CHECK_AND_RETHROW(verifier_function_init(&function, method));
+    CHECK_AND_RETHROW(verifier_function_init(&function, method_def));
 
     // start with verifying the function fully
     CHECK_AND_RETHROW(verifier_visit_blocks(&function));
@@ -641,6 +650,10 @@ tdn_err_t verifier_verify_method(RuntimeMethodBase method) {
     if (trace) {
         TRACE("----------------------------------------");
     }
+
+    // mark both the method def and the method as verified
+    method_def->IsVerified = true;
+    method->IsVerified = true;
 
 cleanup:
     destroy_block(&function.entry_block);
