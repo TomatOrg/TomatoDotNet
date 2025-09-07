@@ -84,7 +84,6 @@ def run_single_test(dll: str, results: Queue) -> bool:
         proc = subprocess.Popen(
             [
                 TDN_BINARY,
-                '--jit-verify-verbose',
                 '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0',
                 os.path.join(CURRENT_DIR, dll)
             ],
@@ -124,7 +123,6 @@ def run_single_ilverify_test(dll: str, results: Queue) -> bool:
         proc = subprocess.Popen(
             [
                 TDN_BINARY,
-                '--jit-verify-verbose',
                 '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0',
                 '--ilverify-test', os.path.join(CURRENT_DIR, dll)
             ],
@@ -188,10 +186,10 @@ def run_tests(cases: List[str], parallelism: int) -> bool:
                 raise stderr
 
             if isinstance(stdout, bytes):
-                stdout = stdout.decode('utf-8')
+                stdout = stdout.decode('utf-8', errors='ignore')
 
             if isinstance(stderr, bytes):
-                stderr = stderr.decode('utf-8')
+                stderr = stderr.decode('utf-8', errors='ignore')
 
             stdout_output = format_output(stdout)
             stderr_output = format_output(stderr)

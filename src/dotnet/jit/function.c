@@ -148,12 +148,9 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
-    tdn_il_opcode_t last_opcode;
     uint32_t pc = block.block.start;
     RuntimeTypeInfo constrained = NULL;
     while (pc < block.block.end) {
-        last_opcode = inst.opcode;
-
         // get the instruction
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 

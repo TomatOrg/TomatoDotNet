@@ -99,7 +99,10 @@ tdn_err_t tdn_check_generic_argument_constraints(
         for (int i = 0; i < constraints->Length; i++) {
             RuntimeTypeInfo constraint = constraints->Elements[i];
             if (constraint == tUnmanagedType) {
-                CHECK(arg_type->IsUnmanaged);
+                // only check for unmanaged if the type is non-generic
+                if (!tdn_is_generic_parameter(arg_type)) {
+                    CHECK(arg_type->IsUnmanaged);
+                }
             } else {
                 CHECK(tdn_is_instance(arg_type, constraint, typeArgs, methodArgs),
                     "%T is-instance %T", arg_type, constraint);

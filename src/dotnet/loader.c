@@ -1359,11 +1359,18 @@ cleanup:
 static tdn_err_t fill_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    CHECK_AND_RETHROW(fill_stack_size(type));
-    CHECK_AND_RETHROW(fill_heap_size(type));
-    CHECK_AND_RETHROW(fill_interface_type_id(type));
-    CHECK_AND_RETHROW(fill_virtual_methods(type));
-    CHECK_AND_RETHROW(fill_object_type_id(type));
+
+    // Don't actually perform type init if this
+    // has a generic type parameter somewhere
+    if (tdn_has_generic_parameters(type)) {
+        CHECK_AND_RETHROW(fill_virtual_methods(type));
+    } else {
+        CHECK_AND_RETHROW(fill_stack_size(type));
+        CHECK_AND_RETHROW(fill_heap_size(type));
+        CHECK_AND_RETHROW(fill_interface_type_id(type));
+        CHECK_AND_RETHROW(fill_virtual_methods(type));
+        CHECK_AND_RETHROW(fill_object_type_id(type));
+    }
 
 cleanup:
     return err;
@@ -1401,13 +1408,6 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
     if (type->TypeInitStarted) {
-        goto cleanup;
-    }
-
-    // Don't actually perform type init if this
-    // has a generic type parameter somewhere
-    if (tdn_has_generic_parameters(type)) {
-        type->TypeInitStarted = true;
         goto cleanup;
     }
 
@@ -2303,6 +2303,12 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
             // now add it to the interface impls
             interface_impl_t impl = { .key = constraint };
             hmputs(current_object->InterfaceImpls, impl);
+
+        } else if (constraint == tUnmanagedType) {
+            // constraint to be an unmanaged type, we will
+            // ignore it for now, mark it as a value-type
+            // which is required to be unmanaged
+            current_object->BaseType = tValueType;
 
         } else {
             if (current_object->BaseType == tValueType) {

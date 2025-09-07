@@ -279,18 +279,18 @@ static tdn_err_t verifier_start_block(function_t* function, block_t* block) {
         }
 
         if (r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER || r->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-            // // stack must be uninit or 1 (exception object)
-            // CHECK_ERROR(arrlen(block->stack) == 1, TDN_ERROR_VERIFIER_FILTER_OR_CATCH_UNEXPECTED_STACK);
-            //
-            // // TODO: initialize the stack right now
-            //
-            // if (r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-            //     // TODO: should have an object on the stack
-            // } else if (r->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-            //     RuntimeTypeInfo exception_type = r->CatchType;
-            //     CHECK_ERROR(!exception_type->IsByRef, TDN_ERROR_VERIFIER_CATCH_BYREF);
-            //     // TODO: set as the entry object
-            // }
+            // stack must be uninit or 1 (exception object)
+            CHECK_ERROR(arrlen(block->stack) == 1, TDN_ERROR_VERIFIER_FILTER_OR_CATCH_UNEXPECTED_STACK);
+
+            // TODO: initialize the stack right now
+
+            if (r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+                // TODO: should have an object on the stack
+            } else if (r->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                RuntimeTypeInfo exception_type = r->CatchType;
+                CHECK_ERROR(!exception_type->IsByRef, TDN_ERROR_VERIFIER_CATCH_BYREF);
+                // TODO: set as the entry object
+            }
         } else {
             // stack must be empty
             CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_FIN_OR_FAULT_NON_EMPTY_STACK);
@@ -329,6 +329,40 @@ static tdn_err_t verifier_visit_blocks(function_t* function) {
     cleanup:
         arrfree(function->queue);
 
+    return err;
+}
+
+static tdn_err_t verifier_init_exception_handlers(function_t* function) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    for (int i = 0; i < arrlen(function->blocks); i++) {
+        block_t* block = &function->blocks[i];
+
+        if (block->block.handler_start) {
+            // this is the start of a handler, if its an exception or filter then we need
+            // to push the exception object
+
+            RuntimeExceptionHandlingClause clause = block->block.handler_clause;
+            if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+                // the exception is of the CatchType
+                stack_value_t value = {};
+                stack_value_init(&value, clause->CatchType);
+                arrpush(block->stack, value);
+                block->visited = true;
+
+            } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+                // TODO: filters
+                CHECK_FAIL();
+            }
+
+        } else if (block->block.filter_start) {
+            // TODO: filters
+            CHECK_FAIL();
+        }
+
+    }
+
+cleanup:
     return err;
 }
 
@@ -459,6 +493,9 @@ static tdn_err_t verifier_function_init(function_t* function, RuntimeMethodBase 
     ) {
         function->track_ctor_state = true;
     }
+
+    // setup the exception stacks
+    CHECK_AND_RETHROW(verifier_init_exception_handlers(function));
 
 cleanup:
     return err;

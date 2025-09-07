@@ -419,8 +419,8 @@ int main(int argc, char* argv[]) {
     int jit_verify_verbose = 1;
     int jit_dump = 0;
     int jit_dump_elf = 0;
-    int jit_dont_optimize = 1;
-    int jit_dont_inline = 1;
+    int jit_dont_optimize = 0;
+    int jit_dont_inline = 0;
     int il_verify_test = 0;
     struct option options[] = {
         {"search-path", required_argument, 0, 's'},
