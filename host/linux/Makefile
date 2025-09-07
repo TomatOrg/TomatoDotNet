@@ -17,7 +17,7 @@ AR				:= llvm-ar
 LD				:= ld.lld
 
 # Build in debug or release mode
-DEBUG			?= 1
+DEBUG			?= 0
 
 # Should we optimize
 ifeq ($(DEBUG),1)

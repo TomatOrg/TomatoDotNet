@@ -710,8 +710,10 @@ static tdn_err_t verify_stind(function_t* function, block_t* block, tdn_il_inst_
     stack_value_t type_val = stack_value_create(inst->operand.type);
     stack_value_t address_val = stack_value_create(address->type);
 
-    CHECK_IS_ASSIGNABLE(&type_val, &address_val);
-    CHECK_IS_ASSIGNABLE(value, &type_val);
+    if (!function->allow_unsafe) {
+        CHECK_IS_ASSIGNABLE(&type_val, &address_val);
+        CHECK_IS_ASSIGNABLE(value, &type_val);
+    }
 
 cleanup:
     return err;

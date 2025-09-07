@@ -237,12 +237,10 @@ static tdn_err_t type_store_local(jit_function_t* function, jit_block_t* block, 
     tdn_err_t err = TDN_NO_ERROR;
 
     jit_block_local_t* block_locals = is_arg ? block->args : block->locals;
-    jit_local_t* function_locals = is_arg ? function->args : function->locals;
 
     // get the local slot
     CHECK(inst->operand.variable < arrlen(block_locals));
     jit_block_local_t* block_local = &block_locals[inst->operand.variable];
-    jit_local_t* func_local = &function_locals[inst->operand.variable];
 
     // initialized, no need to zero initialize later on
     block_local->initialized = true;
@@ -372,7 +370,11 @@ cleanup:
 static tdn_err_t type_ldind(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    jit_stack_value_init(STACK_PUSH(), inst->operand.type);
+    RuntimeTypeInfo type = inst->operand.type;
+    if (type == NULL) {
+        type = tObject;
+    }
+    jit_stack_value_init(STACK_PUSH(), type);
 
 cleanup:
     return err;
@@ -643,16 +645,9 @@ static tdn_err_t type_ldftn(jit_function_t* function, jit_block_t* block, tdn_il
     CHECK_ERROR(!tdn_compare_string_to_cstr(inst->operand.method->Name, ".ctor"),
         TDN_ERROR_VERIFIER_LDFTN_CTOR);
 
-    RuntimeTypeInfo instance = NULL;
     if (inst->opcode == CEE_LDVIRTFTN) {
         // TODO: devirt at this point already?
         CHECK(!method->Attributes.Static);
-
-        // We want the boxed value for the comparison
-        jit_stack_value_t declared_type = {
-            .kind = JIT_KIND_OBJ_REF,
-            .type = method->DeclaringType
-        };
     }
 
     // special case, since its only used to pass it to the newobj, we verify
