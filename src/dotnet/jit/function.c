@@ -8,6 +8,7 @@
 #include "emit.h"
 #include "type.h"
 #include "dotnet/types.h"
+#include "dotnet/verifier/localloc.h"
 #include "dotnet/verifier/verifier.h"
 #include "spidir/log.h"
 #include "tomatodotnet/tdn.h"
@@ -143,8 +144,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     bool allow_unsafe = method->Module->Assembly->AllowUnsafe;
 
     // the localloc verification
-    localloc_state_machine_t localloc_state = LOCALLOC_PATTERN__NONE;
-    int localloc_size = 0;
+    localloc_verifier_t verifier = {};
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
@@ -236,7 +236,8 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
             stack_items[i] = arrpop(block.stack);
         }
 
-        // TODO: LOCALLOC
+        // Check for localloc verifier
+        CHECK_AND_RETHROW(localloc_verifier_check(&verifier, &inst, allow_unsafe));
 
         //
         // Ensure we can push to the stack enough items
