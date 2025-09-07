@@ -1,39 +1,73 @@
 #include "function.h"
 
-#include "emitter.h"
-#include "type.h"
-#include "dotnet/disasm.h"
-#include "dotnet/types.h"
-#include "dotnet/verifier/basic_block.h"
-#include "spidir/log.h"
-#include "tomatodotnet/disasm.h"
-#include "tomatodotnet/tdn.h"
+#include <util/except.h>
 #include "tomatodotnet/util/stb_ds.h"
-#include "util/except.h"
-#include "util/string.h"
-#include "util/string_builder.h"
+#include <util/string.h>
+#include <util/string_builder.h>
 
-block_t* jit_function_get_block(function_t* function, uint32_t target_pc, uint32_t* leave_target_stack) {
+#include "emit.h"
+#include "type.h"
+#include "dotnet/types.h"
+#include "dotnet/verifier/verifier.h"
+#include "spidir/log.h"
+#include "tomatodotnet/tdn.h"
+
+#define VarPop  (-1)
+#define Pop0    0
+#define Pop1    1
+#define PopRef  Pop1
+#define PopI    Pop1
+#define PopI8   Pop1
+#define PopR4   Pop1
+#define PopR8   Pop1
+
+#define VarPush     (-1)
+#define Push0       0
+#define Push1       1
+#define PushRef     Push1
+#define PushI       Push1
+#define PushI8      Push1
+#define PushR4      Push1
+#define PushR8      Push1
+
+typedef struct il_stack_behavior {
+    int pop;
+    int push;
+} il_stack_behavior_t;
+
+/**
+ * Metadata for all the opcodes, used for decoding, this is turned
+ * into another struct which is a bit more useful
+ */
+static il_stack_behavior_t m_il_stack_behavior[] = {
+#define OPDEF_REAL_OPCODES_ONLY
+#define OPDEF(c,s,pop,push,args,type,l,s1,s2,ctrl) [c] = { pop, push },
+#include "tomatodotnet/opcode.def"
+#undef OPDEF
+#undef OPDEF_REAL_OPCODES_ONLY
+};
+
+jit_block_t* jit_function_get_block(jit_function_t* function, uint32_t target_pc, uint32_t* leave_target_stack) {
     basic_block_entry_t* b = hmgetp_null(function->labels, target_pc);
     if (b == NULL) {
         return NULL;
     }
 
     // get the real block
-    block_t* block = &function->blocks[b->value.index];
+    jit_block_t* block = &function->blocks[b->value.index];
 
     // do we have a leave target we are after?
     if (arrlen(leave_target_stack) != 0) {
-        leave_block_key_t key = {
+        jit_leave_block_key_t key = {
             .block = block,
             .leave_target = arrlast(leave_target_stack)
         };
-        block_t* leave_block = hmget(function->leave_blocks, key);
+        jit_block_t* leave_block = hmget(function->leave_blocks, key);
 
         // if we don't have a block in the leave chain to this target
         // then create one right now (only if not emitting)
         if (leave_block == NULL && !function->emitting) {
-            leave_block = tdn_host_mallocz(sizeof(block_t), _Alignof(block_t));
+            leave_block = tdn_host_mallocz(sizeof(jit_block_t), _Alignof(jit_block_t));
             if (leave_block == NULL) {
                 return NULL;
             }
@@ -52,9 +86,9 @@ block_t* jit_function_get_block(function_t* function, uint32_t target_pc, uint32
     return block;
 }
 
-static void jit_clone_block(block_t* in, block_t* out) {
+static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
     out->block = in->block;
-    out->jit_block = in->jit_block;
+    out->spidir_block = in->spidir_block;
 
     // steal the leave target stack, its not needed anymore
     out->leave_target_stack = jit_copy_leave_targets(in->leave_target_stack);
@@ -69,7 +103,7 @@ static void jit_clone_block(block_t* in, block_t* out) {
     memcpy(out->stack, in->stack, arrlen(in->stack) * sizeof(*in->stack));
 }
 
-static void jit_destroy_block(block_t* block) {
+static void jit_destroy_block(jit_block_t* block) {
     arrfree(block->stack);
     arrfree(block->stack_phis);
     arrfree(block->locals);
@@ -77,32 +111,32 @@ static void jit_destroy_block(block_t* block) {
     arrfree(block->leave_target_stack);
 }
 
-// we need this purely for the length, in theory if we had an alloca in spidir then
-// we would be able to use it instead of this
 typedef enum localloc_state_machine {
     LOCALLOC_PATTERN__NONE,
     LOCALLOC_PATTERN__FOUND_LDC_I4,
     LOCALLOC_PATTERN__FOUND_CONV_U,
     LOCALLOC_PATTERN__FOUND_SIZEOF,
     LOCALLOC_PATTERN__FOUND_MUL_OVF_UN,
+    LOCALLOC_PATTERN__FOUND_LOCALLOC,
+    LOCALLOC_PATTERN__FOUND_LDC_I4_LEN,
 } localloc_state_machine_t;
 
-static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, spidir_builder_handle_t builder) {
+static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in_block, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeMethodBase method = function->method;
     RuntimeMethodBody body = method->MethodBody;
-    stack_value_t* stack_items = NULL;
+    jit_stack_value_t* stack_items = NULL;
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
-    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_type_prop_trace);
+    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
 
     // clone the block into the current frame, so we can modify it
-    block_t block = {};
+    jit_block_t block = {};
     jit_clone_block(in_block, &block);
 
     // if we are in emit set the current block to
     // the basic block we are jitting
     if (builder != NULL) {
-        spidir_builder_set_block(builder, block.jit_block);
+        spidir_builder_set_block(builder, block.spidir_block);
     }
 
     int indent = 0;
@@ -114,17 +148,11 @@ static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, 
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
+    tdn_il_opcode_t last_opcode;
     uint32_t pc = block.block.start;
     RuntimeTypeInfo constrained = NULL;
     while (pc < block.block.end) {
-        // can only parse more instructions if we had no block
-        // terminating instruction
-        CHECK(
-            inst.control_flow == TDN_IL_CF_FIRST ||
-            inst.control_flow == TDN_IL_CF_NEXT ||
-            inst.control_flow == TDN_IL_CF_META ||
-            inst.control_flow == TDN_IL_CF_CALL
-        );
+        last_opcode = inst.opcode;
 
         // get the instruction
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
@@ -154,7 +182,6 @@ static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, 
 
             // constrained is only allowed on a callvirt
             if (prefix & TDN_IL_PREFIX_CONSTRAINED) {
-                CHECK(inst.opcode == CEE_CALLVIRT || inst.opcode == CEE_CALL);
                 inst.constrained = constrained;
                 constrained = NULL;
             }
@@ -165,7 +192,7 @@ static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, 
         //
         // figure how much we need to pop from the stack
         //
-        il_stack_behavior_t stack_behavior = g_il_stack_behavior[inst.opcode];
+        il_stack_behavior_t stack_behavior = m_il_stack_behavior[inst.opcode];
 
         // ensure we know how much to push
         if (stack_behavior.push < 0) {
@@ -209,98 +236,23 @@ static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, 
             stack_items[i] = arrpop(block.stack);
         }
 
-        // check the localloc state machine, the patterns we are matching are:
-        //
-        //  ldc.i4 <total size>
-        //  conv.u
-        //  localloc
-        //
-        // or (when there are generics)
-        //  ldc.i4 <len>
-        //  conv.u
-        //  sizeof !!T
-        //  mul.ovf.un
-        //  localloc
-        //
-        // in both cases we will set a constant value for localloc
-        // in the case of safe assemblies we will also verify that
-        // it continues with:
-        //  ldc.i4 <len>
-        //  newobj Span<T>(void*,int)
-        //
-        // we will explicitly check that the len * sizeof(T) matches
-        // the allocated size
-        //
-        switch (localloc_state) {
-            case LOCALLOC_PATTERN__NONE: {
-                if (inst.opcode == CEE_LDC_I4) {
-                    localloc_state = LOCALLOC_PATTERN__FOUND_LDC_I4;
-                    localloc_size = inst.operand.int32;
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_LDC_I4: {
-                if (inst.opcode == CEE_CONV_U) {
-                    localloc_state = LOCALLOC_PATTERN__FOUND_CONV_U;
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_CONV_U: {
-                if (inst.opcode == CEE_LOCALLOC) {
-                    inst.operand_type = TDN_IL_INT32;
-                    inst.operand.int32 = localloc_size;
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-
-                } else if (inst.opcode == CEE_SIZEOF) {
-                    // TODO: overflow checking or something
-                    localloc_size *= inst.operand.type->StackSize;
-                    localloc_state = LOCALLOC_PATTERN__FOUND_SIZEOF;
-
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_SIZEOF: {
-                if (inst.opcode == CEE_MUL_OVF_UN) {
-                    localloc_state = LOCALLOC_PATTERN__FOUND_MUL_OVF_UN;
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_MUL_OVF_UN: {
-                if (inst.opcode == CEE_LOCALLOC) {
-                    inst.operand_type = TDN_IL_INT32;
-                    inst.operand.int32 = localloc_size;
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-        }
+        // TODO: LOCALLOC
 
         //
         // Ensure we can push to the stack enough items
         //
-        CHECK_ERROR(arrlen(block.stack) + stack_behavior.push <= body->MaxStackSize,
-            TDN_ERROR_VERIFIER_STACK_OVERFLOW);
+        CHECK(arrlen(block.stack) + stack_behavior.push <= body->MaxStackSize);
         size_t wanted_stack_size = arrlen(block.stack) + stack_behavior.push;
 
         // ensure we have a verifier for this opcode
         CHECK(inst.opcode < g_type_dispatch_table_size && g_type_dispatch_table[inst.opcode] != NULL,
-            "Unimplemented opcode `%s` in type-propogation", tdn_get_opcode_name(inst.opcode));
+            "Unimplemented opcode %s in type propagation", tdn_get_opcode_name(inst.opcode));
         CHECK_AND_RETHROW(g_type_dispatch_table[inst.opcode](function, &block, &inst, stack_items));
 
         // call the emitter (if need be)
         if (builder != NULL) {
             CHECK(inst.opcode < g_emit_dispatch_table_size && g_emit_dispatch_table[inst.opcode] != NULL,
-                "Unimplemented opcode `%s` in emitter", tdn_get_opcode_name(inst.opcode));
+                "Unimplemented opcode %s in emitter", tdn_get_opcode_name(inst.opcode));
             CHECK_AND_RETHROW(g_emit_dispatch_table[inst.opcode](function, builder, &block, &inst, stack_items));
         }
 
@@ -316,7 +268,7 @@ static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, 
 
     // if we have a fallthrough, then we need to merge to the next block
     if (inst.control_flow == TDN_IL_CF_NEXT || inst.control_flow == TDN_IL_CF_CALL) {
-        block_t* next = jit_function_get_block(function, block.block.end, block.leave_target_stack);
+        jit_block_t* next = jit_function_get_block(function, block.block.end, block.leave_target_stack);
         CHECK(next != NULL);
 
         CHECK_AND_RETHROW(type_on_block_fallthrough(function, &block, next));
@@ -324,12 +276,6 @@ static tdn_err_t jit_visit_basic_block(function_t* function, block_t* in_block, 
             CHECK_AND_RETHROW(emitter_on_block_fallthrough(function, builder, &block, next));
         }
     }
-
-    // last must be a valid instruction
-    CHECK(
-        inst.control_flow != TDN_IL_CF_FIRST &&
-        inst.control_flow != TDN_IL_CF_META
-    );
 
 cleanup:
     // free the block data
@@ -341,8 +287,7 @@ cleanup:
     return err;
 }
 
-
-tdn_err_t jit_visit_blocks(function_t* function, spidir_builder_handle_t builder) {
+tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
 
@@ -361,7 +306,7 @@ tdn_err_t jit_visit_blocks(function_t* function, spidir_builder_handle_t builder
 
     // and run until all blocks are verifier
     while (arrlen(function->queue) != 0) {
-        block_t* block = arrpop(function->queue);
+        jit_block_t* block = arrpop(function->queue);
         block->in_queue = false;
 
         if (trace) {
@@ -377,8 +322,11 @@ cleanup:
     return err;
 }
 
-tdn_err_t jit_function_init(function_t* function, RuntimeMethodBase method) {
+tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure the method is verified properly
+    CHECK_AND_RETHROW(verifier_verify_method(method));
 
     // ensure this method has a body
     CHECK(method->MethodBody != NULL);
@@ -396,7 +344,7 @@ tdn_err_t jit_function_init(function_t* function, RuntimeMethodBase method) {
         function->blocks[function->labels[i].value.index].block = function->labels[i].value;
     }
 
-    block_t* entry_block = &function->entry_block;
+    jit_block_t* entry_block = &function->entry_block;
 
     //
     // Initialize the arguments
@@ -404,10 +352,10 @@ tdn_err_t jit_function_init(function_t* function, RuntimeMethodBase method) {
 
     // handle the this parameter if non-static
     if (!method->Attributes.Static) {
-        block_local_t local = {};
+        jit_block_local_t local = {};
         arrpush(entry_block->args, local);
 
-        local_t arg = {
+        jit_local_t arg = {
             .type = method->DeclaringType,
         };
         if (tdn_type_is_valuetype(method->DeclaringType)) {
@@ -421,10 +369,12 @@ tdn_err_t jit_function_init(function_t* function, RuntimeMethodBase method) {
         ParameterInfo parameter = method->Parameters->Elements[i];
         RuntimeTypeInfo type = parameter->ParameterType;
 
-        block_local_t local = {};
+        jit_block_local_t local = {};
         arrpush(entry_block->args, local);
 
-        local_t arg = { .type = type };
+        jit_local_t arg = {
+            .type = type,
+        };
         arrpush(function->args, arg);
     }
 
@@ -450,7 +400,7 @@ cleanup:
     return err;
 }
 
-tdn_err_t jit_function(function_t* function, spidir_builder_handle_t builder) {
+tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
     bool trace = tdn_get_config()->jit_emit_trace || tdn_get_config()->jit_verify_trace;
     spidir_log_level_t orig_level = spidir_log_get_max_level();
@@ -483,16 +433,16 @@ tdn_err_t jit_function(function_t* function, spidir_builder_handle_t builder) {
     // prepare all the blocks for another pass, this time with a spidir
     // block ready so it can be jumped to
     for (int i = 0; i < arrlen(function->blocks); i++) {
-        block_t* block = &function->blocks[i];
+        jit_block_t* block = &function->blocks[i];
         block->visited = false;
-        block->jit_block = spidir_builder_create_block(builder);
+        block->spidir_block = spidir_builder_create_block(builder);
     }
 
     // prepare all the leave blocks as well
     for (int i = 0; i < hmlen(function->leave_blocks); i++) {
-        block_t* block = function->leave_blocks[i].value;
+        jit_block_t* block = function->leave_blocks[i].value;
         block->visited = false;
-        block->jit_block = spidir_builder_create_block(builder);
+        block->spidir_block = spidir_builder_create_block(builder);
     }
 
     // now we can do the second pass of emitting
@@ -504,7 +454,7 @@ cleanup:
     return err;
 }
 
-void jit_function_destroy(function_t* function) {
+void jit_function_destroy(jit_function_t* function) {
     if (function == NULL)
         return;
 
@@ -532,3 +482,184 @@ void jit_function_destroy(function_t* function) {
     arrfree(function->queue);
 }
 
+RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous) {
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    bool found_previous = previous == NULL;
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+        if (previous == clause) {
+            found_previous = true;
+            continue;
+        }
+
+        // if we have not found the previous yet continue
+        if (!found_previous) {
+            continue;
+        }
+
+        if (type != -1 && clause->Flags != type) {
+            continue;
+        }
+
+        if (clause->TryOffset <= pc && pc < clause->TryOffset + clause->TryLength) {
+            return clause;
+        }
+    }
+
+    return NULL;
+}
+
+RuntimeExceptionHandlingClause jit_get_enclosing_handler_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous) {
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    bool found_previous = previous == NULL;
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+        if (previous == clause) {
+            found_previous = true;
+            continue;
+        }
+
+        // if we have not found the previous yet continue
+        if (!found_previous) {
+            continue;
+        }
+
+        if (type != -1 && clause->Flags != type) {
+            continue;
+        }
+
+        if (clause->HandlerOffset <= pc && pc < clause->HandlerOffset + clause->HandlerLength) {
+            return clause;
+        }
+    }
+
+    return NULL;
+}
+
+
+RuntimeExceptionHandlingClause jit_get_enclosing_filter_clause(jit_function_t* function, uint32_t pc) {
+    RuntimeExceptionHandlingClause_Array arr = function->method->MethodBody->ExceptionHandlingClauses;
+
+    if (arr == NULL) {
+        return NULL;
+    }
+
+    for (int i = 0; i < arr->Length; i++) {
+        RuntimeExceptionHandlingClause clause = arr->Elements[i];
+
+        if (clause->Flags != COR_ILEXCEPTION_CLAUSE_FILTER) {
+            continue;
+        }
+
+        if (clause->FilterOffset <= pc && pc < clause->HandlerOffset) {
+            return clause;
+        }
+    }
+
+    return NULL;
+}
+
+jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInfo type) {
+    if (
+        type == tBoolean ||
+        type == tChar ||
+        type == tSByte ||
+        type == tByte ||
+        type == tInt16 ||
+        type == tUInt16 ||
+        type == tInt32 ||
+        type == tUInt32
+    ) {
+        value->kind = JIT_KIND_INT32;
+        value->type = tInt32;
+
+    } else if (type == tInt64 || type == tUInt64) {
+        value->kind = JIT_KIND_INT64;
+        value->type = tInt64;
+
+    } else if (type == tDouble) {
+        value->kind = JIT_KIND_FLOAT;
+        value->type = tDouble;
+
+    } else if (type == tSingle) {
+        // TODO: properly support f32
+        value->kind = JIT_KIND_FLOAT;
+        value->type = tDouble;
+
+    } else if (type == tIntPtr || type == tUIntPtr) {
+        value->kind = JIT_KIND_NATIVE_INT;
+        value->type = tIntPtr;
+
+    } else if (type->IsPointer) {
+        value->kind = JIT_KIND_NATIVE_INT;
+        value->type = type;
+
+    } else if (type->BaseType == tEnum) {
+        jit_stack_value_init(value, type->EnumUnderlyingType);
+
+    } else if (type->IsByRef) {
+        value->kind = JIT_KIND_BY_REF;
+        value->type = type->ElementType;
+
+    } else if (tdn_type_is_valuetype(type)) {
+        value->kind = JIT_KIND_VALUE_TYPE;
+        value->type = type;
+
+    } else {
+        ASSERT(tdn_type_is_referencetype(type));
+        value->kind = JIT_KIND_OBJ_REF;
+        value->type = type;
+
+    }
+
+    return value;
+}
+
+jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
+    if (type == NULL) {
+        return JIT_KIND_OBJ_REF;
+    } else if (
+        type == tBoolean ||
+        type == tChar ||
+        type == tSByte ||
+        type == tByte ||
+        type == tInt16 ||
+        type == tUInt16 ||
+        type == tInt32 ||
+        type == tUInt32
+    ) {
+        return JIT_KIND_INT32;
+
+    } else if (type == tInt64 || type == tUInt64) {
+        return JIT_KIND_INT64;
+
+    } else if (type == tDouble || type == tSingle) {
+        return JIT_KIND_FLOAT;
+
+    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
+        return JIT_KIND_NATIVE_INT;
+
+    } else if (type->BaseType == tEnum) {
+        return jit_get_type_kind(type->EnumUnderlyingType);
+
+    } else if (type->IsByRef) {
+        return JIT_KIND_BY_REF;
+
+    } else if (tdn_type_is_valuetype(type)) {
+        return JIT_KIND_VALUE_TYPE;
+
+    } else {
+        ASSERT(tdn_type_is_referencetype(type));
+        return JIT_KIND_OBJ_REF;
+    }
+}

@@ -87,7 +87,7 @@ static inline bool tdn_is_struct(RuntimeTypeInfo type) {
  * ABI wise, does this type behave like a struct, includes value types
  * and fat pointers like interfaces and delegates
  */
-static inline bool jit_is_struct_like(RuntimeTypeInfo type) {
+static inline bool tdn_is_struct_like(RuntimeTypeInfo type) {
     return tdn_is_interface(type) || tdn_is_struct(type) || tdn_is_delegate(type);
 }
 

@@ -2,6 +2,8 @@
 
 #include <stdatomic.h>
 
+#include "function.h"
+#include "type.h"
 #include "dotnet/loader.h"
 #include "dotnet/types.h"
 #include "tomatodotnet/tdn.h"
@@ -14,7 +16,7 @@ typedef struct native_function {
     const char* class;
     const char* name;
     void* function;
-    spidir_value_type_t* args;
+    jit_stack_value_kind_t* args;
 } native_function_t;
 
 static double math_sqrt_double(double value) {
@@ -79,25 +81,10 @@ static void runtime_helpers_initialize_array(Array array, RuntimeFieldInfo* fiel
     memcpy((void*)array + data_offset, field->JitFieldPtr, field->FieldType->StackSize);
 }
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Signatures
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-typedef enum arg_kind : uint8_t {
-    KIND_UNKNOWN,
-    KIND_INT32,
-    KIND_INT64,
-    KIND_NATIVE_INT,
-    KIND_FLOAT,
-    KIND_BY_REF,
-    KIND_OBJ_REF,
-    KIND_VALUE_TYPE,
-} arg_kind_t;
-
 // helper to define the signature in a nicer way
-#define MAKE_SIG(x) KIND_##x
+#define MAKE_SIG(x) JIT_KIND_##x
 #define SIG(...) \
-    (arg_kind_t[]){ MAP(MAKE_SIG, COMMA, ## __VA_ARGS__, UNKNOWN) }
+    (jit_stack_value_kind_t[]){ MAP(MAKE_SIG, COMMA, ## __VA_ARGS__, UNKNOWN) }
 
 static native_function_t m_native_functions[] = {
     {
@@ -157,45 +144,6 @@ static native_function_t m_native_functions[] = {
     },
 };
 
-static arg_kind_t get_type_kind(RuntimeTypeInfo type) {
-    if (type == NULL) {
-        return KIND_OBJ_REF;
-    } else if (
-        type == tBoolean ||
-        type == tChar ||
-        type == tSByte ||
-        type == tByte ||
-        type == tInt16 ||
-        type == tUInt16 ||
-        type == tInt32 ||
-        type == tUInt32
-    ) {
-        return KIND_INT32;
-
-    } else if (type == tInt64 || type == tUInt64) {
-        return KIND_INT64;
-
-    } else if (type == tDouble || type == tSingle) {
-        return KIND_FLOAT;
-
-    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
-        return KIND_NATIVE_INT;
-
-    } else if (type->BaseType == tEnum) {
-        return get_type_kind(type->EnumUnderlyingType);
-
-    } else if (type->IsByRef) {
-        return KIND_BY_REF;
-
-    } else if (tdn_type_is_valuetype(type)) {
-        return KIND_VALUE_TYPE;
-
-    } else {
-        ASSERT(tdn_type_is_referencetype(type));
-        return KIND_OBJ_REF;
-    }
-}
-
 void* jit_get_native_method(RuntimeMethodInfo info) {
     // only go here for native implemented methods
     if (info->MethodImplFlags.CodeType != TDN_METHOD_IMPL_CODE_TYPE_NATIVE) {
@@ -217,13 +165,13 @@ void* jit_get_native_method(RuntimeMethodInfo info) {
         if (!tdn_compare_string_to_cstr(info->Name, func->name)) continue;
 
         size_t arg_count = 0;
-        for (arg_kind_t arg = func->args[0]; arg != KIND_UNKNOWN; arg = func->args[++arg_count]) {
+        for (jit_stack_value_kind_t arg = func->args[0]; arg != JIT_KIND_UNKNOWN; arg = func->args[++arg_count]) {
             if (info->Parameters->Length < arg_count) {
                 break;
             }
 
             // compare the kind
-            arg_kind_t kind = get_type_kind(info->Parameters->Elements[arg_count]->ParameterType);
+            jit_stack_value_kind_t kind = jit_get_type_kind(info->Parameters->Elements[arg_count]->ParameterType);
             if (kind != func->args[arg_count]) {
                 break;
             }

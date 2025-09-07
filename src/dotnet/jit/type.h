@@ -1,19 +1,19 @@
 #pragma once
 
-#include "util/except.h"
-#include "function.h"
-#include <stddef.h>
+#include <tomatodotnet/disasm.h>
+#include <tomatodotnet/except.h>
 
-#include "tomatodotnet/disasm.h"
+#include "emit.h"
+#include "function.h"
 
 typedef tdn_err_t (*type_instruction_t)(
-    function_t* function,
-    block_t* block,
+    jit_function_t* function,
+    jit_block_t* block,
     tdn_il_inst_t* inst,
-    stack_value_t* stack
+    jit_stack_value_t* stack
 );
 
-extern const type_instruction_t g_type_dispatch_table[];
-extern const size_t g_type_dispatch_table_size;
+extern type_instruction_t g_type_dispatch_table[];
+extern size_t g_type_dispatch_table_size;
 
-tdn_err_t type_on_block_fallthrough(function_t* function, block_t* from, block_t* block);
+tdn_err_t type_on_block_fallthrough(jit_function_t* function, jit_block_t* from, jit_block_t* block);

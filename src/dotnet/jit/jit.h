@@ -1,10 +1,7 @@
 #pragma once
 
-#include "spidir/module.h"
-#include "tomatodotnet/except.h"
-#include "tomatodotnet/types/reflection.h"
-
-tdn_err_t tdn_jit_init();
+#include <spidir/module.h>
+#include <tomatodotnet/jit/jit.h>
 
 /**
  * Lookup for the spidir function from the method
@@ -25,3 +22,8 @@ void jit_queue_type(spidir_module_handle_t module, RuntimeTypeInfo type);
  * Queue a cctor if required
  */
 void jit_queue_cctor(spidir_module_handle_t module, RuntimeTypeInfo type);
+
+/**
+ * Initialize anything that needs to be initialized
+ */
+tdn_err_t tdn_jit_init();

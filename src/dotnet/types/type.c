@@ -402,6 +402,28 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
     tdn_err_t err = TDN_NO_ERROR;
 
     CHECK(tdn_is_generic_type_definition(base));
+    CHECK(base->GenericArguments->Length == args->Length);
+
+    // Special cases, instantiating the type from its own arguments, we will
+    // just return the same base type for consistency
+    if (base->GenericArguments == args) {
+        *type = base;
+        goto cleanup;
+    }
+
+    // Another special case, if its not the same array instance, but same arguments
+    // in them, then its still the same base type
+    bool is_same = true;
+    for (int i = 0; i < base->GenericArguments->Length; i++) {
+        if (base->GenericArguments->Elements[i] != args->Elements[i]) {
+            is_same = false;
+            break;
+        }
+    }
+    if (is_same) {
+        *type = base;
+        goto cleanup;
+    }
 
     // check if already has one
     size_t hash = stbds_hash_bytes(args->Elements, sizeof(RuntimeTypeInfo) * args->Length, 0);
@@ -414,21 +436,7 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
         hmput(base->GenericTypeInstances, hash, new_type);
 
         CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
-
-        // check for generic arguments
-        bool has_generic_params = false;
-        for (int i = 0; i < args->Length; i++) {
-            if (tdn_has_generic_parameters(args->Elements[i])) {
-                has_generic_params = true;
-                break;
-            }
-        }
-
-        // if it does not then we can properly init the type instead
-        // of keeping it uninitialized
-        if (!has_generic_params) {
-            CHECK_AND_RETHROW(tdn_type_init(new_type));
-        }
+        CHECK_AND_RETHROW(tdn_type_init(new_type));
 
         // and out it goes
         *type = new_type;
