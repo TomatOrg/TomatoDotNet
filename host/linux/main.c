@@ -104,6 +104,17 @@ static int type_output(FILE* stream, const struct printf_info* info, const void*
     }
 
     output_type_name(stream, type, true);
+    if (type->IsGenericTypeParameter) {
+        fprintf(stream, " (of ");
+        output_type_name(stream, type->DeclaringType, false);
+        fprintf(stream, ")");
+    } else if (type->IsGenericMethodParameter) {
+        fprintf(stream, " (of ");
+        output_type_name(stream, type->DeclaringMethod->DeclaringType, false);
+        fprintf(stream, "::");
+        fprintf(stream, "%U", type->DeclaringMethod->Name);
+        fprintf(stream, ")");
+    }
 
     return len;
 }
@@ -403,16 +414,18 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    int jit_emit_verbose = 0;
+    int jit_emit_verbose = 1;
+    int jit_type_verbose = 1;
     int jit_verify_verbose = 1;
     int jit_dump = 0;
     int jit_dump_elf = 0;
-    int jit_dont_optimize = 0;
-    int jit_dont_inline = 0;
+    int jit_dont_optimize = 1;
+    int jit_dont_inline = 1;
     int il_verify_test = 0;
     struct option options[] = {
         {"search-path", required_argument, 0, 's'},
         {"jit-emit-verbose", no_argument, &jit_emit_verbose, 1},
+        {"jit-type-verbose", no_argument, &jit_type_verbose, 1},
         {"jit-verify-verbose", no_argument, &jit_verify_verbose, 1},
         {"jit-dump", no_argument, &jit_dump, 1},
         {"jit-dump-elf", no_argument, &jit_dump_elf, 1},
@@ -452,11 +465,10 @@ int main(int argc, char* argv[]) {
     if (jit_dont_inline) config->jit_inline = false;
     if (jit_dont_optimize) config->jit_optimize = false;
     if (jit_dump) config->jit_spidir_dump = true;
+    if (jit_emit_verbose) config->jit_emit_trace = true;
+    if (jit_type_verbose) config->jit_type_trace = true;
     if (jit_verify_verbose) config->jit_verify_trace = true;
     if (jit_dump_elf) config->jit_elf_dump = true;
-    if (jit_emit_verbose) {
-        config->jit_emit_trace = true;
-    }
 
     // auto-resolve the search path from the file to run
     if (g_assembly_search_path == NULL) {

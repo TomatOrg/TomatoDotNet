@@ -10,17 +10,17 @@ typedef struct tdn_config {
     /**
      * Trace the opcodes while verifying the IL
      */
-    bool jit_type_prop_trace;
-
-    /**
-     * Trace the opcodes while verifying the IL
-     */
     bool jit_verify_trace;
 
     /**
      * Trace the opcodes while emitting the IL
      */
     bool jit_emit_trace;
+
+    /**
+     * Trace the opcodes while verifying the IL
+     */
+    bool jit_type_trace;
 
     /**
      * Dump a debug ELF with the spidir output
