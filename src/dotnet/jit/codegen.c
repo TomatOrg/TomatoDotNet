@@ -7,9 +7,11 @@
 #include <tomatodotnet/types/type.h>
 #include <util/except.h>
 
+#include "jit.h"
+#include "gdb.h"
 #include "elf.h"
 #include "helpers.h"
-#include "jit.h"
+#include "type.h"
 #include "dotnet/types.h"
 #include "tomatodotnet/tdn.h"
 
@@ -287,7 +289,7 @@ tdn_err_t jit_codegen(spidir_module_handle_t module) {
     tdn_host_jit_set_exec(jit_area, total_size);
 
     // register for the debugger to see
-    // TODO: jit_gdb_register(m_function_blobs, jit_area, total_size);
+    jit_gdb_register(m_function_blobs, jit_area, total_size);
 
 cleanup:
     return err;

@@ -1404,6 +1404,13 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
         goto cleanup;
     }
 
+    // Don't actually perform type init if this
+    // has a generic type parameter somewhere
+    if (tdn_has_generic_parameters(type)) {
+        type->TypeInitStarted = true;
+        goto cleanup;
+    }
+
     if (arrlen(m_type_queues) == 0) {
         CHECK_AND_RETHROW(fill_type(type));
     } else {
@@ -2289,6 +2296,22 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
 
         // store it
         current_object->GenericParameterConstraints->Elements[i - offset] = constraint;
+
+        // based on the constraints set either as an interface
+        // or as the base type
+        if (tdn_is_interface(constraint)) {
+            // now add it to the interface impls
+            interface_impl_t impl = { .key = constraint };
+            hmputs(current_object->InterfaceImpls, impl);
+
+        } else {
+            if (current_object->BaseType == tValueType) {
+                CHECK(tdn_type_is_valuetype(constraint));
+            } else if (current_object->BaseType == tObject) {
+                CHECK(tdn_type_is_referencetype(constraint));
+            }
+            current_object->BaseType = constraint;
+        }
 
         // and we are done
         count++;

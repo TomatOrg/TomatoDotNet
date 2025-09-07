@@ -11,12 +11,12 @@
 
 #include <util/string_builder.h>
 
+#include "builtin.h"
 #include "codegen.h"
-#include "function.h"
+#include "emit.h"
 #include "helpers.h"
 #include "native.h"
-#include "spidir.h"
-#include "dotnet/verifier/verifier.h"
+#include "type.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Top level dispatching
@@ -161,9 +161,12 @@ void jit_queue_cctor(spidir_module_handle_t module, RuntimeTypeInfo type) {
 static void jit_emit_function(spidir_builder_handle_t builder, void* _ctx) {
     tdn_err_t err = TDN_NO_ERROR;
     jit_builtin_context_t* ctx = _ctx;
+    jit_function_t function = {};
 
-    function_t function = {};
+    // prepare the function
     CHECK_AND_RETHROW(jit_function_init(&function, ctx->method));
+
+    // and we can jit the function normally
     CHECK_AND_RETHROW(jit_function(&function, builder));
 
 cleanup:
@@ -194,10 +197,6 @@ static tdn_err_t jit_module(spidir_module_handle_t module) {
             CHECK(method->MethodBody != NULL,
                 "Missing method body %T::%U", method->DeclaringType, method->Name);
 
-            // perform the verification of the method
-            CHECK_AND_RETHROW(verifier_verify_method(method));
-
-            // and now actually emit the rest of the function
             spidir_module_build_function(module, spidir_function, jit_emit_function, &emitter);
         }
         CHECK_AND_RETHROW(emitter.err);

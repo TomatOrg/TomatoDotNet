@@ -9,15 +9,14 @@ RuntimeTypeInfo verifier_get_type_definition(RuntimeTypeInfo typ) {
 }
 
 static RuntimeTypeInfo resolve_generic(RuntimeTypeInfo type, RuntimeMethodInfo method) {
-    if (!type->IsGenericParameter) {
-        return type;
-    } else if (type->IsGenericMethodParameter) {
+    if (type->IsGenericMethodParameter && type->DeclaringMethod == (RuntimeMethodBase)method) {
         ASSERT(type->GenericParameterPosition < method->GenericArguments->Length);
         return method->GenericArguments->Elements[type->GenericParameterPosition];
-    } else {
+    } else if (type->IsGenericTypeParameter && type->DeclaringType == method->DeclaringType) {
         ASSERT(type->GenericParameterPosition < method->DeclaringType->GenericArguments->Length);
         return method->DeclaringType->GenericArguments->Elements[type->GenericParameterPosition];
     }
+    return type;
 }
 
 static bool match_generic_type(RuntimeTypeInfo a, RuntimeTypeInfo b, RuntimeMethodInfo ma, RuntimeMethodInfo mb) {

@@ -3,8 +3,9 @@
 #include <stdalign.h>
 #include <string.h>
 
-#include "helpers.h"
 #include "jit.h"
+#include "helpers.h"
+#include "type.h"
 #include "dotnet/types.h"
 #include "spidir/x64.h"
 #include "tomatodotnet/types/type.h"
@@ -674,7 +675,7 @@ static void dwarf_pop_namespace(jit_elf_t* elf, int count) {
 
 static bool method_has_real_return(RuntimeMethodBase method) {
     RuntimeTypeInfo return_type = method->ReturnParameter->ParameterType;
-    return return_type != tVoid && !jit_is_struct_like(return_type);
+    return return_type != tVoid && !tdn_is_struct_like(return_type);
 }
 
 static void dwarf_write_param_location(jit_elf_t* elf, RuntimeTypeInfo type, int* i_offset, int* f_offset) {
