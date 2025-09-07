@@ -7,6 +7,7 @@
 #include "internal.h"
 #include "control_flow.h"
 #include "instruction.h"
+#include "localloc.h"
 #include "dotnet/disasm.h"
 #include "dotnet/types.h"
 #include "tomatodotnet/disasm.h"
@@ -14,30 +15,6 @@
 #include "util/except.h"
 #include "util/string.h"
 #include "util/string_builder.h"
-
-typedef enum localloc_state_machine {
-    LOCALLOC_PATTERN__NONE,
-    LOCALLOC_PATTERN__FOUND_LDC_I4,
-    LOCALLOC_PATTERN__FOUND_CONV_U,
-    LOCALLOC_PATTERN__FOUND_SIZEOF,
-    LOCALLOC_PATTERN__FOUND_MUL_OVF_UN,
-    LOCALLOC_PATTERN__FOUND_LOCALLOC,
-    LOCALLOC_PATTERN__FOUND_LDC_I4_LEN,
-} localloc_state_machine_t;
-
-static bool is_unsafe_span_ctor(RuntimeMethodBase method) {
-    // not span type, ignore
-    if (method->DeclaringType == NULL) return false;
-    if (method->DeclaringType->GenericTypeDefinition != tSpan) return false;
-
-    // check the arguments
-    if (method->Parameters->Length != 2) return false;
-    if (!method->Parameters->Elements[0]->ParameterType->IsPointer) return false;
-    if (method->Parameters->Elements[1]->ParameterType != tInt32) return false;
-
-    // verified!
-    return true;
-}
 
 static void clone_block(block_t* in, block_t* out) {
     out->block = in->block;
@@ -75,8 +52,7 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
     bool allow_unsafe = method->Module->Assembly->AllowUnsafe;
 
     // the localloc verification
-    localloc_state_machine_t localloc_state = LOCALLOC_PATTERN__NONE;
-    int localloc_size = 0;
+    localloc_verifier_t localloc_verifier = {};
 
     // get the pc
     tdn_il_prefix_t prefix = 0;
@@ -216,129 +192,8 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
                 TDN_ERROR_VERIFIER_DELEGATE_PATTERN);
         }
 
-        // check the localloc state machine, the patterns we are matching are:
-        //
-        //  ldc.i4 <total size>
-        //  conv.u
-        //  localloc
-        //
-        // or (when there are generics)
-        //  ldc.i4 <len>
-        //  conv.u
-        //  sizeof !!T
-        //  mul.ovf.un
-        //  localloc
-        //
-        // in both cases we will set a constant value for localloc
-        // in the case of safe assemblies we will also verify that
-        // it continues with:
-        //  ldc.i4 <len>
-        //  newobj Span<T>(void*,int)
-        //
-        // we will explicitly check that the len * sizeof(T) matches
-        // the allocated size
-        //
-        bool call_verified = allow_unsafe;
-        switch (localloc_state) {
-            case LOCALLOC_PATTERN__NONE: {
-                if (inst.opcode == CEE_LDC_I4) {
-                    localloc_state = LOCALLOC_PATTERN__FOUND_LDC_I4;
-                    localloc_size = inst.operand.int32;
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_LDC_I4: {
-                if (inst.opcode == CEE_CONV_U) {
-                    localloc_state = LOCALLOC_PATTERN__FOUND_CONV_U;
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_CONV_U: {
-                if (inst.opcode == CEE_LOCALLOC) {
-                    inst.operand_type = TDN_IL_INT32;
-                    inst.operand.int32 = localloc_size;
-                    localloc_state = LOCALLOC_PATTERN__FOUND_LOCALLOC;
-
-                } else if (inst.opcode == CEE_SIZEOF) {
-                    // TODO: overflow checking or something
-                    localloc_size *= inst.operand.type->StackSize;
-                    localloc_state = LOCALLOC_PATTERN__FOUND_SIZEOF;
-
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_SIZEOF: {
-                if (inst.opcode == CEE_MUL_OVF_UN) {
-                    localloc_state = LOCALLOC_PATTERN__FOUND_MUL_OVF_UN;
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_MUL_OVF_UN: {
-                if (inst.opcode == CEE_LOCALLOC) {
-                    inst.operand_type = TDN_IL_INT32;
-                    inst.operand.int32 = localloc_size;
-                    localloc_state = LOCALLOC_PATTERN__FOUND_LOCALLOC;
-
-                } else {
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_LOCALLOC: {
-                if (!allow_unsafe) {
-                    // we must have the opcode to load the length now
-                    CHECK(inst.opcode == CEE_LDC_I4);
-
-                    // at this point we already allocated, so we need to verify
-                    // that we are invoking the Span ctor correctly, to do so verify
-                    // in here that the size divides perfectly, and remember the per
-                    // element size that we expect to have
-                    CHECK((localloc_size % inst.operand.int32) == 0);
-                    localloc_size /= inst.operand.int32;
-
-                    // next we need to find ctor
-                    localloc_state = LOCALLOC_PATTERN__FOUND_LDC_I4_LEN;
-                } else {
-                    // we don't care whatever happens next
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-                }
-            } break;
-
-            case LOCALLOC_PATTERN__FOUND_LDC_I4_LEN: {
-                // we can only reach here if we don't allow unsafe
-                if (inst.opcode == CEE_NEWOBJ) {
-                    // ensure we are calling the unsafe span ctor
-                    CHECK(is_unsafe_span_ctor(inst.operand.method));
-
-                    // ensure the element size matches
-                    RuntimeTypeInfo span_type = inst.operand.method->DeclaringType->GenericArguments->Elements[0];
-                    CHECK(span_type->StackSize == localloc_size);
-
-                    // we verified the call, we can continue with
-                    // the normal pattern now
-                    call_verified = true;
-                    localloc_state = LOCALLOC_PATTERN__NONE;
-
-                } else {
-                    // we must have seen
-                    CHECK_FAIL();
-                }
-            } break;
-        }
-
-        // if we have not verified the call, then ensure that we don't call
-        // the unsafe span ctor
-        if (!call_verified && inst.operand_type == TDN_IL_METHOD) {
-            CHECK(!is_unsafe_span_ctor(inst.operand.method));
-        }
+        // check for localloc patterns
+        CHECK_AND_RETHROW(localloc_verifier_check(&localloc_verifier, &inst, allow_unsafe));
 
         //
         // Ensure we can push to the stack enough items
@@ -391,7 +246,6 @@ static tdn_err_t verifier_start_block(function_t* function, block_t* block) {
     basic_block_t* basic_block = &block->block;
 
     if (basic_block->try_start) {
-        TRACE("IS TRY START");
         CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_TRY_NON_EMPTY_STACK);
 
         RuntimeExceptionHandlingClause_Array clauses = function->method->MethodBody->ExceptionHandlingClauses;
