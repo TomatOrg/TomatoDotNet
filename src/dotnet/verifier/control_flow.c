@@ -615,8 +615,8 @@ tdn_err_t verifier_propagate_this_state(function_t* function, block_t* from, blo
     // propagate the `this` state
     if (target->visited) {
         // must have the same length at this point
-        CHECK_ERROR(arrlen(from->stack) == arrlen(target->stack),
-            TDN_ERROR_VERIFIER_PATH_STACK_DEPTH);
+        CHECK(arrlen(from->stack) == 0);
+        CHECK(arrlen(target->stack) == 1);
 
         // if we are jumping to a block with this initialized, but its
         // not initialized in our block, then mark it as not initialized
@@ -627,8 +627,12 @@ tdn_err_t verifier_propagate_this_state(function_t* function, block_t* from, blo
     } else {
         // first time being visited, copy over all the type information as is
         arrsetlen(target->stack, 0);
-        arrsetlen(target->args, 0);
-        arrsetlen(target->locals, 0);
+
+        arrsetlen(target->args, arrlen(from->args));
+        memcpy(target->args, from->args, arrlen(from->args) * sizeof(*from->args));
+
+        arrsetlen(target->locals, arrlen(from->locals));
+        memcpy(target->locals, from->locals, arrlen(from->locals) * sizeof(*from->locals));
 
         // pass over the initialized mark
         target->this_initialized = from->this_initialized;

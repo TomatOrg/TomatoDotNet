@@ -1628,7 +1628,8 @@ static tdn_err_t verify_leave(function_t* function, block_t* block, tdn_il_inst_
 
     // ensure this is a proper leave target
     CHECK_AND_RETHROW(verifier_is_valid_leave_target(function, block, target));
-    CHECK_AND_RETHROW(verifier_propagate_this_state(function, block, target));
+    CHECK_AND_RETHROW(verifier_merge_blocks());
+    // CHECK_AND_RETHROW(verifier_propagate_this_state(function, block, target));
 
 cleanup:
     return err;
