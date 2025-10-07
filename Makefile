@@ -91,6 +91,12 @@ default: all
 .PHONY: all
 all: $(BIN_DIR)/libtdn.a
 
+# Quick test
+.PHONY: test
+test:
+	make -C host/linux
+	python3 ./tests/test.py
+
 #-----------------------------------------------------------------------------------------------------------------------
 # Rules
 #-----------------------------------------------------------------------------------------------------------------------
@@ -100,7 +106,7 @@ all: $(BIN_DIR)/libtdn.a
 $(BUILD_DIR)/%.c.o: %.c
 	@echo CC $@
 	@mkdir -p $(@D)
-	@$(CC) $(TDN_CFLAGS) -MMD -c $(abspath $<) -o $@
+	@$(CC) $(TDN_CFLAGS) -MMD -MP -c $(abspath $<) -o $@
 
 $(BIN_DIR)/libtdn.a: $(OBJS)
 	@echo AR $@

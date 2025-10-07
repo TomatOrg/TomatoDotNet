@@ -101,7 +101,7 @@ all: $(BIN_DIR)/tdn.elf
 $(BUILD_DIR)/%.c.o: %.c
 	@echo CC $@
 	@mkdir -p $(@D)
-	@$(CC) $(CFLAGS) -MMD -c $< -o $@
+	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 $(BIN_DIR)/tdn.elf: $(OBJS)
 	@echo LD $@
