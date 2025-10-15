@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <util/defs.h>
 
 #include <tomatodotnet/types/reflection.h>
 
@@ -20,36 +21,57 @@ typedef enum stack_value_kind : uint8_t {
     KIND_VALUE_TYPE,
 } stack_value_kind_t;
 
-typedef struct value_flags {
-    // The reference is read-only
-    bool ref_read_only;
+typedef union value_flags {
+    struct {
+        // Is this reference readonly
+        uint8_t ref_read_only : 1;
 
-    // The reference is non-local
-    bool ref_non_local;
+        // Is this reference pointing to a non-local value
+        uint8_t ref_non_local : 1;
 
-    // The ref-struct contains only non-local references
-    bool ref_struct_non_local;
+        // Does the ref-struct have only non-local pointers, this is valid on a local variable
+        uint8_t ref_struct_non_local : 1;
 
-    // Is the instance the `this` of the method
-    bool this_ptr;
+        // Is the instance the `this` of the method, this is
+        uint8_t this_ptr : 1;
 
-    // was this pushed via ldftn
-    bool ldftn;
+        // was this pushed via ldftn
+        uint8_t ldftn : 1;
+
+        uint8_t : 3;
+    };
+    uint8_t packed;
 } value_flags_t;
+STATIC_ASSERT(sizeof(value_flags_t) == sizeof(uint8_t));
 
-typedef struct block_local {
-    // If the type of the local is delegate this
-    // is the method behind it
-    RuntimeMethodBase method;
+typedef union block_local {
+    struct {
+        // Is there a read-only ref
+        uint8_t ref_read_only : 1;
 
-    // the flags of this value
-    value_flags_t flags;
+        // Is there a non-local ref
+        uint8_t ref_non_local : 1;
 
-    // was the value initialized, whenever stloc is called it will
-    // be set to true, if ldloc/ldloca is called with this being false
-    // we will zero initialize it at the start of the function
-    bool initialized;
+        // Is there a ref-struct that contains only non-local refs
+        uint8_t ref_struct_non_local : 1;
+
+        uint8_t : 5;
+    };
+    uint8_t packed;
 } block_local_t;
+STATIC_ASSERT(sizeof(block_local_t) == sizeof(uint8_t));
+
+static inline void block_local_from_value_flags(block_local_t* local, value_flags_t flags) {
+    local->ref_read_only = flags.ref_read_only;
+    local->ref_non_local = flags.ref_non_local;
+    local->ref_struct_non_local = flags.ref_struct_non_local;
+}
+
+static inline void value_flags_from_block_local(value_flags_t* flags, block_local_t local) {
+    flags->ref_read_only = local.ref_read_only;
+    flags->ref_non_local = local.ref_non_local;
+    flags->ref_struct_non_local = local.ref_struct_non_local;
+}
 
 typedef struct stack_value {
     // The type of this stack value
@@ -68,12 +90,26 @@ typedef struct stack_value {
     stack_value_kind_t kind;
 } stack_value_t;
 
+/**
+ * Check if both stack values are the same
+ */
+static inline bool stack_values_same(const stack_value_t* a, const stack_value_t* b) {
+    return a->kind == b->kind && a->type == b->type && a->flags.packed == b->flags.packed;
+}
 
 /**
  * Check if a stack value represents a null-reference
  */
-static inline bool verifier_is_null_reference(stack_value_t* value) { return value->kind == KIND_OBJ_REF && value->type == NULL; }
-static inline bool verifier_is_boxed_value_type(stack_value_t* value) { return value->kind == KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type); }
+static inline bool verifier_is_null_reference(const stack_value_t* value) {
+    return value->kind == KIND_OBJ_REF && value->type == NULL;
+}
+
+/**
+ * Check if a stack value represents a boxed value type
+ */
+static inline bool verifier_is_boxed_value_type(const stack_value_t* value) {
+    return value->kind == KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type);
+}
 
 /**
  * Initialize a stack-value
@@ -85,6 +121,12 @@ static inline stack_value_t stack_value_create(RuntimeTypeInfo type) {
     stack_value_init(&value, type);
     return value;
 }
+
+typedef enum block_state {
+    BLOCK_STATE_UNMARKED,
+    BLOCK_STATE_IS_PENDING,
+    BLOCK_STATE_WAS_VERIFIED,
+} block_state_t;
 
 typedef struct block {
     // the basic block range
@@ -99,15 +141,15 @@ typedef struct block {
     // the stack at the start of the basic block
     stack_value_t* stack;
 
-    // is this block already in the queue?
-    bool in_queue;
-
-    // was this block visited once
-    bool visited;
+    // the current state of the block
+    block_state_t state;
 
     // did we initialize the this pointer
     // by calling its base ctor
     bool this_initialized;
+
+    // did we visit this once or not?
+    bool visited;
 } block_t;
 
 typedef struct local {
@@ -163,11 +205,10 @@ static inline block_t* verifier_get_block(function_t* function, uint32_t target_
     return &function->blocks[b->value.index];
 }
 
-static inline void verifier_queue_block(function_t* function, block_t* block) {
-    if (!block->in_queue) {
+static inline void verifier_mark_block(function_t* function, block_t* block) {
+    if (block->state == BLOCK_STATE_UNMARKED) {
         arrpush(function->queue, block);
-        block->visited = true;
-        block->in_queue = true;
+        block->state = BLOCK_STATE_IS_PENDING;
     }
 }
 
@@ -189,3 +230,8 @@ RuntimeTypeInfo verifier_get_type_definition(RuntimeTypeInfo typ);
  * or is part of a generic type
  */
 RuntimeMethodBase verifier_get_typical_method_definition(RuntimeMethodBase method);
+
+/**
+ * Check that the src is assignable to the dest
+ */
+bool verifier_is_assignable(stack_value_t* src, stack_value_t* dst);

@@ -614,7 +614,7 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
         value->type = type;
 
     } else {
-        ASSERT(tdn_type_is_referencetype(type));
+        ASSERT(tdn_type_is_gc_pointer(type));
         value->kind = JIT_KIND_OBJ_REF;
         value->type = type;
 
@@ -657,7 +657,7 @@ jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
         return JIT_KIND_VALUE_TYPE;
 
     } else {
-        ASSERT(tdn_type_is_referencetype(type));
+        ASSERT(tdn_type_is_gc_pointer(type));
         return JIT_KIND_OBJ_REF;
     }
 }

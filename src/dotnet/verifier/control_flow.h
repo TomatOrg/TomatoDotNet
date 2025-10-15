@@ -9,8 +9,10 @@ tdn_err_t verifier_propagate_control_flow(function_t* function, block_t* from, b
 
 /**
  * Propagation of the `this` state without stack related operations
+ *
+ * TODO: why is this needed unlike the other thing
  */
-tdn_err_t verifier_propagate_this_state(function_t* function, block_t* from, block_t* target);
+void verifier_propagate_state(block_t* from, block_t* target);
 
 /**
  * Checks needed specifically when using the leave instruction

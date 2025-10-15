@@ -1,5 +1,6 @@
 #include "control_flow.h"
 
+#include "instruction.h"
 #include "internal.h"
 #include "dotnet/types.h"
 #include "tomatodotnet/types/type.h"
@@ -98,177 +99,64 @@ RuntimeTypeInfo verifier_merge_object_references(RuntimeTypeInfo class_a, Runtim
         } else {
             return verifier_merge_class_with_interface(class_a, class_b);
         }
+
     } else if (tdn_is_interface(class_a)) {
         return verifier_merge_class_with_interface(class_b, class_a);
+
     } else {
         return verifier_merge_class_with_class(class_a, class_b);
     }
 }
 
-static bool verifier_merge_flags(value_flags_t* previous, value_flags_t new) {
-    bool modified = false;
-
-    if (new.ref_read_only && !previous->ref_read_only) {
-        previous->ref_read_only = true;
-        modified = true;
-    }
-
-    // turned into a local ref, need to verify again
-    if (!new.ref_non_local && previous->ref_non_local) {
-        previous->ref_non_local = false;
-        modified = true;
-    }
-
-    // turned into a local ref, need to verify again
-    if (!new.ref_struct_non_local && previous->ref_struct_non_local) {
-        previous->ref_struct_non_local = false;
-        modified = true;
-    }
-
-    return modified;
-}
-
-static merge_status_t verifier_merge_stack_values(stack_value_t* previous, stack_value_t* new) {
-    bool modified = false;
+static bool verifier_try_merge_values(const stack_value_t* value_a, const stack_value_t* value_b, stack_value_t* merged) {
+    *merged = *value_a;
 
     // merge the flags
-    if (verifier_merge_flags(&previous->flags, new->flags)) {
-        modified = true;
+    if (value_b->flags.ref_read_only) {
+        merged->flags.ref_read_only = true;
     }
 
-    // methods don't match, zero the method
-    // NOTE: this can only be from a delegate devirt
-    if (previous->method != new->method) {
-        previous->method = NULL;
-        modified = true;
+    if (!value_b->flags.this_ptr) {
+        merged->flags.this_ptr = false;
     }
 
-    // if we don't match in the type we need to merge it
-    if (previous->kind != new->kind || previous->type != new->type) {
-        if (verifier_is_null_reference(previous)) {
-            if (new->kind == KIND_OBJ_REF) {
-                // we had a null-reference, but now we have a real type
-                previous->type = new->type;
-                modified = true;
-            }
-        } else if (previous->kind == KIND_OBJ_REF) {
-            // must also be an object reference
-            if (new->kind != KIND_OBJ_REF) {
-                return MERGE_FAILED;
-            }
-
-            if (!verifier_is_null_reference(new)) {
-                RuntimeTypeInfo merged = verifier_merge_object_references(previous->type, new->type);
-                if (merged == NULL) {
-                    return MERGE_FAILED;
-                }
-
-                if (merged != previous->type) {
-                    // we got a different type
-                    previous->type = merged;
-                    modified = true;
-                }
-            }
-        } else {
-            // otherwise the kind and type must match
-            return MERGE_FAILED;
-        }
+    if (!value_b->flags.ref_non_local) {
+        merged->flags.ref_read_only = false;
     }
 
-    return modified ? MERGE_MODIFIED : MERGE_SUCCESS;
-}
+    if (!value_b->flags.ref_struct_non_local) {
+        merged->flags.ref_struct_non_local = false;
+    }
 
-static bool verifier_merge_block_local(block_local_t* previous, block_local_t* new) {
-    bool modified = false;
-
-    // an uninitialized entry has entered an initialized one, we are going
-    // to mark as not initialized
-    if (previous->initialized && !new->initialized) {
-        previous->initialized = false;
+    // Same type
+    if (value_a->kind == value_b->kind && value_a->type == value_b->type) {
         return true;
     }
 
-    // ignore the local if its not initialized
-    if (!previous->initialized) {
-        return false;
+    if (verifier_is_null_reference(value_a)) {
+        // Null can be any reference type
+        if (value_b->kind == KIND_OBJ_REF) {
+            *merged = *value_b;
+            return true;
+        }
+
+    } else if (value_a->kind == KIND_OBJ_REF) {
+        if (value_b->kind != KIND_OBJ_REF) {
+            return false;
+        }
+
+        // Null can be any reference type
+        if (verifier_is_null_reference(value_b)) {
+            return true;
+        }
+
+        // Merging classes always succeeds since System.Object always works
+        stack_value_init(merged, verifier_merge_object_references(value_a->type, value_b->type));
+        return true;
     }
 
-    // merge the flags
-    if (verifier_merge_flags(&previous->flags, new->flags)) {
-        modified = true;
-    }
-
-    // methods don't match, zero the method
-    // NOTE: this can only be from a delegate devirt
-    if (previous->method != new->method) {
-        previous->method = NULL;
-        modified = true;
-    }
-
-    return modified;
+    return false;
 }
-
-static tdn_err_t verifier_merge_blocks(function_t* function, block_t* from, block_t* target) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    if (target->visited) {
-        for (int i = 0; i < arrlen(from->args); i++) {
-            if (verifier_merge_block_local(&target->args[i], &from->args[i])) {
-                verifier_queue_block(function, target);
-            }
-        }
-
-        for (int i = 0; i < arrlen(from->locals); i++) {
-            if (verifier_merge_block_local(&target->locals[i], &from->locals[i])) {
-                verifier_queue_block(function, target);
-            }
-        }
-
-        // must have the same length at this point
-        CHECK_ERROR(arrlen(from->stack) == arrlen(target->stack),
-            TDN_ERROR_VERIFIER_PATH_STACK_DEPTH);
-
-        for (int i = 0; i < arrlen(from->stack); i++) {
-            // must have the same kind at least
-            CHECK_ERROR(target->stack[i].kind == from->stack[i].kind,
-                TDN_ERROR_VERIFIER_PATH_STACK_UNEXPECTED);
-
-            // now attempt to merge the two values
-            merge_status_t status = verifier_merge_stack_values(&target->stack[i], &from->stack[i]);
-            CHECK_ERROR(status != MERGE_FAILED, TDN_ERROR_VERIFIER_PATH_STACK_UNEXPECTED);
-            if (status == MERGE_MODIFIED) {
-                verifier_queue_block(function, target);
-            }
-        }
-
-        // if we are jumping to a block with this initialized, but its
-        // not initialized in our block, then mark it as not initialized
-        if (target->this_initialized && !from->this_initialized) {
-            target->this_initialized = false;
-            verifier_queue_block(function, target);
-        }
-
-    } else {
-        // first time being visited, copy over all the type information as is
-        arrsetlen(target->stack, arrlen(from->stack));
-        memcpy(target->stack, from->stack, arrlen(from->stack) * sizeof(*from->stack));
-
-        arrsetlen(target->args, arrlen(from->args));
-        memcpy(target->args, from->args, arrlen(from->args) * sizeof(*from->args));
-
-        arrsetlen(target->locals, arrlen(from->locals));
-        memcpy(target->locals, from->locals, arrlen(from->locals) * sizeof(*from->locals));
-
-        // pass over the initialized mark
-        target->this_initialized = from->this_initialized;
-
-        verifier_queue_block(function, target);
-    }
-
-cleanup:
-    return err;
-}
-
 
 static bool verifier_is_direct_child_region(function_t* function, basic_block_t* enclosing_block, basic_block_t* enclosed_block) {
     RuntimeExceptionHandlingClause enclosed_region = enclosed_block->try_clause;
@@ -420,10 +308,99 @@ tdn_err_t verifier_propagate_control_flow(function_t* function, block_t* from, b
 
     // ensure we can perform the branch
     CHECK_AND_RETHROW(verifier_is_valid_branch_target(function, &from->block, &target->block, is_fallthrough));
-    CHECK_AND_RETHROW(verifier_merge_blocks(function, from, target));
+
+    // propogate the this-state properly
+    verifier_propagate_state(from, target);
+
+    if (target->visited) {
+        // Propagate stack across block bounds
+        stack_value_t* entry_stack = target->stack;
+        CHECK_ERROR(arrlen(entry_stack) == arrlen(from->stack),
+            TDN_ERROR_VERIFIER_PATH_STACK_DEPTH);
+
+        for (int i = 0; i < arrlen(entry_stack); i++) {
+            CHECK_ERROR(entry_stack[i].kind == from->stack[i].kind,
+                TDN_ERROR_VERIFIER_PATH_STACK_UNEXPECTED);
+
+            if (entry_stack[i].type != from->stack[i].type) {
+                if (!verifier_is_assignable(&from->stack[i], &entry_stack[i])) {
+                    stack_value_t merged_value = {};
+                    CHECK_ERROR(verifier_try_merge_values(&entry_stack[i], &from->stack[i], &merged_value),
+                        TDN_ERROR_VERIFIER_PATH_STACK_UNEXPECTED);
+
+                    // If merged actually changed entry stack
+                    if (!stack_values_same(&merged_value, &entry_stack[i])) {
+                        entry_stack[i] = merged_value;
+
+                        // Make sure the block is re-verified
+                        if (target->state != BLOCK_STATE_IS_PENDING) {
+                            target->state = BLOCK_STATE_UNMARKED;
+                        }
+                    }
+                }
+            }
+        }
+
+    } else {
+        // copy the stack
+        arrsetlen(target->stack, arrlen(from->stack));
+        memcpy(target->stack, from->stack, sizeof(*from->stack) * arrlen(from->stack));
+    }
+
+    target->visited = true;
+    verifier_mark_block(function, target);
 
 cleanup:
     return err;
+}
+
+static void verifier_propagate_locals(block_t* next, block_local_t* from, block_local_t* target) {
+    ASSERT(arrlen(from) == arrlen(target));
+
+    for (int i = 0; i < arrlen(from); i++) {
+        if (
+            target[i].ref_read_only != from[i].ref_read_only ||
+            target[i].ref_non_local != from[i].ref_non_local ||
+            target[i].ref_struct_non_local != from[i].ref_struct_non_local
+        ) {
+            // Next block has 'this' initialized, but current state has not
+            // therefore next block must be reverified with 'this' uninitialized
+            if (next->state == BLOCK_STATE_WAS_VERIFIED) {
+                next->state = BLOCK_STATE_UNMARKED;
+            }
+        }
+
+        // merge all the values
+        target[i].ref_read_only = target[i].ref_read_only && from[i].ref_read_only;
+        target[i].ref_non_local = target[i].ref_non_local && from[i].ref_non_local;
+        target[i].ref_struct_non_local = target[i].ref_struct_non_local && from[i].ref_struct_non_local;
+    }
+}
+
+void verifier_propagate_state(block_t* from, block_t* target) {
+    if (target->state == BLOCK_STATE_UNMARKED) {
+        target->this_initialized = from->this_initialized;
+
+        arrsetlen(target->locals, arrlen(from->locals));
+        memcpy(target->locals, from->locals, sizeof(*target->locals) * arrlen(from->locals));
+
+        arrsetlen(target->args, arrlen(from->args));
+        memcpy(target->args, from->args, sizeof(*target->args) * arrlen(from->args));
+
+    } else {
+        if (target->this_initialized != from->this_initialized) {
+            // Next block has 'this' initialized, but current state has not
+            // therefore next block must be reverified with 'this' uninitialized
+            if (target->state == BLOCK_STATE_WAS_VERIFIED) {
+                target->state = BLOCK_STATE_UNMARKED;
+            }
+        }
+        target->this_initialized = target->this_initialized && from->this_initialized;
+
+        // propagate the state of the args and locals of the block
+        verifier_propagate_locals(target, from->locals, target->locals);
+        verifier_propagate_locals(target, from->args, target->args);
+    }
 }
 
 static bool verifier_is_disjoint_try_block(function_t *function, RuntimeExceptionHandlingClause disjoint,
@@ -603,37 +580,6 @@ tdn_err_t verifier_is_valid_leave_target(function_t *function, block_t *src_blk,
         ) {
             CHECK_FAIL_ERROR(TDN_ERROR_VERIFIER_LEAVE_INTO_TRY);
         }
-    }
-
-cleanup:
-    return err;
-}
-
-tdn_err_t verifier_propagate_this_state(function_t* function, block_t* from, block_t* target) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    // propagate the `this` state
-    if (target->visited) {
-        // must have the same length at this point
-        CHECK_ERROR(arrlen(from->stack) == arrlen(target->stack),
-            TDN_ERROR_VERIFIER_PATH_STACK_DEPTH);
-
-        // if we are jumping to a block with this initialized, but its
-        // not initialized in our block, then mark it as not initialized
-        if (target->this_initialized && !from->this_initialized) {
-            target->this_initialized = false;
-            verifier_queue_block(function, target);
-        }
-    } else {
-        // first time being visited, copy over all the type information as is
-        arrsetlen(target->stack, 0);
-        arrsetlen(target->args, 0);
-        arrsetlen(target->locals, 0);
-
-        // pass over the initialized mark
-        target->this_initialized = from->this_initialized;
-
-        verifier_queue_block(function, target);
     }
 
 cleanup:

@@ -17,7 +17,7 @@ AR				:= llvm-ar
 LD				:= ld.lld
 
 # Build in debug or release mode
-DEBUG			?= 0
+DEBUG			?= 1
 
 # Should we optimize
 ifeq ($(DEBUG),1)
@@ -106,7 +106,7 @@ $(BUILD_DIR)/%.c.o: %.c
 $(BIN_DIR)/tdn.elf: $(OBJS)
 	@echo LD $@
 	@mkdir -p $(@D)
-	@$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS)
 
 $(TDN_BIN_DIR)/libtdn.a: force
 	@echo MAKE $@

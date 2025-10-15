@@ -91,11 +91,25 @@ default: all
 .PHONY: all
 all: $(BIN_DIR)/libtdn.a
 
+.PHONY: run
+run:
+	make -C host/linux
+	cd TdnCoreLib/Tests && dotnet build --configuration Debug
+	./host/linux/out/bin/tdn.elf ./TdnCoreLib/Tests/bin/Debug/net8.0/Tests.dll --search-path ./TdnCoreLib/Tests/bin/Debug/net8.0
+
+
 # Quick test
 .PHONY: test
 test:
 	make -C host/linux
 	python3 ./tests/test.py
+
+
+# Quick test
+.PHONY: test
+test-verifier:
+	make -C host/linux
+	python3 ./tests/test.py ilverify
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Rules

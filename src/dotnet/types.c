@@ -58,6 +58,8 @@ RuntimeTypeInfo tIsReadOnlyAttribute = NULL;
 RuntimeTypeInfo tIsByRefLikeAttribute = NULL;
 RuntimeTypeInfo tUnmanagedType = NULL;
 
+RuntimeTypeInfo tException = NULL;
+
 RuntimeTypeInfo tDelegate = NULL;
 RuntimeTypeInfo tMulticastDelegate = NULL;
 
@@ -75,7 +77,7 @@ tdn_err_t tdn_check_generic_argument_constraints(
 
     // special constraints
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE) {
-        CHECK(tdn_type_is_referencetype(arg_type));
+        CHECK(tdn_type_is_gc_pointer(arg_type));
     }
 
     if (attributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) {
