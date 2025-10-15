@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "basic_block.h"
+#include "casting.h"
 #include "internal.h"
 #include "control_flow.h"
 #include "instruction.h"
@@ -259,12 +260,14 @@ static tdn_err_t verifier_start_block(function_t* function, block_t* block) {
             if (r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                 block_t* filter_block = verifier_get_block(function, r->FilterOffset);
                 CHECK(filter_block != NULL);
-                CHECK_AND_RETHROW(verifier_propagate_this_state(function, block, filter_block));
+                verifier_propagate_state(block, filter_block);
+                verifier_mark_block(function, filter_block);
             }
 
             block_t* handler_block = verifier_get_block(function, r->HandlerOffset);
             CHECK(handler_block != NULL);
-            CHECK_AND_RETHROW(verifier_propagate_this_state(function, block, handler_block));
+            verifier_propagate_state(block, handler_block);
+            verifier_mark_block(function, handler_block);
         }
     }
 
@@ -275,25 +278,33 @@ static tdn_err_t verifier_start_block(function_t* function, block_t* block) {
         } else if (basic_block->filter_clause != NULL) {
             r = basic_block->filter_clause;
         } else {
-            ASSERT(!"Should not happen");
+            ASSERT(!"Block marked as filter / handler start but no filter / handler index set.");
         }
 
         if (r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER || r->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
             // stack must be uninit or 1 (exception object)
-            CHECK_ERROR(arrlen(block->stack) == 1, TDN_ERROR_VERIFIER_FILTER_OR_CATCH_UNEXPECTED_STACK);
+            CHECK_ERROR(!block->visited || arrlen(block->stack) == 1, TDN_ERROR_VERIFIER_FILTER_OR_CATCH_UNEXPECTED_STACK);
 
-            // TODO: initialize the stack right now
+            if (!block->visited) {
+                arrsetlen(block->stack, 1);
+                block->visited = true;
+            }
 
             if (r->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-                // TODO: should have an object on the stack
+                stack_value_init(&block->stack[0], tObject);
+
             } else if (r->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
                 RuntimeTypeInfo exception_type = r->CatchType;
                 CHECK_ERROR(!exception_type->IsByRef, TDN_ERROR_VERIFIER_CATCH_BYREF);
-                // TODO: set as the entry object
+                stack_value_init(&block->stack[0], exception_type);
+
+                CHECK_ERROR(verifier_can_cast_to(exception_type, tException),
+                    TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE);
             }
         } else {
             // stack must be empty
-            CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_FIN_OR_FAULT_NON_EMPTY_STACK);
+            CHECK_ERROR(!block->visited || arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_FIN_OR_FAULT_NON_EMPTY_STACK);
+            block->visited = true;
         }
     }
 
@@ -316,14 +327,19 @@ static tdn_err_t verifier_visit_blocks(function_t* function) {
     // and run until all blocks are verifier
     while (arrlen(function->queue) != 0) {
         block_t* block = arrpop(function->queue);
-        block->in_queue = false;
 
         if (trace) {
             TRACE("\tBasic block (IL_%04x):", block->block.start);
         }
 
+        // prepare the block verification, this ensures that the entry state is all correct
         CHECK_AND_RETHROW(verifier_start_block(function, block));
+
+        // actually visit the block, ensuring its correct
         CHECK_AND_RETHROW(verifier_visit_basic_block(function, block));
+
+        // we have verified the block successfully
+        block->state = BLOCK_STATE_WAS_VERIFIED;
     }
 
     cleanup:
@@ -400,26 +416,20 @@ static tdn_err_t verifier_function_init(function_t* function, RuntimeMethodBase 
 
     // handle the this parameter if non-static
     if (!method->Attributes.Static) {
-        block_local_t local = {
-            .flags ={
-                // we only want this to represent a `this` ptr if the
-                // method does not take the this by-ref
-                .this_ptr = !function->modifies_this_type
-            }
-        };
-
-        // TODO: unscoped support
+        block_local_t local = {};
 
         // if this is a readonly struct, then the ref is readonly as well
         if (method->DeclaringType->IsReadOnly && !is_ctor) {
-            local.flags.ref_read_only = true;
+            local.ref_read_only = true;
         }
 
-        // unlike the this not being a non-local ref, its contents as a ref-struct
+        // unlike the `this` not being a non-local ref, its contents as a ref-struct
         // are considered non-local
         if (method->DeclaringType->IsByRefStruct) {
-            local.flags.ref_struct_non_local = true;
+            local.ref_struct_non_local = true;
         }
+
+        // TODO: unscoped support
 
         arrpush(entry_block->args, local);
 
@@ -441,21 +451,21 @@ static tdn_err_t verifier_function_init(function_t* function, RuntimeMethodBase 
         // if this is a readonly parameter then mark it as such
         if (parameter->ReferenceIsReadOnly && !is_ctor) {
             CHECK(type->IsByRef);
-            local.flags.ref_read_only = true;
+            local.ref_read_only = true;
         }
-
-        // TODO: scoped references
 
         // references are non-local since they come from the outside
         // same is true for the ref-structs
         if (type->IsByRef) {
-            local.flags.ref_non_local = true;
+            local.ref_non_local = true;
         }
+
+        // TODO: scoped references
 
         // ref-struct that is incoming will only contain non-local references
         // so mark it as such
         if (type->IsByRefStruct) {
-            local.flags.ref_struct_non_local = true;
+            local.ref_struct_non_local = true;
         }
 
         arrpush(entry_block->args, local);
@@ -475,13 +485,20 @@ static tdn_err_t verifier_function_init(function_t* function, RuntimeMethodBase 
         // initialize the local types
         arrsetlen(function->locals, method->MethodBody->LocalVariables->Length);
         memset(function->locals, 0, arrlen(function->locals) * sizeof(*function->locals));
-        for (int i = 0; i < method->MethodBody->LocalVariables->Length; i++) {
-            function->locals[i].type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
-        }
 
         // initialize the entry block types
         arrsetlen(entry_block->locals, method->MethodBody->LocalVariables->Length);
         memset(entry_block->locals, 0, arrlen(entry_block->locals) * sizeof(*entry_block->locals));
+
+        for (int i = 0; i < method->MethodBody->LocalVariables->Length; i++) {
+            function->locals[i].type = method->MethodBody->LocalVariables->Elements[i]->LocalType;
+
+            // by default a zero-initialized ref-struct is a non-local, because null refs
+            // are zero initialized
+            if (function->locals[i].type->IsByRefStruct) {
+                entry_block->locals[i].ref_struct_non_local = true;
+            }
+        }
     }
 
     // if this is a ctor, we need to track the ctor state to ensure that the parent

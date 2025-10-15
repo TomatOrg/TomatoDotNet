@@ -24,72 +24,6 @@
             TDN_ERROR_VERIFIER_UNINIT_STACK); \
     } while (0)
 
-
-static bool verifier_is_assignable(stack_value_t* src, stack_value_t* dst) {
-    // can't store readonly to a non-readonly location
-    if (src->flags.ref_read_only && !dst->flags.ref_read_only) {
-        return false;
-    }
-
-    // can't store a local to a non-local location
-    if (!src->flags.ref_non_local && dst->flags.ref_non_local) {
-        return false;
-    }
-
-    // same type, we good
-    if (src->kind == dst->kind && src->type == dst->type) {
-        return true;
-    }
-
-    // can't store into a null value
-    if (dst->type == NULL) {
-        return false;
-    }
-
-    switch (src->kind) {
-        // check if can be casted
-        case KIND_OBJ_REF: {
-            if (dst->kind != KIND_OBJ_REF) {
-                return false;
-            }
-
-            // Mull is always assignable
-            if (src->type == NULL) {
-                return true;
-            }
-
-            // and now check if we can perform the cast
-            return verifier_can_cast_to(src->type, dst->type);
-        } break;
-
-        // must match exactly
-        case KIND_INT64:
-        case KIND_FLOAT:
-        case KIND_VALUE_TYPE:
-            return false;
-
-        case KIND_BY_REF: {
-            if (dst->kind == KIND_BY_REF && dst->flags.ref_read_only) {
-                return src->type == dst->type;
-            }
-
-            return false;
-        } break;
-
-        // can either be int64 or native int
-        case KIND_INT32:
-            return dst->kind == KIND_INT64 || dst->kind == KIND_NATIVE_INT;
-
-        // can also be int64
-        case KIND_NATIVE_INT:
-            return dst->kind == KIND_INT64 || dst->kind == KIND_NATIVE_INT;
-
-        default:
-            ASSERT(!"Invalid kind", "%d of %T", src->kind, src->type);
-    }
-}
-
-
 static RuntimeTypeInfo verifier_get_reduced_type(RuntimeTypeInfo type) {
     if (type == NULL) {
         return NULL;
@@ -243,24 +177,23 @@ static tdn_err_t verify_load_local(function_t* function, block_t* block, tdn_il_
     // get the local slot
     CHECK_ERROR(inst->operand.variable < arrlen(block_locals),
         is_arg ? TDN_ERROR_VERIFIER_UNRECOGNIZED_ARGUMENT_NUMBER : TDN_ERROR_VERIFIER_UNRECOGNIZED_LOCAL_NUMBER);
-    block_local_t* block_local = &block_locals[inst->operand.variable];
+    block_local_t block_local = block_locals[inst->operand.variable];
     local_t* func_local = &function_locals[inst->operand.variable];
 
-    // check if we need an initializer
-    if (!block_local->initialized) {
-        block_local->initialized = true;
-
-        // a zero initialized ref-struct only contains null-refs
-        // which are considered to be non-local
-        if (func_local->type->IsByRefStruct) {
-            block_local->flags.ref_struct_non_local = true;
-        }
+    if (!function->allow_unsafe) {
+        // verified code can't use pointers
+        CHECK_ERROR(!func_local->type->IsPointer,
+            TDN_ERROR_VERIFIER_UNMANAGED_POINTER);
     }
 
-    // push the new type to the stack, copy the flags and method pointers
+    // push the new type to the stack, copy the flags, those handle the this-state on their own
     stack_value_t* value = stack_value_init(STACK_PUSH(), func_local->type);
-    value->flags = block_local->flags;
-    value->method = block_local->method;
+    value_flags_from_block_local(&value->flags, block_local);
+
+    // Set the this_ptr when loading it (only valid on methods that have not
+    if (inst->operand.variable == 0 && is_arg && !function->method->Attributes.Static && !function->modifies_this_type) {
+        value->flags.this_ptr = true;
+    }
 
 cleanup:
     return err;
@@ -268,8 +201,6 @@ cleanup:
 
 static tdn_err_t verify_store_local(function_t* function, block_t* block, tdn_il_inst_t* inst, stack_value_t* stack, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
-
-    CHECK_INIT_THIS(stack);
 
     block_local_t* block_locals = is_arg ? block->args : block->locals;
     local_t* function_locals = is_arg ? function->args : function->locals;
@@ -280,31 +211,19 @@ static tdn_err_t verify_store_local(function_t* function, block_t* block, tdn_il
     block_local_t* block_local = &block_locals[inst->operand.variable];
     local_t* func_local = &function_locals[inst->operand.variable];
 
-    // initialized, no need to zero initialize later on
-    block_local->initialized = true;
-
-    // taking the address of variable, invalid this
-    // because the emit has a verification pass as well, it
-    // will catch anything that we missed until now
-    if (is_arg && inst->operand.variable == 0) {
-        function->modifies_this_type = false;
-    }
-
-    // don't allow to load the this if we are not ready yet
+    // don't allow to store the this if we are not ready yet
     if (is_arg && function->track_ctor_state && !block->this_initialized) {
         CHECK_ERROR(inst->operand.variable != 0, TDN_ERROR_VERIFIER_THIS_UNINIT_STORE);
     }
 
     // init the type location, inherit the flags
     // from the incoming value
-    stack_value_t local_value = {
-        .flags = stack->flags
-    };
+    stack_value_t local_value = {};
     stack_value_init(&local_value, func_local->type);
     CHECK_IS_ASSIGNABLE(stack, &local_value);
 
     // remember the flags of the local
-    block_local->flags = stack->flags;
+    block_local_from_value_flags(block_local, stack->flags);
 
 cleanup:
     return err;
@@ -325,35 +244,21 @@ static tdn_err_t verify_load_local_address(function_t* function, block_t* block,
     // don't allow to have nested byrefs
     CHECK_ERROR(!func_local->type->IsByRef, TDN_ERROR_VERIFIER_BYYREF_OF_BYREF);
 
-    // check if we need an initializer
-    // TODO: when we do location tracking have some lazy
-    //       check for the zero initialzie (since ldloca -> initobj
-    //       is a pretty common pattern)
-    if (!block_local->initialized) {
-        block_local->initialized = true;
-
-        // a zero initialized ref-struct only contains null-refs
-        // which are considered to be non-local
-        if (func_local->type->IsByRefStruct) {
-            block_local->flags.ref_struct_non_local = true;
-        }
-    }
-
-    // taking the address of variable, invalid this
-    if (is_arg && inst->operand.variable == 0) {
-        function->modifies_this_type = false;
-    }
-
-    // don't allow to load the this if we are not ready yet
-    if (is_arg && function->track_ctor_state && !block->this_initialized) {
-        CHECK_ERROR(inst->operand.variable != 0, TDN_ERROR_VERIFIER_THIS_UNINIT_STORE);
-    }
-
     // setup the new stack value
     stack_value_t* value = STACK_PUSH();
     value->kind = KIND_BY_REF;
     value->type = func_local->type;
-    value->flags = block_local->flags;
+
+    // don't allow to load the this if we are not ready yet
+    if (inst->operand.variable == 0 && is_arg && !function->method->Attributes.Static) {
+        value->flags.this_ptr = true;
+
+        CHECK_ERROR(!function->track_ctor_state || block->this_initialized,
+            TDN_ERROR_VERIFIER_THIS_UNINIT_STORE);
+    }
+
+    // properties that are kept
+    value->flags.ref_struct_non_local = block_local->ref_struct_non_local;
 
 cleanup:
     return err;
@@ -661,14 +566,14 @@ static tdn_err_t verify_ldind(function_t* function, block_t* block, tdn_il_inst_
         CHECK(stack->kind == KIND_BY_REF || stack->kind == KIND_NATIVE_INT);
 
         if (inst->operand.type == NULL) {
-            CHECK(tdn_type_is_referencetype(stack->type));
+            CHECK(tdn_type_is_gc_pointer(stack->type));
             inst->operand.type = stack->type;
         }
     } else {
         CHECK(stack->kind == KIND_BY_REF);
 
         if (inst->operand.type == NULL) {
-            CHECK(tdn_type_is_referencetype(stack->type));
+            CHECK(tdn_type_is_gc_pointer(stack->type));
             inst->operand.type = stack->type;
         } else {
             CHECK_IS_ASSIGNABLE_TYPE(
@@ -961,6 +866,11 @@ static bool verifier_is_binary_comparable(stack_value_t* a, stack_value_t* b, td
             if (b->kind != KIND_OBJ_REF) {
                 return false;
             }
+
+            // ECMA-335 III.1.5 Operand type table, P. 303:
+            // __cgt.un__ is allowed and verifiable on ObjectRefs (O). This is commonly used when
+            // comparing an ObjectRef with null(there is no "compare - not - equal" instruction, which
+            // would otherwise be a more obvious solution)
             return opcode == CEE_BEQ || opcode == CEE_BNE_UN || opcode == CEE_CEQ || opcode == CEE_CGT_UN;
         } break;
 
@@ -1076,7 +986,7 @@ static tdn_err_t verify_ldelem(function_t* function, block_t* block, tdn_il_inst
         );
     } else {
         element_type = actual_element_type;
-        CHECK(tdn_type_is_referencetype(element_type));
+        CHECK(tdn_type_is_gc_pointer(element_type));
     }
 
     stack_value_init(STACK_PUSH(), element_type);
@@ -1109,7 +1019,7 @@ static tdn_err_t verify_stelem(function_t* function, block_t* block, tdn_il_inst
         );
     } else {
         element_type = actual_element_type;
-        CHECK_ERROR(tdn_type_is_referencetype(element_type), TDN_ERROR_VERIFIER_STACK_OBJ_REF);
+        CHECK_ERROR(tdn_type_is_gc_pointer(element_type), TDN_ERROR_VERIFIER_STACK_OBJ_REF);
     }
 
     // ensure the value matches
@@ -1626,9 +1536,12 @@ static tdn_err_t verify_leave(function_t* function, block_t* block, tdn_il_inst_
     block_t* target = verifier_get_block(function, inst->operand.branch_target);
     CHECK(target != NULL);
 
+    // propagate everything that is not the stack
+    verifier_propagate_state(block, target);
+    verifier_mark_block(function, target);
+
     // ensure this is a proper leave target
     CHECK_AND_RETHROW(verifier_is_valid_leave_target(function, block, target));
-    CHECK_AND_RETHROW(verifier_propagate_this_state(function, block, target));
 
 cleanup:
     return err;
@@ -1660,7 +1573,15 @@ static tdn_err_t verify_throw(function_t* function, block_t* block, tdn_il_inst_
     CHECK_INIT_THIS(stack);
     CHECK(stack[0].kind == KIND_OBJ_REF);
 
-    // TODO: check this is System.Exception
+    // Ensure that this is an exception type, with the exception that we allow to throw
+    // an object type (?)
+    if (stack[0].type != tObject) {
+        stack_value_t temp = {};
+        stack_value_init(&temp, tException);
+        CHECK_ERROR(verifier_is_assignable(&stack[0], &temp),
+            TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE,
+            "%T [%s] is-assignable-to %T [%s]", stack->type, KIND_str(stack->kind), temp.type, KIND_str(temp.kind));
+    }
 
     // empty the stack
     arrsetlen(block->stack, 0);

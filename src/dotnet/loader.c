@@ -163,6 +163,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System.Runtime.CompilerServices, RuntimeHelpers),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
+    LOAD_TYPE(System, Exception),
     { "System", "Nullable`1", &tNullable, 4 },
     { "System", "Span`1", &tSpan, 4 },
 };
@@ -440,7 +441,7 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
             }
 
             CHECK_AND_RETHROW(fill_stack_size(field_type));
-            if (tdn_type_is_referencetype(field_type) || !field_type->IsUnmanaged) {
+            if (tdn_type_is_gc_pointer(field_type) || !field_type->IsUnmanaged) {
                 is_managed = true;
             }
 
@@ -486,7 +487,7 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
 
             // fill the field
             field->FieldOffset = current_size;
-            if (tdn_type_is_referencetype(field->FieldType)) {
+            if (tdn_type_is_gc_pointer(field->FieldType)) {
                 // this contains a managed pointer
                 arrpush(type->ManagedPointers, current_size);
 
@@ -1326,7 +1327,7 @@ static tdn_err_t fill_object_type_id(RuntimeTypeInfo info) {
     } else if (info->BaseType == NULL) {
         // ignore types with no base class (aka module)
 
-    } else if (tdn_type_is_referencetype(info) && info->TypeMaskLength == 0) {
+    } else if (tdn_type_is_gc_pointer(info) && info->TypeMaskLength == 0) {
         // reference types have the proper chains, struct types
         // are checked explicitly via the vtable reference
 
@@ -2220,6 +2221,7 @@ static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
             param->DeclaringType = assembly->TypeDefs->Elements[owner.index - 1];
             CHECK(param->DeclaringType->GenericArguments->Length > generic_param->number);
             param->DeclaringType->GenericArguments->Elements[generic_param->number] = param;
+
         } else if (owner.table == METADATA_METHOD_DEF) {
             CHECK(owner.index != 0 && owner.index <= assembly->MethodDefs->Length);
             param->IsGenericMethodParameter = 1;
@@ -2314,7 +2316,7 @@ static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
             if (current_object->BaseType == tValueType) {
                 CHECK(tdn_type_is_valuetype(constraint));
             } else if (current_object->BaseType == tObject) {
-                CHECK(tdn_type_is_referencetype(constraint));
+                CHECK(tdn_type_is_gc_pointer(constraint));
             }
             current_object->BaseType = constraint;
         }

@@ -58,6 +58,8 @@ extern RuntimeTypeInfo tIsByRefLikeAttribute;
 extern RuntimeTypeInfo tIsVolatile;
 extern RuntimeTypeInfo tUnmanagedType;
 
+extern RuntimeTypeInfo tException;
+
 extern RuntimeTypeInfo tDelegate;
 extern RuntimeTypeInfo tMulticastDelegate;
 
@@ -69,18 +71,30 @@ static inline bool tdn_is_delegate(RuntimeTypeInfo type) {
     return type != NULL && type->BaseType == tMulticastDelegate;
 }
 
+static inline bool tdn_is_primitive(RuntimeTypeInfo type) {
+    return type->IsByRef ||
+            type == tByte || type == tSByte ||
+            type == tInt16 || type == tUInt16 ||
+            type == tInt32 || type == tUInt32 ||
+            type == tInt64 || type == tUInt64 ||
+            type == tIntPtr || type == tUIntPtr ||
+            type == tBoolean || type == tChar ||
+            type == tSingle || type == tDouble ||
+            type->BaseType != tEnum;
+}
+
 static inline bool tdn_is_struct(RuntimeTypeInfo type) {
     // Anything which is not a value type but not a
     // native type is a struct
-    return tdn_type_is_valuetype(type) && !type->IsByRef &&
-            type != tByte && type != tSByte &&
-            type != tInt16 && type != tUInt16 &&
-            type != tInt32 && type != tUInt32 &&
-            type != tInt64 && type != tUInt64 &&
-            type != tIntPtr && type != tUIntPtr &&
-            type != tBoolean && type != tChar &&
-            type != tSingle && type != tDouble &&
-            type->BaseType != tEnum;
+    return tdn_type_is_valuetype(type) && tdn_is_primitive(type);
+}
+
+static inline bool tdn_has_non_nullable_value_type_constraint(RuntimeTypeInfo type) {
+    return (type->GenericParameterAttributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_NON_NULLABLE_VALUE_TYPE) != 0;
+}
+
+static inline bool tdn_has_reference_type_constraint(RuntimeTypeInfo type) {
+    return (type->GenericParameterAttributes.SpecialConstraint & TDN_GENERIC_PARAM_CONSTRAINT_REFERENCE_TYPE) != 0;
 }
 
 /**

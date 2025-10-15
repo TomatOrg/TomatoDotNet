@@ -605,7 +605,7 @@ cleanup:
 static tdn_err_t type_ldelem(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    jit_stack_value_t* index = &stack[1];
+    // jit_stack_value_t* index = &stack[1];
     jit_stack_value_t* array = &stack[0];
 
     jit_stack_value_init(STACK_PUSH(), array->type->ElementType);
@@ -621,7 +621,7 @@ static tdn_err_t type_stelem(jit_function_t* function, jit_block_t* block, tdn_i
 static tdn_err_t type_ldelema(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    jit_stack_value_t* index = &stack[1];
+    // jit_stack_value_t* index = &stack[1];
     jit_stack_value_t* array = &stack[0];
 
     jit_stack_value_t* push = STACK_PUSH();

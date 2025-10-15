@@ -172,7 +172,7 @@ static void mangle_push_type(string_builder_t* builder, RuntimeTypeInfo type) {
         string_builder_push_char(builder, 'R');
         mangle_push_type(builder, type->ElementType);
     } else {
-        if (tdn_type_is_referencetype(type)) {
+        if (tdn_type_is_gc_pointer(type)) {
             // classes are considered passed by pointer
             string_builder_push_char(builder, 'P');
         } else {
@@ -383,7 +383,7 @@ static void dwarf_write_type_ref(jit_elf_t* elf, RuntimeTypeInfo type, bool as_p
 }
 
 static void dwarf_write_member_type(jit_elf_t* elf, RuntimeTypeInfo type) {
-    dwarf_write_type_ref(elf, type, tdn_type_is_referencetype(type));
+    dwarf_write_type_ref(elf, type, tdn_type_is_gc_pointer(type));
 }
 
 static void dwarf_write_param_type(jit_elf_t* elf, RuntimeTypeInfo type) {
@@ -913,7 +913,7 @@ static void dwarf_add_single_type(jit_elf_t* elf, RuntimeTypeInfo type) {
             dwarf_write_str(&elf->debug_info, string_builder_build(&builder));
             string_builder_free(&builder);
             dwarf_write_uleb(&elf->debug_info, type->HeapSize);
-            dwarf_write_u8(&elf->debug_info, tdn_type_is_referencetype(type) ? DW_CC_pass_by_reference : DW_CC_pass_by_value);
+            dwarf_write_u8(&elf->debug_info, tdn_type_is_gc_pointer(type) ? DW_CC_pass_by_reference : DW_CC_pass_by_value);
 
             if (type->BaseType != NULL && type != tValueType) {
                 dwarf_write_uleb(&elf->debug_info, TDN_ABBREV_BASE_TYPE);

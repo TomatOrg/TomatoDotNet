@@ -743,7 +743,7 @@ static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t 
     } else if (dest_type == tInt32 || dest_type == tUInt32) {
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I32, 0), stack[0].value);
-    } else if (dest_type == tInt64 || dest_type == tUInt64 || dest_type == tIntPtr || dest_type == tUIntPtr || tdn_type_is_referencetype(dest_type)) {
+    } else if (dest_type == tInt64 || dest_type == tUInt64 || dest_type == tIntPtr || dest_type == tUIntPtr || tdn_type_is_gc_pointer(dest_type)) {
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0), stack[0].value);
     } else if (dest_type == tSingle) {
@@ -1932,7 +1932,7 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
     spidir_value_t* values = NULL;
 
     // for a reference type that is constrained we need to deref it first
-    if (inst->constrained != NULL && tdn_type_is_referencetype(inst->constrained)) {
+    if (inst->constrained != NULL && tdn_type_is_gc_pointer(inst->constrained)) {
         stack[0].value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
     }
 
@@ -2388,7 +2388,7 @@ static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t buil
         // TODO: support this properly
         CHECK_FAIL();
 
-    } else if (tdn_type_is_referencetype(inst->operand.type)) {
+    } else if (tdn_type_is_gc_pointer(inst->operand.type)) {
         // just keep the exact same value when its a reference type
         STACK_TOP()->value = stack[0].value;
 
@@ -2423,7 +2423,7 @@ static tdn_err_t emit_unbox_any(jit_function_t* function, spidir_builder_handle_
     tdn_err_t err = TDN_NO_ERROR;
 
     // the operand is a reference type
-    if (tdn_type_is_referencetype(inst->operand.type)) {
+    if (tdn_type_is_gc_pointer(inst->operand.type)) {
         // perform castclass instead
         CHECK_AND_RETHROW(emit_castclass(function, builder, block, inst, stack));
 
