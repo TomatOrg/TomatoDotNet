@@ -2611,9 +2611,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // calculate the size of all the basic types
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
-        if (!tdn_has_generic_parameters(type)) {
-            CHECK_AND_RETHROW(tdn_type_init(type));
-        }
+        CHECK_AND_RETHROW(tdn_type_init(type));
     }
 
     pushed_type_queue = false;
@@ -2653,6 +2651,8 @@ cleanup:
     if (pushed_type_queue) {
         pop_type_queue();
     }
+
+    ASSERT(arrlen(m_type_queues) == 0);
 
     if (IS_ERROR(err) && assembly != NULL) {
         // we don't own the metadata in

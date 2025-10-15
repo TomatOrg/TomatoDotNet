@@ -80,13 +80,13 @@ static inline bool tdn_is_primitive(RuntimeTypeInfo type) {
             type == tIntPtr || type == tUIntPtr ||
             type == tBoolean || type == tChar ||
             type == tSingle || type == tDouble ||
-            type->BaseType != tEnum;
+            type->BaseType == tEnum;
 }
 
 static inline bool tdn_is_struct(RuntimeTypeInfo type) {
     // Anything which is not a value type but not a
     // native type is a struct
-    return tdn_type_is_valuetype(type) && tdn_is_primitive(type);
+    return tdn_type_is_valuetype(type) && !tdn_is_primitive(type);
 }
 
 static inline bool tdn_has_non_nullable_value_type_constraint(RuntimeTypeInfo type) {
