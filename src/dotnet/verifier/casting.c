@@ -9,12 +9,19 @@
 
     #define VERIFY_TRACE(fmt, ...) TRACE("%*s" fmt, m_verifier_trace_indent, "", ## __VA_ARGS__)
 
-    #define VERIFY_ENTER(fmt, ...) \
+    #define VERIFY_ENTER() \
         do { \
-            VERIFY_TRACE("%s(" fmt ")", __FUNCTION__, ##__VA_ARGS__); \
+            VERIFY_TRACE("%s(%T, %T)", __FUNCTION__, this_type, other_type); \
+            m_verifier_trace_indent += 2; \
         } while(0)
 
-    #define VERIFY_LEAVE(success) success
+    #define VERIFY_LEAVE(success) \
+        ({ \
+            bool __success = success; \
+            m_verifier_trace_indent -= 2; \
+            VERIFY_TRACE("-> %s (%d)", __success ? "true" : "false", __LINE__); \
+            __success; \
+        })
 
 #else
     #define VERIFY_TRACE(...)
@@ -93,20 +100,23 @@ static bool verifier_can_cast_param_to(RuntimeTypeInfo cur_types_parm, RuntimeTy
 }
 
 static bool verifier_can_cast_to_non_variant_interface(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
+    VERIFY_ENTER();
+
     if (other_type == this_type) {
-        return true;
+        return VERIFY_LEAVE(true);
     }
 
     if (hmgeti(this_type->InterfaceImpls, other_type) >= 0) {
-        return true;
+        return VERIFY_LEAVE(true);
     }
 
-    return true;
+    return VERIFY_LEAVE(false);
 }
 
 static bool verifier_can_cast_to_interface(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
     // TODO: handle variance
-    return verifier_can_cast_to_non_variant_interface(this_type, other_type);
+    VERIFY_ENTER();
+    return VERIFY_LEAVE(verifier_can_cast_to_non_variant_interface(this_type, other_type));
 }
 
 static bool verifier_can_cast_to_class(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
@@ -144,10 +154,12 @@ static bool verifier_can_cast_to_class(RuntimeTypeInfo this_type, RuntimeTypeInf
 }
 
 static bool verifier_can_cast_to_class_or_interface(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
+    VERIFY_ENTER();
+
     if (tdn_is_interface(other_type)) {
-        return verifier_can_cast_to_interface(this_type, other_type);
+        return VERIFY_LEAVE(verifier_can_cast_to_interface(this_type, other_type));
     } else {
-        return verifier_can_cast_to_class(this_type, other_type);
+        return VERIFY_LEAVE(verifier_can_cast_to_class(this_type, other_type));
     }
 }
 
@@ -189,12 +201,14 @@ static bool verifier_can_cast_generic_parameter_to(RuntimeTypeInfo this_type, Ru
 }
 
 bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
+    VERIFY_ENTER();
+
     if (this_type == other_type) {
-        return true;
+        return VERIFY_LEAVE(true);
     }
 
     if (this_type->IsGenericParameter) {
-        return verifier_can_cast_generic_parameter_to(this_type, other_type);
+        return VERIFY_LEAVE(verifier_can_cast_generic_parameter_to(this_type, other_type));
     }
 
     if (this_type->IsByRef || this_type->IsPointer) {
@@ -202,11 +216,11 @@ bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type)
             this_type->IsByRef != other_type->IsByRef ||
             this_type->IsPointer != other_type->IsPointer
         ) {
-            return false;
+            return VERIFY_LEAVE(false);
         }
 
-        return verifier_can_cast_param_to(this_type->ElementType, other_type->ElementType);
+        return VERIFY_LEAVE(verifier_can_cast_param_to(this_type->ElementType, other_type->ElementType));
     }
 
-    return verifier_can_cast_to_class_or_interface(this_type, other_type);
+    return VERIFY_LEAVE(verifier_can_cast_to_class_or_interface(this_type, other_type));
 }
