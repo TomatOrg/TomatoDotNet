@@ -4,14 +4,14 @@
 #include "tomatodotnet/util/stb_ds.h"
 #include "util/except.h"
 
-#if 0
+#if 1
     static int m_verifier_trace_indent = 0;
 
     #define VERIFY_TRACE(fmt, ...) TRACE("%*s" fmt, m_verifier_trace_indent, "", ## __VA_ARGS__)
 
     #define VERIFY_ENTER() \
         do { \
-            VERIFY_TRACE("%s(%T, %T)", __FUNCTION__, this_type, other_type); \
+            VERIFY_TRACE("%s || %T => %T", __FUNCTION__, this_type, other_type); \
             m_verifier_trace_indent += 2; \
         } while(0)
 
@@ -164,40 +164,62 @@ static bool verifier_can_cast_to_class_or_interface(RuntimeTypeInfo this_type, R
 }
 
 static bool verifier_can_cast_generic_parameter_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {
+    VERIFY_ENTER();
+
     // A boxed variable type can be cast to any of its constraints, or object, if none are specified
     if (other_type == tObject) {
-        return true;
+        return VERIFY_LEAVE(true);
     }
 
     if (
         tdn_has_non_nullable_value_type_constraint(this_type) && other_type == tValueType
     ) {
-        return true;
+        return VERIFY_LEAVE(true);
     }
 
     // TODO: handle generic constraint properly, idk what we would actually end up with in here tbh
-    // RuntimeTypeInfo_Array type_instantiation = NULL;
-    // RuntimeTypeInfo_Array method_instantiation = NULL;
-    // if (this_type->IsGenericMethodParameter) {
-    //     type_instantiation = this_type->DeclaringMethod->DeclaringType->GenericArguments;
-    //     method_instantiation = this_type->DeclaringMethod->GenericArguments;
-    // } else {
-    //     type_instantiation = this_type->DeclaringType->GenericArguments;
-    // }
+    RuntimeTypeInfo_Array type_instantiation = NULL;
+    RuntimeTypeInfo_Array method_instantiation = NULL;
+    if (this_type->IsGenericMethodParameter) {
+        type_instantiation = this_type->DeclaringMethod->DeclaringType->GenericArguments;
+        method_instantiation = this_type->DeclaringMethod->GenericArguments;
+    } else {
+        type_instantiation = this_type->DeclaringType->GenericArguments;
+    }
+
+    if (type_instantiation != NULL) {
+        VERIFY_TRACE("TYPE:");
+        m_verifier_trace_indent++;
+        for (int j = 0; j < type_instantiation->Length; j++) {
+            VERIFY_TRACE("%T", type_instantiation->Elements[j]);
+        }
+        m_verifier_trace_indent--;
+    }
+
+    if (method_instantiation != NULL) {
+        VERIFY_TRACE("METHOD:");
+        m_verifier_trace_indent++;
+        for (int j = 0; j < method_instantiation->Length; j++) {
+            RuntimeTypeInfo typ = method_instantiation->Elements[j];
+            VERIFY_TRACE("%T -- %d", typ, typ->GenericParameterPosition);
+        }
+        m_verifier_trace_indent--;
+    }
 
     if (this_type->GenericParameterConstraints != NULL) {
         for (int i = 0; i < this_type->GenericParameterConstraints->Length; i++) {
             RuntimeTypeInfo type_constraint = this_type->GenericParameterConstraints->Elements[i];
             // TODO: create instance
+            VERIFY_TRACE("%T", type_constraint);
             ASSERT(!type_constraint->IsGenericParameter, "TODO: this");
 
             if (verifier_can_cast_to(type_constraint, other_type)) {
-                return true;
+                return VERIFY_LEAVE(true);
             }
         }
     }
 
-    return false;
+    return VERIFY_LEAVE(false);
 }
 
 bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type) {

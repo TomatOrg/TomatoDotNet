@@ -3,6 +3,7 @@
 #include "tomatodotnet/util/stb_ds.h"
 
 #include "util/except.h"
+#include "verifier/casting.h"
 
 RuntimeTypeInfo tObject = NULL;
 RuntimeTypeInfo tValueType = NULL;
@@ -106,85 +107,12 @@ tdn_err_t tdn_check_generic_argument_constraints(
                     CHECK(arg_type->IsUnmanaged);
                 }
             } else {
-                CHECK(tdn_is_instance(arg_type, constraint, typeArgs, methodArgs),
-                    "%T is-instance %T", arg_type, constraint);
+                // TODO: implement the proper cast check
+                CHECK_FAIL();
             }
         }
     }
 
 cleanup:
     return err;
-}
-
-bool tdn_is_instance(
-    RuntimeTypeInfo type,
-    RuntimeTypeInfo base,
-    RuntimeTypeInfo_Array typeArgs,
-    RuntimeTypeInfo_Array methodArgs
-) {
-    if (base->Attributes.Interface) {
-        // fast path if its exactly
-        int idx = hmgeti(type->InterfaceImpls, base);
-        if (idx >= 0) {
-            return true;
-        }
-
-        // if not a generic type we can return right now, or we have
-        // no generic arguments given, we can return right now, otherwise
-        // we need to perform a more manual check in case the arguments
-        // have changed
-        if (
-            !tdn_type_is_generic(base->GenericTypeDefinition) ||
-            (typeArgs == NULL && methodArgs == NULL)
-        ) {
-            return false;
-        }
-
-        // slow path for generics
-        for (int i = 0; i < hmlen(type->InterfaceImpls); i++) {
-            RuntimeTypeInfo iface = type->InterfaceImpls[i].key;
-
-            if (iface->GenericTypeDefinition == base->GenericTypeDefinition) {
-                bool matched = true;
-                for (int j = 0; j < iface->GenericArguments->Length; j++) {
-                    RuntimeTypeInfo in_arg = iface->GenericArguments->Elements[j];
-                    RuntimeTypeInfo want_arg = base->GenericArguments->Elements[j];
-
-                    // resolve the real argument
-                    if (want_arg->IsGenericTypeParameter) {
-                        if (typeArgs != NULL && typeArgs->Length > want_arg->GenericParameterPosition) {
-                            want_arg = typeArgs->Elements[want_arg->GenericParameterPosition];
-                        } else {
-                            want_arg = NULL;
-                        }
-                    } else if (want_arg->IsGenericMethodParameter) {
-                        if (methodArgs != NULL && methodArgs->Length > want_arg->GenericParameterPosition) {
-                            want_arg = methodArgs->Elements[want_arg->GenericParameterPosition];
-                        } else {
-                            want_arg = NULL;
-                        }
-                    }
-
-                    // and now check they match
-                    if (in_arg != want_arg) {
-                        matched = false;
-                        break;
-                    }
-                }
-
-                if (matched) {
-                    return true;
-                }
-            }
-        }
-    } else {
-        // go over the inheritance
-        do {
-            if (type == base) {
-                return true;
-            }
-            type = type->BaseType;
-        } while (type != NULL);
-    }
-    return false;
 }

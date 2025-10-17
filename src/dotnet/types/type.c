@@ -282,10 +282,11 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
     type->DeclaredMethods = TDN_GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
     methods = 0;
-    for (size_t i = 0; i < methods_count; i++) {
-        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[type_def->method_list.index - 1 + i];
+    for (int i = 0; i < methods_count; i++) {
+        int idx = type_def->method_list.index + i;
+        metadata_method_def_t* method_def = &assembly->Metadata->method_defs[idx - 1];
+        RuntimeMethodBase original_method = assembly->MethodDefs->Elements[idx - 1];
         MethodAttributes attributes = { .Attributes = method_def->flags };
-        RuntimeMethodBase original_method = assembly->MethodDefs->Elements[type_def->method_list.index - 1 + i];
 
         // get the correct version
         RuntimeMethodBase base = NULL;
@@ -309,6 +310,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
         base->Name = original_method->Name;
         base->Attributes = original_method->Attributes;
         base->MethodImplFlags = original_method->MethodImplFlags;
+        base->IsReadOnly = original_method->IsReadOnly;
         base->VTableOffset = VTABLE_INVALID;
         CHECK_AND_RETHROW(tdn_create_string_from_cstr(method_def->name, &base->Name));
 
@@ -338,12 +340,40 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
                 &signature));
         base->Parameters = signature.parameters;
         base->ReturnParameter = signature.return_parameter;
+
+        // setup the parameters properly
+        // get parameter information from the params table
+        size_t params_count = (idx == assembly->Metadata->method_defs_count ?
+                               assembly->Metadata->params_count :
+                               method_def[1].param_list.index - 1) - (method_def->param_list.index - 1);
+        if (params_count != 0) {
+            CHECK(method_def->param_list.index != 0);
+            CHECK(method_def->param_list.index - 1 + params_count <= assembly->Metadata->params_count);
+        }
+        CHECK(params_count <= base->Parameters->Length + 1); // TODO: shouldn't this be equals??
+        for (int pi = 0; pi < params_count; pi++) {
+            metadata_param_t* param = &assembly->Metadata->params[method_def->param_list.index - 1 + pi];
+            CHECK(param->sequence < base->Parameters->Length + 1);
+            ParameterInfo info = param->sequence == 0 ? base->ReturnParameter : base->Parameters->Elements[param->sequence - 1];
+            info->Attributes = (ParameterAttributes){ .Attributes = param->flags };
+            CHECK_AND_RETHROW(tdn_create_string_from_cstr(param->name, &info->Name));
+        }
+    }
+
+    // expand interface impls
+    for (int i = 0; i < assembly->Metadata->interface_impls_count; i++) {
+        metadata_interface_impl_t* impl = &assembly->Metadata->interface_impls[i];
+        if (impl->class.token == original_type->MetadataToken) {
+            RuntimeTypeInfo interface = NULL;
+            CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->interface.token, type->GenericArguments, NULL, &interface));
+            CHECK_AND_RETHROW(loader_connect_single_interface_impl(type, interface));
+        }
     }
 
     // the nested types are just copied over without
     // actually applying the generic construction on
     // them
-    type->DeclaredNestedTypes = original_type;
+    type->DeclaredNestedTypes = original_type->DeclaredNestedTypes;
 
 cleanup:
     return err;

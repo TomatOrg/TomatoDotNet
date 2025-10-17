@@ -361,9 +361,7 @@ static tdn_err_t verifier_init_exception_handlers(function_t* function) {
             RuntimeExceptionHandlingClause clause = block->block.handler_clause;
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
                 // the exception is of the CatchType
-                stack_value_t value = {};
-                stack_value_init(&value, clause->CatchType);
-                arrpush(block->stack, value);
+                arrpush(block->stack, stack_value_create(clause->CatchType));
                 block->visited = true;
 
             } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
@@ -449,7 +447,7 @@ static tdn_err_t verifier_function_init(function_t* function, RuntimeMethodBase 
         block_local_t local = {};
 
         // if this is a readonly parameter then mark it as such
-        if (parameter->ReferenceIsReadOnly && !is_ctor) {
+        if (parameter->Attributes.In && !is_ctor) {
             CHECK(type->IsByRef);
             local.ref_read_only = true;
         }

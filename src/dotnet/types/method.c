@@ -50,6 +50,24 @@ static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_A
     new_method->Parameters = signature.parameters;
     new_method->ReturnParameter = signature.return_parameter;
 
+    // setup the parameters properly
+    // get parameter information from the params table
+    size_t params_count = (token.index == assembly->Metadata->method_defs_count ?
+                           assembly->Metadata->params_count :
+                           method_def[1].param_list.index - 1) - (method_def->param_list.index - 1);
+    if (params_count != 0) {
+        CHECK(method_def->param_list.index != 0);
+        CHECK(method_def->param_list.index - 1 + params_count <= assembly->Metadata->params_count);
+    }
+    CHECK(params_count <= new_method->Parameters->Length + 1); // TODO: shouldn't this be equals??
+    for (int pi = 0; pi < params_count; pi++) {
+        metadata_param_t* param = &assembly->Metadata->params[method_def->param_list.index - 1 + pi];
+        CHECK(param->sequence < new_method->Parameters->Length + 1);
+        ParameterInfo info = param->sequence == 0 ? new_method->ReturnParameter : new_method->Parameters->Elements[param->sequence - 1];
+        info->Attributes = (ParameterAttributes){ .Attributes = param->flags };
+        CHECK_AND_RETHROW(tdn_create_string_from_cstr(param->name, &info->Name));
+    }
+
 cleanup:
     return err;
 }

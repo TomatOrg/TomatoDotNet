@@ -74,7 +74,10 @@
 tdn_err_t sig_parse_compressed_int(blob_entry_t* blob, uint32_t* value) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    uint8_t a = FETCH_BYTE;
+    CHECK(blob->size >= 1);
+    uint8_t a = *blob->data;
+    blob->data++;
+    blob->size--;
     if ((a & 0x80) == 0) {
         *value = a;
         goto cleanup;
@@ -335,7 +338,7 @@ static tdn_err_t sig_parse_ret_type(
     CHECK_AND_RETHROW(sig_get_next_custom_mod(blob, assembly, typeArgs, methodArgs, &cmod_type, &required));
     while(cmod_type != NULL) {
         if (cmod_type == tInAttribute) {
-            parameter_info->ReferenceIsReadOnly = 1;
+            // TODO: the fuck should I do in here
         } else {
             WARN("Unknown mod %T", cmod_type);
             CHECK(!required);

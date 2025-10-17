@@ -47,9 +47,7 @@ static bool match_generic_type(RuntimeTypeInfo a, RuntimeTypeInfo b, RuntimeMeth
 
 static bool match_generic_param(ParameterInfo a, ParameterInfo b, RuntimeMethodInfo ma, RuntimeMethodInfo mb) {
     if (!match_generic_type(a->ParameterType, b->ParameterType, ma, mb)) return false;
-    // TODO: I had cases where this did not work, why?
-    // if (a->Attributes.Attributes != b->Attributes.Attributes) return false;
-    if (a->ReferenceIsReadOnly != b->ReferenceIsReadOnly) return false;
+    if (a->Attributes.In != b->Attributes.In) return false;
     return true;
 }
 
