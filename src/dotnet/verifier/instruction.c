@@ -121,7 +121,9 @@ static const char* KIND_str(stack_value_kind_t kind) {
         if (!verifier_is_unsafe_assignable(function, __a, __b)) { \
             CHECK_ERROR(verifier_is_assignable(__a, __b), \
                 TDN_ERROR_VERIFIER_STACK_UNEXPECTED, \
-                "%T [%s] is-assignable-to %T [%s]", __a->type, KIND_str(__a->kind), __b->type, KIND_str(__b->kind)); \
+                "%T [%s%s] is-assignable-to %T [%s%s]", \
+                    __a->type, __a->flags.ref_read_only ? "readonly " : "", KIND_str(__a->kind), \
+                    __b->type, __b->flags.ref_read_only ? "readonly " : "", KIND_str(__b->kind)); \
         } \
     } while (0)
 
@@ -218,8 +220,7 @@ static tdn_err_t verify_store_local(function_t* function, block_t* block, tdn_il
 
     // init the type location, inherit the flags
     // from the incoming value
-    stack_value_t local_value = {};
-    stack_value_init(&local_value, func_local->type);
+    stack_value_t local_value = stack_value_create(func_local->type);
     CHECK_IS_ASSIGNABLE(stack, &local_value);
 
     // remember the flags of the local
@@ -1179,8 +1180,10 @@ static tdn_err_t verify_call(function_t* function, block_t* block, tdn_il_inst_t
         int off = (method_type != NULL && inst->opcode != CEE_NEWOBJ) ? 1 : 0;
         CHECK(arrlen(stack) == (off + method->Parameters->Length));
         for (int i = 0; i < method->Parameters->Length; i++) {
+            ParameterInfo param = method->Parameters->Elements[i];
             stack_value_t* actual = &stack[off + i];
-            stack_value_t declared = stack_value_create(method->Parameters->Elements[i]->ParameterType);
+            stack_value_t declared = stack_value_create(param->ParameterType);
+            declared.flags.ref_read_only = param->Attributes.In;
             CHECK_IS_ASSIGNABLE(actual, &declared);
 
             // if this is a ref-struct, and its has local refs, then it might
@@ -1291,7 +1294,7 @@ static tdn_err_t verify_call(function_t* function, block_t* block, tdn_il_inst_t
             // if we won't leak a local reference, this result is a non-local reference
             return_value->flags.ref_non_local = !might_leak_local_ref;
 
-            if (method->ReturnParameter->ReferenceIsReadOnly) {
+            if (method->ReturnParameter->ReturnRefIsReadonly) {
                 // the reference is readonly
                 return_value->flags.ref_read_only = true;
             }
@@ -1341,7 +1344,7 @@ static tdn_err_t verify_ret(function_t* function, block_t* block, tdn_il_inst_t*
             // ensure we don't return a readonly ref
             // when the function return is non-readonly
             if (stack->flags.ref_read_only) {
-                CHECK(function->method->ReturnParameter->ReferenceIsReadOnly);
+                CHECK(function->method->ReturnParameter->ReturnRefIsReadonly);
             }
         }
 
@@ -1393,8 +1396,7 @@ static tdn_err_t verify_box(function_t* function, block_t* block, tdn_il_inst_t*
     stack_value_t* value = &stack[0];
     CHECK_INIT_THIS(value);
 
-    stack_value_t target_type = {};
-    stack_value_init(&target_type, type);
+    stack_value_t target_type = stack_value_create(type);
 
     // can't box a byref
     CHECK_ERROR(target_type.kind != KIND_BY_REF,
@@ -1576,8 +1578,7 @@ static tdn_err_t verify_throw(function_t* function, block_t* block, tdn_il_inst_
     // Ensure that this is an exception type, with the exception that we allow to throw
     // an object type (?)
     if (stack[0].type != tObject) {
-        stack_value_t temp = {};
-        stack_value_init(&temp, tException);
+        stack_value_t temp = stack_value_create(tException);
         CHECK_ERROR(verifier_is_assignable(&stack[0], &temp),
             TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE,
             "%T [%s] is-assignable-to %T [%s]", stack->type, KIND_str(stack->kind), temp.type, KIND_str(temp.kind));

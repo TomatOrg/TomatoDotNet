@@ -29,3 +29,13 @@ tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo InterfaceType);
 tdn_err_t tdn_create_vtable(RuntimeTypeInfo type, int count);
 
 tdn_err_t tdn_find_explicit_implementation(RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_body);
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Loader utilities, used by generic code
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Connect to given interface to the given class, properly initializing everything
+ * that needs to be initialized
+ */
+tdn_err_t loader_connect_single_interface_impl(RuntimeTypeInfo class, RuntimeTypeInfo interface);

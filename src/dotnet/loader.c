@@ -314,11 +314,16 @@ static tdn_err_t fill_stack_size(RuntimeTypeInfo type) {
         type->StackAlignment = type->HeapAlignment;
 
     } else if (type->Attributes.Interface) {
-        type->StackAlignment = _Alignof(Interface);
+        // To ensure we can use atomic operations on the interface struct
+        // we are going to ensure it has the same alignment as size
+        STATIC_ASSERT(sizeof(Interface) <= 16);
+        type->StackAlignment = sizeof(Interface);
         type->StackSize = sizeof(Interface);
 
     } else if (type->BaseType == tMulticastDelegate || type == tMulticastDelegate || type == tDelegate) {
-        type->StackAlignment = _Alignof(Delegate);
+        // Same as interfaces
+        STATIC_ASSERT(sizeof(Delegate) <= 16);
+        type->StackAlignment = sizeof(Delegate);
         type->StackSize = sizeof(Delegate);
 
     } else {
@@ -392,8 +397,8 @@ static tdn_err_t fill_heap_size(RuntimeTypeInfo type) {
 
     // based on the layout setup the fields
     if (type->Attributes.Layout == TDN_TYPE_LAYOUT_EXPLICIT) {
-        // Very basic support for explicit interface, we will
-        // have something more complete
+        // Very basic support for explicit layout, we will
+        // have something more complete in the future
         CHECK(tdn_type_is_valuetype(type));
         CHECK(fields->Length == 0);
 
@@ -555,9 +560,7 @@ cleanup:
 
 static bool parameter_match(ParameterInfo a, ParameterInfo b) {
     if (a->ParameterType != b->ParameterType) return false;
-    // TODO: I had cases where this did not work, why?
-    // if (a->Attributes.Attributes != b->Attributes.Attributes) return false;
-    if (a->ReferenceIsReadOnly != b->ReferenceIsReadOnly) return false;
+    if (a->Attributes.In != b->Attributes.In) return false;
     return true;
 }
 
@@ -698,83 +701,6 @@ static RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, Runtime
     return NULL;
 }
 
-static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info);
-
-static tdn_err_t add_interface_to_type(RuntimeTypeInfo info, RuntimeTypeInfo interface, uint64_t* interface_product, int* vtable_offset) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    // ignore if we already have the type in our list
-    if (hmgeti(info->InterfaceImpls, interface) >= 0) {
-        goto cleanup;
-    }
-
-    // ensure hte interface is initialized
-    CHECK_AND_RETHROW(fill_virtual_methods(interface));
-
-    // check if our parent already has this interface, if so re-use their offset
-    // this is required to ensure consistency acros objects
-    int parent_offset = -1;
-    if (info->BaseType != NULL) {
-        int idx = hmgeti(info->BaseType->InterfaceImpls, interface);
-        if (idx >= 0) {
-            parent_offset = info->BaseType->InterfaceImpls[idx].value;
-        }
-    }
-
-    // check if any of the interfaces we already implement this interface, if so
-    // re-use their internal offset, this is basically an attempt to compact the
-    // vtable
-    for (int i = 0; i < hmlen(info->InterfaceImpls); i++) {
-        interface_impl_t* impl = &info->InterfaceImpls[i];
-        int idx = hmgeti(impl->key->InterfaceImpls, interface);
-        if (idx >= 0) {
-            // we need to take the offset of the interface inside of the
-            // offset of the current interface
-            parent_offset = impl->value + impl->key->InterfaceImpls[idx].value;
-        }
-    }
-
-    // if no offset was found then we have a brand new struct, allocate
-    // new vtable space for it
-    if (parent_offset == -1) {
-        CHECK_AND_RETHROW(fill_virtual_methods(interface));
-        parent_offset = *vtable_offset;
-        *vtable_offset += interface->VTable->Length;
-    }
-
-    // insert the interface properly
-    interface_impl_t new_impl = {
-        .key = interface,
-        .value = parent_offset
-    };
-
-    // if a prime was not generated already, add to the list of types that implement this interface
-    // otherwise just multiply our product with the generated prime
-    if (!info->Attributes.Interface) {
-        if (interface->InterfacePrime == 0) {
-            // set the new link to point to us
-            new_impl.next = interface->InterfaceImplementors;
-            interface->InterfaceImplementors = info;
-        } else {
-            // add the current interface already
-            CHECK(!__builtin_mul_overflow(*interface_product, interface->InterfacePrime, interface_product));
-        }
-    }
-
-    // now add it to the interface impls
-    hmputs(info->InterfaceImpls, new_impl);
-
-    // go over the interfaces that this interface implements and add them, to have a flat
-    // interface table for this type
-    for (int i = 0; i < hmlen(interface->InterfaceImpls); i++) {
-        RuntimeTypeInfo sub_iface = interface->InterfaceImpls[i].key;
-        CHECK_AND_RETHROW(add_interface_to_type(info, sub_iface, interface_product, vtable_offset));
-    }
-
-cleanup:
-    return err;
-}
-
 static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -787,13 +713,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     CHECK(!info->FillingVtable);
     info->FillingVtable = true;
 
-    // fill the vtable of the base class
-    if (info->BaseType != NULL) {
-        CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));
-    }
-
     RuntimeAssembly assembly = info->Module->Assembly;
-    dotnet_file_t* metadata = assembly->Metadata;
 
     //
     // Start by inheriting the vtable from the base type
@@ -803,45 +723,59 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
 
     // the current offset of the vtable
     int vtable_offset = 0;
-    uint64_t interface_product = 1;
 
-    // copy the interfaces implemented by the parent
+    // ensure the parent vtable is initialized first, given we extend it
     if (info->BaseType != NULL) {
-        // start from after the parent's vtable
+        CHECK_AND_RETHROW(fill_virtual_methods(info->BaseType));
         vtable_offset = info->BaseType->VTable ? info->BaseType->VTable->Length : 0;
-
-        // and add all the interfaces implemented by the parent to us
-        for (int i = 0; i < hmlen(info->BaseType->InterfaceImpls); i++) {
-            RuntimeTypeInfo interface = info->BaseType->InterfaceImpls[i].key;
-            CHECK_AND_RETHROW(add_interface_to_type(info, interface, &interface_product, &vtable_offset));
-        }
     }
 
-    // and now add all the interfaces that are
-    // implemented by this type explicitly
-    for (int i = 0; i < metadata->interface_impls_count; i++) {
-        metadata_interface_impl_t* impl = &metadata->interface_impls[i];
-        if (impl->class.token != info->MetadataToken) {
-            continue;
+    // initialize all the interfaces that we are implementing
+    for (int i = 0; i < hmlen(info->InterfaceImpls); i++) {
+        interface_impl_t* impl = &info->InterfaceImpls[i];
+
+        // ensure all its virtual methods are initialized properly
+        CHECK_AND_RETHROW(fill_virtual_methods(impl->key));
+
+        // check if our parent already has this interface, if so re-use their offset
+        // this is required to ensure consistency acros objects
+        int interface_vtable_offset = -1;
+        if (info->BaseType != NULL) {
+            int idx = hmgeti(info->BaseType->InterfaceImpls, impl->key);
+            if (idx >= 0) {
+                interface_vtable_offset = info->BaseType->InterfaceImpls[idx].value;
+            }
         }
 
-        // get the interface type
-        RuntimeTypeInfo interface;
-        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->interface.token, info->GenericArguments, NULL, &interface));
+        // check if any of the interfaces we already have implement this interface, if so
+        // re-use their internal offset, this is basically an attempt to compact the
+        // vtable and re-use entries when possible
+        if (interface_vtable_offset == -1) {
+            for (int j = 0; j < i; j++) {
+                interface_impl_t* other_impl = &info->InterfaceImpls[j];
+                int idx = hmgeti(other_impl->key->InterfaceImpls, impl->key);
+                if (idx >= 0) {
+                    // we need to take the offset of the interface inside of the
+                    // offset of the current interface
+                    interface_vtable_offset = other_impl->value + other_impl->key->InterfaceImpls[idx].value;
+                }
+            }
+        }
 
-        // and add it to the type
-        CHECK_AND_RETHROW(add_interface_to_type(info, interface, &interface_product, &vtable_offset));
+        // if no offset was found then we have a brand new interface, allocate
+        // new vtable space for it
+        if (interface_vtable_offset == -1) {
+            interface_vtable_offset = vtable_offset;
+            vtable_offset += impl->key->VTable->Length;
+        }
+
+        // and remember the offset now
+        impl->value = interface_vtable_offset;
     }
 
     // go over all the virtual methods and allocate vtable slots to all of them,
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
-
-        // fixup readonly if the parent is readonly on the way
-        if (info->IsReadOnly && !method->Attributes.Static) {
-            method->IsReadOnly = true;
-        }
-
         if (!method->Attributes.Virtual || method->Attributes.Static) {
             continue;
         }
@@ -875,7 +809,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
                 // we found an explicit interface implementation where this method is used,
                 // find the offset of it in the vtable and reuse that
                 int idx = hmgeti(info->InterfaceImpls, decl->DeclaringType);
-                CHECK(idx >= 0);
+                CHECK(idx >= 0, "Failed to find %T in %T", decl->DeclaringType, info);
                 vtable_slot =  info->InterfaceImpls[idx].value + decl->VTableOffset;
 
             } else {
@@ -919,9 +853,6 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     } else {
         CHECK(vtable_offset == info->VTableSize, "Got invalid VTABLE size %d/%d - %T", vtable_offset, info->VTableSize, info);
     }
-
-    // set the type id information
-    info->JitVTable->InterfaceProduct = interface_product;
 
     // copy entries from the parent
     if (info->BaseType != NULL) {
@@ -1360,11 +1291,13 @@ cleanup:
 static tdn_err_t fill_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // ensure the generic constraints are properly met
+    CHECK_AND_RETHROW(check_generic_constraints(type));
 
     // Don't actually perform type init if this
     // has a generic type parameter somewhere
     if (tdn_has_generic_parameters(type)) {
-        CHECK_AND_RETHROW(fill_virtual_methods(type));
+        // TODO: anything to do in here?
     } else {
         CHECK_AND_RETHROW(fill_stack_size(type));
         CHECK_AND_RETHROW(fill_heap_size(type));
@@ -1388,11 +1321,6 @@ static tdn_err_t drain_type_queue() {
     for (int i = 0; i < arrlen(queue.types); i++) {
         RuntimeTypeInfo type = queue.types[i];
         CHECK_AND_RETHROW(fill_type(type));
-    }
-
-    for (int i = 0; i < arrlen(queue.types); i++) {
-        RuntimeTypeInfo type = queue.types[i];
-        CHECK_AND_RETHROW(check_generic_constraints(type));
     }
 
 cleanup:
@@ -1606,7 +1534,7 @@ cleanup:
 
 static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembly);
 
-static tdn_err_t assembly_load_assembly_refs(RuntimeAssembly assembly) {
+static tdn_err_t loader_load_assembly_refs(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     tdn_file_t current_file = NULL;
 
@@ -1660,7 +1588,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_load_type_refs(RuntimeAssembly assembly) {
+static tdn_err_t loader_load_type_refs(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     assembly->TypeRefs = (RuntimeTypeInfo_Array)TDN_GC_NEW_ARRAY(RuntimeTypeInfo, assembly->Metadata->type_refs_count);
@@ -1727,7 +1655,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_load_methods(RuntimeAssembly assembly) {
+static tdn_err_t loader_load_methods(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
 
@@ -1794,7 +1722,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_load_fields(RuntimeAssembly assembly) {
+static tdn_err_t loader_load_fields(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
     RuntimeModule module = assembly->Module;
 
@@ -1826,7 +1754,7 @@ static bool is_module_type(RuntimeTypeInfo type) {
     return tdn_compare_string_to_cstr(type->Name, "<Module>") && (type->Namespace == NULL || type->Namespace->Length == 0);
 }
 
-static tdn_err_t connect_method_declaring_type(RuntimeTypeInfo type) {
+static tdn_err_t loader_connect_method_declaring_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
     token_t token = { .token = type->MetadataToken };
     RuntimeAssembly assembly = type->Module->Assembly;
@@ -1846,7 +1774,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t connect_members_to_type(RuntimeTypeInfo type) {
+static tdn_err_t loader_connect_members_to_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
     token_t token = { .token = type->MetadataToken };
     RuntimeAssembly assembly = type->Module->Assembly;
@@ -2129,7 +2057,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_load_generics(RuntimeAssembly assembly) {
+static tdn_err_t loader_load_generics(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     void* last_object = NULL;
@@ -2237,7 +2165,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_load_generic_constraints(RuntimeAssembly assembly) {
+static tdn_err_t loader_load_generic_constraints(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     RuntimeTypeInfo last_object = NULL;
@@ -2330,7 +2258,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_connect_read_only_attribute(RuntimeAssembly assembly, bool parameter) {
+static tdn_err_t loader_connect_read_only_attribute(RuntimeAssembly assembly, bool parameter) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect jit related custom attributes
@@ -2361,7 +2289,9 @@ static tdn_err_t assembly_connect_read_only_attribute(RuntimeAssembly assembly, 
                     if (!parameter) break;
                     CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
                     ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
-                    parent_type->ReferenceIsReadOnly = true;
+                    if (parent_type->Position == -1) {
+                        parent_type->ReturnRefIsReadonly = true;
+                    }
                 } break;
 
                 case METADATA_PROPERTY: {
@@ -2378,7 +2308,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_connect_by_ref_like_attribute(RuntimeAssembly assembly) {
+static tdn_err_t loader_connect_by_ref_like_attribute(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect jit related custom attributes
@@ -2407,7 +2337,53 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_connect_nested_and_class_layout(RuntimeAssembly assembly) {
+tdn_err_t loader_connect_single_interface_impl(RuntimeTypeInfo class, RuntimeTypeInfo interface) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we don't have this already
+    CHECK(hmgeti(class->InterfaceImpls, interface) == -1);
+
+    interface_impl_t new_impl = {
+        .key = interface,
+        .value = -1
+    };
+
+    // if a prime was not generated already, add to the list of types that implement this interface
+    // otherwise just multiply our product with the generated prime
+    if (!tdn_is_interface(class)) {
+        if (interface->InterfacePrime == 0) {
+            // set the new link to point to us
+            new_impl.next = interface->InterfaceImplementors;
+            interface->InterfaceImplementors = class;
+        } else {
+            // add the current interface already
+            CHECK(!__builtin_mul_overflow(class->InterfacePrime, interface->InterfacePrime, &class->InterfacePrime));
+        }
+    }
+
+    // now add it to the interface impls
+    hmputs(class->InterfaceImpls, new_impl);
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t loader_connect_interface_impls(RuntimeAssembly assembly) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    for (int i = 0; i < assembly->Metadata->interface_impls_count; i++) {
+        metadata_interface_impl_t* impl = &assembly->Metadata->interface_impls[i];
+        RuntimeTypeInfo class, interface;
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->class.token, NULL, NULL, &class));
+        CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->interface.token, class->GenericArguments, NULL, &interface));
+        CHECK_AND_RETHROW(loader_connect_single_interface_impl(class, interface));
+    }
+
+cleanup:
+    return err;
+}
+
+static tdn_err_t loader_connect_nested_and_class_layout(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect nested classes
@@ -2454,7 +2430,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t assembly_connect_field_rva(RuntimeAssembly assembly) {
+static tdn_err_t loader_connect_field_rva(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // load all of the field RVAs, this handles any static data and already
@@ -2564,15 +2540,15 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     }
 
     // Load all the external references
-    CHECK_AND_RETHROW(assembly_load_assembly_refs(assembly));
-    CHECK_AND_RETHROW(assembly_load_type_refs(assembly));
+    CHECK_AND_RETHROW(loader_load_assembly_refs(assembly));
+    CHECK_AND_RETHROW(loader_load_type_refs(assembly));
 
     // load all the methods and fields
-    CHECK_AND_RETHROW(assembly_load_methods(assembly));
-    CHECK_AND_RETHROW(assembly_load_fields(assembly));
+    CHECK_AND_RETHROW(loader_load_methods(assembly));
+    CHECK_AND_RETHROW(loader_load_fields(assembly));
 
     // load all the generics type information
-    CHECK_AND_RETHROW(assembly_load_generics(assembly));
+    CHECK_AND_RETHROW(loader_load_generics(assembly));
 
     assembly->Params = TDN_GC_NEW_ARRAY(ParameterInfo, assembly->Metadata->params_count);
 
@@ -2580,33 +2556,36 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // the custom properties connection to work
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
-        CHECK_AND_RETHROW(connect_method_declaring_type(type));
+        CHECK_AND_RETHROW(loader_connect_method_declaring_type(type));
     }
 
     // must be done before we do anything like create generic type instances otherwise
     // it won't pass the properties properly, we don't include parameters since they
     // are not initialized yet in this context
-    CHECK_AND_RETHROW(assembly_connect_by_ref_like_attribute(assembly));
-    CHECK_AND_RETHROW(assembly_connect_read_only_attribute(assembly, false));
+    CHECK_AND_RETHROW(loader_connect_by_ref_like_attribute(assembly));
+    CHECK_AND_RETHROW(loader_connect_read_only_attribute(assembly, false));
 
     push_type_queue();
     pushed_type_queue = true;
 
-    CHECK_AND_RETHROW(assembly_load_generic_constraints(assembly));
+    CHECK_AND_RETHROW(loader_load_generic_constraints(assembly));
 
     // and now connect the types with the members
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
         RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
-        CHECK_AND_RETHROW(connect_members_to_type(type));
+        CHECK_AND_RETHROW(loader_connect_members_to_type(type));
     }
 
     // connect the read-only attribute on parameters, this must be done after
     // connecting the member to types since otherwise the parameters are not
     // initialized
-    CHECK_AND_RETHROW(assembly_connect_read_only_attribute(assembly, true));
+    CHECK_AND_RETHROW(loader_connect_read_only_attribute(assembly, true));
+
+    // connect all the interface impls, will be needed for the type init itself
+    CHECK_AND_RETHROW(loader_connect_interface_impls(assembly));
 
     // connect all the misc classes
-    CHECK_AND_RETHROW(assembly_connect_nested_and_class_layout(assembly));
+    CHECK_AND_RETHROW(loader_connect_nested_and_class_layout(assembly));
 
     // calculate the size of all the basic types
     for (int i = 0; i < assembly->TypeDefs->Length; i++) {
@@ -2618,7 +2597,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     CHECK_AND_RETHROW(drain_type_queue());
 
     // initialize all of the static fields
-    CHECK_AND_RETHROW(assembly_connect_field_rva(assembly));
+    CHECK_AND_RETHROW(loader_connect_field_rva(assembly));
 
     // finish up with bootstrapping if this is the corelib
     if (gCoreAssembly == NULL) {
