@@ -166,9 +166,15 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         if (inst.opcode == CEE_VOLATILE) {
             prefix |= TDN_IL_PREFIX_VOLATILE;
             continue;
+
         } else if (inst.opcode == CEE_READONLY) {
             prefix |= TDN_IL_PREFIX_READONLY;
             continue;
+
+        } else if (inst.opcode == CEE_UNALIGNED) {
+            prefix |= TDN_IL_PREFIX_UNALIGNED;
+            continue;
+
         } else if (inst.opcode == CEE_CONSTRAINED) {
             prefix |= TDN_IL_PREFIX_CONSTRAINED;
             constrained = inst.operand.type;

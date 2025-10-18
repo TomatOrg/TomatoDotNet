@@ -88,12 +88,24 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
         if (inst.opcode == CEE_VOLATILE) {
             prefix |= TDN_IL_PREFIX_VOLATILE;
             continue;
+
         } else if (inst.opcode == CEE_READONLY) {
             prefix |= TDN_IL_PREFIX_READONLY;
             continue;
+
         } else if (inst.opcode == CEE_CONSTRAINED) {
             prefix |= TDN_IL_PREFIX_CONSTRAINED;
             constrained = inst.operand.type;
+            continue;
+
+        } else if (inst.opcode == CEE_UNALIGNED) {
+            prefix |= TDN_IL_PREFIX_UNALIGNED;
+            CHECK(
+                inst.operand.int8 == 1 ||
+                inst.operand.int8 == 2 ||
+                inst.operand.int8 == 4
+            );
+            // TODO: use the alignment
             continue;
 
         } else {
@@ -118,7 +130,7 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
 
             // readonly is only allowed on ldelema
             if (prefix & TDN_IL_PREFIX_READONLY) {
-                CHECK(inst.opcode == CEE_LDELEMA);
+                CHECK_ERROR(inst.opcode == CEE_LDELEMA, TDN_ERROR_VERIFIER_READONLY);
             }
 
             // constrained is only allowed on a callvirt

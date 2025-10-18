@@ -352,23 +352,30 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
             // there are special cases where we need to choose another method
             RuntimeMethodBase test_method = method;
             if (tdn_string_contains(method->Name, "special.")) {
+                test_method = NULL;
+
                 if (tdn_string_contains(method->Name, "..ctor")) {
-                    for (int i = 0; i < method->DeclaringType->DeclaredConstructors->Length; i++) {
-                        RuntimeConstructorInfo ctor = method->DeclaringType->DeclaredConstructors->Elements[i];
+                    for (int k = 0; k < method->DeclaringType->DeclaredConstructors->Length; k++) {
+                        RuntimeConstructorInfo ctor = method->DeclaringType->DeclaredConstructors->Elements[k];
                         // TODO: check exact signature or something
                         if (ctor->Parameters->Length == method->Parameters->Length) {
                             test_method = (RuntimeMethodBase)ctor;
                             break;
                         }
                     }
+
                 } else {
                     CHECK_FAIL("%T::%U", method->DeclaringType, method->Name);
                 }
+
+                CHECK(test_method != NULL,
+                    "Failed to find the real method for %T::%U", method->DeclaringType, method->Name);
             }
 
+            ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
+
             if (tdn_string_ends(method->Name, "_Valid")) {
-                ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
-                CHECK_AND_RETHROW(tdn_jit_method(test_method));
+                CHECK_AND_RETHROW(verifier_verify_method(test_method));
                 continue;
 
             }
@@ -380,8 +387,6 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 continue;
             }
             idx += strlen("_Invalid");
-
-            ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
 
             // we expect to get an error from this, if we didn't
             // then we failed the test
@@ -581,7 +586,7 @@ int main(int argc, char* argv[]) {
 
     int jit_emit_verbose = 0;
     int jit_type_verbose = 0;
-    int jit_verify_verbose = 0;
+    int jit_verify_verbose = 1;
     int jit_dump = 0;
     int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
