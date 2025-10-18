@@ -725,14 +725,6 @@ cleanup:
 static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // type != tByte && type != tSByte &&
-    // type != tInt16 && type != tUInt16 &&
-    // type != tInt32 && type != tUInt32 &&
-    // type != tInt64 && type != tUInt64 &&
-    // type != tIntPtr && type != tUIntPtr &&
-    // type != tBoolean && type != tChar &&
-    // type != tSingle && type != tDouble;
-
     RuntimeTypeInfo dest_type = stack[0].type;
     if (dest_type == tByte || dest_type == tSByte || dest_type == tBoolean) {
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_1,
@@ -746,10 +738,13 @@ static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t 
     } else if (dest_type == tInt64 || dest_type == tUInt64 || dest_type == tIntPtr || dest_type == tUIntPtr || tdn_type_is_gc_pointer(dest_type)) {
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0), stack[0].value);
+
     } else if (dest_type == tSingle) {
         CHECK_FAIL();
     } else if (dest_type == tDouble) {
-        CHECK_FAIL();
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
+            spidir_builder_build_fconst64(builder, 0), stack[0].value);
+
     } else {
         CHECK(tdn_type_is_valuetype(dest_type));
         jit_emit_bzero(builder, stack[0].value, dest_type);
@@ -1338,6 +1333,13 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
             case CEE_XOR: value = spidir_builder_build_xor(builder, stack[0].value, stack[1].value); break;
             default: CHECK_FAIL();
         }
+
+        // one of them is a by-ref, convert back to a
+        // pointer since that should be the result too
+        if (STACK_TOP()->kind == JIT_KIND_BY_REF) {
+            value = spidir_builder_build_inttoptr(builder, value);
+        }
+
     }
     STACK_TOP()->value = value;
 
@@ -2903,7 +2905,12 @@ tdn_err_t emitter_on_entry_block(jit_function_t* function, spidir_builder_handle
             }
         } else if (zero_initialize) {
             // this is a value type, but we need to zero init it
-            value = spidir_builder_build_iconst(builder, get_spidir_type(func_local->type), 0);
+            spidir_value_type_t type = get_spidir_type(func_local->type);
+            if (type == SPIDIR_TYPE_F64) {
+                value = spidir_builder_build_fconst64(builder, 0.0f);
+            } else {
+                value = spidir_builder_build_iconst(builder, get_spidir_type(func_local->type), 0);
+            }
         }
 
         // and store it

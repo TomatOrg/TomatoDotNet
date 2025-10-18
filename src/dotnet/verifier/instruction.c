@@ -737,8 +737,14 @@ static tdn_err_t verify_binary_op(function_t* function, block_t* block, tdn_il_i
         case CEE_MUL:
         case CEE_DIV:
         case CEE_REM: {
-            CHECK_ERROR(KIND_INT32 <= stack[0].kind && stack[0].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-            CHECK_ERROR(KIND_INT32 <= stack[1].kind && stack[1].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+            if (function->allow_unsafe && (inst->opcode == CEE_ADD || inst->opcode == CEE_SUB)) {
+                // unsafe code can also perform operations on a by-ref, resulting in a by-ref
+                CHECK_ERROR(KIND_INT32 <= stack[0].kind && stack[0].kind <= KIND_BY_REF, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+                CHECK_ERROR(KIND_INT32 <= stack[1].kind && stack[1].kind <= KIND_BY_REF, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+            } else {
+                CHECK_ERROR(KIND_INT32 <= stack[0].kind && stack[0].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+                CHECK_ERROR(KIND_INT32 <= stack[1].kind && stack[1].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+            }
         } break;
 
         default: {
@@ -756,8 +762,14 @@ static tdn_err_t verify_binary_op(function_t* function, block_t* block, tdn_il_i
         result.type = tIntPtr;
     }
 
-    CHECK_ERROR((stack[0].kind == stack[1].kind) || (result.kind == KIND_NATIVE_INT),
-        TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+    if (result.kind == KIND_BY_REF) {
+        if (stack[0].kind == stack[1].kind && inst->opcode == CEE_SUB) {
+            result = stack_value_create(tIntPtr);
+        }
+    } else {
+        CHECK_ERROR((stack[0].kind == stack[1].kind) || (result.kind == KIND_NATIVE_INT),
+            TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+    }
 
     *STACK_PUSH() = result;
 

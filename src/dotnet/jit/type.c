@@ -490,7 +490,11 @@ static tdn_err_t type_binary_op(jit_function_t* function, jit_block_t* block, td
         result.type = tIntPtr;
     }
 
-    CHECK((stack[0].kind == stack[1].kind) || (result.kind == JIT_KIND_NATIVE_INT));
+    if (result.kind == JIT_KIND_BY_REF) {
+        if (stack[0].kind == stack[1].kind && inst->opcode == CEE_SUB) {
+            result = jit_stack_value_create(tIntPtr);
+        }
+    }
 
     *STACK_PUSH() = result;
 
