@@ -614,9 +614,21 @@ tdn_err_t sig_parse_type_spec(
             CHECK_AND_RETHROW(tdn_get_byref_type(*type, type));
         } break;
 
-        case ELEMENT_TYPE_STRING: {
-            *type = tString;
-        } break;
+        case ELEMENT_TYPE_BOOLEAN: *type = tBoolean; break;
+        case ELEMENT_TYPE_CHAR: *type = tChar; break;
+        case ELEMENT_TYPE_I1: *type = tSByte; break;
+        case ELEMENT_TYPE_U1: *type = tByte; break;
+        case ELEMENT_TYPE_I2: *type = tInt16; break;
+        case ELEMENT_TYPE_U2: *type = tUInt16; break;
+        case ELEMENT_TYPE_I4: *type = tInt32; break;
+        case ELEMENT_TYPE_U4: *type = tUInt32; break;
+        case ELEMENT_TYPE_I8: *type = tInt64; break;
+        case ELEMENT_TYPE_U8: *type = tUInt64; break;
+        case ELEMENT_TYPE_R4: *type = tSingle; break;
+        case ELEMENT_TYPE_R8: *type = tDouble; break;
+        case ELEMENT_TYPE_I: *type = tIntPtr; break;
+        case ELEMENT_TYPE_U: *type = tUIntPtr; break;
+        case ELEMENT_TYPE_STRING: *type = tString; break;
 
         default:
             CHECK_FAIL("Unknown element type %02x", value);
