@@ -370,6 +370,9 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
                 else if (tdn_string_contains(method->Name, "_ReturnPtrToStack")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
                 else if (tdn_string_contains(method->Name, "_MethodFallthrough")) CHECK(jit_err == TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH);
                 else if (tdn_string_contains(method->Name, "_ThisUninitReturn")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_UNINIT_RETURN);
+                else if (tdn_string_contains(method->Name, "_TypeAccess")) CHECK(jit_err == TDN_ERROR_VERIFIER_TYPE_ACCESS);
+                else if (tdn_string_contains(method->Name, "_StackObjRef")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_OBJ_REF);
+                else if (tdn_string_contains(method->Name, "_BoxByRef.ExpectedValClassObjRefVariable")) CHECK(jit_err == TDN_ERROR_VERIFIER_BOX_BYREF || jit_err == TDN_ERROR_VERIFIER_EXPECTED_VAL_CLASS_OBJ_REF_VARIABLE);
                 else CHECK_FAIL("Invalid error condition");
 
             } else {

@@ -1370,7 +1370,7 @@ static tdn_err_t verify_castclass(function_t* function, block_t* block, tdn_il_i
     stack_value_t* value = &stack[0];
     CHECK_INIT_THIS(value);
 
-    CHECK(value->kind == KIND_OBJ_REF);
+    CHECK_ERROR(value->kind == KIND_OBJ_REF, TDN_ERROR_VERIFIER_STACK_OBJ_REF);
 
     // ensure we can access that type
     CHECK_ERROR(verifier_can_access_type(function->method->DeclaringType, inst->operand.type),
@@ -1399,8 +1399,18 @@ static tdn_err_t verify_box(function_t* function, block_t* block, tdn_il_inst_t*
     stack_value_t target_type = stack_value_create(type);
 
     // can't box a byref
-    CHECK_ERROR(target_type.kind != KIND_BY_REF,
+    CHECK_ERROR(target_type.kind != KIND_BY_REF && !target_type.type->IsByRefStruct,
         TDN_ERROR_VERIFIER_BOX_BYREF);
+
+    CHECK_ERROR(
+        tdn_is_primitive(type) ||
+        target_type.kind == KIND_OBJ_REF ||
+        tdn_is_generic_parameter(type) ||
+        tdn_type_is_valuetype(type),
+        TDN_ERROR_VERIFIER_EXPECTED_VAL_CLASS_OBJ_REF_VARIABLE
+    );
+
+    // TODO: check constraints? what does that do?
 
     // ensure we can access the boxed type
     CHECK_ERROR(verifier_can_access_type(function->method->DeclaringType, type),
