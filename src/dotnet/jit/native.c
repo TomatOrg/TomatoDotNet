@@ -23,6 +23,10 @@ static double math_sqrt_double(double value) {
     return __builtin_sqrt(value);
 }
 
+static double math_ceiling_double(double value) {
+    return __builtin_ceil(value);
+}
+
 static String string_allocate(int len) {
     String new_str = tdn_gc_new(tString, sizeof(struct String) + len * 2);
     ASSERT(new_str != NULL);
@@ -90,6 +94,11 @@ static native_function_t m_native_functions[] = {
     {
         "System", "Math", "Sqrt",
         math_sqrt_double,
+        SIG(FLOAT)
+    },
+    {
+        "System", "Math", "Ceiling",
+        math_ceiling_double,
         SIG(FLOAT)
     },
     {
