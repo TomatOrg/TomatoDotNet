@@ -403,8 +403,7 @@ void verifier_propagate_state(block_t* from, block_t* target) {
     }
 }
 
-static bool verifier_is_disjoint_try_block(function_t *function, RuntimeExceptionHandlingClause disjoint,
-                                           RuntimeExceptionHandlingClause source) {
+static bool verifier_is_disjoint_try_block(function_t* function, RuntimeExceptionHandlingClause disjoint, RuntimeExceptionHandlingClause source) {
     if (source->TryOffset <= disjoint->TryOffset && source->TryOffset + source->TryLength >= disjoint->TryOffset +
         disjoint->TryLength) {
         // Source is enclosing disjoint
@@ -456,7 +455,7 @@ static bool verifier_is_disjoint_try_block(function_t *function, RuntimeExceptio
     return true;
 }
 
-tdn_err_t verifier_is_valid_leave_target(function_t *function, block_t *src_blk, block_t *target_blk) {
+tdn_err_t verifier_is_valid_leave_target(function_t* function, block_t* src_blk, block_t* target_blk) {
     tdn_err_t err = TDN_NO_ERROR;
     basic_block_t *src = &src_blk->block;
     basic_block_t *target = &target_blk->block;
@@ -516,7 +515,7 @@ tdn_err_t verifier_is_valid_leave_target(function_t *function, block_t *src_blk,
     // or not within any try block
     if (src->handler_clause != NULL && src->handler_clause != target->handler_clause) {
         if (target->try_clause != NULL) {
-            RuntimeExceptionHandlingClause src_region = src->try_clause;
+            RuntimeExceptionHandlingClause src_region = src->handler_clause;
             RuntimeExceptionHandlingClause target_region = target->try_clause;
 
             // If target is not associated try block, and not enclosing srcRegion
@@ -568,15 +567,14 @@ tdn_err_t verifier_is_valid_leave_target(function_t *function, block_t *src_blk,
         RuntimeExceptionHandlingClause target_region = target->try_clause;
 
         if (
+            // Not first instruction
             target->start != target_region->TryOffset &&
-            (
-                src->handler_clause == NULL ||
-                src->handler_clause != target->handler_clause
-            ) &&
-            (
-                target_region->TryOffset > src->start ||
-                target_region->TryOffset + target_region->TryLength < src->start
-            )
+
+            // Not associated handler
+            (src->handler_clause == NULL || src->handler_clause != target->try_clause) &&
+
+            // Target region does not enclose source
+            (target_region->TryOffset > src->start || target_region->TryOffset + target_region->TryLength < src->start)
         ) {
             CHECK_FAIL_ERROR(TDN_ERROR_VERIFIER_LEAVE_INTO_TRY);
         }

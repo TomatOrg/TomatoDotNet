@@ -155,7 +155,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
         if (trace) {
-            indent = tdn_disasm_print_start(body, pc, inst, indent);
+            indent = tdn_disasm_print_start(body, pc, inst, indent, false);
         }
 
         // normalize the instruction for easier processing
@@ -258,7 +258,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         CHECK(arrlen(block.stack) == wanted_stack_size);
 
         if (trace) {
-            indent = tdn_disasm_print_end(body, pc, indent);
+            indent = tdn_disasm_print_end(body, pc, indent, false);
         }
 
         tdn_free_inst(&inst);

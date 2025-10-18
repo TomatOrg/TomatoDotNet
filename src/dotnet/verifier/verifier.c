@@ -70,14 +70,14 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
             inst.control_flow == TDN_IL_CF_NEXT ||
             inst.control_flow == TDN_IL_CF_META ||
             inst.control_flow == TDN_IL_CF_CALL,
-            TDN_ERROR_VERIFIER_BAD_JUMP_TARGET
+            TDN_ERROR_VERIFIER_BAD_JUMP_TARGET,
         );
 
         // get the instruction
         CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
 
         if (trace) {
-            indent = tdn_disasm_print_start(body, pc, inst, indent);
+            indent = tdn_disasm_print_start(body, pc, inst, indent, false);
         }
 
         // normalize the instruction for easier processing
@@ -203,6 +203,15 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
             TDN_ERROR_VERIFIER_STACK_OVERFLOW);
         size_t wanted_stack_size = arrlen(block.stack) + stack_behavior.push;
 
+        // these opcodes empty the stack
+        if (
+            inst.opcode == CEE_LEAVE ||
+            inst.opcode == CEE_ENDFINALLY ||
+            inst.opcode == CEE_THROW
+        ) {
+            wanted_stack_size = 0;
+        }
+
         // ensure we have a verifier for this opcode
         CHECK(inst.opcode < g_verify_dispatch_table_size && g_verify_dispatch_table[inst.opcode] != NULL,
             "Unimplemented opcode %s in verifier", tdn_get_opcode_name(inst.opcode));
@@ -212,7 +221,7 @@ static tdn_err_t verifier_visit_basic_block(function_t* function, block_t* in_bl
         CHECK(arrlen(block.stack) == wanted_stack_size);
 
         if (trace) {
-            indent = tdn_disasm_print_end(body, pc, indent);
+            indent = tdn_disasm_print_end(body, pc, indent, false);
         }
 
         tdn_free_inst(&inst);
@@ -298,10 +307,11 @@ static tdn_err_t verifier_start_block(function_t* function, block_t* block) {
                 CHECK_ERROR(!exception_type->IsByRef, TDN_ERROR_VERIFIER_CATCH_BYREF);
                 stack_value_init(&block->stack[0], exception_type);
 
-                // TODO: in theory we can catch non-exception objects, recheck against ILVerify what they do
-                // stack_value_t exception_obj = stack_value_create(tException);
-                // CHECK_ERROR(verifier_is_assignable(&block->stack[0], &exception_obj),
-                //     TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE);
+                if (exception_type != tObject) {
+                    stack_value_t exception_obj = stack_value_create(tException);
+                    CHECK_ERROR(verifier_is_assignable(&block->stack[0], &exception_obj),
+                        TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE);
+                }
             }
         } else {
             // stack must be empty

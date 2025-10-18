@@ -204,6 +204,8 @@ cleanup:
 static tdn_err_t verify_store_local(function_t* function, block_t* block, tdn_il_inst_t* inst, stack_value_t* stack, bool is_arg) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK_INIT_THIS(stack);
+
     block_local_t* block_locals = is_arg ? block->args : block->locals;
     local_t* function_locals = is_arg ? function->args : function->locals;
 
@@ -516,6 +518,8 @@ cleanup:
 
 static tdn_err_t verify_initobj(function_t* function, block_t* block, tdn_il_inst_t* inst, stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
+
+    CHECK_INIT_THIS(stack);
 
     // must be a byref
     CHECK_ERROR(stack->kind == KIND_BY_REF,
@@ -1579,6 +1583,23 @@ cleanup:
     return err;
 }
 
+static tdn_err_t verify_endfilter(function_t* function, block_t* block, tdn_il_inst_t* inst, stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    // ensure we have a filter clause for the block
+    CHECK_ERROR(block->block.filter_clause != NULL,
+        TDN_ERROR_VERIFIER_ENDFILTER);
+
+    // must have an integer on the stack
+    CHECK_ERROR(stack->kind == KIND_INT32, TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+
+    // ensure the stack is empty
+    CHECK_ERROR(arrlen(block->stack) == 0, TDN_ERROR_VERIFIER_END_FILTER_STACK);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t verify_throw(function_t* function, block_t* block, tdn_il_inst_t* inst, stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1762,6 +1783,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
 
     [CEE_LEAVE] = verify_leave,
     [CEE_ENDFINALLY] = verify_endfinally,
+    [CEE_ENDFILTER] = verify_endfilter,
     [CEE_THROW] = verify_throw,
 
     [CEE_SIZEOF] = verify_sizeof,

@@ -227,7 +227,18 @@ static tdn_err_t dump_type(RuntimeTypeInfo type, const char* method_to_dump) {
 
         if (method->MethodBody != NULL) {
             printf(" {\n");
-//            CHECK_AND_RETHROW(tdn_disasm_inst(method, ));
+
+            uint32_t pc = 0;
+            int indent = 0;
+            while (pc < method->MethodBody->ILSize) {
+                tdn_il_inst_t inst = {};
+                CHECK_AND_RETHROW(tdn_disasm_inst(method, pc, &inst));
+                indent = tdn_disasm_print_start(method->MethodBody, pc, inst, indent, true);
+                pc += inst.length;
+                indent = tdn_disasm_print_end(method->MethodBody, pc, indent, true);
+                tdn_free_inst(&inst);
+            }
+
             TRACE("\t}");
             TRACE("");
         } else {
@@ -284,12 +295,26 @@ static bool tdn_string_ends(String str, const char* pattern) {
     return true;
 }
 
-static bool tdn_string_contains(String str, const char* pattern) {
-    size_t pattern_len = strlen(pattern);
-    if (pattern_len == 0) return true;
-    if (pattern_len > str->Length) return false;
+static bool tdn_string_compare_slice(String str, const char* pattern, int offset) {
+    size_t len = strlen(pattern);
 
-    for (size_t i = 0; i <= str->Length - pattern_len; i++) {
+    if (str->Length < offset + len) return false;
+
+    for (int j = 0; j < len; j++) {
+        if (str->Chars[offset + j] != pattern[j]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static int tdn_string_index_from(String str, const char* pattern, int i) {
+    size_t pattern_len = strlen(pattern);
+    if (pattern_len == 0) return -1;
+    if (pattern_len + i > str->Length) return -1;
+
+    for (; i <= str->Length - pattern_len; i++) {
         bool match = true;
         for (size_t j = 0; j < pattern_len; j++) {
             if (str->Chars[i + j] != pattern[j]) {
@@ -299,12 +324,15 @@ static bool tdn_string_contains(String str, const char* pattern) {
         }
 
         if (match) {
-            return true;
+            return i;
         }
     }
 
-    return false;
+    return -1;
 }
+
+static int tdn_string_index(String str, const char* pattern) { return tdn_string_index_from(str, pattern, 0); }
+static bool tdn_string_contains(String str, const char* pattern) { return tdn_string_index(str, pattern) >= 0; }
 
 static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -341,43 +369,177 @@ static tdn_err_t tdn_run_ilverify_test(RuntimeAssembly assembly) {
             if (tdn_string_ends(method->Name, "_Valid")) {
                 ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
                 CHECK_AND_RETHROW(tdn_jit_method(test_method));
+                continue;
 
-            } else if (tdn_string_contains(method->Name, "_Invalid_")) {
-                ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
-
-                // we expect to get an error from this, if we didn't
-                // then we failed the test
-                tdn_err_t jit_err = verifier_verify_method(test_method);
-                CHECK(IS_ERROR(jit_err), "Should have failed");
-
-                // check that we got the correct condition
-                if (tdn_string_contains(method->Name, "_ExpectedNumericType")) CHECK(jit_err == TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-                else if (tdn_string_contains(method->Name, "_StackUnexpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
-                else if (tdn_string_contains(method->Name, "_BranchOutOfTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY);
-                else if (tdn_string_contains(method->Name, "_BranchIntoTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_INTO_TRY);
-                else if (tdn_string_contains(method->Name, "_BranchOutOfFinally")) CHECK(jit_err == TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY);
-                else if (tdn_string_contains(method->Name, "_FallthroughException")) CHECK(jit_err == TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION);
-                else if (tdn_string_contains(method->Name, "_BadJumpTarget")) CHECK(jit_err == TDN_ERROR_VERIFIER_BAD_JUMP_TARGET);
-                else if (tdn_string_contains(method->Name, "_ThisMismatch")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_MISMATCH);
-                else if (tdn_string_contains(method->Name, "_CtorSig.CtorExpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_EXPECTED || jit_err == TDN_ERROR_VERIFIER_CTOR_SIG);
-                else if (tdn_string_contains(method->Name, "_CtorExpected")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_EXPECTED);
-                else if (tdn_string_contains(method->Name, "_CtorSig")) CHECK(jit_err == TDN_ERROR_VERIFIER_CTOR_SIG);
-                else if (tdn_string_contains(method->Name, "_ReturnVoid")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_VOID);
-                else if (tdn_string_contains(method->Name, "_ReturnMissing")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_MISSING);
-                else if (tdn_string_contains(method->Name, "_ReturnEmpty")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_EMPTY);
-                else if (tdn_string_contains(method->Name, "_ReturnFromTry")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_FROM_TRY);
-                else if (tdn_string_contains(method->Name, "_ReturnFromHandler")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_FROM_HANDLER);
-                else if (tdn_string_contains(method->Name, "_ReturnPtrToStack")) CHECK(jit_err == TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK);
-                else if (tdn_string_contains(method->Name, "_MethodFallthrough")) CHECK(jit_err == TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH);
-                else if (tdn_string_contains(method->Name, "_ThisUninitReturn")) CHECK(jit_err == TDN_ERROR_VERIFIER_THIS_UNINIT_RETURN);
-                else if (tdn_string_contains(method->Name, "_TypeAccess")) CHECK(jit_err == TDN_ERROR_VERIFIER_TYPE_ACCESS);
-                else if (tdn_string_contains(method->Name, "_StackObjRef")) CHECK(jit_err == TDN_ERROR_VERIFIER_STACK_OBJ_REF);
-                else if (tdn_string_contains(method->Name, "_BoxByRef.ExpectedValClassObjRefVariable")) CHECK(jit_err == TDN_ERROR_VERIFIER_BOX_BYREF || jit_err == TDN_ERROR_VERIFIER_EXPECTED_VAL_CLASS_OBJ_REF_VARIABLE);
-                else CHECK_FAIL("Invalid error condition");
-
-            } else {
-                TRACE("IGNORING %T::%U", method->DeclaringType, method->Name);
             }
+
+            // get the offset to the exception names that are expected
+            int idx = tdn_string_index(method->Name, "_Invalid_");
+            if (idx < 0) {
+                ERROR("IGNORING %T::%U", method->DeclaringType, method->Name);
+                continue;
+            }
+            idx += strlen("_Invalid");
+
+            ERROR("TESTING %T::%U", method->DeclaringType, method->Name);
+
+            // we expect to get an error from this, if we didn't
+            // then we failed the test
+            tdn_err_t jit_err = verifier_verify_method(test_method);
+            CHECK(IS_ERROR(jit_err), "Should have failed");
+
+            static const char* m_exception_names[] = {
+                [TDN_ERROR_UNKNOWN_OPCODE] = "UnknownOpcode",
+
+                [TDN_ERROR_VERIFIER_METHOD_FALLTHROUGH] = "MethodFallthrough",
+
+                [TDN_ERROR_VERIFIER_FALLTHROUGH_EXCEPTION] = "FallthroughException",
+                [TDN_ERROR_VERIFIER_FALLTHROUGH_INTO_HANDLER] = "FallthroughIntoHandler",
+                [TDN_ERROR_VERIFIER_FALLTHROUGH_INTO_FILTER] = "FallthroughIntoFilter",
+                [TDN_ERROR_VERIFIER_LEAVE_INTO_TRY] = "LeaveIntoTry",
+                [TDN_ERROR_VERIFIER_LEAVE_INTO_HANDLER] = "LeaveIntoHandler",
+                [TDN_ERROR_VERIFIER_LEAVE_INTO_FILTER] = "LeaveIntoFilter",
+                [TDN_ERROR_VERIFIER_LEAVE_OUT_OF_FILTER] = "LeaveOutOfFilter",
+                [TDN_ERROR_VERIFIER_LEAVE_OUT_OF_FINALLY] = "LeaveOutOfFinally",
+                [TDN_ERROR_VERIFIER_LEAVE_OUT_OF_FAULT] = "LeaveOutOfFault",
+                [TDN_ERROR_VERIFIER_RETHROW] = "Rethrow",
+                [TDN_ERROR_VERIFIER_ENDFINALLY] = "Endfinally",
+                [TDN_ERROR_VERIFIER_ENDFILTER] = "Endfilter",
+                [TDN_ERROR_VERIFIER_BRANCH_INTO_TRY] = "BranchIntoTry",
+                [TDN_ERROR_VERIFIER_BRANCH_INTO_HANDLER] = "BranchIntoHandler",
+                [TDN_ERROR_VERIFIER_BRANCH_INTO_FILTER] = "BranchIntoFilter",
+                [TDN_ERROR_VERIFIER_BRANCH_OUT_OF_TRY] = "BranchOutOfTry",
+                [TDN_ERROR_VERIFIER_BRANCH_OUT_OF_HANDLER] = "BranchOutOfHandler",
+                [TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FILTER] = "BranchOutOfFilter",
+                [TDN_ERROR_VERIFIER_BRANCH_OUT_OF_FINALLY] = "BranchOutOfFinally",
+                [TDN_ERROR_VERIFIER_RETURN_FROM_TRY] = "ReturnFromTry",
+                [TDN_ERROR_VERIFIER_RETURN_FROM_HANDLER] = "ReturnFromHandler",
+                [TDN_ERROR_VERIFIER_RETURN_FROM_FILTER] = "ReturnFromFilter",
+                [TDN_ERROR_VERIFIER_BAD_JUMP_TARGET] = "BadJumpTarget",
+                [TDN_ERROR_VERIFIER_PATH_STACK_UNEXPECTED] = "PathStackUnexpected",
+                [TDN_ERROR_VERIFIER_PATH_STACK_DEPTH] = "PathStackDepth",
+
+                [TDN_ERROR_VERIFIER_THIS_UNINIT_STORE] = "ThisUninitStore",
+                [TDN_ERROR_VERIFIER_THIS_UNINIT_RETURN] = "ThisUninitReturn",
+                [TDN_ERROR_VERIFIER_LDFTN_CTOR] = "LdftnCtor",
+
+                [TDN_ERROR_VERIFIER_STACK_UNEXPECTED] = "StackUnexpected",
+                [TDN_ERROR_VERIFIER_STACK_UNEXPECTED_ARRAY_TYPE] = "StackUnexpectedArrayType",
+                [TDN_ERROR_VERIFIER_STACK_OVERFLOW] = "StackOverflow",
+                [TDN_ERROR_VERIFIER_STACK_UNDERFLOW] = "StackUnderflow",
+                [TDN_ERROR_VERIFIER_UNINIT_STACK] = "UninitStack",
+                [TDN_ERROR_VERIFIER_EXPECTED_INTEGER_TYPE] = "ExpectedIntegerType",
+                [TDN_ERROR_VERIFIER_EXPECTED_FLOAT_TYPE] = "ExpectedFloatType",
+                [TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE] = "ExpectedNumericType",
+                [TDN_ERROR_VERIFIER_STACK_OBJ_REF] = "StackObjRef",
+                [TDN_ERROR_VERIFIER_STACK_BY_REF] = "StackByRef",
+                [TDN_ERROR_VERIFIER_STACK_METHOD] = "StackMethod",
+                [TDN_ERROR_VERIFIER_UNRECOGNIZED_LOCAL_NUMBER] = "UnrecognizedLocalNumber",
+                [TDN_ERROR_VERIFIER_UNRECOGNIZED_ARGUMENT_NUMBER] = "UnrecognizedArgumentNumber",
+                [TDN_ERROR_VERIFIER_EXPECTED_TYPE_TOKEN] = "ExpectedTypeToken",
+                [TDN_ERROR_VERIFIER_TOKEN_RESOLVE] = "TokenResolve",
+
+                [TDN_ERROR_VERIFIER_EXPECTED_METHOD_TOKEN] = "ExpectedMethodToken",
+                [TDN_ERROR_VERIFIER_EXPECTED_FIELD_TOKEN] = "ExpectedFieldToken",
+                [TDN_ERROR_VERIFIER_UNVERIFIABLE] = "Unverifiable",
+                [TDN_ERROR_VERIFIER_STRING_OPERAND] = "StringOperand",
+                [TDN_ERROR_VERIFIER_RETURN_PTR_TO_STACK] = "ReturnPtrToStack",
+                [TDN_ERROR_VERIFIER_RETURN_VOID] = "ReturnVoid",
+                [TDN_ERROR_VERIFIER_RETURN_MISSING] = "ReturnMissing",
+                [TDN_ERROR_VERIFIER_RETURN_EMPTY] = "ReturnEmpty",
+                [TDN_ERROR_VERIFIER_EXPECTED_ARRAY] = "ExpectedArray",
+
+                [TDN_ERROR_VERIFIER_VALUE_TYPE_EXPEXCTED] = "ValueTypeExpected",
+
+                [TDN_ERROR_VERIFIER_TYPE_ACCESS] = "TypeAccess",
+                [TDN_ERROR_VERIFIER_METHOD_ACCESS] = "MethodAccess",
+                [TDN_ERROR_VERIFIER_FIELD_ACCESS] = "FieldAccess",
+                [TDN_ERROR_VERIFIER_EXPECTED_STATIC_FIELD] = "ExpectedStaticField",
+                [TDN_ERROR_VERIFIER_INIT_ONLY] = "InitOnly",
+
+                [TDN_ERROR_VERIFIER_CALLVIRT_ON_VALUE_TYPE] = "CallVirtOnValueType",
+                [TDN_ERROR_VERIFIER_CTOR_EXPECTED] = "CtorExpected",
+                [TDN_ERROR_VERIFIER_CTOR_SIG] = "CtorSig",
+
+                [TDN_ERROR_VERIFIER_ARRAY_BY_REF] = "ArrayByRef",
+                [TDN_ERROR_VERIFIER_BYYREF_OF_BYREF] = "ByrefOfByref",
+                [TDN_ERROR_VERIFIER_CODE_SIZE_ZERO] = "CodeSizeZero",
+                [TDN_ERROR_VERIFIER_TAIL_CALL] = "TailCall",
+                [TDN_ERROR_VERIFIER_TAIL_BY_REF] = "TailByRef",
+                [TDN_ERROR_VERIFIER_TAIL_RET] = "TailRet",
+                [TDN_ERROR_VERIFIER_TAIL_RET_VOID] = "TailRetVoid",
+                [TDN_ERROR_VERIFIER_TAIL_RET_TYPE] = "TailRetType",
+                [TDN_ERROR_VERIFIER_TAIL_STACK_EMPTY] = "TailStackEmpty",
+                [TDN_ERROR_VERIFIER_METHOD_END] = "MethodEnd",
+                [TDN_ERROR_VERIFIER_BAD_BRANCH] = "BadBranch",
+
+                [TDN_ERROR_VERIFIER_VOLATILE] = "Volatile",
+                [TDN_ERROR_VERIFIER_UNALIGNED] = "Unaligned",
+
+                [TDN_ERROR_VERIFIER_CALL_ABSTRACT] = "CallAbstract",
+                [TDN_ERROR_VERIFIER_TRY_NON_EMPTY_STACK] = "TryNonEmptyStack",
+                [TDN_ERROR_VERIFIER_FILTER_OR_CATCH_UNEXPECTED_STACK] = "FilterOrCatchUnexpectedStack",
+                [TDN_ERROR_VERIFIER_FIN_OR_FAULT_NON_EMPTY_STACK] = "FinOrFaultNonEmptyStack",
+                [TDN_ERROR_VERIFIER_DELEGATE_CTOR] = "DelegateCtor",
+                [TDN_ERROR_VERIFIER_DELEGATE_PATTERN] = "DelegatePattern",
+
+                [TDN_ERROR_VERIFIER_BOX_BYREF] = "BoxByRef",
+
+                [TDN_ERROR_VERIFIER_END_FILTER_STACK] = "EndfilterStack",
+                [TDN_ERROR_VERIFIER_DELEGATE_CTOR_SIG_I] = "DelegateCtorSigI",
+                [TDN_ERROR_VERIFIER_DELEGATE_CTOR_SIG_O] = "DelegateCtorSigO",
+
+                [TDN_ERROR_VERIFIER_CATCH_BYREF] = "CatchByRef",
+                [TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE] = "ThrowOrCatchOnlyExceptionType",
+                [TDN_ERROR_VERIFIER_LDVIRTFTN_ON_STATIC] = "LdvirtftnOnStatic",
+                [TDN_ERROR_VERIFIER_CALLVIRT_ON_STATIC] = "CallVirtOnStatic",
+                [TDN_ERROR_VERIFIER_INIT_LOCALS] = "InitLocals",
+                [TDN_ERROR_VERIFIER_CALL_CTOR] = "CallCtor",
+
+                [TDN_ERROR_VERIFIER_EXPECTED_VAL_CLASS_OBJ_REF_VARIABLE] = "ExpectedValClassObjRefVariable",
+                [TDN_ERROR_VERIFIER_READONLY] = "ReadOnly",
+                [TDN_ERROR_VERIFIER_CONSTRAINED] = "Constrained",
+
+                [TDN_ERROR_VERIFIER_CONSTRAINED_CALL_WITH_NON_BYREF_THIS] = "ConstrainedCallWithNonByRefThis",
+                [TDN_ERROR_VERIFIER_READONLY_UNEXPECTED_CALLEE] = "ReadonlyUnexpectedCallee",
+                [TDN_ERROR_VERIFIER_READONLY_ILLEGAL_WRITE] = "ReadOnlyIllegalWrite",
+
+                [TDN_ERROR_VERIFIER_TAIL_CALL_INSIDE_ER] = "TailCallInsideER",
+                [TDN_ERROR_VERIFIER_BACKWARD_BRANCH] = "BackwardBranch",
+
+                [TDN_ERROR_VERIFIER_NEWOBJ_ABSTRACT_CLASS] = "NewobjAbstractClass",
+                [TDN_ERROR_VERIFIER_UNMANAGED_POINTER] = "UnmanagedPointer",
+                [TDN_ERROR_VERIFIER_LDFTN_NON_FINAL_VIRTUAL] = "LdftnNonFinalVirtual",
+
+                [TDN_ERROR_VERIFIER_THIS_MISMATCH] = "ThisMismatch",
+            };
+
+            // find the value
+            CHECK(jit_err < ARRAY_LENGTH(m_exception_names));
+            const char* pattern = m_exception_names[jit_err];
+            CHECK(pattern != NULL);
+            size_t pattern_len = strlen(pattern);
+
+            // now find it in the thing
+            bool match = false;
+            do {
+                // skip the _ or .
+                idx++;
+
+                // check if this is the error we expect
+                if (
+                    (method->Name->Length == idx + pattern_len || method->Name->Chars[idx + pattern_len] == '.') &&
+                    tdn_string_compare_slice(method->Name, pattern, idx)
+                ) {
+                    match = true;
+                    break;
+                }
+
+                // not found, get the next error condition
+                idx = tdn_string_index_from(method->Name, ".", idx);
+            } while (idx >= 0);
+
+            CHECK(match);
         }
     }
 
