@@ -609,6 +609,11 @@ tdn_err_t sig_parse_type_spec(
             *type = typeArgs->Elements[number];
         } break;
 
+        case ELEMENT_TYPE_BYREF: {
+            CHECK_AND_RETHROW(sig_parse_type(blob, assembly, typeArgs, methodArgs, false, type));
+            CHECK_AND_RETHROW(tdn_get_byref_type(*type, type));
+        } break;
+
         default:
             CHECK_FAIL("Unknown element type %02x", value);
     }
