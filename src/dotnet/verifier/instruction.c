@@ -216,7 +216,7 @@ static tdn_err_t verify_store_local(function_t* function, block_t* block, tdn_il
     local_t* func_local = &function_locals[inst->operand.variable];
 
     // don't allow to store the this if we are not ready yet
-    if (is_arg && function->track_ctor_state && !block->this_initialized) {
+    if (function->track_ctor_state && !block->this_initialized) {
         CHECK_ERROR(inst->operand.variable != 0, TDN_ERROR_VERIFIER_THIS_UNINIT_STORE);
     }
 
@@ -575,11 +575,14 @@ static tdn_err_t verify_ldind(function_t* function, block_t* block, tdn_il_inst_
             inst->operand.type = stack->type;
         }
     } else {
-        CHECK(stack->kind == KIND_BY_REF);
+        CHECK_ERROR(stack->kind == KIND_BY_REF,
+            TDN_ERROR_VERIFIER_STACK_BY_REF);
 
         if (inst->operand.type == NULL) {
-            CHECK(tdn_type_is_gc_pointer(stack->type));
+            CHECK_ERROR(tdn_type_is_gc_pointer(stack->type),
+                TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
             inst->operand.type = stack->type;
+
         } else {
             CHECK_IS_ASSIGNABLE_TYPE(
                 verifier_get_verification_type(stack->type),

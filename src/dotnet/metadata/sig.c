@@ -614,6 +614,10 @@ tdn_err_t sig_parse_type_spec(
             CHECK_AND_RETHROW(tdn_get_byref_type(*type, type));
         } break;
 
+        case ELEMENT_TYPE_STRING: {
+            *type = tString;
+        } break;
+
         default:
             CHECK_FAIL("Unknown element type %02x", value);
     }
