@@ -829,10 +829,9 @@ static tdn_err_t type_leave(jit_function_t* function, jit_block_t* block, tdn_il
         // we reached the same clause as the one around the leave target, so we can stop now, we found
         // the real target to jump to
         clause = jit_get_enclosing_try_clause(function, inst->pc, COR_ILEXCEPTION_CLAUSE_FINALLY, clause);
-        if (target_clause == clause) {
+        if (target_clause == clause || clause == NULL) {
             break;
         }
-        CHECK(clause != NULL);
 
         // remember that we need to call this
         arrins(block->leave_target_stack, inst_off, clause->HandlerOffset);

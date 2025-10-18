@@ -139,11 +139,16 @@ tdn_err_t verifier_find_basic_blocks(RuntimeMethodBase method, basic_block_entry
         for (int i = 0; i < body->ExceptionHandlingClauses->Length; i++) {
             RuntimeExceptionHandlingClause clause = body->ExceptionHandlingClauses->Elements[i];
 
+            // the start regions
             verifier_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset)->try_start = true;
             verifier_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset)->handler_start = true;
             if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
                 verifier_add_basic_block(&ctx, out_basic_blocks, clause->FilterOffset)->filter_start = true;
             }
+
+            // the end of the regions is the start of a new block
+            verifier_add_basic_block(&ctx, out_basic_blocks, clause->TryOffset + clause->TryLength);
+            verifier_add_basic_block(&ctx, out_basic_blocks, clause->HandlerOffset + clause->HandlerLength);
         }
     }
 
@@ -205,6 +210,13 @@ tdn_err_t verifier_find_basic_blocks(RuntimeMethodBase method, basic_block_entry
             block->end = ctx[i + 1].start;
         } else {
             block->end = body->ILSize;
+        }
+
+        // if the block is zero sized, remove it, this must be the final block
+        if (block->start == block->end) {
+            CHECK(i == arrlen(ctx) - 1);
+            hmdel(*out_basic_blocks, ctx[i].start);
+            arrpop(ctx);
         }
     }
 
