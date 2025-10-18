@@ -123,7 +123,7 @@ static inline size_t tdn_get_array_elements_offset(RuntimeTypeInfo element_type)
 /**
  * Check the argument constraint against the actual generic type
  */
-tdn_err_t tdn_check_generic_argument_constraints(
+tdn_err_t tdn_check_generic_param_constraint(
     RuntimeTypeInfo arg_type,
     GenericParameterAttributes attributes,
     RuntimeTypeInfo_Array constraints,

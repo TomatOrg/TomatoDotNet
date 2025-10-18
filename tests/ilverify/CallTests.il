@@ -135,7 +135,8 @@
         ret
     }
 
-    .method public hidebysig instance void Call.ReadonlyByRefForInArg_Invalid_StackUnexpected(object[] objectArray) cil managed
+    // TDN CHANGE: I have no idea why this should not be supported tbh
+    .method public hidebysig instance void Call.ReadonlyByRefForInArg_Valid(object[] objectArray) cil managed
     {
         // SimpleClass.InObjectMethod(objectArray[0]);
 

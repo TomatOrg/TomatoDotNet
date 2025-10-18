@@ -4,7 +4,7 @@
 #include "tomatodotnet/util/stb_ds.h"
 #include "util/except.h"
 
-#if 1
+#if 0
     static int m_verifier_trace_indent = 0;
 
     #define VERIFY_TRACE(fmt, ...) TRACE("%*s" fmt, m_verifier_trace_indent, "", ## __VA_ARGS__)
@@ -178,39 +178,18 @@ static bool verifier_can_cast_generic_parameter_to(RuntimeTypeInfo this_type, Ru
     }
 
     // TODO: handle generic constraint properly, idk what we would actually end up with in here tbh
-    RuntimeTypeInfo_Array type_instantiation = NULL;
-    RuntimeTypeInfo_Array method_instantiation = NULL;
-    if (this_type->IsGenericMethodParameter) {
-        type_instantiation = this_type->DeclaringMethod->DeclaringType->GenericArguments;
-        method_instantiation = this_type->DeclaringMethod->GenericArguments;
-    } else {
-        type_instantiation = this_type->DeclaringType->GenericArguments;
-    }
-
-    if (type_instantiation != NULL) {
-        VERIFY_TRACE("TYPE:");
-        m_verifier_trace_indent++;
-        for (int j = 0; j < type_instantiation->Length; j++) {
-            VERIFY_TRACE("%T", type_instantiation->Elements[j]);
-        }
-        m_verifier_trace_indent--;
-    }
-
-    if (method_instantiation != NULL) {
-        VERIFY_TRACE("METHOD:");
-        m_verifier_trace_indent++;
-        for (int j = 0; j < method_instantiation->Length; j++) {
-            RuntimeTypeInfo typ = method_instantiation->Elements[j];
-            VERIFY_TRACE("%T -- %d", typ, typ->GenericParameterPosition);
-        }
-        m_verifier_trace_indent--;
-    }
+    // RuntimeTypeInfo_Array type_instantiation = NULL;
+    // RuntimeTypeInfo_Array method_instantiation = NULL;
+    // if (this_type->IsGenericMethodParameter) {
+    //     type_instantiation = this_type->DeclaringMethod->DeclaringType->GenericArguments;
+    //     method_instantiation = this_type->DeclaringMethod->GenericArguments;
+    // } else {
+    //     type_instantiation = this_type->DeclaringType->GenericArguments;
+    // }
 
     if (this_type->GenericParameterConstraints != NULL) {
         for (int i = 0; i < this_type->GenericParameterConstraints->Length; i++) {
             RuntimeTypeInfo type_constraint = this_type->GenericParameterConstraints->Elements[i];
-            // TODO: create instance
-            VERIFY_TRACE("%T", type_constraint);
             ASSERT(!type_constraint->IsGenericParameter, "TODO: this");
 
             if (verifier_can_cast_to(type_constraint, other_type)) {

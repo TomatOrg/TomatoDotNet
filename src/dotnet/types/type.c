@@ -369,6 +369,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
             CHECK_AND_RETHROW(loader_connect_single_interface_impl(type, interface));
         }
     }
+    CHECK_AND_RETHROW(loader_connect_interfaces_from_parent(original_type));
 
     // the nested types are just copied over without
     // actually applying the generic construction on
@@ -465,6 +466,10 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
 
         hmput(base->GenericTypeInstances, hash, new_type);
 
+        // validate the make generic
+        CHECK(base->GenericArguments->Length == args->Length);
+        // TODO: check constraints
+
         CHECK_AND_RETHROW(create_generic_type(base, args, new_type));
         CHECK_AND_RETHROW(tdn_type_init(new_type));
 
@@ -482,4 +487,3 @@ tdn_err_t tdn_type_make_generic(RuntimeTypeInfo base, RuntimeTypeInfo_Array args
 cleanup:
     return err;
 }
-

@@ -298,8 +298,10 @@ static tdn_err_t verifier_start_block(function_t* function, block_t* block) {
                 CHECK_ERROR(!exception_type->IsByRef, TDN_ERROR_VERIFIER_CATCH_BYREF);
                 stack_value_init(&block->stack[0], exception_type);
 
-                CHECK_ERROR(verifier_can_cast_to(exception_type, tException),
-                    TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE);
+                // TODO: in theory we can catch non-exception objects, recheck against ILVerify what they do
+                // stack_value_t exception_obj = stack_value_create(tException);
+                // CHECK_ERROR(verifier_is_assignable(&block->stack[0], &exception_obj),
+                //     TDN_ERROR_VERIFIER_THROW_OR_CATCH_ONLY_EXCEPTION_TYPE);
             }
         } else {
             // stack must be empty
@@ -351,30 +353,30 @@ static tdn_err_t verifier_visit_blocks(function_t* function) {
 static tdn_err_t verifier_init_exception_handlers(function_t* function) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    for (int i = 0; i < arrlen(function->blocks); i++) {
-        block_t* block = &function->blocks[i];
-
-        if (block->block.handler_start) {
-            // this is the start of a handler, if its an exception or filter then we need
-            // to push the exception object
-
-            RuntimeExceptionHandlingClause clause = block->block.handler_clause;
-            if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
-                // the exception is of the CatchType
-                arrpush(block->stack, stack_value_create(clause->CatchType));
-                block->visited = true;
-
-            } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
-                // TODO: filters
-                CHECK_FAIL();
-            }
-
-        } else if (block->block.filter_start) {
-            // TODO: filters
-            CHECK_FAIL();
-        }
-
-    }
+    // for (int i = 0; i < arrlen(function->blocks); i++) {
+    //     block_t* block = &function->blocks[i];
+    //
+    //     if (block->block.handler_start) {
+    //         // this is the start of a handler, if its an exception or filter then we need
+    //         // to push the exception object
+    //
+    //         RuntimeExceptionHandlingClause clause = block->block.handler_clause;
+    //         if (clause->Flags == COR_ILEXCEPTION_CLAUSE_EXCEPTION) {
+    //             // the exception is of the CatchType
+    //             arrpush(block->stack, stack_value_create(clause->CatchType));
+    //             block->visited = true;
+    //
+    //         } else if (clause->Flags == COR_ILEXCEPTION_CLAUSE_FILTER) {
+    //             // TODO: filters
+    //             CHECK_FAIL();
+    //         }
+    //
+    //     } else if (block->block.filter_start) {
+    //         // TODO: filters
+    //         CHECK_FAIL();
+    //     }
+    //
+    // }
 
 cleanup:
     return err;
