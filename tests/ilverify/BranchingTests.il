@@ -784,7 +784,7 @@
 
         lbl_ret: ret
     }
-/* TODO: ENABLE ONCE WE SUPPORT EXCEPTIONS
+
     .method static public hidebysig void Fallthrough.OutOfCatch_Invalid_FallthroughException() cil managed
     {
         .try
@@ -799,7 +799,6 @@
 
         lbl_ret: ret
     }
-*/
 
     .method static public hidebysig void Fallthrough.OutOfTryIntoFilter_Invalid_FallthroughException.FallthroughIntoFilter() cil managed
     {
@@ -951,6 +950,7 @@
         ret
     }
 
+    // TDN CHANGE: We support backwards branches, and the C# spec modifications support it as well
     .method static public hidebysig void Branch.BackwardWithoutPredecessor_Valid() cil managed
     {
         br      MethodEnd

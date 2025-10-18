@@ -1211,30 +1211,6 @@ static prime_generator_t m_interface_prime_generator;
  */
 static uint64_t m_interface_id = 0;
 
-static tdn_err_t check_generic_constraints(RuntimeTypeInfo type) {
-    tdn_err_t err = TDN_NO_ERROR;
-
-    if (type->GenericArguments == NULL) {
-        goto cleanup;
-    }
-
-    // just go over the types and check they match properly
-    for (int i = 0; i < type->GenericArguments->Length; i++) {
-        RuntimeTypeInfo arg_type = type->GenericArguments->Elements[i];
-        RuntimeTypeInfo constraint_type = type->GenericTypeDefinition->GenericArguments->Elements[i];
-        CHECK_AND_RETHROW(tdn_check_generic_argument_constraints(
-            arg_type,
-            constraint_type->GenericParameterAttributes,
-            constraint_type->GenericParameterConstraints,
-            type->GenericArguments,
-            type->DeclaringMethod ? type->DeclaringMethod->GenericArguments : NULL
-        ));
-    }
-
-cleanup:
-    return err;
-}
-
 static tdn_err_t fill_interface_type_id(RuntimeTypeInfo info) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1290,9 +1266,6 @@ cleanup:
 
 static tdn_err_t fill_type(RuntimeTypeInfo type) {
     tdn_err_t err = TDN_NO_ERROR;
-
-    // ensure the generic constraints are properly met
-    CHECK_AND_RETHROW(check_generic_constraints(type));
 
     // Don't actually perform type init if this
     // has a generic type parameter somewhere
@@ -2337,11 +2310,13 @@ cleanup:
     return err;
 }
 
-tdn_err_t loader_connect_single_interface_impl(RuntimeTypeInfo class, RuntimeTypeInfo interface) {
+static tdn_err_t loader_connect_single_interface_impl(RuntimeTypeInfo class, RuntimeTypeInfo interface) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // ensure we don't have this already
-    CHECK(hmgeti(class->InterfaceImpls, interface) == -1);
+    if (hmgeti(class->InterfaceImpls, interface) != -1) {
+        goto cleanup;
+    }
 
     interface_impl_t new_impl = {
         .key = interface,
@@ -2368,15 +2343,47 @@ cleanup:
     return err;
 }
 
+tdn_err_t loader_connect_interfaces_from_parent(RuntimeTypeInfo type) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    if (type->EndFillingIfaces) {
+        goto cleanup;
+    }
+
+    CHECK(!type->FillingIfaces);
+    type->FillingIfaces = 1;
+
+    if (type->BaseType != NULL) {
+        CHECK_AND_RETHROW(loader_connect_interfaces_from_parent(type->BaseType));
+
+        for (int i = 0; i < hmlen(type->BaseType->InterfaceImpls); i++) {
+            interface_impl_t impl = type->BaseType->InterfaceImpls[i];
+            CHECK_AND_RETHROW(loader_connect_single_interface_impl(type, impl.key));
+        }
+    }
+
+    type->EndFillingIfaces = 1;
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t loader_connect_interface_impls(RuntimeAssembly assembly) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    // first fill the first level of interfaces
     for (int i = 0; i < assembly->Metadata->interface_impls_count; i++) {
         metadata_interface_impl_t* impl = &assembly->Metadata->interface_impls[i];
         RuntimeTypeInfo class, interface;
         CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->class.token, NULL, NULL, &class));
         CHECK_AND_RETHROW(tdn_assembly_lookup_type(assembly, impl->interface.token, class->GenericArguments, NULL, &interface));
         CHECK_AND_RETHROW(loader_connect_single_interface_impl(class, interface));
+    }
+
+    // now fill recursively from the parents
+    for (int i = 0; i < assembly->TypeDefs->Length; i++) {
+        RuntimeTypeInfo type = assembly->TypeDefs->Elements[i];
+        CHECK_AND_RETHROW(loader_connect_interfaces_from_parent(type));
     }
 
 cleanup:

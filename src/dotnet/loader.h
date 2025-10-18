@@ -35,6 +35,12 @@ tdn_err_t tdn_find_explicit_implementation(RuntimeTypeInfo type, RuntimeMethodIn
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Connect the interfaces that came from the parent of the type, can be done either before or after
+ * the pass over the interface impls
+ */
+tdn_err_t loader_connect_interfaces_from_parent(RuntimeTypeInfo type);
+
+/**
  * Connect to given interface to the given class, properly initializing everything
  * that needs to be initialized
  */
