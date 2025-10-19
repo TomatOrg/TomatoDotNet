@@ -730,21 +730,50 @@ static tdn_err_t verify_pop(function_t* function, block_t* block, tdn_il_inst_t*
 static tdn_err_t verify_binary_op(function_t* function, block_t* block, tdn_il_inst_t* inst, stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
-    // check that we got the expected item
+    // we are going to handle the unsafe path explicitly so the rest of the code
+    // can stay as it is
+    if (function->allow_unsafe) {
+        if (stack[0].kind == KIND_BY_REF && stack[1].kind == KIND_BY_REF) {
+            // both are ref, this can only be done via a sub, and it will
+            // just return a native int back
+            if (inst->opcode == CEE_SUB) {
+                *STACK_PUSH() = stack_value_create(tIntPtr);
+                goto cleanup;
+            }
+
+        } else if (stack[0].kind == KIND_BY_REF) {
+            if (inst->opcode == CEE_ADD || inst->opcode == CEE_SUB) {
+                // either of them are ref, can be either a sub or an add
+                // this will return the by-ref as the result
+                CHECK_ERROR(stack[1].kind == KIND_INT32 || stack[1].kind == KIND_NATIVE_INT,
+                    TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+
+                *STACK_PUSH() = stack[0];
+                goto cleanup;
+            }
+
+        } else if (stack[1].kind == KIND_BY_REF) {
+            // in this path we have value + ptr, we only allow add because we don't
+            // want to negate the pointer to emulate a sub in this case
+            if (inst->opcode == CEE_ADD) {
+                CHECK_ERROR(stack[0].kind == KIND_INT32 || stack[0].kind == KIND_NATIVE_INT,
+                    TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
+
+                *STACK_PUSH() = stack[1];
+                goto cleanup;
+            }
+
+        }
+    }
+
     switch (inst->opcode) {
         case CEE_ADD:
         case CEE_SUB:
         case CEE_MUL:
         case CEE_DIV:
         case CEE_REM: {
-            if (function->allow_unsafe && (inst->opcode == CEE_ADD || inst->opcode == CEE_SUB)) {
-                // unsafe code can also perform operations on a by-ref, resulting in a by-ref
-                CHECK_ERROR(KIND_INT32 <= stack[0].kind && stack[0].kind <= KIND_BY_REF, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-                CHECK_ERROR(KIND_INT32 <= stack[1].kind && stack[1].kind <= KIND_BY_REF, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-            } else {
-                CHECK_ERROR(KIND_INT32 <= stack[0].kind && stack[0].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-                CHECK_ERROR(KIND_INT32 <= stack[1].kind && stack[1].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
-            }
+            CHECK_ERROR(KIND_INT32 <= stack[0].kind && stack[0].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
+            CHECK_ERROR(KIND_INT32 <= stack[1].kind && stack[1].kind <= KIND_FLOAT, TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
         } break;
 
         default: {
@@ -756,20 +785,8 @@ static tdn_err_t verify_binary_op(function_t* function, block_t* block, tdn_il_i
     // Stack value kind is ordered to make this work
     stack_value_t result = (stack[0].kind > stack[1].kind) ? stack[0] : stack[1];
 
-    // ensure that whatever the native int was its degraded into
-    // an integer and not stay as a pointer
-    if (result.kind == KIND_NATIVE_INT) {
-        result.type = tIntPtr;
-    }
-
-    if (result.kind == KIND_BY_REF) {
-        if (stack[0].kind == stack[1].kind && inst->opcode == CEE_SUB) {
-            result = stack_value_create(tIntPtr);
-        }
-    } else {
-        CHECK_ERROR((stack[0].kind == stack[1].kind) || (result.kind == KIND_NATIVE_INT),
-            TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
-    }
+    CHECK_ERROR((stack[0].kind == stack[1].kind) || (result.kind == KIND_NATIVE_INT),
+        TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
 
     *STACK_PUSH() = result;
 
