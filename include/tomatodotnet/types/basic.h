@@ -48,11 +48,12 @@ typedef struct ObjectVTable {
 
 typedef struct Object {
     ObjectVTable* VTable;
-    uint32_t GcColor : 2;
-    uint32_t : 30;
+    uint16_t GcColor : 2;
+    uint16_t : 14;
+    uint16_t MutexDepth;
+    uint16_t MutexThreadId;
     uint8_t Mutex;
     uint8_t CondVar;
-    uint16_t MutexThreadId;
 }* Object;
 _Static_assert(sizeof(struct Object) == 16, "Object size too big");
 

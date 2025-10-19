@@ -9,7 +9,7 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
 
 ## Implemented
 
-- Mostly complete basic MSIL support
+- Mostly complete basic C#/MSIL support
   - Verifies all operations are memory and type safe
   - Classes and Structs
   - Generics
@@ -22,19 +22,20 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
   - Ensures references don't escape
   - Readonly reference tracking
   - Ref-structs
+  - Safe stackalloc into a Slice
 - Corelib
-  - All integer methods (missing ToString/Parse)
-  - All double methods (missing ToString/Parse)
-  - Most string methods (missing any culture other than Ordinal and also Ordinal stuff)
+  - All integer methods
+  - All double methods
+  - Most string methods (missing alot of manipulation functions to do with Culture)
   - All span methods and extensions
   - All the debug class
 
 ### To be implemented
 
 These are planned and are being worked on
+- Generic constraints checking
 - Explicit scoped and unscoped reference support
 - Exceptions (missing jit support)
-- Safe stackalloc (The kind that constructs a Span)
 - Virtual generic methods (Need a good design)
 - Boxing a delegate into either a Delegate/MulticastDelegate/object (changes allocation semantics greatly)
 - Reflection (Need a good design)
@@ -91,8 +92,11 @@ And then under `out/bin/tdn.elf` you can run the binary
 
 - Objects have a 16 bytes header
   - 8 byte for VTable pointer
-  - 4 bytes for flags
-  - 4 bytes for mutex + condvar
+  - 2 bytes for flags
+  - 2 byte mutex depth
+  - 2 byte mutex thread id
+  - 1 byte condvar
+  - 1 byte mutex
 
 - Optimized type checking
   - Uses a simple bitmask to encode the type hierarchy for normal objects 
@@ -122,6 +126,9 @@ And then under `out/bin/tdn.elf` you can run the binary
 ## Compromises
 
 - Only 64bit support, we have no plans on supporting 32bit instruction sets, this simplifies alot of design choices
+
+- All fat pointers must be 16-byte aligned to ensure single-copy-atomicity for the fat pointers themselves, this also
+  limits the supported arches only to those who have 16-byte single-copy-atomicity (like x86-64 and aarch64)
 
 - No support for array variance
     - requires more hidden type checks to work:
