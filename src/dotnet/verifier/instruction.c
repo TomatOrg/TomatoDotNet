@@ -1282,6 +1282,9 @@ static tdn_err_t verify_call(function_t* function, block_t* block, tdn_il_inst_t
 
             // turn into am objref
             actual_this.kind = KIND_OBJ_REF;
+            actual_this.flags.ref_read_only = false;
+            actual_this.flags.ref_non_local = false;
+            actual_this.flags.ref_struct_non_local = false;
         }
 
         // if the method or type is marked as readonly then the
