@@ -62,6 +62,11 @@ typedef struct jit_stack_value {
 static inline bool jit_is_null_reference(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type == NULL; }
 static inline bool jit_is_boxed_value_type(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type); }
 
+static inline bool jit_is_pointer(jit_stack_value_t* value) {
+    return value->kind == JIT_KIND_BY_REF ||
+            (value->kind == JIT_KIND_NATIVE_INT && value->type->IsPointer);
+}
+
 /**
  * Initialize a stack-value
  */

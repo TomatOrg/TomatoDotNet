@@ -587,7 +587,7 @@ int main(int argc, char* argv[]) {
     int jit_emit_verbose = 0;
     int jit_type_verbose = 0;
     int jit_verify_verbose = 0;
-    int jit_dump = 0;
+    int jit_dump = 1;
     int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
@@ -655,6 +655,7 @@ int main(int argc, char* argv[]) {
 
     // now load the assembly we want to run
     CHECK_AND_RETHROW(load_assembly_from_path(argv[optind], &run));
+    run->AllowUnsafe = true;
 
     if (il_verify_test) {
         CHECK_AND_RETHROW(tdn_run_ilverify_test(run));

@@ -78,6 +78,7 @@ static void runtime_helpers_initialize_array(Array array, RuntimeFieldInfo* fiel
 
     // ensure that the size of the array is the same as the data size in the struct
     RuntimeTypeInfo array_type = array->VTable->Type->ElementType;
+    ASSERT(array_type->IsUnmanaged);
     ASSERT(field->FieldType->StackSize == array->Length * array_type->StackSize);
 
     // and now copy it

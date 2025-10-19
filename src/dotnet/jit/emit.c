@@ -946,31 +946,25 @@ static spidir_value_t emit_float_binary_compare(spidir_builder_handle_t builder,
     return spidir_builder_build_fcmp(builder, kind, SPIDIR_TYPE_I32, value1, value2);
 }
 
-static void emit_convert_for_op_one(spidir_builder_handle_t builder, jit_stack_value_t* value, bool is_unsigned) {
-    if (value->kind == JIT_KIND_INT32) {
-        // comparing int32 with non-int32, extend it
-        value->value = emit_extend_int(builder, value->value, !is_unsigned);
-
-    } else if (
-        value->kind == JIT_KIND_BY_REF ||
-        value->kind == JIT_KIND_OBJ_REF ||
-        (value->kind == JIT_KIND_NATIVE_INT && value->type->IsPointer)
-    ) {
-        // comparing pointer/by-ref/obj-ref with int, convert to int
-        value->value = spidir_builder_build_ptrtoint(builder, value->value);
+static void emit_convert_for_op(spidir_builder_handle_t builder, jit_stack_value_t* a, jit_stack_value_t* b, bool is_unsigned, bool allow_ptr) {
+    if (!allow_ptr || (jit_is_pointer(a) != jit_is_pointer(b))) {
+        // we are going to conver the pointer to native int if either we don't allow
+        // pointers at all, or we allow them only if both of them are a pointer
+        if (jit_is_pointer(a)) {
+            a->value = spidir_builder_build_ptrtoint(builder, a->value);
+        }
+        if (jit_is_pointer(b)) {
+            b->value = spidir_builder_build_ptrtoint(builder, b->value);
+        }
     }
-}
 
-static void emit_convert_for_op(spidir_builder_handle_t builder, jit_stack_value_t* a, jit_stack_value_t* b, bool is_unsigned) {
-    if (
-        (a->kind != b->kind) ||
-        (
-            a->kind == JIT_KIND_NATIVE_INT &&
-            a->type->IsPointer != b->type->IsPointer
-        )
-    ) {
-        emit_convert_for_op_one(builder, a, is_unsigned);
-        emit_convert_for_op_one(builder, b, is_unsigned);
+    // sign extend if we need to
+    if (a->kind != b->kind) {
+        if (a->kind == JIT_KIND_INT32) {
+            a->value = emit_extend_int(builder, a->value, !is_unsigned);
+        } else if (b->kind == JIT_KIND_INT32) {
+            b->value = emit_extend_int(builder, b->value, !is_unsigned);
+        }
     }
 }
 
@@ -998,7 +992,7 @@ static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t 
 
     } else {
         // if the kinds are not the same we need to extend both into a full integer
-        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned);
+        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned, true);
         STACK_TOP()->value = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
     }
 
@@ -1296,7 +1290,45 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
     tdn_err_t err = TDN_NO_ERROR;
 
     spidir_value_t value = SPIDIR_VALUE_INVALID;
-    if (stack[1].kind == JIT_KIND_FLOAT) {
+    if (
+        // optimization for the case of ptr +/- value => ptr
+        (inst->opcode == CEE_ADD || inst->opcode == CEE_SUB) &&
+        jit_is_pointer(&stack[0]) && !jit_is_pointer(&stack[1])
+    ) {
+        spidir_value_t op1 = stack[0].value;
+        spidir_value_t op2 = stack[1].value;
+
+        // extend the other value if needed
+        if (stack[1].kind == JIT_KIND_INT32) {
+            op2 = emit_extend_int(builder, op2, false);
+        }
+
+        // if we want to sub then just neg the second parameter
+        if (inst->opcode == CEE_SUB) {
+            spidir_value_t zero = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0);
+            op2 = spidir_builder_build_isub(builder, zero, op2);
+        }
+
+        // and now we can perform the ptroff
+        value = spidir_builder_build_ptroff(builder, op1, op2);
+
+    } else if (
+        // optimization for the case of ptr +/- value => ptr
+        inst->opcode == CEE_ADD &&
+        !jit_is_pointer(&stack[0]) && jit_is_pointer(&stack[1])
+    ) {
+        spidir_value_t op1 = stack[0].value;
+        spidir_value_t op2 = stack[1].value;
+
+        // extend the other value if needed
+        if (stack[0].kind == JIT_KIND_INT32) {
+            op1 = emit_extend_int(builder, op1, false);
+        }
+
+        // and now we can perform the ptroff
+        value = spidir_builder_build_ptroff(builder, op2, op1);
+
+    } else if (stack[1].kind == JIT_KIND_FLOAT) {
         if (stack[0].type != stack[1].type) {
             if (stack[0].type == tSingle) {
                 CHECK_FAIL("TODO: f32 -> f64");
@@ -1317,7 +1349,7 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
         }
     } else {
         bool is_unsigned = inst->opcode == CEE_DIV_UN || inst->opcode == CEE_REM_UN;
-        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned);
+        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned, false);
 
         // if the kinds are not the same we need to extend both into a full integer
         switch (inst->opcode) {
@@ -1334,12 +1366,8 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
             default: CHECK_FAIL();
         }
 
-        // one of them is a by-ref, convert back to a
-        // pointer since that should be the result too
-        if (STACK_TOP()->kind == JIT_KIND_BY_REF) {
-            value = spidir_builder_build_inttoptr(builder, value);
-        }
-
+        // this should never return a pointer back
+        CHECK(!jit_is_pointer(STACK_TOP()));
     }
     STACK_TOP()->value = value;
 
@@ -1353,7 +1381,7 @@ static tdn_err_t emit_binary_op_ovf(jit_function_t* function, spidir_builder_han
     bool is_unsigned = inst->opcode == CEE_ADD_OVF_UN || inst->opcode == CEE_SUB_OVF_UN || inst->opcode == CEE_MUL_OVF_UN;
 
     // if the kinds are not the same we need to extend both into a full integer
-    emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned);
+    emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned, false);
 
     spidir_value_t value = SPIDIR_VALUE_INVALID;
     switch (inst->opcode) {

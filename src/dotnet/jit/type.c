@@ -484,16 +484,24 @@ static tdn_err_t type_binary_op(jit_function_t* function, jit_block_t* block, td
     // Stack value kind is ordered to make this work
     jit_stack_value_t result = (stack[0].kind > stack[1].kind) ? stack[0] : stack[1];
 
-    // ensure that whatever the native int was its degraded into
-    // an integer and not stay as a pointer
-    if (result.kind == JIT_KIND_NATIVE_INT) {
-        result.type = tIntPtr;
-    }
+    if (
+        // optimization for the case of ptr +/- value => ptr
+        (inst->opcode == CEE_ADD || inst->opcode == CEE_SUB) &&
+        jit_is_pointer(&stack[0]) && !jit_is_pointer(&stack[1])
+    ) {
+        result = stack[0];
 
-    if (result.kind == JIT_KIND_BY_REF) {
-        if (stack[0].kind == stack[1].kind && inst->opcode == CEE_SUB) {
-            result = jit_stack_value_create(tIntPtr);
-        }
+    } else if (
+        // optimization for the case of value + ptr => ptr
+        inst->opcode == CEE_ADD &&
+        !jit_is_pointer(&stack[0]) && jit_is_pointer(&stack[1])
+    ) {
+        result = stack[1];
+
+    } else if (result.kind == JIT_KIND_NATIVE_INT) {
+        // ensure that whatever the native int was its degraded into
+        // an integer and not stay as a pointer
+        result.type = tIntPtr;
     }
 
     *STACK_PUSH() = result;
