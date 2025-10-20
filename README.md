@@ -30,11 +30,17 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
   - All span methods and extensions
   - All the debug class
 
-### To be implemented
+### Short term TODO
 
-These are planned and are being worked on
-- Generic constraints checking
-- Explicit scoped and unscoped reference support
+These are things we are planning todo on the short term
+- Generic constraints verification
+- Proper Nullable support
+- Culture support
+- Custom attributes
+
+### Long term TODO
+
+These are planned but will take time until we will actually have proper full support for them
 - Exceptions (missing jit support)
 - Virtual generic methods (Need a good design)
 - Boxing a delegate into either a Delegate/MulticastDelegate/object (changes allocation semantics greatly)

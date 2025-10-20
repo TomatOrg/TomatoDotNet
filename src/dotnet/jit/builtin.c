@@ -73,6 +73,22 @@ static spidir_value_t emit_unsafe_add_byte_offset(spidir_builder_handle_t builde
     return spidir_builder_build_ptroff(builder, args[0], args[1]);
 }
 
+static spidir_value_t emit_unsafe_sub_byte_offset(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    spidir_value_t zero = spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0);
+    return spidir_builder_build_ptroff(builder, args[0],
+        spidir_builder_build_isub(builder, zero, args[1]));
+}
+
+static spidir_value_t emit_unsafe_byte_offset(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return spidir_builder_build_isub(builder,
+        spidir_builder_build_ptrtoint(builder, args[0]),
+        spidir_builder_build_ptrtoint(builder, args[1]));
+}
+
+static spidir_value_t emit_unsafe_is_address_lt(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    return spidir_builder_build_icmp(builder, SPIDIR_ICMP_ULT, SPIDIR_TYPE_I32, args[0], args[1]);
+}
+
 static spidir_value_t emit_unsafe_are_same(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
     return spidir_builder_build_icmp(builder, SPIDIR_ICMP_EQ, SPIDIR_TYPE_I32, args[0], args[1]);
 }
@@ -127,6 +143,22 @@ static spidir_value_t emit_runtime_helpers_get_offset_to_string_data(spidir_buil
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Object methods
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+static spidir_value_t emit_object_get_hash_code(spidir_builder_handle_t builder, RuntimeMethodBase method, spidir_value_t* args) {
+    // convert the pointer to an integer
+    spidir_value_t ptr = spidir_builder_build_ptrtoint(builder, args[0]);
+
+    // ((int)value) ^ (int)(value >> 32)
+    return spidir_builder_build_xor(builder,
+        spidir_builder_build_itrunc(builder, ptr),
+        spidir_builder_build_itrunc(builder,
+            spidir_builder_build_lshr(builder, ptr,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 32))));
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Generic emit code
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -150,6 +182,12 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
             return emit_unsafe_as;
         } else if (tdn_compare_string_to_cstr(method->Name, "AddByteOffset")) {
             return emit_unsafe_add_byte_offset;
+        } else if (tdn_compare_string_to_cstr(method->Name, "SubtractByteOffset")) {
+            return emit_unsafe_sub_byte_offset;
+        } else if (tdn_compare_string_to_cstr(method->Name, "ByteOffset")) {
+            return emit_unsafe_byte_offset;
+        } else if (tdn_compare_string_to_cstr(method->Name, "IsAddressLessThan")) {
+            return emit_unsafe_is_address_lt;
         } else if (tdn_compare_string_to_cstr(method->Name, "AreSame")) {
             return emit_unsafe_are_same;
         }
@@ -164,6 +202,10 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
             return emit_runtime_helpers_is_bitwise_equatable;
         } else if (tdn_compare_string_to_cstr(method->Name, "get_OffsetToStringData")) {
             return emit_runtime_helpers_get_offset_to_string_data;
+        }
+    } else if (type == tObject) {
+        if (tdn_compare_string_to_cstr(method->Name, "GetHashCode")) {
+            return emit_object_get_hash_code;
         }
     }
 

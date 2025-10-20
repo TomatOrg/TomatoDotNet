@@ -1974,11 +1974,17 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
         goto cleanup;
     }
 
+    //
     // attempt to de-virtualize the method, if we could then
     // replace the instruction and call the normal emit_call
     // method
+    //
+    // if the devirt resulted in a method that is implemented by either ValueType
+    // or Object, and the original value is a value type, then we need to perform
+    // a box instead and can't call it directly
+    //
     RuntimeMethodBase known = devirt_method(&stack[0], inst->operand.method);
-    if (known != NULL) {
+    if (known != NULL && tdn_type_is_valuetype(stack[0].type) == tdn_type_is_valuetype(known->DeclaringType)) {
         // TODO: perform explicit null check
 
         // the devirt was from a delegate, load the this pointer properly
@@ -2017,7 +2023,34 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
     // passing it to the function (the devirt takes care of the case that the type
     // does implement the function)
     if (inst->constrained != NULL && tdn_type_is_valuetype(inst->constrained)) {
-        CHECK_FAIL("TODO: box for constrained");
+        CHECK(known != NULL);
+        CHECK(inst->constrained == stack[0].type);
+
+        // we don't actually need to allocate the object because it won't leak
+        // from the functions, so we will allocate them on the stack
+        RuntimeTypeInfo type = inst->constrained;
+        spidir_value_t obj = spidir_builder_build_stackslot(builder,
+            type->HeapSize + tdn_get_boxed_value_offset(type),
+            MAX(type->HeapAlignment, tObject->HeapAlignment));
+
+        // store the vtable
+        ASSERT(offsetof(struct Object, VTable) == 0);
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)type->JitVTable), obj);
+
+        // store the value itself
+        spidir_value_t value_ptr = spidir_builder_build_ptroff(builder, obj,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tdn_get_boxed_value_offset(inst->constrained)));
+        jit_emit_memcpy(builder, value_ptr, stack[0].value, inst->constrained);
+
+        // and now we have it as an object ref
+        stack[0].kind = JIT_KIND_OBJ_REF;
+        stack[0].value = obj;
+
+        // and now we can perform the direct call
+        inst->operand.method = known;
+        CHECK_AND_RETHROW(emit_call(function, builder, block, inst, stack));
+        goto cleanup;
     }
 
     RuntimeMethodBase callee = inst->operand.method;
