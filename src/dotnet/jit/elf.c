@@ -1,7 +1,6 @@
 #include "elf.h"
 
 #include <stdalign.h>
-#include <string.h>
 
 #include "jit.h"
 #include "helpers.h"
@@ -582,15 +581,12 @@ static char* string_to_cstr(String str) {
     return s;
 }
 
-// static char* rstrchr(char* str, char sep) {
-//     int len = strlen(str);
-//     for (int i = len - 1; i >= 0; i--) {
-//         if (str[i] == sep) {
-//             return &str[i];
-//         }
-//     }
-//     return NULL;
-// }
+static char *strchr(const char *s, int c) {
+    for (; *s; s++)
+        if (*s == (char)c)
+            return (char*)s;
+    return c == 0 ? (char*)s : 0;
+}
 
 static int dwarf_push_namespace_internal(jit_elf_t* elf, char* nm) {
     // we will push ourselves

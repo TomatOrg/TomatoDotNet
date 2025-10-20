@@ -1,6 +1,5 @@
 #include "codegen.h"
 
-#include <string.h>
 #include "tomatodotnet/util/stb_ds.h"
 #include <spidir/codegen.h>
 #include <spidir/x64.h>

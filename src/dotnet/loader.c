@@ -1,7 +1,6 @@
 #include <stddef.h>
 #include "loader.h"
 
-#include <string.h>
 #include <tomatodotnet/tdn.h>
 
 #include "tomatodotnet/except.h"
