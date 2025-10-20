@@ -152,6 +152,7 @@ static int m_inited_types = 0;
 static load_type_t m_load_types[] = {
     LOAD_TYPE(System.Runtime.CompilerServices, IsReadOnlyAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsByRefLikeAttribute),
+    LOAD_TYPE(System.Runtime.CompilerServices, ScopedRefAttribute),
     LOAD_TYPE(System.Runtime.CompilerServices, IsVolatile),
     LOAD_TYPE(System.Runtime.InteropServices, InAttribute),
     LOAD_TYPE(System.Runtime.InteropServices, UnmanagedType),
@@ -2231,7 +2232,7 @@ cleanup:
     return err;
 }
 
-static tdn_err_t loader_connect_read_only_attribute(RuntimeAssembly assembly, bool parameter) {
+static tdn_err_t loader_connect_builtin_attribute(RuntimeAssembly assembly, bool parameter) {
     tdn_err_t err = TDN_NO_ERROR;
 
     // connect jit related custom attributes
@@ -2269,6 +2270,19 @@ static tdn_err_t loader_connect_read_only_attribute(RuntimeAssembly assembly, bo
 
                 case METADATA_PROPERTY: {
                     // readonly property, we ignore
+                } break;
+
+                default:
+                    WARN("Found IsReadOnlyAttribute on unknown token %02x", attr->parent.table);
+            }
+
+        } else if (type == tScopedRefAttribute) {
+            switch (attr->parent.table) {
+                case METADATA_PARAM: {
+                    if (!parameter) break;
+                    CHECK(attr->parent.index != 0 && attr->parent.index <= assembly->Params->Length);
+                    ParameterInfo parent_type = assembly->Params->Elements[attr->parent.index - 1];
+                    parent_type->ScopedRef = true;
                 } break;
 
                 default:
@@ -2570,7 +2584,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // it won't pass the properties properly, we don't include parameters since they
     // are not initialized yet in this context
     CHECK_AND_RETHROW(loader_connect_by_ref_like_attribute(assembly));
-    CHECK_AND_RETHROW(loader_connect_read_only_attribute(assembly, false));
+    CHECK_AND_RETHROW(loader_connect_builtin_attribute(assembly, false));
 
     push_type_queue();
     pushed_type_queue = true;
@@ -2586,7 +2600,7 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // connect the read-only attribute on parameters, this must be done after
     // connecting the member to types since otherwise the parameters are not
     // initialized
-    CHECK_AND_RETHROW(loader_connect_read_only_attribute(assembly, true));
+    CHECK_AND_RETHROW(loader_connect_builtin_attribute(assembly, true));
 
     // connect all the interface impls, will be needed for the type init itself
     CHECK_AND_RETHROW(loader_connect_interface_impls(assembly));

@@ -64,7 +64,8 @@ typedef struct ParameterInfo {
     String Name;
     int Position;
     uint32_t ReturnRefIsReadonly : 1;
-    uint32_t : 31;
+    uint32_t ScopedRef : 1;
+    uint32_t : 30;
 }* ParameterInfo;
 DEFINE_ARRAY(ParameterInfo);
 

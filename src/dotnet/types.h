@@ -55,6 +55,7 @@ extern RuntimeTypeInfo tRuntimeHelpers;
 extern RuntimeTypeInfo tInAttribute;
 extern RuntimeTypeInfo tIsReadOnlyAttribute;
 extern RuntimeTypeInfo tIsByRefLikeAttribute;
+extern RuntimeTypeInfo tScopedRefAttribute;
 extern RuntimeTypeInfo tIsVolatile;
 extern RuntimeTypeInfo tUnmanagedType;
 

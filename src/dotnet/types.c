@@ -57,6 +57,7 @@ RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;
 RuntimeTypeInfo tIsReadOnlyAttribute = NULL;
 RuntimeTypeInfo tIsByRefLikeAttribute = NULL;
+RuntimeTypeInfo tScopedRefAttribute = NULL;
 RuntimeTypeInfo tUnmanagedType = NULL;
 
 RuntimeTypeInfo tException = NULL;

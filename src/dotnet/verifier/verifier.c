@@ -476,18 +476,24 @@ static tdn_err_t verifier_function_init(function_t* function, RuntimeMethodBase 
             local.ref_read_only = true;
         }
 
-        // references are non-local since they come from the outside
-        // same is true for the ref-structs
-        if (type->IsByRef) {
-            local.ref_non_local = true;
-        }
+        if (parameter->ScopedRef) {
+            // for scoped reference we consider everything local, except
+            // for the case of `scoped ref RefStruct`, in which case the ref
+            // itself is scoped, but the ref-struct is not scoped
+            if (type->IsByRef && type->IsByRefStruct) {
+                local.ref_struct_non_local = true;
+            }
 
-        // TODO: scoped references
+        } else {
+            // we have an unscoped ref, so it is non-local
+            if (type->IsByRef) {
+                local.ref_non_local = true;
+            }
 
-        // ref-struct that is incoming will only contain non-local references
-        // so mark it as such
-        if (type->IsByRefStruct) {
-            local.ref_struct_non_local = true;
+            // we have an unscoped ref-struct, so its non-local
+            if (type->IsByRefStruct) {
+                local.ref_struct_non_local = true;
+            }
         }
 
         arrpush(entry_block->args, local);

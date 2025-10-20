@@ -1222,18 +1222,25 @@ static tdn_err_t verify_call(function_t* function, block_t* block, tdn_il_inst_t
             declared.flags.ref_read_only = param->Attributes.In;
             CHECK_IS_ASSIGNABLE(actual, &declared);
 
-            // if this is a ref-struct, and its has local refs, then it might
-            // leak a local ref from that
-            if (actual->type != NULL && actual->type->IsByRefStruct) {
-                might_leak_local_ref = !actual->flags.ref_struct_non_local;
-            }
+            if (param->ScopedRef) {
+                // the parameter takes a scoped reference, the only case where something
+                // might leak anything is if its a `scoped ref RefStruct` paramter that takes
+                // in a ref-struct that is non-local
+                if (declared.type->IsByRef && declared.type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
+                    might_leak_local_ref = true;
+                }
 
-            // TODO: unscoped this support
+            } else {
+                // if this is a ref, and the ref is local, then we might leak a reference back
+                // so treat the returned reference as scoped
+                if (declared.type->IsByRef && !actual->flags.ref_non_local) {
+                    might_leak_local_ref = true;
+                }
 
-            // if this is a ref-struct, and it contains local fields, ensure
-            // we don't leak don't leak them accidently
-            if (actual->type != NULL && actual->type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
-                might_leak_local_ref = true;
+                // same but for ref-struct content
+                if (declared.type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
+                    might_leak_local_ref = true;
+                }
             }
         }
     }
