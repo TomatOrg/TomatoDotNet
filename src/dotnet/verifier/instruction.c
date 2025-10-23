@@ -567,30 +567,33 @@ static tdn_err_t verify_ldind(function_t* function, block_t* block, tdn_il_inst_
 
     CHECK_INIT_THIS(stack);
 
-    if (function->method->Module->Assembly->AllowUnsafe) {
+    RuntimeTypeInfo type = inst->operand.type;
+    if (function->allow_unsafe) {
         CHECK(stack->kind == KIND_BY_REF || stack->kind == KIND_NATIVE_INT);
 
-        if (inst->operand.type == NULL) {
-            CHECK(tdn_type_is_gc_pointer(stack->type));
-            inst->operand.type = stack->type;
+        if (type == NULL) {
+            type = stack->type;
+            CHECK(type != tVoid);
         }
+
     } else {
         CHECK_ERROR(stack->kind == KIND_BY_REF,
             TDN_ERROR_VERIFIER_STACK_BY_REF);
 
-        if (inst->operand.type == NULL) {
+        if (type == NULL) {
             CHECK_ERROR(tdn_type_is_gc_pointer(stack->type),
                 TDN_ERROR_VERIFIER_STACK_UNEXPECTED);
-            inst->operand.type = stack->type;
+            type = stack->type;
 
         } else {
             CHECK_IS_ASSIGNABLE_TYPE(
                 verifier_get_verification_type(stack->type),
-                verifier_get_verification_type(inst->operand.type));
+                verifier_get_verification_type(type));
         }
     }
 
-    stack_value_init(STACK_PUSH(), inst->operand.type);
+    CHECK(type != NULL);
+    stack_value_init(STACK_PUSH(), type);
 
 cleanup:
     return err;
@@ -603,13 +606,14 @@ static tdn_err_t verify_stind(function_t* function, block_t* block, tdn_il_inst_
     stack_value_t* address = &stack[0];
 
     CHECK_INIT_THIS(value);
+    CHECK_INIT_THIS(address);
 
     // must be writable to store
     CHECK_ERROR(!address->flags.ref_read_only,
         TDN_ERROR_VERIFIER_READONLY_ILLEGAL_WRITE);
 
     // must be a byref
-    if (function->method->Module->Assembly->AllowUnsafe) {
+    if (function->allow_unsafe) {
         CHECK(stack->kind == KIND_BY_REF || stack->kind == KIND_NATIVE_INT);
     } else {
         CHECK(stack->kind == KIND_BY_REF);
@@ -1226,19 +1230,19 @@ static tdn_err_t verify_call(function_t* function, block_t* block, tdn_il_inst_t
                 // the parameter takes a scoped reference, the only case where something
                 // might leak anything is if its a `scoped ref RefStruct` paramter that takes
                 // in a ref-struct that is non-local
-                if (declared.type->IsByRef && declared.type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
+                if (declared.kind == KIND_BY_REF && verifier_is_byref_struct(&declared) && !actual->flags.ref_struct_non_local) {
                     might_leak_local_ref = true;
                 }
 
             } else {
                 // if this is a ref, and the ref is local, then we might leak a reference back
                 // so treat the returned reference as scoped
-                if (declared.type->IsByRef && !actual->flags.ref_non_local) {
+                if (declared.kind == KIND_BY_REF && !actual->flags.ref_non_local) {
                     might_leak_local_ref = true;
                 }
 
                 // same but for ref-struct content
-                if (declared.type->IsByRefStruct && !actual->flags.ref_struct_non_local) {
+                if (verifier_is_byref_struct(&declared) && !actual->flags.ref_struct_non_local) {
                     might_leak_local_ref = true;
                 }
             }
@@ -1347,7 +1351,7 @@ static tdn_err_t verify_call(function_t* function, block_t* block, tdn_il_inst_t
 
         }
 
-        if (return_value->type->IsByRefStruct) {
+        if (verifier_is_byref_struct(return_value)) {
             // returned a ref-struct, can't contain local references as long as the input
             // can't contain them
             return_value->flags.ref_struct_non_local = !might_leak_local_ref;
@@ -1397,7 +1401,7 @@ static tdn_err_t verify_ret(function_t* function, block_t* block, tdn_il_inst_t*
         // if we are returning a ref-struct, then it must
         // have non-local references, otherwise we might
         // leak it
-        if (stack->type != NULL && stack->type->IsByRefStruct) {
+        if (stack->type != NULL && verifier_is_byref_struct(stack)) {
             CHECK(stack->flags.ref_struct_non_local);
         }
     }
@@ -1445,7 +1449,7 @@ static tdn_err_t verify_box(function_t* function, block_t* block, tdn_il_inst_t*
     stack_value_t target_type = stack_value_create(type);
 
     // can't box a byref
-    CHECK_ERROR(target_type.kind != KIND_BY_REF && !target_type.type->IsByRefStruct,
+    CHECK_ERROR(target_type.kind != KIND_BY_REF && !verifier_is_byref_struct(&target_type),
         TDN_ERROR_VERIFIER_BOX_BYREF);
 
     CHECK_ERROR(

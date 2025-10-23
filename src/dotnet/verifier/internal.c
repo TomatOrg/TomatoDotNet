@@ -148,18 +148,21 @@ stack_value_t* stack_value_init(stack_value_t* value, RuntimeTypeInfo type) {
         value->kind = KIND_INT64;
         value->type = tInt64;
 
+    } else if (type == tSingle) {
+        value->kind = KIND_FLOAT;
+        value->type = tSingle;
+
     } else if (type == tDouble) {
         value->kind = KIND_FLOAT;
         value->type = tDouble;
 
-    } else if (type == tSingle) {
-        // TODO: properly support f32
-        value->kind = KIND_FLOAT;
-        value->type = tDouble;
-
-    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
+    } else if (type == tIntPtr || type == tUIntPtr) {
         value->kind = KIND_NATIVE_INT;
         value->type = tIntPtr;
+
+    } else if (type->IsPointer) {
+        value->kind = KIND_NATIVE_INT;
+        value->type = type->ElementType;
 
     } else if (type->BaseType == tEnum) {
         stack_value_init(value, type->EnumUnderlyingType);
@@ -168,7 +171,7 @@ stack_value_t* stack_value_init(stack_value_t* value, RuntimeTypeInfo type) {
         value->kind = KIND_BY_REF;
         value->type = type->ElementType;
 
-    } else if (tdn_type_is_valuetype(type)) {
+    } else if (tdn_type_is_valuetype(type) || type->IsGenericParameter) {
         value->kind = KIND_VALUE_TYPE;
         value->type = type;
 

@@ -2285,7 +2285,7 @@ static tdn_err_t loader_connect_builtin_attribute(RuntimeAssembly assembly, bool
                 } break;
 
                 default:
-                    WARN("Found IsReadOnlyAttribute on unknown token %02x", attr->parent.table);
+                    WARN("Found ScopedRefAttribute on unknown token %02x", attr->parent.table);
             }
         }
     }

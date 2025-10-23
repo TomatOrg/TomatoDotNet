@@ -111,6 +111,10 @@ static inline bool verifier_is_boxed_value_type(const stack_value_t* value) {
     return value->kind == KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type);
 }
 
+static inline bool verifier_is_byref_struct(const stack_value_t* value) {
+    return (value->kind == KIND_BY_REF || value->kind == KIND_VALUE_TYPE) && value->type->IsByRefStruct;
+}
+
 /**
  * Initialize a stack-value
  */

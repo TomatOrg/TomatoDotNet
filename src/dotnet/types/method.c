@@ -52,21 +52,18 @@ static tdn_err_t create_generic_method(RuntimeMethodInfo base, RuntimeTypeInfo_A
 
     // setup the parameters properly
     // get parameter information from the params table
-    size_t params_count = (token.index == assembly->Metadata->method_defs_count ?
-                           assembly->Metadata->params_count :
-                           method_def[1].param_list.index - 1) - (method_def->param_list.index - 1);
-    if (params_count != 0) {
-        CHECK(method_def->param_list.index != 0);
-        CHECK(method_def->param_list.index - 1 + params_count <= assembly->Metadata->params_count);
+    for (int pi = 0; pi < base->Parameters->Length; pi++) {
+        ParameterInfo orig_info = base->Parameters->Elements[pi];
+        ParameterInfo info = new_method->Parameters->Elements[pi];
+        info->Name = orig_info->Name;
+        info->Attributes = orig_info->Attributes;
+        info->ScopedRef = orig_info->ScopedRef;
     }
-    CHECK(params_count <= new_method->Parameters->Length + 1); // TODO: shouldn't this be equals??
-    for (int pi = 0; pi < params_count; pi++) {
-        metadata_param_t* param = &assembly->Metadata->params[method_def->param_list.index - 1 + pi];
-        CHECK(param->sequence < new_method->Parameters->Length + 1);
-        ParameterInfo info = param->sequence == 0 ? new_method->ReturnParameter : new_method->Parameters->Elements[param->sequence - 1];
-        info->Attributes = (ParameterAttributes){ .Attributes = param->flags };
-        CHECK_AND_RETHROW(tdn_create_string_from_cstr(param->name, &info->Name));
-    }
+
+    // and copy the return parameter info
+    new_method->ReturnParameter->Name = base->ReturnParameter->Name;
+    new_method->ReturnParameter->Attributes = base->ReturnParameter->Attributes;
+    new_method->ReturnParameter->ScopedRef = base->ReturnParameter->ScopedRef;
 
 cleanup:
     return err;
