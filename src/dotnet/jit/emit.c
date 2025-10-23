@@ -39,15 +39,8 @@ static spidir_value_type_t get_spidir_type(RuntimeTypeInfo type) {
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
 
-    } else if (kind == JIT_KIND_INT64) {
+    } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
         return SPIDIR_TYPE_I64;
-
-    } else if (kind == JIT_KIND_NATIVE_INT) {
-        if (type->IsPointer) {
-            return SPIDIR_TYPE_PTR;
-        } else {
-            return SPIDIR_TYPE_I64;
-        }
 
     } else if (kind == JIT_KIND_FLOAT) {
         return SPIDIR_TYPE_F64;
@@ -67,15 +60,8 @@ spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
 
-    } else if (kind == JIT_KIND_INT64) {
+    } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
         return SPIDIR_TYPE_I64;
-
-    } else if (kind == JIT_KIND_NATIVE_INT) {
-        if (type->IsPointer) {
-            return SPIDIR_TYPE_PTR;
-        } else {
-            return SPIDIR_TYPE_I64;
-        }
 
     } else if (kind == JIT_KIND_FLOAT) {
         return SPIDIR_TYPE_F64;
@@ -238,6 +224,7 @@ static spidir_value_t jit_emit_load(spidir_builder_handle_t builder, RuntimeType
     if (tdn_is_struct_like(from_type)) {
         value = spidir_builder_build_stackslot(builder, from_type->StackSize, from_type->StackAlignment);
         jit_emit_memcpy(builder, value, from, from_type);
+
     } else {
         spidir_mem_size_t mem_size;
         switch (from_type->StackSize) {
@@ -273,8 +260,7 @@ static void emit_load_reference(spidir_builder_handle_t builder, jit_stack_value
 }
 
 static void emit_convert_to_reference(spidir_builder_handle_t builder, jit_stack_value_t* item) {
-    if (item->kind == JIT_KIND_NATIVE_INT && item->type == tIntPtr) {
-        // convert a native-int to a pointer
+    if (item->kind == JIT_KIND_NATIVE_INT) {
         item->value = spidir_builder_build_inttoptr(builder, item->value);
     } else {
         emit_load_reference(builder, item);
@@ -335,19 +321,13 @@ static spidir_value_t jit_convert_value(spidir_builder_handle_t builder, jit_sta
         return spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, from->value);
 
     } else if (
-        (
-            (from->kind == JIT_KIND_BY_REF) ||
-            (from->kind == JIT_KIND_OBJ_REF) ||
-            (from->kind == JIT_KIND_NATIVE_INT && from->type->IsPointer)
-        ) && (to_type == tIntPtr || to_type == tUIntPtr)
+        (from->kind == JIT_KIND_BY_REF || from->kind == JIT_KIND_OBJ_REF) &&
+        (to_type == tIntPtr || to_type == tUIntPtr)
     ) {
         // by-ref/pointer -> native-int
         return spidir_builder_build_ptrtoint(builder, from->value);
 
-    } else if (
-        (from->kind == JIT_KIND_NATIVE_INT && from->type == tIntPtr) &&
-        (to_type->IsByRef || to_type->IsPointer)
-    ) {
+    } else if (from->kind == JIT_KIND_NATIVE_INT && (to_type->IsByRef || to_type->IsPointer)) {
         // pointer native-int -> by-ref/pointer
         return spidir_builder_build_inttoptr(builder, from->value);
 
@@ -388,7 +368,7 @@ static spidir_value_type_t get_spidir_stack_phi_type(jit_stack_value_t* value) {
     switch (value->kind) {
         case JIT_KIND_INT32: return SPIDIR_TYPE_I32;
         case JIT_KIND_INT64: return SPIDIR_TYPE_I64;
-        case JIT_KIND_NATIVE_INT: return value->type->IsPointer ? SPIDIR_TYPE_PTR : SPIDIR_TYPE_I64;
+        case JIT_KIND_NATIVE_INT: return SPIDIR_TYPE_I64;
         case JIT_KIND_FLOAT: return SPIDIR_TYPE_F64;
         case JIT_KIND_BY_REF: return SPIDIR_TYPE_PTR;
         case JIT_KIND_OBJ_REF: return SPIDIR_TYPE_PTR;
@@ -947,6 +927,10 @@ static spidir_value_t emit_float_binary_compare(spidir_builder_handle_t builder,
 }
 
 static void emit_convert_for_op(spidir_builder_handle_t builder, jit_stack_value_t* a, jit_stack_value_t* b, bool is_unsigned, bool allow_ptr) {
+    // ensure we have hte actual references and not interfaces
+    emit_load_reference(builder, a);
+    emit_load_reference(builder, b);
+
     if (!allow_ptr || (jit_is_pointer(a) != jit_is_pointer(b))) {
         // we are going to conver the pointer to native int if either we don't allow
         // pointers at all, or we allow them only if both of them are a pointer
@@ -962,7 +946,9 @@ static void emit_convert_for_op(spidir_builder_handle_t builder, jit_stack_value
     if (a->kind != b->kind) {
         if (a->kind == JIT_KIND_INT32) {
             a->value = emit_extend_int(builder, a->value, !is_unsigned);
-        } else if (b->kind == JIT_KIND_INT32) {
+        }
+
+        if (b->kind == JIT_KIND_INT32) {
             b->value = emit_extend_int(builder, b->value, !is_unsigned);
         }
     }
@@ -971,10 +957,6 @@ static void emit_convert_for_op(spidir_builder_handle_t builder, jit_stack_value
 static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
-
-    // ensure we have hte actual references and not interfaces
-    emit_load_reference(builder, &stack[0]);
-    emit_load_reference(builder, &stack[1]);
 
     if (stack[0].kind == JIT_KIND_FLOAT) {
         // if the kinds are not the same we need to extend both into a full integer
@@ -1129,6 +1111,11 @@ static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t 
     // truncate the value if too big
     if (stack[0].kind == JIT_KIND_INT64 || stack[0].kind == JIT_KIND_NATIVE_INT) {
         value = spidir_builder_build_itrunc(builder, value);
+
+    } else if (stack[0].kind == JIT_KIND_OBJ_REF || stack[0].kind == JIT_KIND_BY_REF) {
+        value = spidir_builder_build_ptrtoint(builder, value);
+        value = spidir_builder_build_itrunc(builder, value);
+
     } else if (stack[0].kind == JIT_KIND_FLOAT) {
         if (inst->opcode == CEE_CONV_I1 || inst->opcode == CEE_CONV_I2) {
             value = spidir_builder_build_floattosint(builder, SPIDIR_TYPE_I32, value);
@@ -1174,12 +1161,9 @@ static tdn_err_t emit_conv_ovf_i8(jit_function_t* function, spidir_builder_handl
         type = SPIDIR_TYPE_I32;
         minus_one = (uint32_t)-1;
     } else if (stack->kind == JIT_KIND_INT64 || stack->kind == JIT_KIND_NATIVE_INT) {
-        if (stack->type->IsPointer) {
-            stack->value = spidir_builder_build_ptrtoint(builder, stack->value);
-        }
-
         type = SPIDIR_TYPE_I64;
         minus_one = (uint64_t)-1;
+
     } else {
         // TODO: floats
         CHECK_FAIL();
@@ -1225,17 +1209,15 @@ static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t 
     if (stack[0].kind == JIT_KIND_INT32) {
         value = emit_extend_int(builder, stack[0].value,
             inst->opcode == CEE_CONV_I8 || inst->opcode == CEE_CONV_I);
+
     } else if (stack[0].kind == JIT_KIND_FLOAT) {
         if (inst->opcode == CEE_CONV_I || inst->opcode == CEE_CONV_I8) {
             value = spidir_builder_build_floattosint(builder, SPIDIR_TYPE_I64, value);
         } else {
             value = spidir_builder_build_floattouint(builder, SPIDIR_TYPE_I64, value);
         }
-    } else if (
-        (stack[0].kind == JIT_KIND_BY_REF) ||
-        (stack[0].kind == JIT_KIND_OBJ_REF) ||
-        (stack[0].kind == JIT_KIND_NATIVE_INT && stack[0].type->IsPointer)
-    ) {
+
+    } else if (stack[0].kind == JIT_KIND_BY_REF || stack[0].kind == JIT_KIND_OBJ_REF) {
         value = spidir_builder_build_ptrtoint(builder, value);
     }
 
@@ -2569,7 +2551,7 @@ static tdn_err_t emit_br_unary_cond(jit_function_t* function, spidir_builder_han
     emit_load_reference(builder, &stack[0]);
 
     // if this is a reference need to turn into an integer
-    if (stack[0].kind == JIT_KIND_OBJ_REF || (stack[0].kind == JIT_KIND_NATIVE_INT && stack[0].type->IsPointer)) {
+    if (jit_is_pointer(&stack[0])) {
         stack[0].value = spidir_builder_build_icmp(builder,
             inst->opcode == CEE_BRFALSE ? SPIDIR_ICMP_EQ : SPIDIR_ICMP_NE,
             SPIDIR_TYPE_I32,
@@ -2590,7 +2572,6 @@ cleanup:
 
 static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
-    bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
 
     // perform the condition
     spidir_value_t cond;
@@ -2608,23 +2589,8 @@ static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_ha
         cond = emit_float_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
 
     } else {
-        // sign extend as required
-        if (stack[0].type == tInt32 && stack[1].type != tInt32) {
-            stack[0].type = tIntPtr;
-            stack[0].value = emit_extend_int(builder, stack[0].value, !is_unsigned);
-        } else if (stack[1].type == tInt32 && stack[0].type != tInt32) {
-            stack[1].type = tIntPtr;
-            stack[1].value = emit_extend_int(builder, stack[1].value, !is_unsigned);
-        }
-
-        // interface and delegate are a fat pointer, we need to
-        // load the instance/function and check against that
-        emit_load_reference(builder, &stack[0]);
-        emit_load_reference(builder, &stack[1]);
-
-        // NOTE: in here we don't need to inttoptr since compare can
-        //       just take in a pointer without a problem
-
+        bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
+        emit_convert_for_op(builder, &stack[0], &stack[1], is_unsigned, true);
         cond = emit_binary_compare(builder, inst->opcode, stack[0].value, stack[1].value);
     }
 

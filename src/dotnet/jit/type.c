@@ -498,9 +498,10 @@ static tdn_err_t type_binary_op(jit_function_t* function, jit_block_t* block, td
     ) {
         result = stack[1];
 
-    } else if (result.kind == JIT_KIND_NATIVE_INT) {
-        // ensure that whatever the native int was its degraded into
-        // an integer and not stay as a pointer
+    } else if (result.kind == JIT_KIND_BY_REF) {
+        // if we had operations with by-ref at this point
+        // the turned into a native int 
+        result.kind = JIT_KIND_NATIVE_INT;
         result.type = tIntPtr;
     }
 
@@ -571,7 +572,6 @@ static tdn_err_t type_conv(jit_function_t* function, jit_block_t* block, tdn_il_
         case CEE_CONV_R8: type = tDouble; break;
         default: CHECK_FAIL();
     }
-
     jit_stack_value_init(STACK_PUSH(), type);
 
 cleanup:

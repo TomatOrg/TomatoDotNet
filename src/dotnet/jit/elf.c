@@ -394,7 +394,8 @@ static void dwarf_write_param_type(jit_elf_t* elf, RuntimeTypeInfo type) {
         type == tInt64 || type == tUInt64 ||
         type == tIntPtr || type == tUIntPtr ||
         type == tDouble || type == tSingle ||
-        type->BaseType == tEnum
+        type->BaseType == tEnum || type->IsPointer ||
+        type->IsByRef
     ) {
         dwarf_write_type_ref(elf, type, false);
     } else {
@@ -724,11 +725,11 @@ static void dwarf_write_param_location(jit_elf_t* elf, RuntimeTypeInfo type, int
     arrfree(location);
 }
 
-static void dwarf_write_method_params(jit_elf_t* elf, RuntimeMethodBase method, bool location) {
+static void dwarf_write_method_params(jit_elf_t* elf, RuntimeMethodBase method, bool location, bool thunk) {
     int i_offset = 0, f_offset = 0;
 
     // the `this` parameter
-    if (!method->Attributes.Static) {
+    if (!method->Attributes.Static || thunk) {
         // complete the pointer to the object pointer
         dwarf_write_u32(&elf->debug_info, arrlen(elf->debug_info) + 4);
 
@@ -736,7 +737,11 @@ static void dwarf_write_method_params(jit_elf_t* elf, RuntimeMethodBase method, 
         dwarf_write_uleb(&elf->debug_info, location ? TDN_ABBREV_PARAM_LOCATION : TDN_ABBREV_PARAM);
         dwarf_write_str(&elf->debug_info, "this");
         dwarf_write_u8(&elf->debug_info, true);
-        dwarf_write_param_type(elf, method->DeclaringType);
+        if (thunk) {
+            dwarf_write_param_type(elf, tObject);
+        } else {
+            dwarf_write_param_type(elf, method->DeclaringType);
+        }
 
         // always in the same location
         if (location) {
@@ -773,9 +778,9 @@ static void dwarf_write_method_params(jit_elf_t* elf, RuntimeMethodBase method, 
     }
 }
 
-static void dwarf_write_method(jit_elf_t* elf, RuntimeMethodBase method) {
+static void dwarf_write_method(jit_elf_t* elf, RuntimeMethodBase method, bool thunk) {
     uint8_t tag;
-    if (method->Attributes.Static) {
+    if (method->Attributes.Static && !thunk) {
         if (method_has_real_return(method)) {
             tag = TDN_ABBREV_STATIC_METHOD_WITH_RETURN;
         } else {
@@ -808,7 +813,7 @@ static void dwarf_write_method(jit_elf_t* elf, RuntimeMethodBase method) {
     }
 
     // the values
-    dwarf_write_method_params(elf, method, false);
+    dwarf_write_method_params(elf, method, false, thunk);
 
     // we are done with its children
     dwarf_write_uleb(&elf->debug_info, 0);
@@ -950,13 +955,13 @@ static void dwarf_add_single_type(jit_elf_t* elf, RuntimeTypeInfo type) {
 
         if (type->DeclaredConstructors != NULL) {
             for (int i = 0; i < type->DeclaredConstructors->Length; i++) {
-                dwarf_write_method(elf, (RuntimeMethodBase)type->DeclaredConstructors->Elements[i]);
+                dwarf_write_method(elf, (RuntimeMethodBase)type->DeclaredConstructors->Elements[i], false);
             }
         }
 
         if (type->DeclaredMethods != NULL) {
             for (int i = 0; i < type->DeclaredMethods->Length; i++) {
-                dwarf_write_method(elf, (RuntimeMethodBase)type->DeclaredMethods->Elements[i]);
+                dwarf_write_method(elf, (RuntimeMethodBase)type->DeclaredMethods->Elements[i], false);
             }
         }
     }
@@ -1166,12 +1171,12 @@ void jit_elf_add_entry(jit_codegen_entry_t* entry) {
 
         // add an entry that adds more data to the method specification
         // for its code location
-        dwarf_write_uleb(&m_elf.debug_info, entry->method->Attributes.Static ?
+        dwarf_write_uleb(&m_elf.debug_info, (entry->method->Attributes.Static && !entry->thunk) ?
             TDN_ABBREV_STATIC_METHOD_LOCATION : TDN_ABBREV_METHOD_LOCATION);
         dwarf_write_uleb(&m_elf.debug_info, hmget(m_elf.methods, entry->method));
         dwarf_write_u64(&m_elf.debug_info, code_offset);
         dwarf_write_u64(&m_elf.debug_info, code_offset + code_size);
-        dwarf_write_method_params(&m_elf, entry->method, true);
+        dwarf_write_method_params(&m_elf, entry->method, true, entry->thunk);
         dwarf_write_uleb(&m_elf.debug_info, 0);
     }
 }

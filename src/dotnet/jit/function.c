@@ -604,14 +604,12 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
         value->kind = JIT_KIND_NATIVE_INT;
         value->type = tIntPtr;
 
-    } else if (type->IsPointer) {
-        value->kind = JIT_KIND_NATIVE_INT;
-        value->type = type;
-
     } else if (type->BaseType == tEnum) {
         jit_stack_value_init(value, type->EnumUnderlyingType);
 
-    } else if (type->IsByRef) {
+    } else if (type->IsByRef || type->IsPointer) {
+        // for the jit managed and unmanaged pointers
+        // are both just pointers
         value->kind = JIT_KIND_BY_REF;
         value->type = type->ElementType;
 
@@ -650,13 +648,13 @@ jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
     } else if (type == tDouble || type == tSingle) {
         return JIT_KIND_FLOAT;
 
-    } else if (type == tIntPtr || type == tUIntPtr || type->IsPointer) {
+    } else if (type == tIntPtr || type == tUIntPtr) {
         return JIT_KIND_NATIVE_INT;
 
     } else if (type->BaseType == tEnum) {
         return jit_get_type_kind(type->EnumUnderlyingType);
 
-    } else if (type->IsByRef) {
+    } else if (type->IsByRef || type->IsPointer) {
         return JIT_KIND_BY_REF;
 
     } else if (tdn_type_is_valuetype(type)) {
