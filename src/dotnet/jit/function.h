@@ -23,26 +23,12 @@ typedef enum jit_stack_value_kind : uint8_t {
     JIT_KIND_VALUE_TYPE,
 } jit_stack_value_kind_t;
 
-typedef struct jit_block_local {
-    // If the type of the local is delegate this
-    // is the method behind it
-    RuntimeMethodBase method;
-
-    // the phi of the local
-    spidir_phi_t phi;
-
-    // the value of the local
-    spidir_value_t value;
-
-    // was the value initialized, whenever stloc is called it will
-    // be set to true, if ldloc/ldloca is called with this being false
-    // we will zero initialize it at the start of the function
-    bool initialized;
-} jit_block_local_t;
-
 typedef struct jit_stack_value {
     // The type of this stack value
     RuntimeTypeInfo type;
+
+    // The type of this stack value
+    RuntimeTypeInfo actual_type;
 
     // The method of this stack value,
     // if the type is delegate, this is
@@ -55,6 +41,10 @@ typedef struct jit_stack_value {
 
     // The kind of value in this slot
     jit_stack_value_kind_t kind;
+
+    // is the actual type the exact type, or is it
+    // only the most known part of the tree
+    bool is_actual_type_exact;
 } jit_stack_value_t;
 
 /**
@@ -76,7 +66,49 @@ static inline jit_stack_value_t jit_stack_value_create(RuntimeTypeInfo type) {
     return value;
 }
 
+static inline RuntimeTypeInfo jit_get_actual_type(jit_stack_value_t* value) {
+    // if we have an actual type always get it
+    if (value->actual_type != NULL) {
+        return value->actual_type;
+    }
+
+    // if the type is an obj-ref, then keep the type
+    // as the actual type
+    if (value->kind == JIT_KIND_OBJ_REF) {
+        return value->type;
+    }
+
+    // otherwise we are sadge
+    return NULL;
+}
+
 jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type);
+
+typedef struct jit_block_local {
+    // the actual type that we got on the stack
+    // this is used to complement the type of the
+    // variable that we have
+    RuntimeTypeInfo actual_type;
+
+    // If the type of the local is delegate this
+    // is the method behind it
+    RuntimeMethodBase method;
+
+    // the phi of the local
+    spidir_phi_t phi;
+
+    // the value of the local
+    spidir_value_t value;
+
+    // is the actual type the exact type, or is it
+    // only the most known part of the tree
+    bool is_actual_type_exact;
+
+    // was the value initialized, whenever stloc is called it will
+    // be set to true, if ldloc/ldloca is called with this being false
+    // we will zero initialize it at the start of the function
+    bool initialized;
+} jit_block_local_t;
 
 typedef struct jit_block {
     // the basic block range
@@ -182,6 +214,10 @@ typedef struct jit_function {
 
     // the block to return to when returning from the inline
     spidir_block_t return_block;
+
+    // the actual type that we found to be used when returning
+    RuntimeTypeInfo return_actual_type;
+    bool return_is_actual_type_exact;
 
     // the depth of the inline, 0 meaning not inlining, 1 or
     // more means we are part of an inline

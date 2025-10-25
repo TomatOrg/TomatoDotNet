@@ -138,7 +138,7 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
     RuntimeMethodBody body = method->MethodBody;
     jit_stack_value_t* stack_items = NULL;
     tdn_il_inst_t inst = { .control_flow = TDN_IL_CF_FIRST };
-    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
+    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_type_trace);
 
     // clone the block into the current frame, so we can modify it
     jit_block_t block = {};
@@ -308,7 +308,7 @@ cleanup:
 
 tdn_err_t jit_visit_blocks(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
-    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_verify_trace);
+    bool trace = (function->emitting && tdn_get_config()->jit_emit_trace) || (!function->emitting && tdn_get_config()->jit_type_trace);
 
     // for the emitter we need a pass in here to initialize all of the block
     // locals before we enter the real entry block
@@ -421,7 +421,7 @@ cleanup:
 
 tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder) {
     tdn_err_t err = TDN_NO_ERROR;
-    bool trace = tdn_get_config()->jit_emit_trace || tdn_get_config()->jit_verify_trace;
+    bool trace = tdn_get_config()->jit_emit_trace || tdn_get_config()->jit_type_trace;
     spidir_log_level_t orig_level = spidir_log_get_max_level();
 
     if (trace) {
@@ -705,15 +705,18 @@ RuntimeMethodBase jit_devirt_method(jit_stack_value_t* item, RuntimeMethodBase t
         return target;
     }
 
-    // if this is a delegate with a known instance call then
-    // we can perform a direct call
-    if (tdn_is_delegate(item->type) && item->method != NULL) {
-        return item->method;
+    // use the actual type whenever possible
+    RuntimeTypeInfo cur_type = jit_get_actual_type(item);
+    if (cur_type == NULL) {
+        ASSERT(item->kind == JIT_KIND_BY_REF || item->kind == JIT_KIND_VALUE_TYPE);
+        cur_type = item->type;
     }
 
-    // get the real type
-    RuntimeTypeInfo cur_type = item->type;
-    // TODO: extended type info as required
+    // if this is a delegate with a known instance call then
+    // we can perform a direct call
+    if (tdn_is_delegate(cur_type) && item->method != NULL) {
+        return item->method;
+    }
 
     // find the method that implements this
     if (tdn_is_interface(target->DeclaringType)) {
@@ -729,7 +732,7 @@ RuntimeMethodBase jit_devirt_method(jit_stack_value_t* item, RuntimeMethodBase t
 
     // if this is a final type/method or we know that this is
     // the exact type we can devirt it
-    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->type->IsArray) {
+    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->type->IsArray || item->is_actual_type_exact) {
         return target;
     }
 

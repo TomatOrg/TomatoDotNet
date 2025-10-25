@@ -6,6 +6,8 @@
 #include <util/string.h>
 #include <util/except.h>
 
+#include "dotnet/verifier/casting.h"
+#include "dotnet/verifier/internal.h"
 #include "tomatodotnet/tdn.h"
 #include "tomatodotnet/util/stb_ds.h"
 
@@ -31,14 +33,51 @@ typedef enum merge_status {
 // pretty generic and will fit well with
 RuntimeTypeInfo verifier_merge_object_references(RuntimeTypeInfo class_a, RuntimeTypeInfo class_b);
 
+static RuntimeTypeInfo type_merge_actual_type(RuntimeTypeInfo actual_type_a, RuntimeTypeInfo actual_type_b) {
+    // merge the types
+    if (actual_type_a == NULL || actual_type_b == NULL) {
+        // one of the side has no known type, ignore it
+        actual_type_a = NULL;
+
+    } else {
+        // both have a known type, find something common about it
+        actual_type_a = verifier_merge_object_references(actual_type_a, actual_type_b);
+        if (actual_type_a == tObject) {
+            // if we get to object just assume there is no known type
+            actual_type_a = NULL;
+        }
+    }
+
+    return actual_type_a;
+}
+
 static merge_status_t type_merge_stack_values(jit_stack_value_t* previous, jit_stack_value_t* new) {
     bool modified = false;
 
     // methods don't match, zero the method
     // NOTE: this can only be from a delegate devirt
     if (previous->method != new->method) {
-        previous->method = NULL;
-        modified = true;
+        if (previous->method != NULL) {
+            previous->method = NULL;
+            modified = true;
+        }
+    }
+
+    if (previous->actual_type != new->actual_type) {
+        previous->is_actual_type_exact = false;
+        RuntimeTypeInfo type = type_merge_actual_type(previous->actual_type, new->actual_type);
+        if (type != previous->actual_type || previous->is_actual_type_exact) {
+            previous->is_actual_type_exact = false;
+            previous->actual_type = type;
+            modified = true;
+        }
+    }
+
+    if (previous->is_actual_type_exact != new->is_actual_type_exact) {
+        if (previous->is_actual_type_exact) {
+            previous->is_actual_type_exact = false;
+            modified = true;
+        }
     }
 
     // if we don't match in the type we need to merge it
@@ -94,8 +133,28 @@ static bool type_merge_block_local(jit_block_local_t* previous, jit_block_local_
     // methods don't match, zero the method
     // NOTE: this can only be from a delegate devirt
     if (previous->method != new->method) {
-        previous->method = NULL;
-        modified = true;
+        if (previous->method != NULL) {
+            previous->method = NULL;
+            modified = true;
+        }
+    }
+
+    if (previous->actual_type != new->actual_type) {
+        // it can't be the actual type since we have two different types
+        previous->is_actual_type_exact = false;
+        RuntimeTypeInfo type = type_merge_actual_type(previous->actual_type, new->actual_type);
+        if (type != previous->actual_type || previous->is_actual_type_exact) {
+            previous->is_actual_type_exact = false;
+            previous->actual_type = type;
+            modified = true;
+        }
+    }
+
+    if (previous->is_actual_type_exact != new->is_actual_type_exact) {
+        if (previous->is_actual_type_exact) {
+            previous->is_actual_type_exact = false;
+            modified = true;
+        }
     }
 
     return modified;
@@ -230,6 +289,8 @@ static tdn_err_t type_load_local(jit_function_t* function, jit_block_t* block, t
 
     // push the new type to the stack, copy the flags and method pointers
     jit_stack_value_t* value = jit_stack_value_init(STACK_PUSH(), func_local->type);
+    value->actual_type = block_local->actual_type;
+    value->is_actual_type_exact = block_local->is_actual_type_exact;
     value->method = block_local->method;
 
 cleanup:
@@ -247,6 +308,9 @@ static tdn_err_t type_store_local(jit_function_t* function, jit_block_t* block, 
 
     // initialized, no need to zero initialize later on
     block_local->initialized = true;
+    block_local->actual_type = jit_get_actual_type(stack);
+    block_local->is_actual_type_exact = stack->is_actual_type_exact;
+    block_local->method = stack->method;
 
 cleanup:
     return err;
@@ -279,6 +343,9 @@ static tdn_err_t type_load_local_address(jit_function_t* function, jit_block_t* 
     jit_stack_value_t* value = STACK_PUSH();
     value->kind = JIT_KIND_BY_REF;
     value->type = func_local->type;
+
+    // TODO: do we want to remember the actual
+    //       information in here? probably we do?
 
 cleanup:
     return err;
@@ -755,6 +822,9 @@ static tdn_err_t type_call(jit_function_t* function, jit_block_t* block, tdn_il_
     RuntimeMethodBase method = inst->operand.method;
     RuntimeTypeInfo method_type = method->Attributes.Static ? NULL : method->DeclaringType;
 
+    RuntimeTypeInfo return_actual_type = NULL;
+    bool return_is_actual_type_exact = false;
+
     // if this is a callvirt attempt to de-virt the call
     RuntimeMethodBase devirt_method = NULL;
     if (inst->opcode == CEE_CALLVIRT) {
@@ -799,12 +869,30 @@ static tdn_err_t type_call(jit_function_t* function, jit_block_t* block, tdn_il_
                 CHECK(inlinee_function->inline_depth == function->inline_depth + 1);
             }
 
-            // TODO: update the type information for a better de-virt
+            // update the type information, this will allow for a better devirt
+            // note that for newobj we need to ignore the `this` since its added
+            // implicitly
+            int off = inst->opcode == CEE_NEWOBJ ? 1 : 0;
+            for (int i = 0; i < arrlen(stack); i++) {
+                inlinee_function->entry_block.args[off + i].actual_type = jit_get_actual_type(&stack[i]);
+                inlinee_function->entry_block.args[off + i].is_actual_type_exact = stack[i].is_actual_type_exact;
+                inlinee_function->entry_block.args[off + i].method = stack[i].method;
+            }
+
+            if (inst->opcode == CEE_NEWOBJ) {
+                // for newobj the this is an actual exact type, so we can handle it as such
+                inlinee_function->entry_block.args[0].actual_type = inst->operand.type;
+                inlinee_function->entry_block.args[0].is_actual_type_exact = true;
+            }
 
             // type the function's blocks
             CHECK_AND_RETHROW(jit_function(inlinee_function, NULL));
 
-            // TODO: take the return type and use it instead
+            // get the actual return type
+            if (method->ReturnParameter->ParameterType != tVoid) {
+                return_actual_type = inlinee_function->return_actual_type;
+                return_is_actual_type_exact = inlinee_function->return_is_actual_type_exact;
+            }
         } else {
             // we don't want to inline it, if we wanted before then ensure
             // we no longer do
@@ -825,10 +913,14 @@ static tdn_err_t type_call(jit_function_t* function, jit_block_t* block, tdn_il_
     if (inst->opcode == CEE_NEWOBJ) {
         jit_stack_value_t* value = STACK_PUSH();
         jit_stack_value_init(value, method_type);
+        value->actual_type = method_type;
+        value->is_actual_type_exact = true;
 
     } else if (method->ReturnParameter->ParameterType != tVoid) {
         jit_stack_value_t* return_value = STACK_PUSH();
         jit_stack_value_init(return_value, method->ReturnParameter->ParameterType);
+        return_value->actual_type = return_actual_type;
+        return_value->is_actual_type_exact = return_is_actual_type_exact;
     }
 
 cleanup:
@@ -836,6 +928,30 @@ cleanup:
 }
 
 static tdn_err_t type_ret(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    // if we are inside of an inline set the return type so the caller can get better information
+    // about the inline that just happened
+    if (function->inline_depth != 0) {
+        // if we are returning an obj-ref, then get the actual on-stack type of the object
+        // so we can return a more accurate object
+        if (function->method->ReturnParameter->ParameterType != tVoid) {
+            RuntimeTypeInfo return_type = jit_get_actual_type(stack);
+
+            // merge it with the other known return types
+            if (function->return_actual_type == NULL) {
+                function->return_actual_type = return_type;
+                function->return_is_actual_type_exact = stack->is_actual_type_exact;
+            }
+
+            if (function->return_actual_type != return_type) {
+                function->return_is_actual_type_exact = false;
+                function->return_actual_type = type_merge_actual_type(function->return_actual_type, return_type);
+            }
+
+            if (function->return_is_actual_type_exact != stack->is_actual_type_exact) {
+                function->return_is_actual_type_exact = false;
+            }
+        }
+    }
     return TDN_NO_ERROR;
 }
 
@@ -854,6 +970,15 @@ static tdn_err_t type_castclass(jit_function_t* function, jit_block_t* block, td
     jit_stack_value_t* pushed = STACK_PUSH();
     pushed->kind = JIT_KIND_OBJ_REF;
     pushed->type = inst->operand.type;
+
+    // if we take the actual type, and we are performing an upcast to another type, we want
+    // to keep the actual type exactly as it is, otherwise it means we have made a downcast
+    // and we don't actually want to keep it
+    RuntimeTypeInfo actual_type = jit_get_actual_type(stack);
+    if (actual_type != NULL && verifier_can_cast_to(actual_type, inst->operand.type)) {
+        pushed->actual_type = actual_type;
+        pushed->is_actual_type_exact = stack->is_actual_type_exact;
+    }
 
 cleanup:
     return err;
