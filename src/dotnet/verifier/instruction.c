@@ -225,6 +225,13 @@ static tdn_err_t verify_store_local(function_t* function, block_t* block, tdn_il
     stack_value_t local_value = stack_value_create(func_local->type);
     CHECK_IS_ASSIGNABLE(stack, &local_value);
 
+    // if we are assigning from a native int to a by-ref then I want
+    // to mark the by-ref as non-local so it can do whatever it wants
+    // with it
+    if (stack->kind == KIND_NATIVE_INT && local_value.kind == KIND_BY_REF) {
+        stack->flags.ref_non_local = true;
+    }
+
     // remember the flags of the local
     block_local_from_value_flags(block_local, stack->flags);
 

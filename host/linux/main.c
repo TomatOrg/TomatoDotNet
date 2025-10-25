@@ -584,13 +584,14 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    int jit_emit_verbose = 0;
-    int jit_type_verbose = 0;
-    int jit_verify_verbose = 0;
-    int jit_dump = 0;
+    int jit_emit_verbose = 1;
+    int jit_type_verbose = 1;
+    int jit_verify_verbose = 1;
+    int jit_dump = 1;
     int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
+    int allow_unsafe = 1;
     int il_verify_test = 0;
     struct option options[] = {
         {"search-path", required_argument, 0, 's'},
@@ -602,6 +603,7 @@ int main(int argc, char* argv[]) {
         {"jit-dont-optimize", no_argument, &jit_dont_optimize, 1},
         {"jit-dont-inline", no_argument, &jit_dont_inline, 1},
         {"ilverify-test", no_argument, &il_verify_test, 1},
+        {"allow-unsafe", no_argument, &allow_unsafe, 1},
         {0, 0, 0, 0}
     };
 
@@ -655,6 +657,7 @@ int main(int argc, char* argv[]) {
 
     // now load the assembly we want to run
     CHECK_AND_RETHROW(load_assembly_from_path(argv[optind], &run));
+    run->AllowUnsafe = allow_unsafe;
 
     if (il_verify_test) {
         CHECK_AND_RETHROW(tdn_run_ilverify_test(run));

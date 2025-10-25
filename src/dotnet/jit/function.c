@@ -102,6 +102,10 @@ static void jit_clone_block(jit_block_t* in, jit_block_t* out) {
 
     arrsetlen(out->stack, arrlen(in->stack));
     memcpy(out->stack, in->stack, arrlen(in->stack) * sizeof(*in->stack));
+
+    // transfer ownership of the inlines to the clone
+    out->inlines = in->inlines;
+    in->inlines = NULL;
 }
 
 static void jit_destroy_block(jit_block_t* block) {
@@ -110,6 +114,12 @@ static void jit_destroy_block(jit_block_t* block) {
     arrfree(block->locals);
     arrfree(block->args);
     arrfree(block->leave_target_stack);
+
+    for (int i = 0; i < hmlen(block->inlines); i++) {
+        jit_function_destroy(block->inlines[i].value);
+        tdn_host_free(block->inlines[i].value);
+    }
+    hmfree(block->inlines);
 }
 
 typedef enum localloc_state_machine {
@@ -281,6 +291,11 @@ static tdn_err_t jit_visit_basic_block(jit_function_t* function, jit_block_t* in
         }
     }
 
+    // move the inlines into the in
+    // block for next time
+    in_block->inlines = block.inlines;
+    block.inlines = NULL;
+
 cleanup:
     // free the block data
     jit_destroy_block(&block);
@@ -427,30 +442,31 @@ tdn_err_t jit_function(jit_function_t* function, spidir_builder_handle_t builder
     // start with verifying the function fully
     CHECK_AND_RETHROW(jit_visit_blocks(function, NULL));
 
-    if (trace) {
-        TRACE("----------------------------------------");
+    if (builder != NULL) {
+        if (trace) {
+            TRACE("----------------------------------------");
+        }
+
+        function->emitting = true;
+
+        // prepare all the blocks for another pass, this time with a spidir
+        // block ready so it can be jumped to
+        for (int i = 0; i < arrlen(function->blocks); i++) {
+            jit_block_t* block = &function->blocks[i];
+            block->visited = false;
+            block->spidir_block = spidir_builder_create_block(builder);
+        }
+
+        // prepare all the leave blocks as well
+        for (int i = 0; i < hmlen(function->leave_blocks); i++) {
+            jit_block_t* block = function->leave_blocks[i].value;
+            block->visited = false;
+            block->spidir_block = spidir_builder_create_block(builder);
+        }
+
+        // now we can do the second pass of emitting
+        CHECK_AND_RETHROW(jit_visit_blocks(function, builder));
     }
-
-    // don't allow
-    function->emitting = true;
-
-    // prepare all the blocks for another pass, this time with a spidir
-    // block ready so it can be jumped to
-    for (int i = 0; i < arrlen(function->blocks); i++) {
-        jit_block_t* block = &function->blocks[i];
-        block->visited = false;
-        block->spidir_block = spidir_builder_create_block(builder);
-    }
-
-    // prepare all the leave blocks as well
-    for (int i = 0; i < hmlen(function->leave_blocks); i++) {
-        jit_block_t* block = function->leave_blocks[i].value;
-        block->visited = false;
-        block->spidir_block = spidir_builder_create_block(builder);
-    }
-
-    // now we can do the second pass of emitting
-    CHECK_AND_RETHROW(jit_visit_blocks(function, builder));
 
 cleanup:
     spidir_log_set_max_level(orig_level);
@@ -664,4 +680,56 @@ jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
         ASSERT(tdn_type_is_gc_pointer(type));
         return JIT_KIND_OBJ_REF;
     }
+}
+
+int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
+    // the type is the interface, just return zero since that
+    // is technically the base
+    if (type == iface) {
+        return 0;
+    }
+
+    // search in the implementations
+    int idx = hmgeti(type->InterfaceImpls, iface);
+    if (idx < 0) {
+        return -1;
+    }
+    return type->InterfaceImpls[idx].value;
+}
+
+RuntimeMethodBase jit_devirt_method(jit_stack_value_t* item, RuntimeMethodBase target) {
+    // not virtual, we know it exactly
+    if (!target->Attributes.Virtual) {
+        return target;
+    }
+
+    // if this is a delegate with a known instance call then
+    // we can perform a direct call
+    if (tdn_is_delegate(item->type) && item->method != NULL) {
+        return item->method;
+    }
+
+    // get the real type
+    RuntimeTypeInfo cur_type = item->type;
+    // TODO: extended type info as required
+
+    // find the method that implements this
+    if (tdn_is_interface(target->DeclaringType)) {
+        int offset = 0;
+        if (cur_type != target->DeclaringType) {
+            offset = jit_get_interface_offset(cur_type, target->DeclaringType);
+            ASSERT(offset >= 0, "Attempting to get %T from %T", target->DeclaringType, cur_type);
+        }
+        target = (RuntimeMethodBase)cur_type->VTable->Elements[offset + target->VTableOffset];
+    } else {
+        target = (RuntimeMethodBase)cur_type->VTable->Elements[target->VTableOffset];
+    }
+
+    // if this is a final type/method or we know that this is
+    // the exact type we can devirt it
+    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->type->IsArray) {
+        return target;
+    }
+
+    return NULL;
 }

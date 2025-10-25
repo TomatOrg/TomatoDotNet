@@ -98,6 +98,13 @@ typedef struct jit_block {
     // the phi's of the stack entries
     spidir_phi_t* stack_phis;
 
+    // the function context for all the inlines, this is used during
+    // type propagation to ensure
+    struct {
+        uint32_t key;
+        struct jit_function* value;
+    }* inlines;
+
     // is this block already in the queue?
     bool in_queue;
 
@@ -219,3 +226,14 @@ void jit_function_destroy(jit_function_t* function);
 RuntimeExceptionHandlingClause jit_get_enclosing_try_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous);
 RuntimeExceptionHandlingClause jit_get_enclosing_handler_clause(jit_function_t* function, uint32_t pc, int type, RuntimeExceptionHandlingClause previous);
 RuntimeExceptionHandlingClause jit_get_enclosing_filter_clause(jit_function_t* function, uint32_t pc);
+
+/**
+ * Get the offset of the interface vtable inside the vtable of the type
+ */
+int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface);
+
+/**
+ * Given a stack value and a method to call on that stack item, de-virtualize the target
+ * into a known function. Returns NULL if there is no valid devirt
+ */
+RuntimeMethodBase jit_devirt_method(jit_stack_value_t* item, RuntimeMethodBase target);

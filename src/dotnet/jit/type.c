@@ -1,9 +1,12 @@
 #include "type.h"
 
+#include <stdalign.h>
 #include <dotnet/types.h>
 #include <tomatodotnet/types/type.h>
 #include <util/string.h>
 #include <util/except.h>
+
+#include "tomatodotnet/tdn.h"
 #include "tomatodotnet/util/stb_ds.h"
 
 static void type_queue_block(jit_function_t* function, jit_block_t* block) {
@@ -500,7 +503,7 @@ static tdn_err_t type_binary_op(jit_function_t* function, jit_block_t* block, td
 
     } else if (result.kind == JIT_KIND_BY_REF) {
         // if we had operations with by-ref at this point
-        // the turned into a native int 
+        // the turned into a native int
         result.kind = JIT_KIND_NATIVE_INT;
         result.type = tIntPtr;
     }
@@ -672,11 +675,148 @@ cleanup:
     return err;
 }
 
+// these constants are inspired by openjdk
+#define INLINE_SMALL_CODE       1000    /* native function size */
+#define MAX_INLINE_SIZE         35      /* il bytecode size */
+#define MAX_TRIVIAL_SIZE        6       /* il bytecode size */
+#define MAX_INLINE_LEVEL        15      /* the max nesting of inline we allow */
+
+static bool jit_should_inline(jit_function_t* caller, RuntimeMethodBase callee) {
+    // can't inline something without a body
+    if (callee->MethodBody == NULL) {
+        return false;
+    }
+
+    // inline is requested
+    if (callee->MethodImplFlags.AggressiveInlining) {
+        return true;
+    }
+
+    // TODO: for now assume a method is cold, we might want some logic
+    //       to check for hot methods
+
+    // check if already compiled into a medium method
+    if (callee->MethodPtr != NULL && callee->MethodSize > (INLINE_SMALL_CODE / 4)) {
+        return false;
+    }
+
+    // method too big for inline
+    if (callee->MethodBody->ILSize > MAX_INLINE_SIZE) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool jit_should_not_inline(jit_function_t* caller, RuntimeMethodBase callee) {
+    // user doesn't want to enable inline globally
+    if (!tdn_get_config()->jit_inline) {
+        return true;
+    }
+
+    // don't inline if marked as no inline
+    if (callee->MethodImplFlags.NoInlining) {
+        return true;
+    }
+
+    // don't allow to inline too much
+    if (caller->inline_depth + 1 > MAX_INLINE_LEVEL) {
+        return true;
+    }
+
+    // don't allow recursion
+    if (caller->method == callee) {
+        return true;
+    }
+
+    // requested inline, ignore the rest of the logic
+    if (callee->MethodImplFlags.AggressiveInlining) {
+        return false;
+    }
+
+    // don't inline big methods if they are already compiled
+    if (callee->MethodPtr != NULL && callee->MethodSize > INLINE_SMALL_CODE) {
+        return true;
+    }
+
+    // small methods should always get inlined
+    if (callee->MethodBody->ILSize <= MAX_TRIVIAL_SIZE) {
+        return false;
+    }
+
+    // TODO: something else?
+
+    return false;
+}
+
 static tdn_err_t type_call(jit_function_t* function, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
     RuntimeMethodBase method = inst->operand.method;
     RuntimeTypeInfo method_type = method->Attributes.Static ? NULL : method->DeclaringType;
+
+    // if this is a callvirt attempt to de-virt the call
+    RuntimeMethodBase devirt_method = NULL;
+    if (inst->opcode == CEE_CALLVIRT) {
+        devirt_method = jit_devirt_method(&stack[0], inst->operand.method);
+    }
+
+    // check if we wanted to inline before
+    int inline_idx = hmgeti(block->inlines, inst->pc);
+
+    // if this has a direct call, or the callvirt devirted the method, then check
+    // if we should attempt and inline it
+    if (inst->opcode == CEE_CALL || inst->opcode == CEE_NEWOBJ || devirt_method != NULL) {
+        // fix it up to not have a null
+        if (devirt_method == NULL) {
+            devirt_method = method;
+        }
+
+        // if the previous method we wanted to inline is not the same as
+        // the current one then we need to recreate the inline information
+        if (inline_idx >= 0 && devirt_method != block->inlines[inline_idx].value->method) {
+            jit_function_destroy(block->inlines[inline_idx].value);
+            hmdel(block->inlines, inst->pc);
+        }
+
+        // check if we should inline this
+        if (jit_should_inline(function, devirt_method) && !jit_should_not_inline(function, devirt_method)) {
+            // we want to inline it
+            jit_function_t* inlinee_function = NULL;
+            if (inline_idx < 0) {
+                // this is the first time we go over and want to inline it, create the method properly
+                inlinee_function = tdn_host_mallocz(sizeof(jit_function_t), alignof(jit_function_t));
+                CHECK(inlinee_function != NULL);
+                hmput(block->inlines, inst->pc, inlinee_function);
+
+                // inline the function right away
+                CHECK_AND_RETHROW(jit_function_init(inlinee_function, devirt_method));
+            } else {
+                inlinee_function = block->inlines[inline_idx].value;
+            }
+
+            // TODO: update the type information for a better de-virt
+
+            // type the function's blocks
+            CHECK_AND_RETHROW(jit_function(inlinee_function, NULL));
+
+            // TODO: take the return type and use it instead
+        } else {
+            // we don't want to inline it, if we wanted before then ensure
+            // we no longer do
+            if (inline_idx >= 0) {
+                jit_function_destroy(block->inlines[inline_idx].value);
+                hmdel(block->inlines, inst->pc);
+            }
+        }
+    } else {
+        // we don't have anything to inline, ensure that if we did we no
+        // longer do
+        if (inline_idx >= 0) {
+            jit_function_destroy(block->inlines[inline_idx].value);
+            hmdel(block->inlines, inst->pc);
+        }
+    }
 
     if (inst->opcode == CEE_NEWOBJ) {
         jit_stack_value_t* value = STACK_PUSH();

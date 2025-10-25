@@ -13,21 +13,6 @@
 #include "dotnet/types.h"
 #include "tomatodotnet/tdn.h"
 
-static int jit_get_interface_offset(RuntimeTypeInfo type, RuntimeTypeInfo iface) {
-    // the type is the interface, just return zero since that
-    // is technically the base
-    if (type == iface) {
-        return 0;
-    }
-
-    // search in the implementations
-    int idx = hmgeti(type->InterfaceImpls, iface);
-    if (idx < 0) {
-        return -1;
-    }
-    return type->InterfaceImpls[idx].value;
-}
-
 // TODO: variant interface arguments
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1571,43 +1556,6 @@ cleanup:
 // Method related
 //----------------------------------------------------------------------------------------------------------------------
 
-static RuntimeMethodBase devirt_method(jit_stack_value_t* item, RuntimeMethodBase target) {
-    // not virtual, we know it exactly
-    if (!target->Attributes.Virtual) {
-        return target;
-    }
-
-    // if this is a delegate with a known instance call then
-    // we can perform a direct call
-    if (tdn_is_delegate(item->type) && item->method != NULL) {
-        return item->method;
-    }
-
-    // get the real type
-    RuntimeTypeInfo cur_type = item->type;
-    // TODO: extended type info as required
-
-    // find the method that implements this
-    if (tdn_is_interface(target->DeclaringType)) {
-        int offset = 0;
-        if (cur_type != target->DeclaringType) {
-            offset = jit_get_interface_offset(cur_type, target->DeclaringType);
-            ASSERT(offset >= 0, "Attempting to get %T from %T", target->DeclaringType, cur_type);
-        }
-        target = (RuntimeMethodBase)cur_type->VTable->Elements[offset + target->VTableOffset];
-    } else {
-        target = (RuntimeMethodBase)cur_type->VTable->Elements[target->VTableOffset];
-    }
-
-    // if this is a final type/method or we know that this is
-    // the exact type we can devirt it
-    if (cur_type->Attributes.Sealed || target->Attributes.Final || item->type->IsArray) {
-        return target;
-    }
-
-    return NULL;
-}
-
 static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, RuntimeMethodBase callee, jit_stack_value_t* stack) {
     spidir_value_t* values = NULL;
 
@@ -1652,80 +1600,6 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
     return values;
 }
 
-// these constants are inspired by openjdk
-#define INLINE_SMALL_CODE       1000    /* native function size */
-#define MAX_INLINE_SIZE         35      /* il bytecode size */
-#define MAX_TRIVIAL_SIZE        6       /* il bytecode size */
-#define MAX_INLINE_LEVEL        15      /* the max nesting of inline we allow */
-
-static bool jit_should_inline(jit_function_t* caller, RuntimeMethodBase callee) {
-    // can't inline something without a body
-    if (callee->MethodBody == NULL) {
-        return false;
-    }
-
-    // inline is requested
-    if (callee->MethodImplFlags.AggressiveInlining) {
-        return true;
-    }
-
-    // TODO: for now assume a method is cold, we might want some logic
-    //       to check for hot methods
-
-    // check if already compiled into a medium method
-    if (callee->MethodPtr != NULL && callee->MethodSize > (INLINE_SMALL_CODE / 4)) {
-        return false;
-    }
-
-    // method too big for inline
-    if (callee->MethodBody->ILSize > MAX_INLINE_SIZE) {
-        return false;
-    }
-
-    return true;
-}
-
-static bool jit_should_not_inline(jit_function_t* caller, RuntimeMethodBase callee) {
-    // user doesn't want to enable inline globally
-    if (!tdn_get_config()->jit_inline) {
-        return true;
-    }
-
-    // don't inline if marked as no inline
-    if (callee->MethodImplFlags.NoInlining) {
-        return true;
-    }
-
-    // don't allow to inline too much
-    if (caller->inline_depth + 1 > MAX_INLINE_LEVEL) {
-        return true;
-    }
-
-    // don't allow recursion
-    if (caller->method == callee) {
-        return true;
-    }
-
-    // requested inline, ignore the rest of the logic
-    if (callee->MethodImplFlags.AggressiveInlining) {
-        return false;
-    }
-
-    // don't inline big methods if they are already compiled
-    if (callee->MethodPtr != NULL && callee->MethodSize > INLINE_SMALL_CODE) {
-        return true;
-    }
-
-    // small methods should always get inlined
-    if (callee->MethodBody->ILSize <= MAX_TRIVIAL_SIZE) {
-        return false;
-    }
-
-    // TODO: something else?
-
-    return false;
-}
-
 static tdn_err_t emit_ldftn(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1750,10 +1624,22 @@ cleanup:
 static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t* values = NULL;
-    jit_function_t inlinee = {};
+    jit_function_t* inlinee = NULL;
 
     RuntimeMethodBase callee = inst->operand.method;
     jit_builtin_emitter_t emitter = jit_get_builtin_emitter(callee);
+    if (emitter == NULL) {
+        // if this is not an emitter attempt to resolve the inlinee
+        // function, if any
+        int idx = hmgeti(block->inlines, inst->pc);
+        if (idx >= 0) {
+            inlinee = block->inlines[idx].value;
+
+            // ensure that the emitter logic arrived to the same method
+            // as the inline code in the type propagation
+            CHECK(inlinee->method == inst->operand.method);
+        }
+    }
 
     if (callee->Attributes.Static) {
         jit_queue_cctor(spidir_builder_get_module(builder), callee->DeclaringType);
@@ -1769,40 +1655,36 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         }
     }
 
-    // check if we should inline, special case for builtin emitters since they have a special inline semantic
-    if (emitter == NULL && jit_should_inline(function, callee) && !jit_should_not_inline(function, callee)) {
-        // initialize the function
-        CHECK_AND_RETHROW(jit_function_init(&inlinee, callee));
-
+    // check if we decided to inline the method
+    if (inlinee != NULL) {
         // pass the arguments, we need to convert them properly
         // to the correct types before we do so tho
-        // TODO: pass extended type info for better devirt in the inlined method
-        for (int i = 0; i < arrlen(inlinee.entry_block.args); i++) {
-            inlinee.entry_block.args[i].value = jit_convert_local(
+        for (int i = 0; i < arrlen(inlinee->entry_block.args); i++) {
+            inlinee->entry_block.args[i].value = jit_convert_local(
                 builder,
                 &stack[i],
-                inlinee.args[i].type);
+                inlinee->args[i].type);
         }
 
         // create the entry block and jump into it
-        inlinee.entry_block.spidir_block = spidir_builder_create_block(builder);
-        spidir_builder_build_branch(builder, inlinee.entry_block.spidir_block);
+        inlinee->entry_block.spidir_block = spidir_builder_create_block(builder);
+        spidir_builder_build_branch(builder, inlinee->entry_block.spidir_block);
 
         // setup the inline information
-        inlinee.inline_depth = function->inline_depth + 1;
-        inlinee.return_block = spidir_builder_create_block(builder);
-        spidir_builder_set_block(builder, inlinee.return_block);
+        inlinee->inline_depth = function->inline_depth + 1;
+        inlinee->return_block = spidir_builder_create_block(builder);
+        spidir_builder_set_block(builder, inlinee->return_block);
 
         // prepare the return phi if needed
         spidir_value_t return_value = SPIDIR_VALUE_INVALID;
         if (callee->ReturnParameter->ParameterType != tVoid) {
             return_value = spidir_builder_build_phi(builder,
                 get_spidir_type(callee->ReturnParameter->ParameterType),
-                0, NULL, &inlinee.return_phi);
+                0, NULL, &inlinee->return_phi);
         }
 
         // now let it cook
-        CHECK_AND_RETHROW(jit_function(&inlinee, builder));
+        CHECK_AND_RETHROW(jit_function(inlinee, builder));
 
         // and set the return value, unlike a normal call, struct likes are
         // returned directly instead of by-reference
@@ -1812,7 +1694,7 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         }
 
         // continue at the return block
-        spidir_builder_set_block(builder, inlinee.return_block);
+        spidir_builder_set_block(builder, inlinee->return_block);
     } else {
         // gather all the parameters for a call
         values = emit_gather_arguments(builder, callee, stack);
@@ -1838,7 +1720,6 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
 
 cleanup:
     arrfree(values);
-    jit_function_destroy(&inlinee);
 
     return err;
 }
@@ -1965,7 +1846,7 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
     // or Object, and the original value is a value type, then we need to perform
     // a box instead and can't call it directly
     //
-    RuntimeMethodBase known = devirt_method(&stack[0], inst->operand.method);
+    RuntimeMethodBase known = jit_devirt_method(&stack[0], inst->operand.method);
     if (known != NULL && tdn_type_is_valuetype(stack[0].type) == tdn_type_is_valuetype(known->DeclaringType)) {
         // TODO: perform explicit null check
 
