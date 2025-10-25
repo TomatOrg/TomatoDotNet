@@ -584,14 +584,14 @@ int main(int argc, char* argv[]) {
     register_printf_specifier('U', string_output, string_arginf_sz);
     register_printf_specifier('T', type_output, type_arginf_sz);
 
-    int jit_emit_verbose = 1;
-    int jit_type_verbose = 1;
-    int jit_verify_verbose = 1;
-    int jit_dump = 1;
+    int jit_emit_verbose = 0;
+    int jit_type_verbose = 0;
+    int jit_verify_verbose = 0;
+    int jit_dump = 0;
     int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
-    int allow_unsafe = 1;
+    int allow_unsafe = 0;
     int il_verify_test = 0;
     struct option options[] = {
         {"search-path", required_argument, 0, 's'},

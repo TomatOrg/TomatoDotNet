@@ -791,8 +791,12 @@ static tdn_err_t type_call(jit_function_t* function, jit_block_t* block, tdn_il_
 
                 // inline the function right away
                 CHECK_AND_RETHROW(jit_function_init(inlinee_function, devirt_method));
+
+                // prevent too deep of inline recursion
+                inlinee_function->inline_depth = function->inline_depth + 1;
             } else {
                 inlinee_function = block->inlines[inline_idx].value;
+                CHECK(inlinee_function->inline_depth == function->inline_depth + 1);
             }
 
             // TODO: update the type information for a better de-virt
@@ -1084,6 +1088,7 @@ type_instruction_t g_type_dispatch_table[] = {
     [CEE_LDIND_I8] = type_ldind,
     [CEE_LDIND_I] = type_ldind,
     [CEE_LDIND_REF] = type_ldind,
+    [CEE_LDIND_R4] = type_ldind,
     [CEE_LDIND_R8] = type_ldind,
     [CEE_LDOBJ] = type_ldind,
 
@@ -1093,6 +1098,7 @@ type_instruction_t g_type_dispatch_table[] = {
     [CEE_STIND_I4] = type_stind,
     [CEE_STIND_I8] = type_stind,
     [CEE_STIND_REF] = type_stind,
+    [CEE_STIND_R4] = type_stind,
     [CEE_STIND_R8] = type_stind,
     [CEE_STOBJ] = type_stind,
 

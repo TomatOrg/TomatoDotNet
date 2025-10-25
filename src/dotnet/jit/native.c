@@ -23,6 +23,10 @@ static double math_sqrt_double(double value) {
     return __builtin_sqrt(value);
 }
 
+static double math_cos_double(double value) {
+    return __builtin_cos(value);
+}
+
 static double math_ceiling_double(double value) {
     return __builtin_ceil(value);
 }
@@ -95,12 +99,17 @@ static native_function_t m_native_functions[] = {
     {
         "System", "Math", "Sqrt",
         math_sqrt_double,
-        SIG(FLOAT)
+        SIG(F64)
+    },
+    {
+        "System", "Math", "Cos",
+        math_cos_double,
+        SIG(F64)
     },
     {
         "System", "Math", "Ceiling",
         math_ceiling_double,
-        SIG(FLOAT)
+        SIG(F64)
     },
     {
         "System", "String", "FastAllocateString",

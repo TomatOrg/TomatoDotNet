@@ -22,6 +22,9 @@ typedef enum jit_helper_type {
     JIT_HELPER_NEWARR,
 
     JIT_HELPER_GET_INTERFACE_VTABLE,
+
+    JIT_HELPER_F32_REM,
+    JIT_HELPER_F64_REM,
 } jit_helper_type_t;
 
 /**

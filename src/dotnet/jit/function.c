@@ -608,13 +608,12 @@ jit_stack_value_t* jit_stack_value_init(jit_stack_value_t* value, RuntimeTypeInf
         value->type = tInt64;
 
     } else if (type == tDouble) {
-        value->kind = JIT_KIND_FLOAT;
+        value->kind = JIT_KIND_F64;
         value->type = tDouble;
 
     } else if (type == tSingle) {
-        // TODO: properly support f32
-        value->kind = JIT_KIND_FLOAT;
-        value->type = tDouble;
+        value->kind = JIT_KIND_F32;
+        value->type = tSingle;
 
     } else if (type == tIntPtr || type == tUIntPtr) {
         value->kind = JIT_KIND_NATIVE_INT;
@@ -661,8 +660,11 @@ jit_stack_value_kind_t jit_get_type_kind(RuntimeTypeInfo type) {
     } else if (type == tInt64 || type == tUInt64) {
         return JIT_KIND_INT64;
 
-    } else if (type == tDouble || type == tSingle) {
-        return JIT_KIND_FLOAT;
+    } else if (type == tDouble) {
+        return JIT_KIND_F64;
+
+    } else if (type == tSingle) {
+        return JIT_KIND_F32;
 
     } else if (type == tIntPtr || type == tUIntPtr) {
         return JIT_KIND_NATIVE_INT;

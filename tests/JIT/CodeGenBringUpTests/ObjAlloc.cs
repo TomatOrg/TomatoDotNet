@@ -34,7 +34,7 @@ public class BringUpTest_ObjAlloc
 
        int d = p1.DistanceSquared(p2);
        if (d != 0) return null;
-
+        
        return new Point(0,0);
     }
 

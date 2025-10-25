@@ -1709,6 +1709,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_LDIND_I8] = verify_ldind,
     [CEE_LDIND_I] = verify_ldind,
     [CEE_LDIND_REF] = verify_ldind,
+    [CEE_LDIND_R4] = verify_ldind,
     [CEE_LDIND_R8] = verify_ldind,
     [CEE_LDOBJ] = verify_ldind,
 
@@ -1718,6 +1719,7 @@ verify_instruction_t g_verify_dispatch_table[] = {
     [CEE_STIND_I4] = verify_stind,
     [CEE_STIND_I8] = verify_stind,
     [CEE_STIND_REF] = verify_stind,
+    [CEE_STIND_R4] = verify_stind,
     [CEE_STIND_R8] = verify_stind,
     [CEE_STOBJ] = verify_stind,
 

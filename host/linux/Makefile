@@ -106,7 +106,7 @@ $(BUILD_DIR)/%.c.o: %.c
 $(BIN_DIR)/tdn.elf: $(OBJS)
 	@echo LD $@
 	@mkdir -p $(@D)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) -lm
 
 $(TDN_BIN_DIR)/libtdn.a: force
 	@echo MAKE $@

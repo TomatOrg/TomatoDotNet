@@ -5,7 +5,6 @@
 
 using System;
 using System.Runtime.CompilerServices;
-
 public class BringUpTest_IntConv
 {
     const int Pass = 100;
@@ -36,7 +35,7 @@ public class BringUpTest_IntConv
     {
         long x = IntConv((int)3);
         if (x != 3) return Fail;
-
+        
         x = IntConv((UInt32)3294168832);
         if (x != 3294168832L) return Fail;
 
@@ -45,7 +44,7 @@ public class BringUpTest_IntConv
 
         z = IntConv((byte)3);
         if (z != 3) return Fail;
-
+               
         byte w = IntConv((Int16)3);
         if (w != 3) return Fail;
 

@@ -5,7 +5,6 @@
 
 using System;
 using System.Runtime.CompilerServices;
-
 public class BringUpTest_FibLoop
 {
     const int Pass = 100;

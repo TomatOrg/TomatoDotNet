@@ -16,7 +16,8 @@ typedef enum jit_stack_value_kind : uint8_t {
     JIT_KIND_INT32,
     JIT_KIND_INT64,
     JIT_KIND_NATIVE_INT,
-    JIT_KIND_FLOAT,
+    JIT_KIND_F32,
+    JIT_KIND_F64,
     JIT_KIND_BY_REF,
     JIT_KIND_OBJ_REF,
     JIT_KIND_VALUE_TYPE,
@@ -62,6 +63,7 @@ typedef struct jit_stack_value {
 static inline bool jit_is_null_reference(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type == NULL; }
 static inline bool jit_is_boxed_value_type(jit_stack_value_t* value) { return value->kind == JIT_KIND_OBJ_REF && value->type != NULL && tdn_type_is_valuetype(value->type); }
 static inline bool jit_is_pointer(jit_stack_value_t* value) { return value->kind == JIT_KIND_BY_REF || value->kind == JIT_KIND_OBJ_REF; }
+static inline bool jit_is_float(jit_stack_value_t* value) { return value->kind == JIT_KIND_F32 || value->kind == JIT_KIND_F64; }
 
 /**
  * Initialize a stack-value

@@ -11,7 +11,7 @@ public class BringUpTest_Call1
     const int Fail = -1;
 
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
-    internal static void  M() {  }
+    internal static void  M() { }
     [MethodImplAttribute(MethodImplOptions.NoInlining)]
     internal static void  Call1()
     {

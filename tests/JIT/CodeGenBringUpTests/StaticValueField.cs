@@ -3,7 +3,6 @@
 //
 
 using System;
-
 struct TestValue
 {
   public int a;

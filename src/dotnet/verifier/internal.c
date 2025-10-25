@@ -148,11 +148,9 @@ stack_value_t* stack_value_init(stack_value_t* value, RuntimeTypeInfo type) {
         value->kind = KIND_INT64;
         value->type = tInt64;
 
-    } else if (type == tSingle) {
-        value->kind = KIND_FLOAT;
-        value->type = tSingle;
-
-    } else if (type == tDouble) {
+    } else if (type == tSingle || type == tDouble) {
+        // for the verifier f32/f64 does not matter
+        // so we will just tell it everything is double
         value->kind = KIND_FLOAT;
         value->type = tDouble;
 

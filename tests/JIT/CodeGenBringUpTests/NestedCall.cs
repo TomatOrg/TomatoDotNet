@@ -5,7 +5,6 @@
 
 using System;
 using System.Runtime.CompilerServices;
-
 public class BringUpTest_NestedCall
 {
     const int Pass = 100;

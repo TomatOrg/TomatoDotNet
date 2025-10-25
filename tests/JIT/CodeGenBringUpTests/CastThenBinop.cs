@@ -64,17 +64,16 @@ public class Test_CastThenBinop
             return Fail;
         }
 
-//          TODO: exception support
-//         try
-//         {
-//             DowncastAnd_Overflow(0x100, 0xFF);
-//             // should throw
-//             return Fail;
-//         }
-//         catch (OverflowException)
-//         {
-//             // expected
-//         }
+        // try
+        // {
+        //     DowncastAnd_Overflow(0x100, 0xFF);
+        //     // should throw
+        //     return Fail;
+        // }
+        // catch (OverflowException)
+        // {
+        //     // expected
+        // }
 
         {
             var result = UpcastAnd_ComplexExpression(0x0FF, 0xFF0);

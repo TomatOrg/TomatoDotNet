@@ -113,6 +113,14 @@ static void* jit_get_interface_vtable(Object object, RuntimeTypeInfo to_type) {
     return &object->VTable->Functions[offset];
 }
 
+static float jit_f32_rem(float a, float b) {
+    return __builtin_fmodf(a, b);
+}
+
+static double jit_f64_rem(double a, double b) {
+    return __builtin_fmod(a, b);
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Helper abstraction
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -142,6 +150,8 @@ static jit_helper_t m_jit_helpers[] = {
     [JIT_HELPER_NEWSTR] = JIT_HELPER(jit_newstr),
     [JIT_HELPER_NEWARR] = JIT_HELPER(jit_newarr),
     [JIT_HELPER_GET_INTERFACE_VTABLE] = JIT_HELPER(jit_get_interface_vtable),
+    [JIT_HELPER_F32_REM] = JIT_HELPER(jit_f32_rem),
+    [JIT_HELPER_F64_REM] = JIT_HELPER(jit_f64_rem),
 };
 
 spidir_funcref_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t helper) {
@@ -216,6 +226,16 @@ spidir_funcref_t jit_get_helper(spidir_module_handle_t module, jit_helper_type_t
             func = spidir_module_create_extern_function(module,
                 "jit_get_interface_vtable", SPIDIR_TYPE_PTR, 2,
                 (spidir_value_type_t[]){ SPIDIR_TYPE_PTR, SPIDIR_TYPE_PTR }); break;
+
+        case JIT_HELPER_F32_REM:
+            func = spidir_module_create_extern_function(module,
+                "jit_f32_rem", SPIDIR_TYPE_F32, 2,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_F32, SPIDIR_TYPE_F32 }); break;
+
+        case JIT_HELPER_F64_REM:
+            func = spidir_module_create_extern_function(module,
+                "jit_f64_rem", SPIDIR_TYPE_F64, 2,
+                (spidir_value_type_t[]){ SPIDIR_TYPE_F64, SPIDIR_TYPE_F64 }); break;
 
         default:
             ASSERT(!"Invalid jit helper");

@@ -23,13 +23,12 @@ static spidir_value_type_t get_spidir_type(RuntimeTypeInfo type) {
     jit_stack_value_kind_t kind = jit_get_type_kind(type);
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
-
     } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
         return SPIDIR_TYPE_I64;
-
-    } else if (kind == JIT_KIND_FLOAT) {
+    } else if (kind == JIT_KIND_F64) {
         return SPIDIR_TYPE_F64;
-
+    } else if (kind == JIT_KIND_F32) {
+        return SPIDIR_TYPE_F32;
     } else {
         return SPIDIR_TYPE_PTR;
     }
@@ -44,13 +43,12 @@ spidir_value_type_t jit_get_spidir_ret_type(RuntimeMethodBase method) {
     jit_stack_value_kind_t kind = jit_get_type_kind(type);
     if (kind == JIT_KIND_INT32) {
         return SPIDIR_TYPE_I32;
-
     } else if (kind == JIT_KIND_INT64 || kind == JIT_KIND_NATIVE_INT) {
         return SPIDIR_TYPE_I64;
-
-    } else if (kind == JIT_KIND_FLOAT) {
+    } else if (kind == JIT_KIND_F64) {
         return SPIDIR_TYPE_F64;
-
+    } else if (kind == JIT_KIND_F32) {
+        return SPIDIR_TYPE_F32;
     } else {
         ASSERT(kind == JIT_KIND_BY_REF || kind == JIT_KIND_OBJ_REF);
         return SPIDIR_TYPE_PTR;
@@ -316,6 +314,12 @@ static spidir_value_t jit_convert_value(spidir_builder_handle_t builder, jit_sta
         // pointer native-int -> by-ref/pointer
         return spidir_builder_build_inttoptr(builder, from->value);
 
+    } else if (from->kind == JIT_KIND_F32 && to_type == tDouble) {
+        return spidir_builder_build_fwiden(builder, from->value);
+
+    } else if (from->kind == JIT_KIND_F64 && to_type == tSingle) {
+        return spidir_builder_build_fnarrow(builder, from->value);
+
     } else {
         return from->value;
     }
@@ -354,7 +358,8 @@ static spidir_value_type_t get_spidir_stack_phi_type(jit_stack_value_t* value) {
         case JIT_KIND_INT32: return SPIDIR_TYPE_I32;
         case JIT_KIND_INT64: return SPIDIR_TYPE_I64;
         case JIT_KIND_NATIVE_INT: return SPIDIR_TYPE_I64;
-        case JIT_KIND_FLOAT: return SPIDIR_TYPE_F64;
+        case JIT_KIND_F32: return SPIDIR_TYPE_F32;
+        case JIT_KIND_F64: return SPIDIR_TYPE_F64;
         case JIT_KIND_BY_REF: return SPIDIR_TYPE_PTR;
         case JIT_KIND_OBJ_REF: return SPIDIR_TYPE_PTR;
         case JIT_KIND_VALUE_TYPE: return SPIDIR_TYPE_PTR;
@@ -834,7 +839,7 @@ static tdn_err_t emit_ldc_i8(jit_function_t* function, spidir_builder_handle_t b
 }
 
 static tdn_err_t emit_ldc_r4(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
-    STACK_TOP()->value = spidir_builder_build_fconst64(builder, inst->operand.float32);
+    STACK_TOP()->value = spidir_builder_build_fconst32(builder, inst->operand.float32);
     return TDN_NO_ERROR;
 }
 
@@ -943,15 +948,15 @@ static tdn_err_t emit_compare(jit_function_t* function, spidir_builder_handle_t 
     tdn_err_t err = TDN_NO_ERROR;
     bool is_unsigned = inst->opcode == CEE_CGT_UN || inst->opcode == CEE_CLT_UN;
 
-    if (stack[0].kind == JIT_KIND_FLOAT) {
+    if (jit_is_float(&stack[0])) {
         // if the kinds are not the same we need to extend both into a full integer
-        if (stack[0].type != stack[1].type) {
-            if (stack[0].type == tSingle) {
-                CHECK_FAIL("TODO: f32 -> f64");
+        if (stack[0].kind != stack[1].kind) {
+            if (stack[0].kind == JIT_KIND_F32) {
+                stack[0].value = spidir_builder_build_fwiden(builder, stack[0].value);
             }
 
-            if (stack[1].type == tSingle) {
-                CHECK_FAIL("TODO: f32 -> f64");
+            if (stack[1].kind == JIT_KIND_F32) {
+                stack[1].value = spidir_builder_build_fwiden(builder, stack[1].value);
             }
         }
 
@@ -1101,7 +1106,7 @@ static tdn_err_t emit_conv_i4(jit_function_t* function, spidir_builder_handle_t 
         value = spidir_builder_build_ptrtoint(builder, value);
         value = spidir_builder_build_itrunc(builder, value);
 
-    } else if (stack[0].kind == JIT_KIND_FLOAT) {
+    } else if (jit_is_float(&stack[0])) {
         if (inst->opcode == CEE_CONV_I1 || inst->opcode == CEE_CONV_I2) {
             value = spidir_builder_build_floattosint(builder, SPIDIR_TYPE_I32, value);
         } else {
@@ -1195,7 +1200,7 @@ static tdn_err_t emit_conv_i8(jit_function_t* function, spidir_builder_handle_t 
         value = emit_extend_int(builder, stack[0].value,
             inst->opcode == CEE_CONV_I8 || inst->opcode == CEE_CONV_I);
 
-    } else if (stack[0].kind == JIT_KIND_FLOAT) {
+    } else if (jit_is_float(&stack[0])) {
         if (inst->opcode == CEE_CONV_I || inst->opcode == CEE_CONV_I8) {
             value = spidir_builder_build_floattosint(builder, SPIDIR_TYPE_I64, value);
         } else {
@@ -1216,12 +1221,12 @@ static tdn_err_t emit_conv_r4(jit_function_t* function, spidir_builder_handle_t 
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t value = stack[0].value;
 
-    if (stack[0].kind == JIT_KIND_FLOAT) {
-        if (stack[0].type == tDouble) {
-            CHECK_FAIL("TODO: f64 -> f32");
-        }
+    if (stack[0].kind == JIT_KIND_F64) {
+        value = spidir_builder_build_fnarrow(builder, value);
+    } else if (stack[0].kind == JIT_KIND_F32) {
+        // f32 -> f32 is a nop
     } else {
-        CHECK_FAIL("TODO: i -> f32");
+        value = spidir_builder_build_sinttofloat(builder, SPIDIR_TYPE_F32, value);
     }
 
     STACK_TOP()->value = value;
@@ -1235,10 +1240,10 @@ static tdn_err_t emit_conv_r8(jit_function_t* function, spidir_builder_handle_t 
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t value = stack[0].value;
 
-    if (stack[0].kind == JIT_KIND_FLOAT) {
-        if (stack[0].type == tSingle) {
-            CHECK_FAIL("f32 -> f64");
-        }
+    if (stack[0].kind == JIT_KIND_F64) {
+        // f64 -> f64 is a nop
+    } else if (stack[0].kind == JIT_KIND_F32) {
+        value = spidir_builder_build_fwiden(builder, value);
     } else {
         if (inst->opcode == CEE_CONV_R_UN) {
             value = spidir_builder_build_uinttofloat(builder, SPIDIR_TYPE_F64, value);
@@ -1295,14 +1300,14 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
         // and now we can perform the ptroff
         value = spidir_builder_build_ptroff(builder, op2, op1);
 
-    } else if (stack[1].kind == JIT_KIND_FLOAT) {
-        if (stack[0].type != stack[1].type) {
-            if (stack[0].type == tSingle) {
-                CHECK_FAIL("TODO: f32 -> f64");
+    } else if (jit_is_float(&stack[1])) {
+        if (stack[0].kind != stack[1].kind) {
+            if (stack[0].kind == JIT_KIND_F32) {
+                stack[0].value = spidir_builder_build_fwiden(builder, stack[0].value);
             }
 
-            if (stack[1].type == tSingle) {
-                CHECK_FAIL("TODO: f32 -> f64");
+            if (stack[1].kind == JIT_KIND_F32) {
+                stack[1].value = spidir_builder_build_fwiden(builder, stack[1].value);
             }
         }
 
@@ -1311,7 +1316,13 @@ static tdn_err_t emit_binary_op(jit_function_t* function, spidir_builder_handle_
             case CEE_SUB: value = spidir_builder_build_fsub(builder, stack[0].value, stack[1].value); break;
             case CEE_MUL: value = spidir_builder_build_fmul(builder, stack[0].value, stack[1].value); break;
             case CEE_DIV: value = spidir_builder_build_fdiv(builder, stack[0].value, stack[1].value); break;
-            case CEE_REM: CHECK_FAIL();
+            case CEE_REM: {
+                // reminder is implemented as a native method because spidir does not have a builtin for it
+                jit_helper_type_t helper = stack[0].kind == JIT_KIND_F32 ? JIT_HELPER_F32_REM : JIT_HELPER_F64_REM;
+                spidir_funcref_t rem = jit_get_helper(spidir_builder_get_module(builder), helper);
+                value = spidir_builder_build_call(builder, rem,
+                    2, (spidir_value_t[]){ stack[0].value, stack[1].value });
+            } break;
             default: CHECK_FAIL();
         }
     } else {
@@ -1368,8 +1379,9 @@ cleanup:
 
 static tdn_err_t emit_neg(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     // emulate neg via `0 - value`
-    if (stack[0].kind == JIT_KIND_FLOAT) {
-        spidir_value_t zero = spidir_builder_build_fconst64(builder, 0);
+    if (jit_is_float(&stack[0])) {
+        spidir_value_t zero = stack[0].kind == JIT_KIND_F32 ? spidir_builder_build_fconst32(builder, 0) :
+                                                                spidir_builder_build_fconst64(builder, 0);
         STACK_TOP()->value = spidir_builder_build_fsub(builder, zero, stack[0].value);
     } else {
         spidir_value_t zero = spidir_builder_build_iconst(builder, get_spidir_type(stack[0].type), 0);
@@ -1671,7 +1683,6 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         spidir_builder_build_branch(builder, inlinee->entry_block.spidir_block);
 
         // setup the inline information
-        inlinee->inline_depth = function->inline_depth + 1;
         inlinee->return_block = spidir_builder_create_block(builder);
         spidir_builder_set_block(builder, inlinee->return_block);
 
@@ -1689,7 +1700,6 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
         // and set the return value, unlike a normal call, struct likes are
         // returned directly instead of by-reference
         if (callee->ReturnParameter->ParameterType != tVoid) {
-            // TODO: extended type info, for better devirt from the result
             STACK_TOP()->value = return_value;
         }
 
@@ -2456,14 +2466,14 @@ static tdn_err_t emit_br_binary_cond(jit_function_t* function, spidir_builder_ha
 
     // perform the condition
     spidir_value_t cond;
-    if (stack[0].kind == JIT_KIND_FLOAT) {
-        if (stack[0].type != stack[1].type) {
-            if (stack[0].type == tSingle) {
-                CHECK_FAIL("TODO: f32 -> f64");
+    if (jit_is_float(&stack[0])) {
+        if (stack[0].kind != stack[1].kind) {
+            if (stack[0].kind == JIT_KIND_F32) {
+                stack[0].value = spidir_builder_build_fwiden(builder, stack[0].value);
             }
 
-            if (stack[1].type == tSingle) {
-                CHECK_FAIL("TODO: f32 -> f64");
+            if (stack[1].kind == JIT_KIND_F32) {
+                stack[1].value = spidir_builder_build_fwiden(builder, stack[1].value);
             }
         }
 
@@ -2612,6 +2622,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_LDIND_I8] = emit_ldind,
     [CEE_LDIND_I] = emit_ldind,
     [CEE_LDIND_REF] = emit_ldind,
+    [CEE_LDIND_R4] = emit_ldind,
     [CEE_LDIND_R8] = emit_ldind,
     [CEE_LDOBJ] = emit_ldind,
 
@@ -2621,6 +2632,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STIND_I4] = emit_stind,
     [CEE_STIND_I8] = emit_stind,
     [CEE_STIND_REF] = emit_stind,
+    [CEE_STIND_R4] = emit_stind,
     [CEE_STIND_R8] = emit_stind,
     [CEE_STOBJ] = emit_stind,
 
