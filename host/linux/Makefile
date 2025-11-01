@@ -64,6 +64,7 @@ CFLAGS					:= $(COMMON_CFLAGS)
 CFLAGS					+= -Wall -Werror
 CFLAGS					+= -Wno-format-invalid-specifier -Wno-unused-label -Wno-unused-function
 CFLAGS					+= -fms-extensions -Wno-microsoft-anon-tag
+CFLAGS					+= -fno-omit-frame-pointer
 CFLAGS					+= -I../../src
 CFLAGS					+= -I../../include
 CFLAGS					+= -I../../libs/spidir/c-api/include
@@ -80,9 +81,6 @@ BUILD_DIR	:= $(OUT_DIR)/build
 SRCS 		:= $(shell find . -name '*.c')
 OBJS 		:= $(SRCS:%=$(BUILD_DIR)/%.o)
 DEPS 		:= $(OBJS:%.o=%.d)
-
-# Add tdn to the object list
-OBJS		+= $(TDN_BIN_DIR)/libtdn.a
 
 # The default rule
 .PHONY: default
@@ -103,10 +101,15 @@ $(BUILD_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
 	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-$(BIN_DIR)/tdn.elf: $(OBJS)
+$(BIN_DIR)/tdn.elf: $(OBJS) $(TDN_BIN_DIR)/libtdn.a
 	@echo LD $@
 	@mkdir -p $(@D)
-	$(CC) -o $@ $^ $(LDFLAGS) -lm
+	@$(CC) -o $@ \
+ 		-L$(TDN_BIN_DIR) \
+ 		-Wl,-whole-archive -l:libtdn.a -Wl,-no-whole-archive \
+ 		$(OBJS) \
+ 		$(LDFLAGS) \
+ 		-lm
 
 $(TDN_BIN_DIR)/libtdn.a: force
 	@echo MAKE $@
@@ -116,9 +119,9 @@ $(TDN_BIN_DIR)/libtdn.a: force
 		LD="$(LD)" \
 		DEBUG="$(DEBUG)" \
 		CFLAGS="$(COMMON_CFLAGS)" \
-		SPIDIR_CARGO_TARGET_NAME="x86_64-unknown-linux-none" \
-		SPIDIR_CARGO_FLAGS="--target x86_64-unknown-linux-none -Zbuild-std=core,alloc" \
-		SPIDIR_RUSTUP_TOOLCHAIN="nightly-2025-05-07"
+		CARGO_TARGET_NAME="x86_64-unknown-linux-none" \
+		CARGO_FLAGS="--target x86_64-unknown-linux-none -Zbuild-std=core,alloc" \
+		RUSTUP_TOOLCHAIN="nightly-2025-05-07"
 
 clean:
 	rm -rf $(OUT_DIR)

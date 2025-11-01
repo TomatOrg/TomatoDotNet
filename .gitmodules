@@ -7,3 +7,9 @@
 [submodule "TdnCoreLib"]
 	path = TdnCoreLib
 	url = git@github.com:TomatOrg/TdnCoreLib.git
+[submodule "libs/icu4x"]
+	path = libs/icu4x
+	url = git@github.com:unicode-org/icu4x.git
+[submodule "libs/utf8-utf16-converter"]
+	path = libs/utf8-utf16-converter
+	url = git@github.com:Davipb/utf8-utf16-converter.git

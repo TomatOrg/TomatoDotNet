@@ -1752,53 +1752,41 @@ static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t b
         // we initialize the type, ensure we have the full vtable available
         jit_queue_type(spidir_builder_get_module(builder), callee->DeclaringType);
 
-        // figure the amount of chars we need in the new string
-        spidir_value_t char_count = SPIDIR_VALUE_INVALID;
-        ParameterInfo_Array params = callee->Parameters;
-        if (params->Length == 1) {
-            RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
-            if (param0->IsArray && param0->ElementType == tChar) {
-                // get the length of the array
-                char_count = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32,
-                    spidir_builder_build_ptroff(builder, stack[0].value,
-                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(struct Array, Length))));
-            } else {
-                // TODO: enforce that this is a ReadOnlySpan
-                char_count = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_4, SPIDIR_TYPE_I32,
-                    spidir_builder_build_ptroff(builder, stack[0].value,
-                        spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Span, Length))));
+        // we implement the string constructors by calling Ctor methods that get the same
+        // args but return a string object (they usually use FastAllocateString internally)
+        RuntimeMethodInfo ctor = NULL;
+        for (int i = 0; i < tString->DeclaredMethods->Length; i++) {
+            RuntimeMethodInfo method = tString->DeclaredMethods->Elements[i];
+
+            // we have special methods called Ctor that are the real "constructor"
+            if (!tdn_compare_string_to_cstr(method->Name, "Ctor"))
+                continue;
+
+            // match the parameters count
+            if (method->Parameters->Length != callee->Parameters->Length)
+                continue;
+
+            // match the parameters
+            bool match = true;
+            for (int j = 0; j < callee->Parameters->Length; j++) {
+                if (callee->Parameters->Elements[j]->ParameterType != method->Parameters->Elements[j]->ParameterType) {
+                    match = false;
+                    break;
+                }
             }
-        } else if (params->Length == 2) {
-            RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
-            RuntimeTypeInfo param1 = params->Elements[1]->ParameterType;
-            if (param0 == tChar && param1 == tInt32) {
-                char_count = stack[1].value;
-            } else {
-                CHECK_FAIL("Unknown string ctor (%T, %T)", param0, param1);
-            }
-        } else if (params->Length == 3) {
-            RuntimeTypeInfo param0 = params->Elements[0]->ParameterType;
-            RuntimeTypeInfo param1 = params->Elements[1]->ParameterType;
-            RuntimeTypeInfo param2 = params->Elements[2]->ParameterType;
-            if (param0->IsArray && param0->ElementType == tChar && param1 == tInt32 && param2 == tInt32) {
-                char_count = stack[2].value;
-            } else {
-                CHECK_FAIL("Unknown string ctor (%T, %T, %T)", param0, param1, param2);
-            }
-        } else {
-            CHECK_FAIL();
+            if (!match)
+                continue;
+
+            // found a full match, use it
+            ctor = method;
+            break;
         }
+        CHECK(ctor != NULL);
 
-        // actually call the newstr
-        obj = spidir_builder_build_call(builder,
-            jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWSTR), 1,
-            (spidir_value_t[]){ char_count });
-
-        // set the string length inline, so the jit can see it
-        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4, char_count,
-        spidir_builder_build_ptroff(builder, obj,
-            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64,
-                offsetof(struct String, Length))));
+        // we are going to perform a manual call to it instead
+        inst->operand.method = (RuntimeMethodBase)ctor;
+        CHECK_AND_RETHROW(emit_call(function, builder, block, inst, stack));
+        goto cleanup;
 
     } else {
         // we initialize the type, ensure we have the full vtable available

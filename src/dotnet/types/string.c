@@ -6,6 +6,7 @@
 #include "dotnet/types.h"
 #include "tomatodotnet/tdn.h"
 #include "util/except.h"
+#include "converter.h"
 
 tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {
     tdn_err_t err = TDN_NO_ERROR;
@@ -19,18 +20,19 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {
         goto cleanup;
     }
 
+    // figure how much space we need
+    size_t utf16_len = utf8_to_utf16((utf8_t*)cstr, len, NULL, 0);
+
     // allocate it
-    String new_str = tdn_gc_new(tString, sizeof(struct String) + len * 2);
+    String new_str = tdn_gc_new(tString, sizeof(struct String) + (utf16_len + 1) * 2);
     CHECK_ERROR(new_str, TDN_ERROR_OUT_OF_MEMORY);
-    new_str->Length = (int)len;
+    new_str->Length = (int)utf16_len;
+
+    // and now actually conver it
+    utf8_to_utf16((utf8_t*)cstr, len, new_str->Chars, new_str->Length);
 
     // TODO: do interning assuming that cstr come only from the binary and common
     //       stuff like namespace will arrive alot
-
-    // and finally fill it
-    for (size_t i = 0; i < len; i++) {
-        new_str->Chars[i] = (Char)cstr[i];
-    }
 
     // output it
     *out_str = new_str;

@@ -13,31 +13,31 @@ MAKEFLAGS += -rR
 .PHONY: force
 
 # Use clang by default
-CC				:= clang
-AR				:= llvm-ar
-LD				:= ld.lld
+CC					:= clang
+AR					:= llvm-ar
+LD					:= ld.lld
 
 # Should we compile in debug
-DEBUG			?= 0
+DEBUG				?= 0
 
 # Should we compile in debug or not
-SPIDIR_DEBUG	?= $(DEBUG)
+SPIDIR_DEBUG		?= $(DEBUG)
 
 # The name of the target, this will not actually put it
 # as the target, you need to do it yourself with flags
-SPIDIR_CARGO_TARGET_NAME	?=
+CARGO_TARGET_NAME	?= x86_64-unknown-linux-none
 
 # Additional flags to pass to cargo
-SPIDIR_CARGO_FLAGS 			?=
+CARGO_FLAGS			?= --target x86_64-unknown-linux-none -Zbuild-std=core,alloc
 
 # Override rust toolchain used to build spidir
-SPIDIR_RUSTUP_TOOLCHAIN		?=
+RUSTUP_TOOLCHAIN	?= nightly-2025-05-07
 
 # Flags to pass to the rustc compiler
-SPIDIR_RUSTC_FLAGS			?=
+RUSTC_FLAGS			?=
 
 # The cflags
-CFLAGS			?=
+CFLAGS				?=
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Build constants
@@ -57,11 +57,15 @@ BUILD_DIR		:= $(OUT_DIR)/build
 TDN_CFLAGS		:= -Wall -Werror
 TDN_CFLAGS		+= -std=gnu17
 TDN_CFLAGS		+= -g
+TDN_CFLAGS		+= -fno-omit-frame-pointer
 TDN_CFLAGS		+= -Wno-unused-label
 TDN_CFLAGS		+= -Wno-address-of-packed-member
 TDN_CFLAGS		+= -Wno-format-invalid-specifier
 TDN_CFLAGS		+= -fms-extensions -Wno-microsoft-anon-tag
-TDN_CFLAGS		+= -Iinclude -Isrc -Ilibs/spidir/c-api/include
+TDN_CFLAGS		+= -Iinclude -Isrc
+TDN_CFLAGS		+= -Ilibs/spidir/c-api/include
+TDN_CFLAGS		+= -Ilibs/icu4x/ffi/capi/bindings/c
+TDN_CFLAGS		+= -Ilibs/utf8-utf16-converter/converter/include
 TDN_CFLAGS		+= $(CFLAGS)
 
 ifeq ($(DEBUG),1)
@@ -70,17 +74,19 @@ endif
 
 # Get the sources along side all of the objects and dependencies
 SRCS 		:= $(shell find src -name '*.c')
+SRCS		+= libs/utf8-utf16-converter/converter/src/converter.c
+
 OBJS 		:= $(SRCS:%=$(BUILD_DIR)/%.o)
 DEPS 		:= $(OBJS:%.o=%.d)
 
 # Add the spidir object
-OBJS 		+= $(BUILD_DIR)/spidir.o
+OBJS 		+= $(BUILD_DIR)/tdn-rust-libs.o
 
-# Choose which of the spidirs we want to use
+# Choose which of the rust libs we want to use
 ifeq ($(SPIDIR_DEBUG),1)
-LIBSPIDIR	:= out/cargo-target/$(SPIDIR_CARGO_TARGET_NAME)/debug/libspidir.a
+RUST_LIBS := out/cargo-target/$(CARGO_TARGET_NAME)/debug/libtdn_rust_libs.a
 else
-LIBSPIDIR	:= out/cargo-target/$(SPIDIR_CARGO_TARGET_NAME)/release/libspidir.a
+RUST_LIBS := out/cargo-target/$(CARGO_TARGET_NAME)/release/libtdn_rust_libs.a
 endif
 
 # The default rule
@@ -131,32 +137,30 @@ clean:
 	rm -rf out
 
 #-----------------------------------------------------------------------------------------------------------------------
-# Spidir rules
+# Rust rules
 #-----------------------------------------------------------------------------------------------------------------------
 
 CARGO_CMD 	:= cargo
-ifneq ($(SPIDIR_RUSTUP_TOOLCHAIN),)
-CARGO_CMD	+= +$(SPIDIR_RUSTUP_TOOLCHAIN)
+ifneq ($(RUSTUP_TOOLCHAIN),)
+CARGO_CMD 	+= +$(RUSTUP_TOOLCHAIN)
 endif
 CARGO_CMD	+= rustc
-CARGO_CMD	+= --manifest-path libs/spidir/c-api/Cargo.toml
+CARGO_CMD 	+= --manifest-path libs/tdn-rust-libs/Cargo.toml
 ifneq ($(SPIDIR_DEBUG),1)
 CARGO_CMD	+= --release
 endif
-CARGO_CMD	+= -p c-api
-CARGO_CMD	+= $(SPIDIR_CARGO_FLAGS)
+CARGO_CMD 	+= $(CARGO_FLAGS)
 CARGO_CMD 	+= --target-dir out/cargo-target
 CARGO_CMD 	+= --
 CARGO_CMD	+= -C force-frame-pointers=yes
-CARGO_CMD	+= $(SPIDIR_RUSTC_FLAGS)
+CARGO_CMD	+= $(RUSTC_FLAGS)
 
-
-# We are going to compile the entire libspidir.a into a single object file for easier
+# We are going to compile all the rusts into a single object file for easier
 # linking of the tdn library
-$(BUILD_DIR)/spidir.o: $(LIBSPIDIR)
-	@echo CC $@
+$(BUILD_DIR)/tdn-rust-libs.o: $(RUST_LIBS)
+	@echo LD $@
 	@mkdir -p $(@D)
 	@$(LD) -r --whole-archive -o $@ $^
 
-$(LIBSPIDIR): force
+$(RUST_LIBS): force
 	$(CARGO_CMD)

@@ -32,11 +32,34 @@ static int string_output(FILE* stream, const struct printf_info* info, const voi
         return fprintf(stream, "<NULL>");
     }
 
-    for (int i = 0; i < str->Length; i++) {
-        if (putc(str->Chars[i], stream) == EOF) {
-            return len;
+    len = str->Length;
+    for (size_t i = 0; i < len; i++) {
+        uint16_t c = str->Chars[i];
+        if (c < 0x80) {
+            putchar(c);
+        } else if (c < 0x800) {
+            putchar(0xC0 | (c >> 6));
+            putchar(0x80 | (c & 0x3F));
+        } else if (c >= 0xD800 && c <= 0xDBFF) {
+            if (i + 1 < len) {
+                uint16_t low = str->Chars[i + 1];
+                if (low >= 0xDC00 && low <= 0xDFFF) {
+                    uint32_t codepoint = 0x10000 + (((c - 0xD800) << 10) | (low - 0xDC00));
+                    putchar(0xF0 | (codepoint >> 18));
+                    putchar(0x80 | ((codepoint >> 12) & 0x3F));
+                    putchar(0x80 | ((codepoint >> 6) & 0x3F));
+                    putchar(0x80 | (codepoint & 0x3F));
+                    i++; // skip low surrogate
+                    continue;
+                }
+            }
+            // invalid surrogate
+            putchar('?');
+        } else {
+            putchar(0xE0 | (c >> 12));
+            putchar(0x80 | ((c >> 6) & 0x3F));
+            putchar(0x80 | (c & 0x3F));
         }
-        len++;
     }
 
     return len;
@@ -587,8 +610,8 @@ int main(int argc, char* argv[]) {
     int jit_emit_verbose = 0;
     int jit_type_verbose = 0;
     int jit_verify_verbose = 0;
-    int jit_dump = 1;
-    int jit_dump_elf = 1;
+    int jit_dump = 0;
+    int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
     int jit_dont_inline = 0;
     int allow_unsafe = 0;
