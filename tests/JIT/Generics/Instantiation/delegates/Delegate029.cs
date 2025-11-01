@@ -5,22 +5,21 @@ using System;
 
 internal delegate T GenDelegate<T>(T p1, out T p2);
 
-internal struct Foo<T>
+internal struct Foo
 {
-    public T Function(T i, out T j)
+    static public int Function(int i, out int j)
     {
         j = i;
         return i;
     }
 }
 
-public class Test_Delegate010
+public class Test_Delegate029
 {
     public static int Main()
     {
         int i, j;
-        Foo<int> inst = new Foo<int>();
-        GenDelegate<int> MyDelegate = new GenDelegate<int>(inst.Function);
+        GenDelegate<int> MyDelegate = new GenDelegate<int>(Foo.Function);
         i = MyDelegate(10, out j);
 
         if ((i != 10) || (j != 10))
