@@ -2,6 +2,7 @@
 
 #include "tomatodotnet/types/type.h"
 #include "util/defs.h"
+#include "util/except.h"
 
 // base types that can be used
 extern RuntimeTypeInfo tObject;
@@ -119,6 +120,28 @@ static inline size_t tdn_get_boxed_value_offset(RuntimeTypeInfo type) {
  */
 static inline size_t tdn_get_array_elements_offset(RuntimeTypeInfo element_type) {
     return ALIGN_UP(sizeof(struct Array), element_type->StackAlignment);
+}
+
+static inline size_t tdn_get_nullable_value_offset(RuntimeTypeInfo type) {
+    ASSERT(tdn_type_is_nullable(type));
+    for (int i = 0; i < type->DeclaredFields->Length; i++) {
+        RuntimeFieldInfo field =  type->DeclaredFields->Elements[i];
+        if (tdn_compare_string_to_cstr(field->Name, "value")) {
+            return field->FieldOffset;
+        }
+    }
+    ASSERT(!"Did not find the value field");
+}
+
+static inline size_t tdn_get_nullable_has_offset(RuntimeTypeInfo type) {
+    ASSERT(tdn_type_is_nullable(type));
+    for (int i = 0; i < type->DeclaredFields->Length; i++) {
+        RuntimeFieldInfo field =  type->DeclaredFields->Elements[i];
+        if (tdn_compare_string_to_cstr(field->Name, "hasValue")) {
+            return field->FieldOffset;
+        }
+    }
+    ASSERT(!"Did not find the has value field");
 }
 
 /**

@@ -34,7 +34,6 @@ This is a custom C# runtime made for TomatOS with 3 design goals:
 
 These are things we are planning todo on the short term
 - Generic constraints verification
-- Proper Nullable support
 - Culture support
 - Custom attributes
 
@@ -56,10 +55,13 @@ First you will want to invoke the makefile from your makefile giving the followi
 - `CC` (defaults to `clang`): The compiler to use
 - `AR` (defaults to `llvm-ar`): The archive utility to use
 - `LD` (defaults to `ld.lld`): The linker to use
-- `SPIDIR_TARGET` (defaults to `x86_64-unknown-none`): The target to use for compiling the jit (rust)
 - `CFLAGS`: additional CFLAGS to add, you will most likely want at least optimization level
 - `DEBUG`: should we compile as debug or release
-- `SPIDIR_DEBUG`: Should spidir (the jit) be compiled as debug or release (defaults to same as `DEBUG`)
+
+We have some rust code in the project, these are the settings that can be controled to compile it:
+- `CARGO_TARGET_NAME` (defaults to `x86_64-unknown-none`): The target name to pass to cargo
+- `REUSTUP_TOOLCHAIN` (defaults to `nightly-2025-05-07`): The toolchain to pass to rustup
+- `RUSTC_FLAGS`: additional flags to pass to rustc
 
 Then you will want to include it in your source:
 - Include paths:

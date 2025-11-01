@@ -2136,6 +2136,8 @@ bool verifier_can_cast_to(RuntimeTypeInfo this_type, RuntimeTypeInfo other_type)
 static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
+    CHECK(!tdn_type_is_nullable(inst->operand.type));
+
     if (stack[0].type != NULL) {
         // check if this is an upcast known at compile time,
         // so we can hard-code the validity of this
@@ -2259,7 +2261,7 @@ static tdn_err_t emit_castclass(jit_function_t* function, spidir_builder_handle_
         //
         spidir_builder_set_block(builder, cast_null);
         spidir_value_t null_cast_value = SPIDIR_VALUE_INVALID;
-        if (tdn_is_struct_like(inst->operand.type)) {
+        if (tdn_is_interface(inst->operand.type) || tdn_is_delegate(inst->operand.type)) {
             // TODO: cache an interface null value and re-use it when possible
             null_cast_value = spidir_builder_build_stackslot(builder, sizeof(Interface), _Alignof(Interface));
             jit_emit_bzero(builder, null_cast_value, inst->operand.type);
@@ -2309,8 +2311,55 @@ static tdn_err_t emit_box(jit_function_t* function, spidir_builder_handle_t buil
 
     if (tdn_type_is_nullable(inst->operand.type)) {
         // boxes the value instance
-        // TODO: support this properly
-        CHECK_FAIL();
+        spidir_block_t is_null = spidir_builder_create_block(builder);
+        spidir_block_t is_not_null = spidir_builder_create_block(builder);
+        spidir_block_t done = spidir_builder_create_block(builder);
+
+        RuntimeTypeInfo underlying = inst->operand.type->GenericArguments->Elements[0];
+
+        // Branch into the correct path depending on the hasValue field
+        spidir_value_t has_value_ptr = spidir_builder_build_ptroff(builder, stack->value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tdn_get_nullable_has_offset(inst->operand.type)));
+        spidir_value_t has_value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_1, SPIDIR_TYPE_I32, has_value_ptr);
+        spidir_builder_build_brcond(builder, has_value, is_not_null, is_null);
+
+        //
+        // Path when the nullable is not null
+        //
+        spidir_builder_set_block(builder, is_not_null);
+
+        // set the type as a boxed one
+        spidir_value_t obj = spidir_builder_build_call(builder,
+            jit_get_helper(spidir_builder_get_module(builder), JIT_HELPER_NEWOBJ), 1,
+            (spidir_value_t[]){ spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, (uintptr_t)underlying) });
+
+        // get the offset to the value
+        spidir_value_t dst_value_ptr = spidir_builder_build_ptroff(builder, obj,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tdn_get_boxed_value_offset(underlying)));
+
+        // get the offset to the value of the nullable
+        spidir_value_t src_value_ptr = spidir_builder_build_ptroff(builder, stack->value,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, tdn_get_nullable_value_offset(inst->operand.type)));
+
+        // and we can just copy it nicely
+        jit_emit_memcpy(builder, dst_value_ptr, src_value_ptr, underlying);
+
+        spidir_builder_build_branch(builder, done);
+
+        //
+        // Path when nullable is null
+        //
+        spidir_builder_set_block(builder, is_null);
+        spidir_value_t null = spidir_builder_build_iconst(builder, SPIDIR_TYPE_PTR, 0);
+        spidir_builder_build_branch(builder, done);
+
+        //
+        // And merge again
+        //
+        spidir_builder_set_block(builder, done);
+        STACK_TOP()->value = spidir_builder_build_phi(builder, SPIDIR_TYPE_PTR, 2, (spidir_value_t[]){
+            obj, null
+        }, NULL);
 
     } else if (tdn_type_is_gc_pointer(inst->operand.type)) {
         // just keep the exact same value when its a reference type
@@ -2349,6 +2398,7 @@ static tdn_err_t emit_unbox_any(jit_function_t* function, spidir_builder_handle_
     // the operand is a reference type
     if (tdn_type_is_gc_pointer(inst->operand.type)) {
         // perform castclass instead
+        inst->opcode = CEE_CASTCLASS;
         CHECK_AND_RETHROW(emit_castclass(function, builder, block, inst, stack));
 
     } else if (tdn_type_is_nullable(inst->operand.type)) {

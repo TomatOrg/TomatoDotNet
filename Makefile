@@ -17,6 +17,9 @@ CC					:= clang
 AR					:= llvm-ar
 LD					:= ld.lld
 
+# The cflags
+CFLAGS				?=
+
 # Should we compile in debug
 DEBUG				?= 0
 
@@ -32,9 +35,6 @@ RUSTUP_TOOLCHAIN	?= nightly-2025-05-07
 
 # Flags to pass to the rustc compiler
 RUSTC_FLAGS			?=
-
-# The cflags
-CFLAGS				?=
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Build constants
