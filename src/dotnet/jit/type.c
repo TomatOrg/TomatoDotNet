@@ -728,7 +728,9 @@ static tdn_err_t type_ldftn(jit_function_t* function, jit_block_t* block, tdn_il
         TDN_ERROR_VERIFIER_LDFTN_CTOR);
 
     if (inst->opcode == CEE_LDVIRTFTN) {
-        // TODO: devirt at this point already?
+        // TODO: devirt the method if we can, in this case its just
+        //       to find the real value and use it directly instead
+        //       of going through the page table
         CHECK(!method->Attributes.Static);
     }
 

@@ -1615,6 +1615,68 @@ static spidir_value_t* emit_gather_arguments(spidir_builder_handle_t builder, Ru
     return values;
 }
 
+/**
+ * Given an object and a virtual method, resolve the method from the vtable and return
+ * the pointer to the object itself.
+ *
+ * If the source is an interface the obj will be adjusted to contain the actual `this`
+ */
+static spidir_value_t jit_get_virt_func_ptr(spidir_builder_handle_t builder, jit_stack_value_t* obj, RuntimeMethodBase callee, bool adjust_this) {
+    // load the vtable of the object on the stack
+    spidir_value_t vtable_base = SPIDIR_VALUE_INVALID;
+    if (tdn_is_interface(obj->type)) {
+        vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+            spidir_builder_build_ptroff(builder, obj->value,
+                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
+
+        // adjust the `this` pointer to point to the interface instance
+        // and not to the interface on the stack
+        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
+        if (adjust_this) {
+            obj->value = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, obj->value);
+        }
+    } else {
+        vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, obj->value);
+    }
+
+    // now figure the offset of the function in the interface
+    size_t base_offset = sizeof(void*) * callee->VTableOffset;
+
+    // calling on an object, take the vtable header into account
+    if (!tdn_is_interface(obj->type)) {
+        base_offset += offsetof(ObjectVTable, Functions);
+    }
+
+    // adjust the interface offset to be of the correct interface based on the type
+    RuntimeTypeInfo callee_this = callee->DeclaringType;
+    if (tdn_is_interface(callee_this)) {
+        int iface_offset = jit_get_interface_offset(obj->type, callee_this);
+        ASSERT(iface_offset >= 0);
+        base_offset += iface_offset * sizeof(void*);
+    }
+
+    // and now load the function pointer
+    spidir_value_t func_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
+        spidir_builder_build_ptroff(builder, vtable_base,
+            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, base_offset)));
+
+    return func_ptr;
+}
+
+static tdn_err_t emit_ldvirtftn(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    RuntimeMethodBase callee = inst->operand.method;
+    CHECK(!callee->Attributes.Static);
+    CHECK(callee->Attributes.Virtual);
+
+    // and load it as a function pointer
+    STACK_TOP()->value = jit_get_virt_func_ptr(builder, stack, callee, false);
+
+cleanup:
+    return err;
+}
+
 static tdn_err_t emit_ldftn(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
 
@@ -1762,8 +1824,8 @@ static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t bui
             return_value = emitter(builder, callee, values);
         } else {
             // lastly, get a direct function to it
-            spidir_funcref_t function = jit_get_function(spidir_builder_get_module(builder), callee);
-            return_value = spidir_builder_build_call(builder, function, arrlen(values), values);
+            spidir_funcref_t funcref = jit_get_function(spidir_builder_get_module(builder), callee);
+            return_value = spidir_builder_build_call(builder, funcref, arrlen(values), values);
         }
 
         // push it if needed
@@ -1962,45 +2024,13 @@ static tdn_err_t emit_callvirt(jit_function_t* function, spidir_builder_handle_t
     }
 
     RuntimeMethodBase callee = inst->operand.method;
-    RuntimeTypeInfo callee_this = callee->DeclaringType;
 
     // gather all the parameters for a call
     values = emit_gather_arguments(builder, callee, stack);
 
-    // load the vtable of the object on the stack
-    spidir_value_t vtable_base = SPIDIR_VALUE_INVALID;
-    if (tdn_is_interface(stack[0].type)) {
-        vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-            spidir_builder_build_ptroff(builder, stack[0].value,
-                spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, offsetof(Interface, VTable))));
-
-        // adjust the `this` pointer to point to the interface instance
-        // and not to the interface on the stack
-        STATIC_ASSERT(offsetof(Interface, Instance) == 0);
-        values[0] = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
-    } else {
-        vtable_base = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR, stack[0].value);
-    }
-
-    // now figure the offset of the function in the interface
-    size_t base_offset = sizeof(void*) * callee->VTableOffset;
-
-    // calling on an object, take the vtable header into account
-    if (!tdn_is_interface(stack[0].type)) {
-        base_offset += offsetof(ObjectVTable, Functions);
-    }
-
-    // adjust the interface offset to be of the correct interface based on the type
-    if (tdn_is_interface(callee_this)) {
-        int iface_offset = jit_get_interface_offset(stack[0].type, callee_this);
-        ASSERT(iface_offset >= 0);
-        base_offset += iface_offset * sizeof(void*);
-    }
-
-    // and now load the function pointer
-    spidir_value_t func_ptr = spidir_builder_build_load(builder, SPIDIR_MEM_SIZE_8, SPIDIR_TYPE_PTR,
-        spidir_builder_build_ptroff(builder, vtable_base,
-            spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, base_offset)));
+    // resolve the function pointer, and set the `this` value
+    spidir_value_t func_ptr = jit_get_virt_func_ptr(builder, stack, callee, true);
+    values[0] = stack->value;
 
     // perform an indirect call
     spidir_value_type_t* arg_types = jit_get_spidir_arg_types(callee);
@@ -2811,6 +2841,7 @@ emit_instruction_t g_emit_dispatch_table[] = {
     [CEE_STELEM_REF] = emit_stelem,
 
     [CEE_LDFTN] = emit_ldftn,
+    [CEE_LDVIRTFTN] = emit_ldvirtftn,
     [CEE_NEWOBJ] = emit_newobj,
     [CEE_CALL] = emit_call,
     [CEE_CALLVIRT] = emit_callvirt,
