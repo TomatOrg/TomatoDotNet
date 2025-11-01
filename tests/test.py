@@ -18,6 +18,12 @@ ILASM_PATH = os.path.join(CURRENT_DIR, 'bin', 'ilasm')
 TDN_BINARY = os.path.join(CURRENT_DIR, '..', 'host', 'linux', 'out', 'bin', 'tdn.elf')
 
 
+UNSAFE_TESTS = [
+    'JIT/Directed/Convert/bin/Debug/net8.0/fpzero.dll',
+    'JIT/Directed/Convert/bin/Release/net8.0/fpzero.dll',
+]
+
+
 DEBUG = False
 
 
@@ -79,14 +85,19 @@ def run_single_test(dll: str, results: Queue) -> bool:
     try:
         dll = compile_to_dll(dll)
 
+        args = [
+            TDN_BINARY,
+            '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0',
+            os.path.join(CURRENT_DIR, dll)
+        ]
+
+        if dll in UNSAFE_TESTS:
+            args.append('--allow-unsafe')
+
         timeout = False
         start_time = time.time()
         proc = subprocess.Popen(
-            [
-                TDN_BINARY,
-                '--search-path', 'tests/JIT/CodeGenBringUpTests/bin/Release/net8.0',
-                os.path.join(CURRENT_DIR, dll)
-            ],
+            args,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )

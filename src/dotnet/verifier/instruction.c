@@ -851,7 +851,7 @@ static tdn_err_t verify_conv(function_t* function, block_t* block, tdn_il_inst_t
 
     // validate that both are good, specifically for unsafe code allow to perform
     // the operation also on by-refs
-    if (function->method->Module->Assembly->AllowUnsafe) {
+    if (function->allow_unsafe) {
         CHECK_ERROR(KIND_INT32 <= stack->kind && stack->kind <= KIND_OBJ_REF,
             TDN_ERROR_VERIFIER_EXPECTED_NUMERIC_TYPE);
     } else {
