@@ -1350,6 +1350,9 @@ tdn_err_t tdn_generate_interface_prime(RuntimeTypeInfo interface) {
     RuntimeTypeInfo implementor = interface->InterfaceImplementors;
     interface->InterfaceImplementors = NULL;
     while (implementor != NULL) {
+        // ensure that the implementor is initialized properly
+        CHECK_AND_RETHROW(tdn_type_init(implementor));
+
         // set the product
         uint64_t* product = &implementor->JitVTable->InterfaceProduct;
         CHECK(!__builtin_mul_overflow(*product, interface->InterfacePrime, product));
@@ -2338,7 +2341,9 @@ static tdn_err_t loader_connect_single_interface_impl(RuntimeTypeInfo class, Run
 
     // if a prime was not generated already, add to the list of types that implement this interface
     // otherwise just multiply our product with the generated prime
-    if (!tdn_is_interface(class)) {
+    // NOTE: if this is a generic type definition we need to ignore the implementors list, instead
+    //       the instance will be added to the list
+    if (!tdn_is_interface(class) && !tdn_has_generic_parameters(class)) {
         if (interface->InterfacePrime == 0) {
             // set the new link to point to us
             new_impl.next = interface->InterfaceImplementors;

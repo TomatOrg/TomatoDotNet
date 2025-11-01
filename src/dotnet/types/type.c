@@ -410,14 +410,25 @@ cleanup:
 }
 
 bool tdn_has_generic_parameters(RuntimeTypeInfo type) {
+    // TODO: maybe just cache the fact it has generic types in the
+    //       bit field instead of doing this?
+
+    // this is a generic parameter by definition
     if (type->IsGenericParameter) {
         return true;
     }
 
+    // if this is a generic type definition, it is a generic
+    if (tdn_is_generic_type_definition(type)) {
+        return true;
+    }
+
+    // if this is something with an element type check it directly
     if (type->IsArray || type->IsByRef || type->IsPointer) {
         return tdn_has_generic_parameters(type->ElementType);
     }
 
+    // finally go over our type parameters recursively...
     if (type->GenericArguments != NULL) {
         for (int i = 0; i < type->GenericArguments->Length; i++) {
             if (tdn_has_generic_parameters(type->GenericArguments->Elements[i])) {
