@@ -9,125 +9,20 @@ RuntimeTypeInfo verifier_get_type_definition(RuntimeTypeInfo typ) {
     return typ->GenericTypeDefinition ?: typ;
 }
 
-static RuntimeTypeInfo resolve_generic(RuntimeTypeInfo type, RuntimeMethodInfo method) {
-    if (type->IsGenericMethodParameter && type->DeclaringMethod == (RuntimeMethodBase)method) {
-        ASSERT(type->GenericParameterPosition < method->GenericArguments->Length);
-        return method->GenericArguments->Elements[type->GenericParameterPosition];
-    } else if (type->IsGenericTypeParameter && type->DeclaringType == method->DeclaringType) {
-        ASSERT(type->GenericParameterPosition < method->DeclaringType->GenericArguments->Length);
-        return method->DeclaringType->GenericArguments->Elements[type->GenericParameterPosition];
-    }
-    return type;
-}
-
-static bool match_generic_type(RuntimeTypeInfo a, RuntimeTypeInfo b, RuntimeMethodInfo ma, RuntimeMethodInfo mb) {
-    a = resolve_generic(a, mb);
-    b = resolve_generic(b, ma);
-    if (a == b) {
-        return true;
-    }
-
-    // must be one of these
-    if (a->IsByRef != b->IsByRef) return false;
-    if (a->IsArray != b->IsArray) return false;
-    if (a->IsPointer != b->IsPointer) return false;
-    if (a->ElementType != NULL) {
-        if (b->ElementType == NULL) {
-            return false;
-        }
-        if (!match_generic_type(a->ElementType, b->ElementType, ma, mb)) return false;
-    } else {
-        if (b->ElementType != NULL) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool match_generic_param(ParameterInfo a, ParameterInfo b, RuntimeMethodInfo ma, RuntimeMethodInfo mb) {
-    if (!match_generic_type(a->ParameterType, b->ParameterType, ma, mb)) return false;
-    if (a->Attributes.In != b->Attributes.In) return false;
-    return true;
-}
-
-static bool match_generic_signature(RuntimeMethodInfo a, RuntimeMethodInfo b) {
-    if (a->GenericArguments != NULL) {
-        if (b->GenericArguments == NULL) {
-            return false;
-        }
-
-        if (a->GenericArguments->Length != b->GenericArguments->Length) {
-            return false;
-        }
-    } else if (b->GenericArguments != NULL) {
-        return false;
-    }
-
-    // check the return type
-    if (!match_generic_param(a->ReturnParameter, b->ReturnParameter, a, b)) {
-        return false;
-    }
-
-    // Check parameter count matches
-    if (a->Parameters->Length != b->Parameters->Length) {
-        return false;
-    }
-
-    // check the parameters
-    for (int j = 0; j < a->Parameters->Length; j++) {
-        ParameterInfo paramA = a->Parameters->Elements[j];
-        ParameterInfo paramB = b->Parameters->Elements[j];
-        if (!match_generic_param(paramA, paramB, a, b)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 RuntimeMethodBase verifier_get_typical_method_definition(RuntimeMethodBase method) {
+    // decompose the generic type
     if (method->GenericMethodDefinition != NULL) {
         method = (RuntimeMethodBase)method->GenericMethodDefinition;
     }
 
-    RuntimeTypeInfo owning_type_definition = verifier_get_type_definition(method->DeclaringType);
+    // lookup the original method by its metadata token
+    ASSERT(!IS_ERROR(tdn_assembly_lookup_method(
+        method->Module->Assembly, method->MetadataToken,
+        NULL, NULL,
+        &method
+    )));
 
-    // If method is on a type that is its own type definition, this it is the type method
-    if (owning_type_definition == method->DeclaringType) {
-        return method;
-    }
-
-    // Otherwise, find its equivalent on the type definition of the owning type
-    // TODO: is there a faster way to do it? maybe search in the method list and take the same
-    //       index assuming that we have the same amount of methods at the same thing?
-    for (int i = 0; i < owning_type_definition->DeclaredMethods->Length; i++) {
-        RuntimeMethodInfo m = owning_type_definition->DeclaredMethods->Elements[i];
-
-        // check the name
-        if (!tdn_compare_string(m->Name, method->Name)) {
-            continue;
-        }
-
-        if (match_generic_signature(m, (RuntimeMethodInfo)method)) {
-            return (RuntimeMethodBase)m;
-        }
-    }
-
-    for (int i = 0; i < owning_type_definition->DeclaredConstructors->Length; i++) {
-        RuntimeMethodInfo m = (RuntimeMethodInfo)owning_type_definition->DeclaredConstructors->Elements[i];
-
-        // check the name
-        if (!tdn_compare_string(m->Name, method->Name)) {
-            continue;
-        }
-
-        if (match_generic_signature(m, (RuntimeMethodInfo)method)) {
-            return (RuntimeMethodBase)m;
-        }
-    }
-
-    ASSERT(false, "Failed to find the method on the parent -> %T::%U ON %T", method->DeclaringType, method->Name, owning_type_definition);
+    return method;
 }
 
 stack_value_t* stack_value_init(stack_value_t* value, RuntimeTypeInfo type) {
