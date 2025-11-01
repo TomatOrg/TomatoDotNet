@@ -1,5 +1,6 @@
 #include "emit.h"
 
+#include <locale.h>
 #include <dotnet/loader.h>
 #include <tomatodotnet/types/type.h>
 #include <util/except.h>
@@ -710,7 +711,9 @@ static tdn_err_t emit_initobj(jit_function_t* function, spidir_builder_handle_t 
             spidir_builder_build_iconst(builder, SPIDIR_TYPE_I64, 0), stack[0].value);
 
     } else if (dest_type == tSingle) {
-        CHECK_FAIL();
+        spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_4,
+            spidir_builder_build_fconst32(builder, 0), stack[0].value);
+
     } else if (dest_type == tDouble) {
         spidir_builder_build_store(builder, SPIDIR_MEM_SIZE_8,
             spidir_builder_build_fconst64(builder, 0), stack[0].value);
@@ -1633,12 +1636,56 @@ cleanup:
     return err;
 }
 
+static tdn_err_t emit_newobj(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack);
+
 static tdn_err_t emit_call(jit_function_t* function, spidir_builder_handle_t builder, jit_block_t* block, tdn_il_inst_t* inst, jit_stack_value_t* stack) {
     tdn_err_t err = TDN_NO_ERROR;
     spidir_value_t* values = NULL;
     jit_function_t* inlinee = NULL;
 
     RuntimeMethodBase callee = inst->operand.method;
+
+    // we have a special case for activator where we want to call
+    // the normal newobj opcode with the default ctor
+    // NOTE: this assumes the constraint check was already done
+    //       properly and that it is allowed to be called from here
+    if (
+        callee->DeclaringType == tActivator &&
+        callee->GenericArguments != NULL &&
+        tdn_compare_string_to_cstr(callee->Name, "CreateInstance") &&
+        callee->Parameters->Length == 0
+    ) {
+        RuntimeTypeInfo wantedType = callee->GenericArguments->Elements[0];
+
+        if (tdn_type_is_gc_pointer(wantedType)) {
+            // this is a managed type, find the ctor and call newobj to init it
+            RuntimeConstructorInfo ctor = NULL;
+            for (int i = 0; i < wantedType->DeclaredConstructors->Length; i++) {
+                RuntimeConstructorInfo c = wantedType->DeclaredConstructors->Elements[i];
+                if (c->Parameters->Length == 0) {
+                    ctor = c;
+                    break;
+                }
+            }
+            CHECK(ctor != NULL);
+            inst->operand.method = (RuntimeMethodBase)ctor;
+            return emit_newobj(function, builder, block, inst, stack);
+
+        } else {
+            // this is a struct type, create a struct and call initobj on it (which should
+            // properly initialize it)
+            spidir_value_t value = spidir_builder_build_stackslot(builder, wantedType->StackSize, wantedType->StackAlignment);
+            jit_stack_value_t initobj_stack = {
+                .value = value,
+                .kind = JIT_KIND_BY_REF,
+                .type = wantedType,
+            };
+            CHECK_AND_RETHROW(emit_initobj(function, builder, block, inst, &initobj_stack));
+            STACK_TOP()->value = value;
+            goto cleanup;
+        }
+    }
+
     jit_builtin_emitter_t emitter = jit_get_builtin_emitter(callee);
     if (emitter == NULL) {
         // if this is not an emitter attempt to resolve the inlinee

@@ -173,6 +173,7 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
         if (tdn_compare_string_to_cstr(method->Name, "Invoke")) {
             return emit_delegate_invoke;
         }
+
     } else if (type == tUnsafe) {
         if (
             tdn_compare_string_to_cstr(method->Name, "As") ||
@@ -191,10 +192,12 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
         } else if (tdn_compare_string_to_cstr(method->Name, "AreSame")) {
             return emit_unsafe_are_same;
         }
+
     } else if (type == tMemoryMarshal) {
         if (tdn_compare_string_to_cstr(method->Name, "GetArrayDataReference")) {
             return emit_memory_marshal_get_array_data_reference;
         }
+
     } else if (type == tRuntimeHelpers) {
         if (tdn_compare_string_to_cstr(method->Name, "IsReferenceOrContainsReferences")) {
             return emit_runtime_helpers_is_reference_or_contains_references;
@@ -203,6 +206,7 @@ jit_builtin_emitter_t jit_get_builtin_emitter(RuntimeMethodBase method) {
         } else if (tdn_compare_string_to_cstr(method->Name, "get_OffsetToStringData")) {
             return emit_runtime_helpers_get_offset_to_string_data;
         }
+
     } else if (type == tObject) {
         if (tdn_compare_string_to_cstr(method->Name, "GetHashCode")) {
             return emit_object_get_hash_code;

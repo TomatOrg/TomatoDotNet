@@ -78,6 +78,9 @@ tdn_err_t tdn_method_make_generic(
 
     CHECK(base->GenericMethodDefinition == base);
 
+    CHECK(!base->Attributes.Virtual,
+        "Generic virtual methods are not currently supported");
+
     // check if already has one
     size_t hash = stbds_hash_bytes(args->Elements, sizeof(RuntimeTypeInfo) * args->Length, 0);
     int idx = hmgeti(base->GenericMethodInstances, hash);

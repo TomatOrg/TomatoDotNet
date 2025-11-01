@@ -52,6 +52,7 @@ RuntimeTypeInfo tSpan = NULL;
 RuntimeTypeInfo tUnsafe = NULL;
 RuntimeTypeInfo tMemoryMarshal = NULL;
 RuntimeTypeInfo tRuntimeHelpers = NULL;
+RuntimeTypeInfo tActivator = NULL;
 
 RuntimeTypeInfo tInAttribute = NULL;
 RuntimeTypeInfo tIsVolatile = NULL;

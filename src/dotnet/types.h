@@ -52,6 +52,7 @@ extern RuntimeTypeInfo tSpan;
 extern RuntimeTypeInfo tUnsafe;
 extern RuntimeTypeInfo tMemoryMarshal;
 extern RuntimeTypeInfo tRuntimeHelpers;
+extern RuntimeTypeInfo tActivator;
 
 extern RuntimeTypeInfo tInAttribute;
 extern RuntimeTypeInfo tIsReadOnlyAttribute;

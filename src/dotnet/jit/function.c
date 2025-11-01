@@ -347,6 +347,11 @@ tdn_err_t jit_function_init(jit_function_t* function, RuntimeMethodBase method) 
     // ensure the method is verified properly
     CHECK_AND_RETHROW(verifier_verify_method(method));
 
+    if (method->Attributes.Virtual) {
+        CHECK(method->GenericArguments == NULL,
+            "Generic virtual methods are not currently supported");
+    }
+
     // ensure this method has a body
     CHECK(method->MethodBody != NULL);
     function->method = method;
@@ -725,8 +730,10 @@ RuntimeMethodBase jit_devirt_method(jit_stack_value_t* item, RuntimeMethodBase t
             offset = jit_get_interface_offset(cur_type, target->DeclaringType);
             ASSERT(offset >= 0, "Attempting to get %T from %T", target->DeclaringType, cur_type);
         }
+        ASSERT(target->VTableOffset >= 0);
         target = (RuntimeMethodBase)cur_type->VTable->Elements[offset + target->VTableOffset];
     } else {
+        ASSERT(target->VTableOffset >= 0, "%T::%U ON %T", target->DeclaringType, target->Name, cur_type);
         target = (RuntimeMethodBase)cur_type->VTable->Elements[target->VTableOffset];
     }
 

@@ -282,6 +282,7 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
     type->DeclaredMethods = TDN_GC_NEW_ARRAY(RuntimeMethodInfo, methods);
     ctors = 0;
     methods = 0;
+    // TRACE("Expanding %s", type_def->type_name);
     for (int i = 0; i < methods_count; i++) {
         int idx = type_def->method_list.index + i;
         metadata_method_def_t* method_def = &assembly->Metadata->method_defs[idx - 1];
@@ -293,6 +294,8 @@ static tdn_err_t expand_type_from_typedef(RuntimeTypeInfo type, RuntimeTypeInfo 
         if (attributes.RTSpecialName) {
             base = (RuntimeMethodBase)TDN_GC_NEW(RuntimeConstructorInfo);
             type->DeclaredConstructors->Elements[ctors++] = (RuntimeConstructorInfo)base;
+
+            // TRACE("Found ctor");
 
             // set this as the type initialized
             if (original_type->TypeInitializer == (RuntimeConstructorInfo)original_method) {

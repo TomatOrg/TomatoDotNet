@@ -162,6 +162,7 @@ static load_type_t m_load_types[] = {
     LOAD_TYPE(System, MulticastDelegate),
     LOAD_TYPE(System.Runtime.CompilerServices, Unsafe),
     LOAD_TYPE(System.Runtime.CompilerServices, RuntimeHelpers),
+    LOAD_TYPE(System, Activator),
     LOAD_TYPE(System.Runtime.InteropServices, MemoryMarshal),
     LOAD_TYPE_VTABLE(System, Exception, 7),
     { "System", "Nullable`1", &tNullable, 4 },
@@ -907,6 +908,7 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
     for (int i = 0; i < info->DeclaredMethods->Length; i++) {
         RuntimeMethodInfo method = info->DeclaredMethods->Elements[i];
         if (method->Attributes.Virtual && !method->Attributes.Static) {
+            CHECK(method->VTableOffset >= 0);
             info->VTable->Elements[method->VTableOffset] = method;
         }
     }
@@ -1312,6 +1314,7 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
     if (type->TypeInitStarted) {
         goto cleanup;
     }
+    type->TypeInitStarted = true;
 
     if (arrlen(m_type_queues) == 0) {
         CHECK_AND_RETHROW(fill_type(type));
@@ -1319,8 +1322,6 @@ tdn_err_t tdn_type_init(RuntimeTypeInfo type) {
         arrpush(arrlast(m_type_queues).types, type);
     }
 
-    // it is considered
-    type->TypeInitStarted = true;
 
 cleanup:
     return err;
