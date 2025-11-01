@@ -20,7 +20,7 @@ tdn_err_t tdn_create_string_from_cstr(const char* cstr, String* out_str) {
     }
 
     // allocate it
-    String new_str = tdn_gc_new(tString, sizeof(struct String) + len * 2);
+    String new_str = tdn_gc_new(tString, sizeof(struct String) + (len + 1) * 2);
     CHECK_ERROR(new_str, TDN_ERROR_OUT_OF_MEMORY);
     new_str->Length = (int)len;
 
