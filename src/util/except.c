@@ -146,3 +146,7 @@ void dump_hex(const void* data, size_t size) {
         }
     }
 }
+
+void tdn_rust_panic(const char* message, size_t message_len) {
+    ASSERT(false, "%.*s", message_len, message);
+}
