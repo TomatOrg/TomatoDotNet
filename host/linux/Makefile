@@ -20,11 +20,11 @@ LD				:= ld.lld
 DEBUG			?= 0
 
 # Should we optimize
-ifeq ($(DEBUG),1)
+#ifeq ($(DEBUG),1)
 OPTIMIZE		?= 0
-else
-OPTIMIZE		?= 1
-endif
+#else
+#OPTIMIZE		?= 1
+#endif
 
 #-----------------------------------------------------------------------------------------------------------------------
 # Build constants

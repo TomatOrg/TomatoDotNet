@@ -1,6 +1,5 @@
 #include "emit.h"
 
-#include <locale.h>
 #include <dotnet/loader.h>
 #include <tomatodotnet/types/type.h>
 #include <util/except.h>

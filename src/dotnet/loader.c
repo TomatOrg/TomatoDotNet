@@ -673,8 +673,22 @@ cleanup:
     return err;
 }
 
-static RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method) {
+static tdn_err_t tdn_find_overriden_method(RuntimeTypeInfo type, RuntimeMethodInfo method, RuntimeMethodInfo* out_body, bool explicit) {
+    tdn_err_t err = TDN_NO_ERROR;
+
+    *out_body = NULL;
+
     while (type != NULL) {
+        if (explicit) {
+            // First try and find an explicit implementation at this level, if we can't find anything
+            // then we are going to continue to use normal inheritance, and if we still can't find anything
+            // we will go to the parent and resolve from there
+            CHECK_AND_RETHROW(tdn_find_explicit_implementation(type, method, out_body));
+            if (*out_body != NULL) {
+                goto cleanup;
+            }
+        }
+
         // Use normal inheritance (I.8.10.4)
         for (int i = 0; i < type->DeclaredMethods->Length; i++) {
             RuntimeMethodInfo info = type->DeclaredMethods->Elements[i];
@@ -684,22 +698,26 @@ static RuntimeMethodInfo tdn_find_overriden_method(RuntimeTypeInfo type, Runtime
                 continue;
 
             // match the name
-            if (!tdn_compare_string(info->Name, method->Name))
+            if (!tdn_compare_string(info->Name, method->Name)) {
                 continue;
+            }
 
             // ensure the signatures match
-            if (!method_signature_match(info, method))
+            if (!method_signature_match(info, method)) {
                 continue;
+            }
 
             // set the offset
-            return info;
+            *out_body = info;
+            goto cleanup;
         }
 
         // get the parent for next iteration
         type = type->BaseType;
     }
 
-    return NULL;
+cleanup:
+    return err;
 }
 
 static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
@@ -791,7 +809,8 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
         // default to allocating a new slot
         if (!method->Attributes.VtableNewSlot) {
             // this should be overriding something new
-            RuntimeMethodInfo parent = tdn_find_overriden_method(info->BaseType, method);
+            RuntimeMethodInfo parent = NULL;
+            CHECK_AND_RETHROW(tdn_find_overriden_method(info->BaseType, method, &parent, false));
             CHECK(parent != NULL);
 
             CHECK(!parent->Attributes.Final);
@@ -877,13 +896,8 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
                 impl = base;
 
             } else {
-                // search for an explicit implementation of this interface
-                CHECK_AND_RETHROW(tdn_find_explicit_implementation(info, base, &impl));
-
-                // fallback to normal override rules
-                if (impl == NULL) {
-                    impl = tdn_find_overriden_method(info, base);
-                }
+                // search for an override of the method
+                CHECK_AND_RETHROW(tdn_find_overriden_method(info, base, &impl, true));
 
                 // if the base has an implementation, use it, this properly handles
                 // default interface implementations
@@ -897,9 +911,6 @@ static tdn_err_t fill_virtual_methods(RuntimeTypeInfo info) {
             // we expect the vtable either to already be filled with the same implementation
             // or to be empty
             size_t vtable_slot = interface->value + vi;
-            if (info->VTable->Elements[vtable_slot] != NULL) {
-                CHECK(info->VTable->Elements[vtable_slot] == impl);
-            }
             info->VTable->Elements[vtable_slot] = impl;
         }
     }
@@ -1274,6 +1285,17 @@ static tdn_err_t fill_type(RuntimeTypeInfo type) {
     if (tdn_has_generic_parameters(type)) {
         // TODO: anything to do in here?
     } else {
+        // for arrays we have extra init that needs to happen much later
+        if (type->IsArray) {
+            type->DeclaredFields = tArray->DeclaredFields;
+            type->DeclaredConstructors = tArray->DeclaredConstructors;
+            type->DeclaredMethods = tArray->DeclaredMethods;
+            type->DeclaredNestedTypes = tArray->DeclaredNestedTypes;
+
+            // TODO: interface impls
+        }
+
+        // and now we can finish everything else nicely
         CHECK_AND_RETHROW(fill_stack_size(type));
         CHECK_AND_RETHROW(fill_heap_size(type));
         CHECK_AND_RETHROW(fill_interface_type_id(type));
@@ -2510,6 +2532,8 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
         shput(m_loaded_assemblies, file->assemblies[0].name, NULL);
     }
 
+    push_type_queue();
+    pushed_type_queue = true;
 
     // if we are loading the main assembly then bootstrap now
     if (gCoreAssembly == NULL) {
@@ -2590,9 +2614,6 @@ static tdn_err_t load_assembly(dotnet_file_t* file, RuntimeAssembly* out_assembl
     // are not initialized yet in this context
     CHECK_AND_RETHROW(loader_connect_by_ref_like_attribute(assembly));
     CHECK_AND_RETHROW(loader_connect_builtin_attribute(assembly, false));
-
-    push_type_queue();
-    pushed_type_queue = true;
 
     CHECK_AND_RETHROW(loader_load_generic_constraints(assembly));
 

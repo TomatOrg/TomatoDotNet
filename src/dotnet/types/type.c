@@ -34,6 +34,8 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
         goto cleanup;
     }
 
+    // TODO: can we just assume it will only ever be called under a mutex?
+
     //
     // create the array type
     //
@@ -67,20 +69,18 @@ tdn_err_t tdn_get_array_type(RuntimeTypeInfo type, RuntimeTypeInfo* out_type) {
     new_type->FillingStackSize = 1;
     new_type->IsArray = 1;
 
-    // TODO: handle the vtable correctly....
+    // Create the jit vtable right away to ensure everything works correctly in there
+    // the rest of the init will happen in a later point
     tdn_create_vtable(new_type, 4);
+
+    // continue the type init elsewhere as needed
+    tdn_type_init(new_type);
 
     // set the array type, because in the mean time someone could
     // have created the instance already, we are going to just let
     // the GC clean after ourselves and use the real one
-    RuntimeTypeInfo result = NULL;
-    if (atomic_compare_exchange_strong(&type->ArrayType, &result, new_type)) {
-        result = new_type;
-    } else {
-        tdn_host_free(new_type->JitVTable);
-    }
-
-    *out_type = result;
+    type->ArrayType = new_type;
+    *out_type = new_type;
 
 cleanup:
     return err;
