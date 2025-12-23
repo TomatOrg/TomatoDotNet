@@ -586,7 +586,7 @@ int main(int argc, char* argv[]) {
 
     int jit_emit_verbose = 0;
     int jit_type_verbose = 0;
-    int jit_verify_verbose = 1;
+    int jit_verify_verbose = 0;
     int jit_dump = 0;
     int jit_dump_elf = 0;
     int jit_dont_optimize = 0;
