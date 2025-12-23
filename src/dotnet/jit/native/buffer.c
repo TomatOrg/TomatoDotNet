@@ -44,6 +44,7 @@ NATIVE_FUNC_FOR(System, SpanHelpers, ClearWithReferences, BY_REF, NATIVE_INT);
 static void RuntimeHelpers_InitializeArray(Array array, RuntimeFieldInfo* field_handle) {
     RuntimeFieldInfo field = *field_handle;
     ASSERT(field->Attributes.Static);
+    ASSERT(field->HasRVA);
     ASSERT(field->JitFieldPtr != NULL);
 
     // ensure that the size of the array is the same as the data size in the struct
@@ -56,3 +57,16 @@ static void RuntimeHelpers_InitializeArray(Array array, RuntimeFieldInfo* field_
     memcpy((void*)array + data_offset, field->JitFieldPtr, field->FieldType->StackSize);
 }
 NATIVE_FUNC_FOR(System.Runtime.CompilerServices, RuntimeHelpers, InitializeArray, OBJ_REF, VALUE_TYPE);
+
+static void* RuntimeHelpers_GetSpanDataFrom(RuntimeFieldInfo* field_handle, RuntimeTypeInfo type, int* count) {
+    RuntimeFieldInfo field = *field_handle;
+    ASSERT(field->Attributes.Static);
+    ASSERT(field->HasRVA);
+    ASSERT(field->JitFieldPtr != NULL);
+
+    // ensure that the size of the array is the same as the data size in the struct
+    ASSERT(type->IsUnmanaged);
+    *count = field->FieldType->StackSize /  type->StackSize;
+    return field->JitFieldPtr;
+}
+NATIVE_FUNC_FOR(System.Runtime.CompilerServices, RuntimeHelpers, GetSpanDataFrom, VALUE_TYPE, OBJ_REF, BY_REF);
